@@ -1,0 +1,6 @@
+target/
+**/*.rs.bk
+*.swp
+*.swo
+.env
+node_modules/
