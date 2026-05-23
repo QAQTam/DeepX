@@ -46,16 +46,25 @@ fn heuristic_count(text: &str) -> u32 {
 
 pub fn count_message_tokens(msg: &Message) -> u32 {
     let mut t = 4u32;
-    if let Some(ref c) = msg.content { t += count_tokens(c); }
-    if let Some(ref r) = msg.reasoning_content { t += count_tokens(r); }
-    if let Some(ref tc) = msg.tool_calls {
-        for tc in tc {
-            t += count_tokens(&tc.function.name);
-            t += count_tokens(&tc.function.arguments);
-            t += 8;
+    for block in &msg.content {
+        match block {
+            dsx_types::ContentBlock::Text { text } => {
+                t += count_tokens(text);
+            }
+            dsx_types::ContentBlock::Thinking { thinking, .. } => {
+                t += count_tokens(thinking);
+            }
+            dsx_types::ContentBlock::ToolUse { name, input, .. } => {
+                t += count_tokens(name);
+                t += count_tokens(&input.to_string());
+                t += 8;
+            }
+            dsx_types::ContentBlock::ToolResult { content, .. } => {
+                t += count_tokens(content);
+                t += 2;
+            }
         }
     }
-    if msg.tool_call_id.is_some() { t += 2; }
     t
 }
 

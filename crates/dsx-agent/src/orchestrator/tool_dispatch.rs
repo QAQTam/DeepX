@@ -131,10 +131,13 @@ pub fn handle_cancel_stream(state: &mut AgentState) {
         state.ctx.remove_last_step_if_incomplete();
         let mut partial = dsx_types::Message::assistant_empty();
         if had_text {
-            partial.content = Some(format!("{}\n\n*(interrupted by user)*", state.stream_content));
+            partial.content.push(dsx_types::ContentBlock::text(&format!("{}\n\n*(interrupted by user)*", state.stream_content)));
         }
         if !state.stream_reasoning.is_empty() {
-            partial.reasoning_content = Some(state.stream_reasoning.clone());
+            partial.content.push(dsx_types::ContentBlock::Thinking {
+                thinking: state.stream_reasoning.clone(),
+                signature: String::new(),
+            });
         }
         let _ = state.ctx.push_assistant_restore(partial);
         state.turn_annotations.push("[health] User interrupted the AI during output".to_string());

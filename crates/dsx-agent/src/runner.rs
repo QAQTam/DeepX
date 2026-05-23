@@ -14,6 +14,7 @@ use dsx_proto::{
 };
 
 use crate::agent::{AgentState, ToolResultAppender};
+use crate::assembly::AssemblerError;
 use crate::config::Config;
 use crate::dsc_log;
 use crate::orchestrator::{gates, learning, phase_detector, tracker, turn_scorer, session_persistence};
@@ -22,7 +23,7 @@ use crate::session;
 use crate::tokenizer;
 use crate::tools;
 use crate::tool_parser;
-use dsx_types::{Message, ToolCall, ToolDef};
+use dsx_types::{ContentBlock, Message, ToolCall, ToolDef};
 
 // ── HP connection ──
 
@@ -138,16 +139,19 @@ fn emit_tool_result(w: &mut impl Write, id: &str, name: &str, content: &str, suc
 // ── User input handler (fully wired) ──
 
 /// Handle a TuiToAgent::UserInput frame with full module integration.
+#[allow(unused_variables)]
 fn handle_user_input(
     agent: &mut AgentState,
     text: &str,
     hp: &mut TcpStream,
     tui_writer: &mut impl Write,
-    tui_reader: &mut impl BufRead,
+    _tui_reader: &mut impl BufRead,
 ) {
     // ── Handle ask_user response ──
     if let Some(tool_call_id) = agent.pending_ask_user.take() {
-        let _ = agent.ctx.push_tool_result(&tool_call_id, text);
+        if let Err(e) = agent.ctx.push_tool_result(&tool_call_id, text) {
+            log::error!("push_tool_result for ask_user failed: {:?} — text dropped", e);
+        }
         // Skip session init, skill matching, push_user — this is a tool continuation
     } else {
         if text.is_empty() { return; }
@@ -160,8 +164,15 @@ fn handle_user_input(
                 let msg_count = agent.ctx.message_count();
                 let summary = agent.ctx.turns().last()
                     .and_then(|t| t.steps.last())
-                    .and_then(|s| s.assistant.content.as_ref())
-                    .map(|c| c.chars().take(100).collect::<String>())
+                    .and_then(|s| {
+                        s.assistant.content.iter().find_map(|b| {
+                            if let ContentBlock::Text { text } = b {
+                                Some(text.chars().take(100).collect::<String>())
+                            } else {
+                                None
+                            }
+                        })
+                    })
                     .unwrap_or_default();
                 let tokens_used = agent.token_estimate;
                 let cache_hit_pct = agent.cache_hit_pct;
@@ -194,7 +205,22 @@ fn handle_user_input(
         }
 
         // ── Push user message to ContextAssembler ──
-        let _ = agent.ctx.push_user(text);
+        if let Err(e) = agent.ctx.push_user(text) {
+            match e {
+                AssemblerError::TurnIncomplete { .. } => {
+                    // Recovery: cancellation deadlock where the last turn has no assistant
+                    // response (or unfulfilled tool calls). Remove the broken step and
+                    // append text to the existing user message so the conversation continues.
+                    log::warn!("push_user TurnIncomplete — repairing (cancellation deadlock)");
+                    agent.ctx.remove_last_step_if_incomplete();
+                    agent.ctx.push_user_restore(text);
+                }
+                _ => {
+                    log::error!("push_user failed: {:?}", e);
+                    return;
+                }
+            }
+        }
     }
 
 
@@ -244,16 +270,17 @@ fn handle_user_input(
             effort: agent.config.effort.clone(),
             max_tokens: Some(agent.config.max_tokens),
             tools: Some(serde_json::to_value(&agent.tool_defs).unwrap_or_default()),
+            user_id: Some(agent.session_seed.clone()),
         };
         let _ = dsx_proto::write_frame(hp, &chat);
 
         // ── Read HP response (streaming loop) ──
         let mut hp_reader = BufReader::new(&mut *hp);
-        let mut content = String::new();
-        let mut reasoning_content: Option<String> = None;
-        let mut thinking_signature: Option<String> = None;
-        let mut usage: Option<dsx_types::UsageInfo> = None;
-        let mut tcs_raw = serde_json::Value::Null;
+        let mut content: String;
+        let reasoning_content: Option<String>;
+        let thinking_signature: Option<String>;
+        let usage: Option<dsx_types::UsageInfo>;
+        let tcs_raw: serde_json::Value;
 
         loop {
             let hp_resp: HpToAgent = match dsx_proto::read_frame(&mut hp_reader) {
@@ -358,14 +385,29 @@ fn handle_user_input(
                 }
 
                 // Build and push assistant Message
+                let mut blocks: Vec<ContentBlock> = Vec::new();
+                if !content.is_empty() || parsed.is_empty() {
+                    blocks.push(ContentBlock::Text { text: content.clone() });
+                }
+                if let Some(ref rc) = reasoning_content {
+                    if !rc.is_empty() {
+                        blocks.push(ContentBlock::Thinking {
+                            thinking: rc.clone(),
+                            signature: thinking_signature.clone().unwrap_or_default(),
+                        });
+                    }
+                }
+                for tc in &parsed {
+                    let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+                    blocks.push(ContentBlock::ToolUse {
+                        id: tc.id.clone(),
+                        name: tc.function.name.clone(),
+                        input,
+                    });
+                }
                 let assistant_msg = Message {
                     role: "assistant".into(),
-                    content: if content.is_empty() && !parsed.is_empty() { None } else { Some(content.clone()) },
-                    name: None,
-                    tool_calls: if parsed.is_empty() { None } else { Some(parsed.clone()) },
-                    tool_call_id: None,
-                    reasoning_content: reasoning_content.clone(),
-                    thinking_signature,
+                    content: blocks,
                 };
 
                 if let Err(e) = agent.ctx.push_assistant(assistant_msg.clone()) {
@@ -493,12 +535,9 @@ fn handle_user_input(
                         let _ = dsx_proto::write_frame(tui_writer, &frame);
 
                         agent.pending_ask_user = Some(id.to_string());
-
-                        // Add placeholder result to ctx so the model sees it
-                        let _ = agent.ctx.push_tool_result(id, "[ASK_USER] Awaiting your response in the Tauri interface.");
-                        agent.tool_results.push((id.to_string(), "[ASK_USER] Awaiting your response in the Tauri interface.".to_string()));
+                        agent.tool_results.push((id.to_string(), "[ASK_USER] Awaiting your response.".to_string()));
                         emit_tool_result(tui_writer, id, name, "[ASK_USER] Awaiting your response.", false);
-                        continue; // Skip calling execute_tool
+                        continue; // Skip calling execute_tool — inner loop continues for other tools
                     }
 
                     // ── Pre-cancel check ──
@@ -557,17 +596,30 @@ fn handle_user_input(
                     }
 
                     // ── Emit ToolState after tool execution ──
+                    let all_tool_calls: Vec<ToolCall> = agent.ctx.to_vec().iter()
+                        .flat_map(|m| &m.content)
+                        .filter_map(|b| {
+                            if let ContentBlock::ToolUse { id, name, input } = b {
+                                Some(ToolCall {
+                                    id: id.clone(),
+                                    call_type: "function".into(),
+                                    function: dsx_types::FunctionCall {
+                                        name: name.clone(),
+                                        arguments: input.to_string(),
+                                    },
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
                     let tool_state_frame = AgentToTui::ToolState {
                         explored: agent.has_explored,
-                        declared_files: agent.ctx.to_vec().iter()
-                            .filter_map(|m| m.tool_calls.as_ref())
-                            .flatten()
+                        declared_files: all_tool_calls.iter()
                             .filter(|tc| tc.function.name == "explore")
                             .map(|tc| format!("{}: {}", tc.function.name, tc.function.arguments))
                             .collect(),
-                        read_files: agent.ctx.to_vec().iter()
-                            .filter_map(|m| m.tool_calls.as_ref())
-                            .flatten()
+                        read_files: all_tool_calls.iter()
                             .filter(|tc| tc.function.name.starts_with("read"))
                             .map(|tc| tc.function.arguments.clone())
                             .collect(),
@@ -577,6 +629,12 @@ fn handle_user_input(
                 }
 
             
+
+                // If ask_user was called, break outer loop — wait for user response.
+                // NO placeholder is pushed (was the root cause of the silent-drop bug).
+                if agent.pending_ask_user.is_some() {
+                    break;
+                }
 
                 // Safety gate: 3 consecutive failures
                 if agent.tool_failures >= 3 {
@@ -589,6 +647,11 @@ fn handle_user_input(
         // Continue loop — next api_chat includes tool results
     }
 
+    // ── Check for pending ask_user before entering post-tool-loop ──
+    if agent.pending_ask_user.is_some() {
+        return;
+    }
+
     // ── Post-tool-loop: one more API call to let the model wrap up ──
     // Even with tools:None, DeepSeek V4 may output DSML tool calls inline.
     // We parse DSML/XML here so raw markup doesn't appear in the chat,
@@ -597,6 +660,7 @@ fn handle_user_input(
     agent.turn_annotations.push(format!("[System] Max tool rounds ({}) reached. Respond with what you have.", agent.max_tool_rounds));
 
     let max_post_rounds = 3u32;
+    let mut sent_final_response = false;
     for _post_round in 0..max_post_rounds {
         let (system, messages, _breakdown) =
             crate::assembly::build_context(agent);
@@ -613,15 +677,16 @@ fn handle_user_input(
             effort: agent.config.effort.clone(),
             max_tokens: Some(agent.config.max_tokens),
             tools: None,
+            user_id: Some(agent.session_seed.clone()),
         };
         let _ = dsx_proto::write_frame(hp, &chat);
 
         let mut hp_reader = BufReader::new(&mut *hp);
-        let mut content = String::new();
-        let mut reasoning_content: Option<String> = None;
-        let mut thinking_signature: Option<String> = None;
-        let mut usage: Option<dsx_types::UsageInfo> = None;
-        let mut tcs_raw = serde_json::Value::Null;
+        let mut content: String;
+        let reasoning_content: Option<String>;
+        let thinking_signature: Option<String>;
+        let usage: Option<dsx_types::UsageInfo>;
+        let tcs_raw: serde_json::Value;
 
         loop {
             let hp_resp: HpToAgent = match dsx_proto::read_frame(&mut hp_reader) {
@@ -689,14 +754,21 @@ fn handle_user_input(
 
         if parsed.is_empty() {
             // No tool calls → this is the final answer
+            let mut blocks: Vec<ContentBlock> = Vec::new();
+            if !content.is_empty() {
+                blocks.push(ContentBlock::Text { text: content.clone() });
+            }
+            if let Some(ref rc) = reasoning_content {
+                if !rc.is_empty() {
+                    blocks.push(ContentBlock::Thinking {
+                        thinking: rc.clone(),
+                        signature: thinking_signature.clone().unwrap_or_default(),
+                    });
+                }
+            }
             let assistant_msg = Message {
                 role: "assistant".into(),
-                content: if content.is_empty() { None } else { Some(content.clone()) },
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: reasoning_content.clone(),
-                thinking_signature,
+                content: blocks,
             };
 
             let msg_for_learning = assistant_msg.clone();
@@ -724,7 +796,7 @@ fn handle_user_input(
                 stop_reason: None,
                 usage,
             });
-
+            sent_final_response = true;
             break; // exit post-tool-loop
         }
 
@@ -733,14 +805,29 @@ fn handle_user_input(
         // The TUI already sees streaming content via ContentDelta frames.
         // ApiResponse is sent only when the model returns no more tools.
 
+        let mut blocks: Vec<ContentBlock> = Vec::new();
+        if !content.is_empty() {
+            blocks.push(ContentBlock::Text { text: content.clone() });
+        }
+        if let Some(ref rc) = reasoning_content {
+            if !rc.is_empty() {
+                blocks.push(ContentBlock::Thinking {
+                    thinking: rc.clone(),
+                    signature: thinking_signature.clone().unwrap_or_default(),
+                });
+            }
+        }
+        for tc in &parsed {
+            let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+            blocks.push(ContentBlock::ToolUse {
+                id: tc.id.clone(),
+                name: tc.function.name.clone(),
+                input,
+            });
+        }
         let assistant_msg = Message {
             role: "assistant".into(),
-            content: if content.is_empty() && !parsed.is_empty() { None } else { Some(content.clone()) },
-            name: None,
-            tool_calls: Some(parsed.clone()),
-            tool_call_id: None,
-            reasoning_content: reasoning_content.clone(),
-            thinking_signature,
+            content: blocks,
         };
 
         let msg_for_learning = assistant_msg.clone();
@@ -840,6 +927,19 @@ fn handle_user_input(
         // Loop back for another post-round (with updated context)
     }
 
+    // Guard: if post-tool-loop exhausted without sending ApiResponse (all 3 rounds
+    // returned XML tool calls), send a fallback to prevent TUI ghost hang.
+    if !sent_final_response {
+        let fallback = AgentToTui::ApiResponse {
+            content: format!("[System] Max post-tool rounds ({}) reached.", max_post_rounds),
+            tool_calls: None,
+            stop_reason: Some("max_rounds".into()),
+            usage: None,
+            reasoning_content: None,
+        };
+        let _ = dsx_proto::write_frame(tui_writer, &fallback);
+    }
+
     // End of post-tool-loop — finalize turn
     agent.health_status_line = health_status(agent);
     agent.health.reset_turn();
@@ -895,7 +995,7 @@ fn respawn_tools(child: &mut Option<std::process::Child>) -> bool {
     let init = AgentToTools::Init {
         allowed_tools: vec![], session_seed: "pipe".into(), auto_mode: false,
     };
-    let init_ok = dsx_proto::write_frame(&mut writer, &init).is_ok();
+    let _init_ok = dsx_proto::write_frame(&mut writer, &init).is_ok();
     let ready = dsx_proto::read_frame::<ToolsToAgent>(&mut reader).ok().flatten();
 
     match ready {
@@ -999,7 +1099,7 @@ pub fn run() {
 
     // ── 5. Spawn dsx-tools ──
     let exe = std::env::current_exe().unwrap();
-    let (mut tools_child, mut tools_reader, mut tools_writer) = spawn_tools_process(&exe);
+    let (tools_child, mut tools_reader, mut tools_writer) = spawn_tools_process(&exe);
     let mut tools_option: Option<std::process::Child> = Some(tools_child);
 
     // Send init frame and read Ready response

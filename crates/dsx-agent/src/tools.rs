@@ -304,7 +304,7 @@ async fn run_command_async(
     }
 
     // Spawn first to get PID for cancellation
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return format!("[ERROR] exec: spawn failed: {}", e),
     };

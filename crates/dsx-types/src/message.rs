@@ -1,59 +1,94 @@
 use serde::{Deserialize, Serialize};
 
+// ── Anthropic-native content blocks ──
+
+/// Content block within a message, matching Anthropic Messages API spec.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum ContentBlock {
+    #[serde(rename = "text")]
+    Text {
+        text: String,
+    },
+    #[serde(rename = "thinking")]
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+    },
+}
+
+impl ContentBlock {
+    pub fn text(text: &str) -> Self {
+        ContentBlock::Text { text: text.to_string() }
+    }
+}
+
 // ── Messages ──
 
+/// A conversation message using Anthropic-native content-block format.
+///
+/// Roles:
+/// - `"user"` — contains `Text` and/or `ToolResult` blocks
+/// - `"assistant"` — contains `Text`, `Thinking`, and/or `ToolUse` blocks
+/// - `"system"` — internal only, never sent to API (handled by `build_context`)
+/// - `"tool"` — internal only, converted to `role:"user"`+`ToolResult` by assembler
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_content: Option<String>,
-    /// Anthropic API thinking signature — MUST be preserved and passed
-    /// back in subsequent requests when thinking mode is enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking_signature: Option<String>,
+    #[serde(default)]
+    pub content: Vec<ContentBlock>,
 }
 
 #[allow(dead_code)]
 impl Message {
+    /// Internal system message (extracted by `build_context`, never sent to API).
     pub fn system(content: &str) -> Self {
         Self {
-            role: "system".into(), content: Some(content.into()),
-            name: None, tool_calls: None, tool_call_id: None,
-            reasoning_content: None, thinking_signature: None,
+            role: "system".into(),
+            content: vec![ContentBlock::text(content)],
         }
     }
+    /// Anthropic user message with a single text block.
     pub fn user(content: &str) -> Self {
         Self {
-            role: "user".into(), content: Some(content.into()),
-            name: None, tool_calls: None, tool_call_id: None,
-            reasoning_content: None, thinking_signature: None,
+            role: "user".into(),
+            content: vec![ContentBlock::text(content)],
         }
     }
+    /// Empty assistant message (blocks added after streaming).
     pub fn assistant_empty() -> Self {
         Self {
-            role: "assistant".into(), content: None,
-            name: None, tool_calls: None, tool_call_id: None,
-            reasoning_content: None, thinking_signature: None,
+            role: "assistant".into(),
+            content: vec![],
         }
     }
+    /// Internal tool result (assembler merges into user role).
     pub fn tool(tool_call_id: &str, result: &str) -> Self {
         Self {
-            role: "tool".into(), content: Some(result.into()),
-            name: None, tool_calls: None, tool_call_id: Some(tool_call_id.into()),
-            reasoning_content: None, thinking_signature: None,
+            role: "tool".into(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: tool_call_id.into(),
+                content: result.into(),
+                is_error: None,
+            }],
         }
     }
 }
 
-// ── Tool Call (from model) ──
+// ── Tool Call (kept for IPC, XML/DSML parsing, and backward compat) ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {

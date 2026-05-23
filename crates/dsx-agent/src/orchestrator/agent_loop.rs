@@ -67,10 +67,24 @@ pub fn handle_start_agent_loop(state: &mut AgentState, stream_tx: mpsc::Sender<S
 
     // ── Build context (returns OpenAI-format messages) ──
     let (system, messages, _breakdown) = crate::assembly::build_context(state);
-    debug_assert!(
-        crate::health::gate::validate_anthropic_messages(&messages).is_ok(),
-        "prepare_and_compact produced invalid message sequence — would cause API 400",
-    );
+
+    // Runtime validation — catches message alternation bugs that would
+    // produce HTTP 400 from the API. Logged at error level (not debug_assert)
+    // so it fires in release builds too.
+    if let Err(ref e) = crate::health::gate::validate_messages(&messages) {
+        let reason = match e {
+            crate::health::gate::GateResult::Block { reason, .. } => reason.clone(),
+            _ => "unknown validation error".into(),
+        };
+        log::error!(
+            "prepare_and_compact produced invalid message sequence — would cause API 400: {}",
+            reason,
+        );
+        let _ = stream_tx.blocking_send(StreamEvent::Error(
+            format!("Internal error: message validation failed — {}", reason),
+        ));
+        return;
+    }
     log::debug!("handle_start_agent_loop auto_mode={}", state.auto_mode);
 
     // Auto mode: override model/effort/tools/max_tokens based on AI-declared phase

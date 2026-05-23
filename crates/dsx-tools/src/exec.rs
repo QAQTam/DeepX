@@ -46,7 +46,7 @@ pub fn exec_command(args: &str) -> String {
         cmd.current_dir(dir);
     }
 
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return format!("[ERROR] exec '{}' failed to start\n[HINT] {}", command, e),
     };

@@ -12,7 +12,6 @@ pub mod tool_def;
 pub mod state;
 pub mod config;
 pub mod session;
-pub mod anthropic;
 pub mod api_types;
 
 
@@ -29,18 +28,12 @@ pub mod token;
 
 // ── Re-exports: flat public API ──
 
-pub use message::{Message, ToolCall, FunctionCall};
+pub use message::{Message, ContentBlock, ToolCall, FunctionCall};
 pub use safety::SafetyLevel;
 pub use tool_def::{ToolDef, ToolFunction};
 pub use state::{TaskPhase, DebugLevel, RouterCommand};
 pub use config::{PersistentConfig, PhasePerfConfig, ProfileConfig, UserPreferences, default_phase_configs};
 pub use session::{SessionFile, SessionMeta, StreamState};
-pub use anthropic::{
-    AnthropicCacheControl, AnthropicSystemBlock,
-    AnthropicContent, AnthropicMessage, AnthropicTool, AnthropicThinking, AnthropicRequest,
-    AnthropicEventMessage, AnthropicContentBlockStart, AnthropicDelta, AnthropicMessageDelta,
-    AnthropicUsage, AnthropicStreamEvent,
-};
 pub use api_types::{UsageInfo, TokenDetails, ModelInfo, ModelList, BalanceInfo, BalanceEntry};
 
 // ── Unified arg parsers ──

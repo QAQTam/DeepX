@@ -31,32 +31,45 @@ impl Step {
         Self { assistant, tool_results: Vec::new() }
     }
 
-    fn has_tool_call(&self, id: &str) -> bool {
-        self.assistant.tool_calls.as_ref()
-            .map(|tcs| tcs.iter().any(|tc| tc.id == id))
-            .unwrap_or(false)
+    fn assistant_tool_ids(&self) -> Vec<String> {
+        self.assistant.content.iter()
+            .filter_map(|b| {
+                if let dsx_types::ContentBlock::ToolUse { id, .. } = b {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
-    fn all_tools_satisfied(&self) -> bool {
-        let Some(ref tcs) = self.assistant.tool_calls else { return true };
-        if tcs.is_empty() { return true; }
-        tcs.iter().all(|tc| {
-            self.tool_results.iter().any(|tr| tr.tool_call_id.as_deref() == Some(&tc.id))
+    fn tool_result_has_id(&self, id: &str) -> bool {
+        self.tool_results.iter().any(|tr| {
+            tr.content.iter().any(|b| {
+                matches!(b, dsx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id)
+            })
         })
     }
 
+    fn has_tool_call(&self, id: &str) -> bool {
+        self.assistant_tool_ids().iter().any(|tid| tid == id)
+    }
+
+    fn all_tools_satisfied(&self) -> bool {
+        let ids = self.assistant_tool_ids();
+        if ids.is_empty() { return true; }
+        ids.iter().all(|id| self.tool_result_has_id(id))
+    }
+
     fn missing_tool_count(&self) -> usize {
-        let Some(ref tcs) = self.assistant.tool_calls else { return 0 };
-        tcs.iter().filter(|tc| {
-            !self.tool_results.iter().any(|tr| tr.tool_call_id.as_deref() == Some(&tc.id))
-        }).count()
+        let ids = self.assistant_tool_ids();
+        ids.iter().filter(|id| !self.tool_result_has_id(id)).count()
     }
 
     fn pending_tool_ids(&self) -> Vec<String> {
-        let Some(ref tcs) = self.assistant.tool_calls else { return vec![] };
-        tcs.iter()
-            .filter(|tc| !self.tool_results.iter().any(|tr| tr.tool_call_id.as_deref() == Some(&tc.id)))
-            .map(|tc| tc.id.clone())
+        let ids = self.assistant_tool_ids();
+        ids.into_iter()
+            .filter(|id| !self.tool_result_has_id(id))
             .collect()
     }
 
@@ -64,7 +77,7 @@ impl Step {
 
 /// A single conversation turn: one user message + a chain of assistant steps.
 #[derive(Debug, Clone)]
-pub(crate) struct Turn {
+pub struct Turn {
     pub(crate) user: Message,
     /// Accumulated annotations for this turn (tagged notes like [health] ...).
     /// Rendered as part of the trailing context note in prepare_and_compact
@@ -173,11 +186,14 @@ impl ContextAssembler {
     pub fn push_user_restore(&mut self, text: &str) {
         if let Some(last) = self.turns.last_mut() {
             if last.steps.is_empty() {
-                last.user.content = Some(format!(
-                    "{}\n\n{}",
-                    last.user.content.clone().unwrap_or_default(),
-                    text
-                ));
+                let prefix = last.user.content.iter().find_map(|b| {
+                    if let dsx_types::ContentBlock::Text { text } = b {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
+                }).unwrap_or_default();
+                last.user.content = vec![dsx_types::ContentBlock::text(&format!("{}\n\n{}", prefix, text))];
                 self.dirty = true;
                 return;
             }
@@ -236,7 +252,7 @@ impl ContextAssembler {
             return Err(AssemblerError::OrphanToolResult { tool_call_id: tool_call_id.into() });
         }
 
-        if !step.tool_results.iter().any(|tr| tr.tool_call_id.as_deref() == Some(tool_call_id)) {
+        if !step.tool_result_has_id(tool_call_id) {
             step.tool_results.push(Message::tool(tool_call_id, result));
             self.dirty = true;
         }
@@ -248,7 +264,7 @@ impl ContextAssembler {
     pub fn push_tool_result_for(&mut self, tool_call_id: &str, result: &str) -> Result<(), AssemblerError> {
         for turn in self.turns.iter_mut().rev() {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
-                if !step.tool_results.iter().any(|tr| tr.tool_call_id.as_deref() == Some(tool_call_id)) {
+                if !step.tool_result_has_id(tool_call_id) {
                     step.tool_results.push(Message::tool(tool_call_id, result));
                     self.dirty = true;
                 }
@@ -294,7 +310,14 @@ impl ContextAssembler {
                     return Err(format!("Turn {} step {}: incomplete but not last step", i, j));
                 }
                 for tr in &step.tool_results {
-                    let Some(ref tid) = tr.tool_call_id else { continue };
+                    let tid = tr.content.iter().find_map(|b| {
+                        if let dsx_types::ContentBlock::ToolResult { tool_use_id, .. } = b {
+                            Some(tool_use_id.as_str())
+                        } else {
+                            None
+                        }
+                    });
+                    let Some(tid) = tid else { continue };
                     if !step.has_tool_call(tid) {
                         return Err(format!("Turn {} step {}: orphan tool_result {}", i, j, tid));
                     }
@@ -324,9 +347,8 @@ impl ContextAssembler {
         Ok(())
     }
 
-    /// Output messages in OpenAI-compatible format.
-    /// System messages are prepended, tool results are separate "tool" role messages.
-    pub fn to_openai_messages(&self) -> Vec<Message> {
+    /// Output messages in flat format (system + conversation + tool results).
+    pub fn to_messages(&self) -> Vec<Message> {
         let mut out = self.system_messages.clone();
         for turn in &self.turns {
             out.push(turn.user.clone());
@@ -407,10 +429,28 @@ impl ContextAssembler {
             .unwrap_or_default()
     }
 
-    pub fn last_assistant_tool_calls(&self) -> Option<&Vec<dsx_types::ToolCall>> {
+    pub fn last_assistant_tool_calls(&self) -> Vec<dsx_types::ToolCall> {
         self.turns.last()
             .and_then(|t| t.current_step())
-            .and_then(|s| s.assistant.tool_calls.as_ref())
+            .map(|s| {
+                s.assistant.content.iter()
+                    .filter_map(|b| {
+                        if let dsx_types::ContentBlock::ToolUse { id, name, input } = b {
+                            Some(dsx_types::ToolCall {
+                                id: id.clone(),
+                                call_type: "function".into(),
+                                function: dsx_types::FunctionCall {
+                                    name: name.clone(),
+                                    arguments: input.to_string(),
+                                },
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn is_dirty(&self) -> bool { self.dirty }
@@ -431,7 +471,13 @@ impl ContextAssembler {
         while i < msgs.len() {
             match msgs[i].role.as_str() {
                 "user" => {
-                    let text = msgs[i].content.clone().unwrap_or_default();
+                    let text = msgs[i].content.iter().find_map(|b| {
+                        if let dsx_types::ContentBlock::Text { text } = b {
+                            Some(text.clone())
+                        } else {
+                            None
+                        }
+                    }).unwrap_or_default();
                     let _ = assembler.push_user(&text);
                     i += 1;
                 }
@@ -441,8 +487,13 @@ impl ContextAssembler {
                     i += 1;
                 }
                 "tool" => {
-                    let tc_id = msgs[i].tool_call_id.clone().unwrap_or_default();
-                    let result = msgs[i].content.clone().unwrap_or_default();
+                    let (tc_id, result) = msgs[i].content.iter().find_map(|b| {
+                        if let dsx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = b {
+                            Some((tool_use_id.clone(), content.clone()))
+                        } else {
+                            None
+                        }
+                    }).unwrap_or_default();
                     match assembler.push_tool_result_for(&tc_id, &result) {
                         Ok(()) => {}
                         Err(AssemblerError::OrphanToolResult { .. }) => {
@@ -463,12 +514,22 @@ impl ContextAssembler {
         for turn in assembler.turns.iter_mut() {
             for step in turn.steps.iter_mut() {
                 let missing: Vec<(String, String)> = {
-                    let Some(ref tcs) = step.assistant.tool_calls else { continue };
-                    tcs.iter()
-                        .filter(|tc| !step.tool_results.iter().any(|tr| tr.tool_call_id.as_deref() == Some(&tc.id)))
-                        .map(|tc| (tc.id.clone(), tc.function.name.clone()))
+                    let tool_ids = step.assistant_tool_ids();
+                    tool_ids.iter()
+                        .filter(|id| !step.tool_result_has_id(id))
+                        .map(|id| {
+                            let name = step.assistant.content.iter().find_map(|b| {
+                                if let dsx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
+                                    if tid == id { Some(name.clone()) } else { None }
+                                } else {
+                                    None
+                                }
+                            }).unwrap_or_default();
+                            (id.clone(), name)
+                        })
                         .collect()
                 };
+                if missing.is_empty() { continue; }
                 for (id, name) in missing {
                     let note = format!(
                         "[RESTORE] Tool '{}' had no result when session was saved — not executed.\n[HINT] Do NOT retry.",
@@ -512,7 +573,7 @@ impl ContextAssembler {
 
     /// Return conversation messages (user/assistant/tool), system messages stripped.
     pub fn build(&self, _context_limit: u32) -> Vec<Message> {
-        let mut msgs = self.to_openai_messages();
+        let mut msgs = self.to_messages();
         msgs.retain(|m| m.role != "system");
         msgs
     }
@@ -523,17 +584,23 @@ fn estimate_message_tokens(msgs: &[Message]) -> u32 {
     let mut t = 0u32;
     for msg in msgs {
         t += 4;
-        if let Some(ref content) = msg.content {
-            t += tokenizer::count_tokens(content);
-        }
-        if let Some(ref rc) = msg.reasoning_content {
-            t += tokenizer::count_tokens(rc);
-        }
-        if let Some(ref tcs) = msg.tool_calls {
-            for tc in tcs {
-                t += tokenizer::count_tokens(&tc.function.name);
-                t += tokenizer::count_tokens(&tc.function.arguments);
-                t += 8;
+        for block in &msg.content {
+            match block {
+                dsx_types::ContentBlock::Text { text } => {
+                    t += tokenizer::count_tokens(text);
+                }
+                dsx_types::ContentBlock::Thinking { thinking, .. } => {
+                    t += tokenizer::count_tokens(thinking);
+                }
+                dsx_types::ContentBlock::ToolUse { name, input, .. } => {
+                    t += tokenizer::count_tokens(name);
+                    t += tokenizer::count_tokens(&input.to_string());
+                    t += 8;
+                }
+                dsx_types::ContentBlock::ToolResult { content, .. } => {
+                    t += tokenizer::count_tokens(content);
+                    t += 2;
+                }
             }
         }
     }
@@ -546,24 +613,23 @@ fn estimate_message_tokens(msgs: &[Message]) -> u32 {
 ///
 /// # Cache-friendly design for DeepSeek KV cache
 ///
-/// DeepSeek caches complete prefix units. Common prefixes across requests
-/// are auto-detected and cached independently. We exploit this by layering
-/// the system prompt: STABLE content first, DYNAMIC content last.
+/// DeepSeek caches via exact-match prefix detection. To maximise reuse,
+/// the system prompt contains ONLY stable content. Dynamic per-round
+/// content (skills, annotations) is appended to the LAST user message
+/// so it sits at the very end of the combined prefix and never shifts
+/// the offset of history messages.
 ///
 /// ```
-/// System prompt layers (in order):
-///   1. Base prompt          ← static (changes only when language switches)
+/// System prompt (stable — fully cached):
+///   1. Base prompt          ← static
 ///   2. Tool definitions     ← stable per session
-///   3. Phase prompt         ← stable per phase (changes occasionally)
-///   4. Active skills        ← dynamic (per user input)
-///   5. Turn annotations     ← dynamic (per round)
+///   3. Phase prompt         ← stable per phase
+///   Static reminder         ← stable
 ///
-/// Messages: pure conversation — user/assistant/tool only, no injected suffix.
+/// Messages (history cached, only tail misses):
+///   Conversation history    ← stable prefix (cached)
+///   Last user message      ← appended with dynamic skills + annotations (uncached suffix)
 /// ```
-///
-/// DeepSeek's common-prefix detection will independently cache layers 1-3
-/// (which are identical across consecutive requests), so only layers 4-5
-/// and new conversation messages miss cache.
 pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBreakdown) {
     debug_assert_eq!(
         state.exec_pending, 0,
@@ -574,7 +640,7 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     let base_prompt = crate::config::system_prompt(&state.config.prompt_lang);
     let base_tokens = tokenizer::count_tokens(&base_prompt);
 
-    // === System prompt: layered, stable→dynamic ===
+    // === System prompt: STABLE layers only (identical across consecutive requests) ===
     let mut system = base_prompt;
 
     // Layer 2: Tool definitions (stable per session)
@@ -593,39 +659,59 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
         tokenizer::count_tokens(suffix)
     } else { 0 };
 
-    // Layer 4: Active skills (dynamic, per user input)
+    // Static reminder (stable — was previously after dynamic content which shifted offsets)
+    system.push_str("\n\n注意：status 工具只支持 plan/coding/debug 三种模式，explore/chat 已移除。");
+    let reminder_tokens = tokenizer::count_tokens("注意：status 工具只支持 plan/coding/debug 三种模式，explore/chat 已移除。");
+
+    // === Messages: conversation from ctx, dynamic content appended to LAST user message ===
+    let mut messages = state.ctx.build(state.config.context_limit);
+
+    // Layer 4: Active skills → appended to last user message (dynamic, per user input)
+    // Appending (not prepending) preserves the prefix cache for ALL history messages.
     let mut skill_tokens = 0u32;
+    let mut dyn_suffix = String::new();
     if !state.active_skill_bodies.is_empty() {
-        let mut text = String::new();
+        dyn_suffix.push_str("\n\n## Active Skills\n");
         for (name, body) in &state.active_skill_bodies {
             let s = format!("### {}\n{}---\n", name, body);
             skill_tokens += tokenizer::count_tokens(&s);
-            text.push_str(&s);
+            dyn_suffix.push_str(&s);
         }
-        system.push_str("\n\n## Active Skills\n");
-        system.push_str(&text);
     }
 
-    // Layer 5: Turn annotations (dynamic, per round — health/gate/system notes)
+    // Layer 5: Turn annotations → appended to last user message (dynamic, per round)
     let mut annotation_tokens = 0u32;
     if !state.turn_annotations.is_empty() {
         let ann = state.turn_annotations.join("\n");
         annotation_tokens = tokenizer::count_tokens(&ann);
-        system.push_str("\n\n## Notes\n");
-        system.push_str(&ann);
+        dyn_suffix.push_str("\n\n## Notes\n");
+        dyn_suffix.push_str(&ann);
     }
-    // Always append the static reminder (stable, small)
-    system.push_str("\n\n注意：status 工具只支持 plan/coding/debug 三种模式，explore/chat 已移除。");
+
+    // Append dynamic suffix to the last user message in the copy (source ctx unchanged)
+    if !dyn_suffix.is_empty() {
+        if let Some(last_user) = messages.iter_mut().rev().find(|m| m.role == "user") {
+            let existing = last_user.content.iter_mut().find_map(|b| {
+                if let dsx_types::ContentBlock::Text { ref mut text } = b {
+                    Some(text)
+                } else {
+                    None
+                }
+            });
+            if let Some(text) = existing {
+                text.push_str(&dyn_suffix);
+            } else {
+                last_user.content.push(dsx_types::ContentBlock::text(&dyn_suffix));
+            }
+        }
+    }
 
     // Clear per-turn annotations for next round
     state.turn_annotations.clear();
 
-    // === Messages: pure conversation, no suffix ===
-    let messages = state.ctx.build(state.config.context_limit);
-
     // === Token breakdown ===
     let mut bd = TokenBreakdown::default();
-    bd.system = base_tokens + tool_help_tokens;
+    bd.system = base_tokens + tool_help_tokens + phase_tokens + reminder_tokens;
     bd.episodic = estimate_message_tokens(&messages);
     bd.total = bd.system + bd.episodic;
 

@@ -300,9 +300,9 @@ pub mod gate {
         GateResult::Pass
     }
 
-    /// Validate OpenAI-compatible message array format.
+    /// Validate message array format.
     /// Catches: orphan tool results, broken alternation, duplicate tool_call_ids.
-    pub fn validate_anthropic_messages(
+    pub fn validate_messages(
         msgs: &[dsx_types::Message],
     ) -> Result<(), GateResult> {
         let mut i = 0;
@@ -339,37 +339,53 @@ pub mod gate {
                             });
                         }
                     }
-                    // If assistant has tool_calls, subsequent messages must be tool results
-                    if let Some(ref tcs) = msgs[i].tool_calls {
-                        if !tcs.is_empty() {
-                            // Check each tool_call_id has a matching tool result
-                            let mut j = i + 1;
-                            while j < msgs.len() && msgs[j].role == "tool" {
-                                j += 1;
-                            }
-                            let tool_results = &msgs[i+1..j];
-                            for tc in tcs {
-                                let has_result = tool_results.iter().any(|tr| {
-                                    tr.tool_call_id.as_deref() == Some(&tc.id)
+                    // If assistant has ToolUse blocks, subsequent messages must be tool results
+                    let tool_uses: Vec<&dsx_types::ContentBlock> = msgs[i].content.iter()
+                        .filter(|b| matches!(b, dsx_types::ContentBlock::ToolUse { .. }))
+                        .collect();
+                    if !tool_uses.is_empty() {
+                        let mut j = i + 1;
+                        while j < msgs.len() && msgs[j].role == "tool" {
+                            j += 1;
+                        }
+                        let tool_results = &msgs[i+1..j];
+                        for tc in &tool_uses {
+                            let (id, name) = match tc {
+                                dsx_types::ContentBlock::ToolUse { id, name, .. } => (id, name),
+                                _ => unreachable!(),
+                            };
+                            let has_result = tool_results.iter().any(|tr| {
+                                tr.content.iter().any(|b| {
+                                    matches!(b, dsx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id)
+                                })
+                            });
+                            if !has_result {
+                                return Err(GateResult::Block {
+                                    reason: format!("Tool call '{}' ('{}') has no matching tool result", id, name),
+                                    repairable: true,
                                 });
-                                if !has_result {
-                                    return Err(GateResult::Block {
-                                        reason: format!("Tool call '{}' ('{}') has no matching tool result", tc.id, tc.function.name),
-                                        repairable: true,
-                                    });
-                                }
                             }
-                            // Check for orphan tool results (no matching tool_call)
-                            for tr in tool_results {
-                                let has_call = tcs.iter().any(|tc| {
-                                    tr.tool_call_id.as_deref() == Some(&tc.id)
-                                });
-                                if !has_call {
-                                    return Err(GateResult::Block {
-                                        reason: format!("Orphan tool result for '{}' — no matching tool_call", tr.tool_call_id.as_deref().unwrap_or("?")),
-                                        repairable: true,
-                                    });
+                        }
+                        // Check for orphan tool results (no matching tool_call)
+                        for tr in tool_results {
+                            let tr_id = tr.content.iter().find_map(|b| {
+                                if let dsx_types::ContentBlock::ToolResult { tool_use_id, .. } = b {
+                                    Some(tool_use_id.as_str())
+                                } else {
+                                    None
                                 }
+                            });
+                            let has_call = tool_uses.iter().any(|tc| {
+                                match tc {
+                                    dsx_types::ContentBlock::ToolUse { id, .. } => tr_id == Some(id.as_str()),
+                                    _ => false,
+                                }
+                            });
+                            if !has_call {
+                                return Err(GateResult::Block {
+                                    reason: format!("Orphan tool result for '{}' — no matching tool_call", tr_id.unwrap_or("?")),
+                                    repairable: true,
+                                });
                             }
                         }
                     }

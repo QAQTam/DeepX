@@ -264,6 +264,8 @@ pub enum AgentToHp {
         max_tokens: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         tools: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_id: Option<String>,
     },
 }
 

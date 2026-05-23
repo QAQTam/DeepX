@@ -37,8 +37,7 @@ use crate::ipc_traits::HealthProbe;
 use crate::liveness::LivenessResult;
 use crate::registry::ProcessRegistry;
 use crate::types::{HpError, ProcessKind, Verdict};
-use crate::StreamEvent;
-use dsx_gateway::GatewayConfig;
+use crate::{GatewayConfig, StreamEvent};
 
 static HP_CONFIG: OnceLock<Config> = OnceLock::new();
 static HP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -110,39 +109,17 @@ impl HealthProbe for HealthService {
 
 /// Load API config: config.json (priority) then env vars, then defaults.
 fn load_hp_config() -> Config {
-    let mut protocol = std::env::var("DSX_PROTOCOL").unwrap_or_default();
-    if protocol.is_empty() { protocol = "openai".into(); }
-
-    // Config file first (highest priority)
     let cfg_path = dsx_types::platform::config_path();
 
     if let Ok(data) = std::fs::read_to_string(&cfg_path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
             let api_key = v.get("api_key").and_then(|k| k.as_str()).unwrap_or("").to_string();
-            let base_url = v.get("base_url").and_then(|b| b.as_str()).unwrap_or("https://api.deepseek.com").to_string();
-            let proto = v.get("protocol").and_then(|p| p.as_str()).unwrap_or(&protocol).to_string();
-            return Config { base_url, api_key, protocol: proto };
+            let base_url = v.get("base_url").and_then(|b| b.as_str()).unwrap_or("https://api.deepseek.com/anthropic").to_string();
+            return Config { base_url, api_key };
         }
     }
 
-    // Fallback: env vars (for Claude Code / legacy setups)
-    let env_key = std::env::var("ANTHROPIC_AUTH_TOKEN").unwrap_or_default();
-    let env_url = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_default();
-
-    if !env_key.is_empty() {
-        let default_url = if protocol == "anthropic" {
-            "https://api.anthropic.com"
-        } else {
-            "https://api.deepseek.com"
-        };
-        return Config {
-            base_url: if env_url.is_empty() { default_url.into() } else { env_url },
-            api_key: env_key,
-            protocol,
-        };
-    }
-
-    Config { base_url: "https://api.deepseek.com".into(), api_key: String::new(), protocol }
+    Config { base_url: "https://api.deepseek.com/anthropic".into(), api_key: String::new() }
 }
 
 pub fn run() {
@@ -363,6 +340,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
     let system = v.get("system").and_then(|v| v.as_str()).map(String::from);
     let effort = v.get("effort").and_then(|v| v.as_str()).map(String::from);
     let max_tokens = v.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(8192) as u32;
+    let user_id = v.get("user_id").and_then(|v| v.as_str()).map(String::from);
 
     let messages_val: Vec<dsx_types::Message> = match v.get("messages")
         .and_then(|m| serde_json::from_value::<Vec<dsx_types::Message>>(m.clone()).ok())
@@ -400,26 +378,11 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         let sys = system;
         let gw = gateway_cfg;
         let effort_o = effort.clone();
-        let proto = config.protocol.clone();
         tokio::spawn(async move {
-            let result = if proto == "anthropic" {
-                // Map DeepSeek effort levels to Anthropic thinking budgets
-                let thinking_budget = effort_o.as_deref().and_then(|e| match e {
-                    "low" => Some(2048u32),
-                    "medium" => Some(4096),
-                    "high" => Some(8192),
-                    _ => None,
-                });
-                dsx_gateway::chat_stream_anthropic(
-                    &gw, &model_o, sys, msgs, tools, max_tokens, thinking_budget, tx,
-                )
-                .await
-            } else {
-                dsx_gateway::chat_stream_openai(
-                    &gw, &model_o, sys, msgs, tools, None, max_tokens, effort_o.as_deref(), tx,
-                )
-                .await
-            };
+            let uid = user_id.clone();
+            let result = crate::anthropic_api::chat_stream(
+                &gw, &model_o, sys, msgs, tools, max_tokens, effort_o, uid, tx,
+            ).await;
             if let Err(e) = result {
                 eprintln!("dsx-hp: gateway error: {e:?}");
             }
@@ -504,17 +467,25 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                     }
                 }
                 StreamEvent::Done { raw_message, stop_reason: sr, usage } => {
-                    if let Some(text) = raw_message.content {
-                        full_content = text;
-                    }
                     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-                    if let Some(tcs) = raw_message.tool_calls {
-                        for tc in tcs {
-                            tool_calls.push(serde_json::json!({
-                                "id": tc.id,
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            }));
+                    let mut thinking_sig: Option<String> = None;
+                    for block in &raw_message.content {
+                        match block {
+                            dsx_types::ContentBlock::Text { text } => {
+                                full_content.push_str(text);
+                            }
+                            dsx_types::ContentBlock::Thinking { thinking, signature } => {
+                                reasoning.push_str(thinking);
+                                thinking_sig = Some(signature.clone());
+                            }
+                            dsx_types::ContentBlock::ToolUse { id, name, input } => {
+                                tool_calls.push(serde_json::json!({
+                                    "id": id,
+                                    "name": name,
+                                    "arguments": serde_json::to_string(input).unwrap_or_default(),
+                                }));
+                            }
+                            _ => {}
                         }
                     }
                     let mut resp = serde_json::json!({
@@ -524,7 +495,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                     if !reasoning.is_empty() {
                         resp["reasoning_content"] = serde_json::json!(reasoning);
                     }
-                    if let Some(ref sig) = raw_message.thinking_signature {
+                    if let Some(ref sig) = thinking_sig {
                         resp["thinking_signature"] = serde_json::json!(sig);
                     }
                     if !tool_calls.is_empty() {

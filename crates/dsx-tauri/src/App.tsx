@@ -90,8 +90,7 @@ export default function App() {
       setTokenUsage(p => ({ ...p, limit }))
       setConfigInfo({ model: c.model || '', effort: c.effort || '' })
       if (c.auto_mode !== undefined) setAutoMode(c.auto_mode)
-      const pvd = c.provider || 'deepseek'
-      let cached = c[`cached_models_${pvd}`] || c.cached_models
+      let cached = c.cached_models_deepseek || c.cached_models
       if (typeof cached === 'string') try { cached = JSON.parse(cached) } catch { /* ignore */ }
       if (Array.isArray(cached)) setModelOptions(cached)
     }).catch(() => {})

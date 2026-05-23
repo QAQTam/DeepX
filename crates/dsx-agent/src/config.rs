@@ -17,9 +17,7 @@ pub struct Config {
     pub active_profile: String,
     pub auto_mode: bool,
     pub max_tool_rounds: Option<u32>,
-    pub provider: String,
     pub phase_configs: HashMap<String, dsx_types::PhasePerfConfig>,
-    pub protocol: String,
 }
 
 impl Default for Config {
@@ -28,18 +26,16 @@ impl Default for Config {
         profiles.insert("default".into(), dsx_types::ProfileConfig {
             model: "deepseek-v4-flash".into(), max_tokens: 16000,
             effort: Some("high".into()), context_limit: 1_000_000,
-            base_url: "https://api.deepseek.com".into(), prompt_lang: "en".into(),
+            base_url: "https://api.deepseek.com/anthropic".into(), prompt_lang: "en".into(),
         });
         Self {
-            api_key: String::new(), base_url: "https://api.deepseek.com".into(),
+            api_key: String::new(), base_url: "https://api.deepseek.com/anthropic".into(),
             model: "deepseek-v4-flash".into(), max_tokens: 16000, context_limit: 1_000_000,
             effort: None, prompt_lang: "en".into(),
             profiles, active_profile: "default".into(),
             auto_mode: true,
             max_tool_rounds: None,
-            provider: "deepseek".into(),
             phase_configs: dsx_types::default_phase_configs(),
-            protocol: "openai".into(),
         }
     }
 }
@@ -77,9 +73,7 @@ impl Config {
                         if let Some(ref e) = pc.effort { if !e.is_empty() { cfg.effort = Some(e.clone()); } }
                         if let Some(pl) = pc.prompt_lang { if !pl.is_empty() { cfg.prompt_lang = pl; } }
                         if let Some(am) = pc.auto_mode { cfg.auto_mode = am; }
-                        if let Some(p) = pc.provider { cfg.provider = p; }
                         if let Some(pc2) = pc.phase_configs { cfg.phase_configs = pc2; }
-                        if let Some(ref p) = pc.protocol { cfg.protocol = p.clone(); }
                     }
                 }
             }
@@ -129,9 +123,7 @@ impl Config {
                 active_profile: Some(self.active_profile.clone()),
                 preferences: None,
                 auto_mode: Some(self.auto_mode),
-                provider: Some(self.provider.clone()),
                 phase_configs: Some(self.phase_configs.clone()),
-                protocol: if self.protocol == "openai" { None } else { Some(self.protocol.clone()) },
             };
             let _ = std::fs::write(&path, serde_json::to_string_pretty(&pc).unwrap_or_default());
         }

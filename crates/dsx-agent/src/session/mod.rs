@@ -5,9 +5,7 @@
 //! Sessions are persisted as [`SessionFile`] on disk, containing
 //! a flat `Vec<Message>` alongside metadata (seed, timestamps, model).
 //! This internal `Vec<Message>` format is the canonical conversation
-//! representation — NOT AnthropicMessage or any API-specific format.
-//! Conversion to API format happens at the API boundary via
-//! [`ContextAssembler::to_anthropic_messages()`].
+//! representation — conversion to API format happens at the gateway layer.
 
 use std::path::PathBuf;
 use dsx_types::Message;
@@ -174,8 +172,14 @@ pub fn plan_path(seed: &str, name: &str) -> Option<PathBuf> {
 pub(crate) fn extract_last_summary(messages: &[Message]) -> String {
     messages.iter()
         .rev()
-        .find(|m| m.role == "assistant" && m.content.is_some())
-        .and_then(|m| m.content.as_ref())
+        .find(|m| m.role == "assistant" && !m.content.is_empty())
+        .and_then(|m| m.content.iter().find_map(|b| {
+            if let dsx_types::ContentBlock::Text { text } = b {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        }))
         .map(|c| {
             let first = c.lines().next().unwrap_or(c);
             safe_truncate(first, 80)

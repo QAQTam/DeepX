@@ -57,11 +57,7 @@ pub struct PersistentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_mode: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub phase_configs: Option<HashMap<String, PhasePerfConfig>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
 }
 
 // ── Profile / Preferences ──
@@ -79,7 +75,7 @@ pub struct ProfileConfig {
     pub prompt_lang: String,
 }
 
-fn default_base_url() -> String { "https://api.deepseek.com".into() }
+fn default_base_url() -> String { "https://api.deepseek.com/anthropic".into() }
 fn default_lang() -> String { "en".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

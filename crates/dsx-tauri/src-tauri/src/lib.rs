@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 struct AgentState {
     stdin: Mutex<Option<Box<dyn Write + Send>>>,
@@ -270,10 +270,7 @@ fn check_config() -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn save_config(provider: String, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, auto_mode: bool, prompt_lang: String, effort: String, protocol: Option<String>) -> Result<(), String> {
-    let proto = protocol.unwrap_or_else(|| {
-        if provider == "anthropic" { "anthropic".into() } else { "openai".into() }
-    });
+fn save_config(api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, auto_mode: bool, prompt_lang: String, effort: String) -> Result<(), String> {
     let p = config_path();
     if let Some(dir) = p.parent() { std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?; }
     // Load existing config to preserve fields we don't want to overwrite
@@ -287,11 +284,11 @@ fn save_config(provider: String, api_key: String, base_url: String, model: Strin
     } else { model };
     // Preserve auxiliary fields
     let mut extra = serde_json::json!({});
-    for key in &["phase_configs", "cached_models", "cached_models_deepseek", "cached_models_custom", "cached_models_anthropic", "profiles", "active_profile", "preferences"] {
+    for key in &["phase_configs", "cached_models", "cached_models_deepseek", "profiles", "active_profile", "preferences"] {
         if let Some(v) = old_cfg.get(*key) { extra[*key] = v.clone(); }
     }
     let mut c = serde_json::json!({
-        "provider": provider, "protocol": proto, "api_key": api_key, "base_url": base_url,
+        "api_key": api_key, "base_url": base_url,
         "model": final_model, "context_limit": context_limit, "max_tokens": max_tokens,
         "auto_mode": auto_mode, "prompt_lang": prompt_lang, "effort": effort,
     });
@@ -308,9 +305,13 @@ async fn fetch_models(api_key: String, base_url: String) -> Result<Vec<String>, 
         .timeout(std::time::Duration::from_secs(10))
         .build().map_err(|e| format!("http client: {e}"))?;
 
-    // Strip /chat/completions or trailing /v1, then append /models
+    // Strip path to get base API root, then append /models
     let stripped = base_url
         .trim_end_matches('/')
+        .trim_end_matches("/anthropic/v1/messages")
+        .trim_end_matches("/anthropic/v1")
+        .trim_end_matches("/anthropic")
+        .trim_end_matches("/v1/messages")
         .trim_end_matches("/chat/completions")
         .trim_end_matches("/v1");
     let url = format!("{}/models", stripped);
@@ -520,20 +521,6 @@ fn delete_all_sessions(app: AppHandle, state: tauri::State<AgentState>) -> Resul
         }
     }
     Ok(())
-}
-
-#[tauri::command]
-fn create_plan(name: String, goal: String, steps: Vec<String>) -> Result<(), String> {
-    let dir = dsx_types::platform::plans_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
-    let content = format!(
-        "---\nstatus: draft\ncreated_at: {}\nupdated_at: {}\nsession: pipe\n---\n\n# Plan: {}\n\n## Goal\n{}\n\n## Steps\n\n{}\n",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-        name, goal,
-        steps.iter().enumerate().map(|(i, s)| format!("{}. [ ] {}", i+1, s)).collect::<Vec<_>>().join("\n")
-    );
-    std::fs::write(dir.join(format!("{}.md", name)), content).map_err(|e| format!("write: {e}"))
 }
 
 #[tauri::command]

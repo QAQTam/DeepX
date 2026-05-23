@@ -5,7 +5,6 @@ members = [
     "crates/dsx-proto",
     "crates/dsx",
     "crates/dsx-hp",
-    "crates/dsx-gateway",
     "crates/dsx-agent",
     "crates/dsx-tools",
     "crates/dsx-sudo",

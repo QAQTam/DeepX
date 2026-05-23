@@ -9,8 +9,6 @@ export const T = {
   model: '模型',
   endpoint: '接口地址',
   apiType: 'API 类型',
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
   contextLimit: '上下文限制',
   language: '提示词语音',
   theme: '主题',

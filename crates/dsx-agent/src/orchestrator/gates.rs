@@ -91,8 +91,8 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
 }
 
 fn last_assistant_mentions(state: &AgentState, path: &str) -> bool {
-    if let Some(last) = state.ctx.to_vec().iter().rev().find(|m| m.role == "assistant" && m.content.is_some()) {
-        last.content.as_ref().map(|c| c.contains(path)).unwrap_or(false)
+    if let Some(last) = state.ctx.to_vec().iter().rev().find(|m| m.role == "assistant" && !m.content.is_empty()) {
+        last.content.iter().any(|b| matches!(b, dsx_types::ContentBlock::Text { text } if text.contains(path)))
     } else {
         false
     }

@@ -126,16 +126,6 @@ pub struct AgentState {
     pub predicted_cache_hit_pct: f64,
     pub cache_analyzer: crate::cache_analyzer::CacheAnalyzer,
 
-    // ── API error salvage ──
-    /// Partial assistant response saved on error, to be re-injected on next user input.
-    pub salvaged: Option<SalvagedResponse>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SalvagedResponse {
-    pub content: String,
-    pub reasoning_content: Option<String>,
-    pub usage: Option<dsx_types::UsageInfo>,
 }
 
 impl AgentState {
@@ -150,7 +140,7 @@ impl AgentState {
 
         let max_tool_rounds = config.max_tool_rounds.unwrap_or(10);
 
-        let mut state = Self {
+        let state = Self {
             ctx,
             config,
             tools_enabled: true,
@@ -209,7 +199,6 @@ impl AgentState {
             last_activity: Instant::now(),
             predicted_cache_hit_pct: 0.0,
             cache_analyzer: crate::cache_analyzer::CacheAnalyzer::new(),
-            salvaged: None,
         };
 
         crate::tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);

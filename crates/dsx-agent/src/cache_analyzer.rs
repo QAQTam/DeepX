@@ -63,12 +63,6 @@ impl CacheAnalyzer {
                     .take_while(|(a, b)| {
                         a.role == b.role
                             && a.content == b.content
-                            && a.name == b.name
-                            && a.tool_call_id == b.tool_call_id
-                            && a.reasoning_content == b.reasoning_content
-                            && a.thinking_signature == b.thinking_signature
-                            && serde_json::to_string(&a.tool_calls).ok()
-                                == serde_json::to_string(&b.tool_calls).ok()
                     })
                     .count();
 

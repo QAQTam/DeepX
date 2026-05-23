@@ -29,7 +29,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use dsx_types::{ToolDef, AnthropicTool};
+use dsx_types::ToolDef;
 
 pub use safety::SafetyVerdict;
 
@@ -201,19 +201,6 @@ impl ToolManager {
             }
         }
         defs
-    }
-
-    pub fn all_anthropic_defs(&self) -> Vec<AnthropicTool> {
-        let mut tools: Vec<AnthropicTool> = Vec::new();
-        for def in self.all_defs() {
-            tools.push(AnthropicTool {
-                name: def.function.name,
-                description: def.function.description,
-                input_schema: def.function.parameters,
-                cache_control: None,
-            });
-        }
-        tools
     }
 
     pub fn filtered_defs(&self) -> Vec<ToolDef> {

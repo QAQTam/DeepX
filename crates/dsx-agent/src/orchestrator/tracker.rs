@@ -58,8 +58,16 @@ pub fn track_tool_code(state: &mut AgentState, tool_name: &str, args: &str, resu
 /// Get the last assistant message text content (for intent gate).
 pub fn last_assistant_content(state: &AgentState) -> String {
     state.ctx.to_vec().iter().rev()
-        .find(|m| m.role == "assistant" && m.content.is_some())
-        .and_then(|m| m.content.clone())
+        .find(|m| m.role == "assistant" && !m.content.is_empty())
+        .and_then(|m| {
+            m.content.iter().find_map(|b| {
+                if let dsx_types::ContentBlock::Text { text } = b {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            })
+        })
         .unwrap_or_default()
 }
 

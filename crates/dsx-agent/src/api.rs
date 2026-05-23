@@ -1,4 +1,4 @@
-use dsx_types::{Message, ToolDef, UsageInfo};
+use dsx_types::{ContentBlock, Message, ToolDef, UsageInfo};
 
 /// Stream events from the API — matches the legacy enum shape.
 #[derive(Debug, Clone)]
@@ -39,7 +39,7 @@ pub async fn chat_stream(
     _tool_choice: Option<&str>,
     max_tokens: u32,
     _stop: Option<&[String]>,
-    _uid: Option<&str>,
+    uid: Option<&str>,
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
 ) -> anyhow::Result<()> {
     let port = hp_port();
@@ -80,6 +80,7 @@ pub async fn chat_stream(
         effort: effort.map(|s| s.to_string()).or_else(|| cfg.effort.clone()),
         max_tokens: Some(if max_tokens > 0 { max_tokens } else { cfg.max_tokens }),
         tools: tools_json,
+        user_id: uid.map(String::from),
     };
 
     // Send frame
@@ -184,14 +185,30 @@ pub async fn chat_stream(
                             })
                             .unwrap_or_default();
 
+                        let mut blocks: Vec<ContentBlock> = Vec::new();
+                        if !content.is_empty() {
+                            blocks.push(ContentBlock::Text { text: content.clone() });
+                        }
+                        let final_reasoning = if reasoning.is_empty() { reasoning_content } else { Some(reasoning.clone()) };
+                        if let Some(ref r) = final_reasoning {
+                            if !r.is_empty() {
+                                blocks.push(ContentBlock::Thinking {
+                                    thinking: r.clone(),
+                                    signature: think_sig.clone().unwrap_or_default(),
+                                });
+                            }
+                        }
+                        for tc in &parsed_tcs {
+                            let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+                            blocks.push(ContentBlock::ToolUse {
+                                id: tc.id.clone(),
+                                name: tc.function.name.clone(),
+                                input,
+                            });
+                        }
                         let raw_message = Message {
                             role: "assistant".into(),
-                            content: if content.is_empty() { None } else { Some(content.clone()) },
-                            name: None,
-                            tool_calls: if parsed_tcs.is_empty() { None } else { Some(parsed_tcs) },
-                            tool_call_id: None,
-                            reasoning_content: if reasoning.is_empty() { reasoning_content } else { Some(reasoning.clone()) },
-                            thinking_signature: think_sig,
+                            content: blocks,
                         };
                         let _ = tx.send(StreamEvent::Done {
                             raw_message,
@@ -216,14 +233,19 @@ pub async fn chat_stream(
     }
 
     // EOF without api_response — partial output
+    let mut blocks: Vec<ContentBlock> = Vec::new();
+    if !content.is_empty() {
+        blocks.push(ContentBlock::Text { text: content });
+    }
+    if !reasoning.is_empty() {
+        blocks.push(ContentBlock::Thinking {
+            thinking: reasoning,
+            signature: think_sig.unwrap_or_default(),
+        });
+    }
     let raw_message = Message {
         role: "assistant".into(),
-        content: if content.is_empty() { None } else { Some(content) },
-        name: None,
-        tool_calls: None,
-        tool_call_id: None,
-        reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning) },
-        thinking_signature: think_sig,
+        content: blocks,
     };
     let _ = tx.send(StreamEvent::Done {
         raw_message,

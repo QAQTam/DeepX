@@ -5,7 +5,7 @@
 
 use crate::api::StreamEvent;
 use crate::tools::{self, classify_tool, execute_tool};
-use dsx_types::{Message, SafetyLevel, ToolCall, UsageInfo};
+use dsx_types::{ContentBlock, FunctionCall, Message, SafetyLevel, ToolCall, UsageInfo};
 use crate::health::monitor::{pre_tool_gate, post_tool_record};
 use crate::agent::{AgentState, ToolResultAppender};
 use crate::orchestrator::gates;
@@ -121,7 +121,22 @@ pub fn finalize_stream_response(
     state.health.record_api_success(&state.config.model);
     state.stream_tool_progress.clear();
 
-    let tool_calls = raw_message.tool_calls.clone().unwrap_or_default();
+    let tool_calls: Vec<ToolCall> = raw_message.content.iter()
+        .filter_map(|b| {
+            if let ContentBlock::ToolUse { id, name, input } = b {
+                Some(ToolCall {
+                    id: id.clone(),
+                    call_type: "function".into(),
+                    function: FunctionCall {
+                        name: name.clone(),
+                        arguments: input.to_string(),
+                    },
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
 
     if tool_calls.is_empty() {
         state.turn_scores.push(turn_scorer::score_current_turn(state));

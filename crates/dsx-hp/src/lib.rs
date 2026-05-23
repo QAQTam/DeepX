@@ -19,6 +19,7 @@ pub mod ipc_traits;
 pub mod emotion;
 pub mod liveness;
 
-// ── Re-export gateway symbols for internal use ──
+// ── Anthropic native API client ──
 
-pub use dsx_gateway::{chat_stream_openai, GatewayConfig, StreamEvent};
+pub mod anthropic_api;
+pub use anthropic_api::{GatewayConfig, StreamEvent};
