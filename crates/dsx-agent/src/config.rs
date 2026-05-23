@@ -121,7 +121,6 @@ impl Config {
                 prompt_lang: Some(self.prompt_lang.clone()),
                 profiles: Some(profiles),
                 active_profile: Some(self.active_profile.clone()),
-                preferences: None,
                 auto_mode: Some(self.auto_mode),
                 phase_configs: Some(self.phase_configs.clone()),
             };

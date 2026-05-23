@@ -12,8 +12,6 @@ pub struct LivenessState {
     pub last_activity: Instant,
     /// Expected interval between heartbeats in seconds.
     pub heartbeat_interval_secs: u64,
-    /// Consecutive missed heartbeats.
-    pub missed_heartbeats: u32,
 }
 
 impl Default for LivenessState {
@@ -21,7 +19,6 @@ impl Default for LivenessState {
         Self {
             last_activity: Instant::now(),
             heartbeat_interval_secs: 30,
-            missed_heartbeats: 0,
         }
     }
 }
@@ -32,7 +29,6 @@ impl LivenessState {
         Self {
             last_activity: Instant::now(),
             heartbeat_interval_secs,
-            missed_heartbeats: 0,
         }
     }
 }
@@ -82,7 +78,6 @@ pub fn check_liveness(state: &LivenessState) -> LivenessResult {
 /// Record a heartbeat — resets the activity timer and missed count.
 pub fn heartbeat(state: &mut LivenessState) {
     state.last_activity = Instant::now();
-    state.missed_heartbeats = 0;
 }
 
 #[cfg(test)]
@@ -111,7 +106,6 @@ mod tests {
         let state = LivenessState {
             last_activity: Instant::now() - std::time::Duration::from_secs(40),
             heartbeat_interval_secs: 30,
-            missed_heartbeats: 0,
         };
         assert!(matches!(check_liveness(&state), LivenessResult::Unresponsive { since_secs: 40 }));
     }
@@ -121,7 +115,6 @@ mod tests {
         let state = LivenessState {
             last_activity: Instant::now() - std::time::Duration::from_secs(120),
             heartbeat_interval_secs: 30,
-            missed_heartbeats: 0,
         };
         assert!(matches!(check_liveness(&state), LivenessResult::Dead { .. }));
     }

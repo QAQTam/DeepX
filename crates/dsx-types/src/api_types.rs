@@ -23,21 +23,6 @@ pub struct TokenDetails {
     pub reasoning_tokens: u32,
 }
 
-// ── Model list ──
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct ModelList {
-    pub data: Vec<ModelInfo>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-pub struct ModelInfo {
-    pub id: String,
-    pub owned_by: String,
-}
-
 // ── Balance ──
 
 #[allow(dead_code)]

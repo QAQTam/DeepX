@@ -9,9 +9,6 @@ pub enum StreamEvent {
     Done { raw_message: dsx_types::Message, usage: Option<UsageInfo>, stop_reason: Option<String> },
     Error(String),
     BalanceResult(String),
-    ExecProgress(String),
-    ModelListResult(Vec<String>),
-    SudoDone(String),
     ExecDone(String, String),
     ExecStarted(String, u32),
 }

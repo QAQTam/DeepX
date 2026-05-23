@@ -1,13 +1,12 @@
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use dsx_proto::{self, AgentToTools, ToolsToAgent};
-use dsx_types::ToolDef;
-
-use crate::tools;
 
 /// Spawn the dsx-tools subprocess with piped stdin/stdout.
-pub fn spawn_process(exe: &std::path::Path) -> (std::process::Child, Box<dyn BufRead + Send>, Box<dyn Write + Send>) {
+/// Returns (child, reader, writer) where reader/writer are boxed for
+/// later handoff to `tools::init_tools_ipc()`.
+pub fn spawn_process(exe: &std::path::Path) -> (Child, Box<dyn BufRead + Send>, Box<dyn Write + Send>) {
     let mut tools_cmd = Command::new(
         if std::env::var("DSX_SINGLE_BINARY").is_ok() {
             exe.to_path_buf()
@@ -31,7 +30,7 @@ pub fn spawn_process(exe: &std::path::Path) -> (std::process::Child, Box<dyn Buf
 
 /// Respawn the tools subprocess. Kills any existing process, spawns new one,
 /// completes the Init/Ready handshake, and stores the child.
-pub fn respawn(child: &mut Option<std::process::Child>) -> bool {
+pub fn respawn(child: &mut Option<Child>) -> bool {
     if let Some(mut c) = child.take() {
         let _ = c.kill();
         let _ = c.wait();
@@ -51,8 +50,10 @@ pub fn respawn(child: &mut Option<std::process::Child>) -> bool {
 
     match ready {
         Some(ToolsToAgent::Ready { tools }) => {
-            let defs: Vec<ToolDef> = tools.iter().filter(|t| crate::tools::ESSENTIAL_TOOLS.contains(&t.function.name.as_str())).cloned().collect();
-            tools::init_tools_ipc(reader, writer, defs);
+            let defs: Vec<_> = tools.iter()
+                .filter(|t| crate::tools::ESSENTIAL_TOOLS.contains(&t.function.name.as_str()))
+                .cloned().collect();
+            crate::tools::init_tools_ipc(reader, writer, defs);
             *child = Some(new_child);
             eprintln!("dsx-agent: tools respawned");
             true

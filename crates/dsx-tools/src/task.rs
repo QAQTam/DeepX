@@ -1,30 +1,7 @@
 //! Task management: create, update, list tasks.
 
 use crate::CURRENT_SESSION;
-use dsx_types::ToolDef;
 use super::{parse_arg, parse_opt};
-
-// ── Task tools ──
-
-#[allow(dead_code)]
-pub(super) fn task_create_def() -> ToolDef {
-    ToolDef {
-        call_type: "function".into(),
-        function: dsx_types::ToolFunction {
-            name: "task_create".into(),
-            description: "Create a tracked task. Break plans into actionable steps.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "subject": {"type": "string", "description": "Task subject, imperative form. E.g. 'Add plan paths to session.rs'"},
-                    "description": {"type": "string", "description": "What needs to be done. 1 sentence."}
-                },
-                "required": ["subject", "description"],
-                "additionalProperties": false
-            }),
-        },
-    }
-}
 
 pub(super) fn exec_task_create(args: &str) -> String {
     let subject = parse_arg(args, "subject");
@@ -46,26 +23,6 @@ pub(super) fn exec_task_create(args: &str) -> String {
     crate::stubs::append_memory(&seed, "tasks", &entry);
 
     format!("[OK] Task created [pending]: {}\nUse task_update(status=in_progress) when you start working on it.", subject)
-}
-
-#[allow(dead_code)]
-pub(super) fn task_update_def() -> ToolDef {
-    ToolDef {
-        call_type: "function".into(),
-        function: dsx_types::ToolFunction {
-            name: "task_update".into(),
-            description: "Update task status: pending→in_progress→completed. Updates short-term memory.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "subject": {"type": "string", "description": "Task subject to update (must match exactly)"},
-                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"], "description": "New task status"}
-                },
-                "required": ["subject", "status"],
-                "additionalProperties": false
-            }),
-        },
-    }
 }
 
 pub(super) fn exec_task_update(args: &str) -> String {
@@ -112,25 +69,6 @@ pub(super) fn exec_task_update(args: &str) -> String {
 
     crate::stubs::write_memory(&seed, "tasks", &updated);
     format!("[OK] Task '{}' → {}", subject, status)
-}
-
-#[allow(dead_code)]
-pub(super) fn task_list_def() -> ToolDef {
-    ToolDef {
-        call_type: "function".into(),
-        function: dsx_types::ToolFunction {
-            name: "task_list".into(),
-            description: "List tasks filtered by status. Review progress and plan next work.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"], "description": "Filter by status. Leave empty for all tasks."}
-                },
-                "required": [],
-                "additionalProperties": false
-            }),
-        },
-    }
 }
 
 pub(super) fn exec_task_list(args: &str) -> String {

@@ -35,14 +35,8 @@ pub use plan_io::{
 pub use memory_io::{
     append_learning,
     append_memory,
-    forget_memory_key,
-    load_pitfalls,
     read_memory,
-    read_semantic_entry,
-    save_pitfalls,
     write_memory,
-    write_memory_preserving_notes,
-    write_semantic_memory,
 };
 pub use restore::{find_live_sessions};
 pub use snapshot::{delete_live_snapshot, load_live_snapshot, save_live_snapshot};

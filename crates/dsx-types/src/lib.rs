@@ -32,9 +32,9 @@ pub use message::{Message, ContentBlock, ToolCall, FunctionCall};
 pub use safety::SafetyLevel;
 pub use tool_def::{ToolDef, ToolFunction};
 pub use state::{TaskPhase, DebugLevel, RouterCommand};
-pub use config::{PersistentConfig, PhasePerfConfig, ProfileConfig, UserPreferences, default_phase_configs};
+pub use config::{PersistentConfig, PhasePerfConfig, ProfileConfig, default_phase_configs};
 pub use session::{SessionFile, SessionMeta, StreamState};
-pub use api_types::{UsageInfo, TokenDetails, ModelInfo, ModelList, BalanceInfo, BalanceEntry};
+pub use api_types::{UsageInfo, TokenDetails, BalanceInfo, BalanceEntry};
 
 // ── Unified arg parsers ──
 pub use arg::{

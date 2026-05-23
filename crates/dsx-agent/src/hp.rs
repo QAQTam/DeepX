@@ -4,7 +4,7 @@ use std::time::Duration;
 use dsx_proto::{self, AgentToHp};
 
 /// Read HP port from port file.
-fn hp_port() -> u16 {
+pub(crate) fn hp_port() -> u16 {
     let path = dsx_types::platform::hp_port_path();
     std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
 }

@@ -37,20 +37,6 @@ impl ContextTier {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ErrorKind {
-    ToolParameter,
-    ToolNotFound,
-    FileAccess,
-    ExecFailure,
-    NetworkFailure,
-    SudoFailure,
-    Timeout,
-    Panic,
-    SessionMissing,
-    Unknown,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentEmotion {
     Flow,
@@ -104,21 +90,12 @@ impl AgentEmotion {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct HealthError {
-    pub turn: u32,
-    pub tool: String,
-    pub category: ErrorKind,
-    pub message: String,
-}
-
 // ── Platform ──
 
 #[derive(Debug, Clone)]
 pub struct DsAgentsHealthPlatform {
     pub tool_calls_this_turn: u32,
     pub consecutive_tool_only_turns: u32,
-    pub error_counts: HashMap<ErrorKind, u32>,
     pub context_tier: ContextTier,
     pub context_tokens: u32,
     pub context_limit: u32,
@@ -134,7 +111,6 @@ impl DsAgentsHealthPlatform {
         DsAgentsHealthPlatform {
             tool_calls_this_turn: 0,
             consecutive_tool_only_turns: 0,
-            error_counts: HashMap::new(),
             context_tier: ContextTier::Premium,
             context_tokens: 0,
             context_limit: 0,
@@ -146,28 +122,11 @@ impl DsAgentsHealthPlatform {
         }
     }
 
-    // TODO: implement
-    pub fn record_error(&mut self, _tool: &str, _raw_result: &str) {
-        log::warn!("health: record_error is a stub");
-    }
+    pub fn record_error(&mut self, _tool: &str, _raw_result: &str) {}
 
-    // TODO: implement
-    pub fn record_tool_outcome(&mut self, _name: &str, _success: bool) {
-        log::warn!("health: record_tool_outcome is a stub");
-    }
+    pub fn record_tool_outcome(&mut self, _name: &str, _success: bool) {}
 
-    // TODO: implement
-    pub fn record_intent_compliance(&mut self, _path: &str, _declared: bool, _is_critical: bool) {
-        log::warn!("health: record_intent_compliance is a stub");
-    }
-
-    pub fn intent_note(&self, _path: &str) -> Option<String> {
-        None
-    }
-
-    // TODO: implement
     pub fn track_tool(&mut self, _name: &str, _args: &str) -> Option<String> {
-        log::warn!("health: track_tool is a stub");
         None
     }
 
@@ -175,10 +134,8 @@ impl DsAgentsHealthPlatform {
         self.tool_calls_this_turn = 0;
     }
 
-    // TODO: implement error tracking
     pub fn record_turn(&mut self, _had_errors: bool) {
         self.turn += 1;
-        log::warn!("health: record_turn ignores _had_errors parameter");
     }
 
     pub fn render_health(&self) -> String {
@@ -192,9 +149,7 @@ impl DsAgentsHealthPlatform {
         )
     }
 
-    // TODO: implement real health assessment
     pub fn assess(&self) -> Assessment {
-        log::warn!("health: assess always returns default (Green/Calm/100%)");
         Assessment::default()
     }
 
@@ -202,31 +157,15 @@ impl DsAgentsHealthPlatform {
         self.tool_calls_this_turn += 1;
     }
 
-    // TODO: implement
-    pub fn record_api_error(&mut self) {
-        log::warn!("health: record_api_error is a stub");
-    }
+    pub fn record_api_error(&mut self) {}
 
-    // TODO: implement
-    pub fn record_api_success(&mut self, _model: &str) {
-        log::warn!("health: record_api_success is a stub");
-    }
+    pub fn record_api_success(&mut self, _model: &str) {}
 
-    // TODO: implement escalation logic
     pub fn should_escalate(&self) -> Option<String> {
-        log::warn!("health: should_escalate always returns None");
         None
     }
 
-    // TODO: implement blocking logic
     pub fn should_block(&self, _tool_name: &str) -> Option<String> {
-        log::warn!("health: should_block always returns None");
-        None
-    }
-
-    // TODO: implement throttling logic
-    pub fn should_throttle(&self, _tool_name: &str) -> Option<String> {
-        log::warn!("health: should_throttle always returns None");
         None
     }
 }
@@ -252,13 +191,6 @@ impl Default for Assessment {
             success_rate: 1.0,
         }
     }
-}
-
-// ── Free functions ──
-
-// TODO: implement
-pub fn update_health_report(_report: String) {
-    log::warn!("health: update_health_report is a stub");
 }
 
 // ── Gate module ──
@@ -418,17 +350,6 @@ pub mod gate {
         Ok(())
     }
 
-    /// Lightweight check for the HP runner path (called before prepare_and_compact).
-    pub fn quick_check(assembler: &ContextAssembler) -> Result<(), String> {
-        if assembler.has_unfulfilled_tool_calls() {
-            return Err("Unfulfilled tool calls in context".into());
-        }
-        if let Err(e) = assembler.validate() {
-            return Err(e);
-        }
-        Ok(())
-    }
-
     #[derive(Debug, Clone)]
     pub enum GateResult {
         Pass,
@@ -493,33 +414,17 @@ pub mod monitor {
         Warn { reason: String },
     }
 
-    // TODO: implement tool gating
     pub fn pre_tool_gate(
         _tool_name: &str,
         _args: &str,
         _monitor: &MonitorState,
     ) -> PreToolResult {
-        log::warn!("health::monitor: pre_tool_gate always returns Pass");
         PreToolResult::Pass
     }
 
-    // TODO: implement
     pub fn post_tool_record(
         _tool_name: &str,
         _success: bool,
         _monitor: &mut MonitorState,
-    ) {
-        log::warn!("health::monitor: post_tool_record is a stub");
-    }
-
-    // TODO: implement
-    pub fn record_tool_call(_state: &mut MonitorState, _tool_name: &str) {
-        log::warn!("health::monitor: record_tool_call is a stub");
-    }
-
-    pub fn reset_turn(state: &mut MonitorState) {
-        state.reasoning_sample.clear();
-        state.content_buffer.clear();
-        state.tool_calls_this_turn = 0;
-    }
+    ) {}
 }

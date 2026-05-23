@@ -6,7 +6,7 @@ pub mod session_persistence;
 pub mod stream_handler;
 pub mod tool_dispatch;
 pub mod tracker;
-pub mod tool_state_machine;
+
 pub mod turn_scorer;
 pub mod learning;
 pub mod phase_detector;

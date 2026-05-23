@@ -47,8 +47,7 @@ pub fn auto_extract_memory(state: &mut AgentState, _final_msg: &Message) {
     // 1c. Record turn + assess health
     state.health.record_turn(had_errors);
     let assessment = state.health.assess();
-    let report = state.health.render_health();
-    crate::health::update_health_report(report);
+    let _report = state.health.render_health();
 
     // Health status — store for TUI display, inject as system note for AI awareness
     let level_tag = if assessment.level == HealthLevel::Red { "RED" }

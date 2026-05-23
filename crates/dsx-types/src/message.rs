@@ -52,7 +52,6 @@ pub struct Message {
     pub content: Vec<ContentBlock>,
 }
 
-#[allow(dead_code)]
 impl Message {
     /// Internal system message (extracted by `build_context`, never sent to API).
     pub fn system(content: &str) -> Self {
@@ -104,9 +103,4 @@ pub struct FunctionCall {
     pub arguments: String, // JSON string
 }
 
-#[allow(dead_code)]
-impl ToolCall {
-    pub fn try_parse_args<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
-        serde_json::from_str(&self.function.arguments).ok()
-    }
-}
+

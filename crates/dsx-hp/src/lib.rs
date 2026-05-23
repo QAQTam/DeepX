@@ -14,9 +14,8 @@ pub mod types;
 pub mod registry;
 pub mod ipc_traits;
 
-// ── Health subsystems (migrated from old health/ directory) ──
+// ── Health subsystems ──
 
-pub mod emotion;
 pub mod liveness;
 
 // ── Anthropic native API client ──

@@ -1,30 +1,7 @@
 //! Plan management: create, update, read, list plans.
 
 use crate::CURRENT_SESSION;
-use dsx_types::ToolDef;
 use super::{parse_arg, parse_opt};
-
-// ── Plan tools ──
-
-#[allow(dead_code)]
-pub(super) fn plan_create_def() -> ToolDef {
-    ToolDef {
-        call_type: "function".into(),
-        function: dsx_types::ToolFunction {
-            name: "plan_create".into(),
-            description: "Create a plan for multi-step tasks. Saved to plans/ and injected as context.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Plan name. Keep it short (3-8 words), lowercase. E.g. 'add-auth-middleware'"},
-                    "goal": {"type": "string", "description": "What this plan aims to accomplish. 1-3 sentences describing the outcome and approach."}
-                },
-                "required": ["name", "goal"],
-                "additionalProperties": false
-            }),
-        },
-    }
-}
 
 pub(super) fn exec_plan_create(args: &str) -> String {
     let name = parse_arg(args, "name");
@@ -48,26 +25,6 @@ pub(super) fn exec_plan_create(args: &str) -> String {
             format!("[OK] Plan created: {}\nPath: {}\nNext: elaborate the Steps section in the plan file using write_file, then call plan_update to set status=active when ready to execute.", name, display)
         }
         None => "[ERROR] plan_create: failed to create plan file".to_string(),
-    }
-}
-
-#[allow(dead_code)]
-pub(super) fn plan_update_def() -> ToolDef {
-    ToolDef {
-        call_type: "function".into(),
-        function: dsx_types::ToolFunction {
-            name: "plan_update".into(),
-            description: "Update plan status: draft→active→done. Auto-summarizes on completion.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Plan name (the slug used in plan_create)"},
-                    "status": {"type": "string", "enum": ["draft", "active", "done", "cancelled"], "description": "New plan status"}
-                },
-                "required": ["name", "status"],
-                "additionalProperties": false
-            }),
-        },
     }
 }
 
@@ -105,25 +62,6 @@ pub(super) fn exec_plan_update(args: &str) -> String {
     }
 }
 
-#[allow(dead_code)]
-pub(super) fn plan_read_def() -> ToolDef {
-    ToolDef {
-        call_type: "function".into(),
-        function: dsx_types::ToolFunction {
-            name: "plan_read".into(),
-            description: "Read a plan by name. Defaults to most recent active/draft plan.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Plan name to read. Leave empty to get the most recent active plan."}
-                },
-                "required": [],
-                "additionalProperties": false
-            }),
-        },
-    }
-}
-
 pub(super) fn exec_plan_read(args: &str) -> String {
     let name = parse_opt(args, "name").unwrap_or_default();
 
@@ -149,23 +87,6 @@ pub(super) fn exec_plan_read(args: &str) -> String {
     match crate::stubs::read_plan_content(&seed, &name) {
         Some(content) => format!("[OK] Plan '{}':\n{}", name, content),
         None => format!("[ERROR] plan_read: plan '{}' not found. Use plan_list to see available plans.", name),
-    }
-}
-
-#[allow(dead_code)]
-pub(super) fn plan_list_def() -> ToolDef {
-    ToolDef {
-        call_type: "function".into(),
-        function: dsx_types::ToolFunction {
-            name: "plan_list".into(),
-            description: "List all plans for current session with statuses.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": false
-            }),
-        },
     }
 }
 

@@ -354,12 +354,6 @@ pub fn write_frame(writer: &mut impl Write, frame: &impl Serialize) -> io::Resul
     Ok(())
 }
 
-/// Convenience: read a raw string line (unparsed JSON).
-pub fn read_line(reader: &mut impl BufRead) -> Option<String> {
-    let mut line = String::new();
-    reader.read_line(&mut line).ok().filter(|n| *n > 0).map(|_| line.trim().to_string())
-}
-
 /// Convenience: write a raw string as a JSON-LP line.
 pub fn write_line(writer: &mut impl Write, line: &str) {
     let _ = writeln!(writer, "{line}");

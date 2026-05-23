@@ -4,28 +4,6 @@ use std::sync::atomic::Ordering;
 
 use crate::CANCEL;
 use crate::{ToolCallCtx, ToolResult};
-use dsx_types::ToolDef;
-
-#[allow(dead_code)]
-pub(super) fn explore_def() -> ToolDef {
-    ToolDef {
-        call_type: "function".into(),
-        function: dsx_types::ToolFunction {
-            name: "explore".into(),
-            description: "Scan directory: file sizes, line counts, signatures. Call FIRST to understand project structure.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Directory to scan", "default": "."}
-                },
-                "required": [],
-                "additionalProperties": false
-            }),
-        },
-    }
-}
-
-
 
 pub(super) fn walk_dir(dir: &str, output: &mut String, depth: usize, max_depth: usize, _rel_prefix: &str) -> std::io::Result<()> {
     if depth >= max_depth || CANCEL.load(Ordering::Relaxed) { return Ok(()); }

@@ -1,34 +1,15 @@
 //! Core types for the dsx-hp daemon: verdict, errors, process metadata.
 //!
 //! All types here are `Serialize + Deserialize` for JSON-LP IPC framing.
-//! No dependency on other hp modules (except `AgentEmotion` in `Verdict::Healthy`).
+
 
 use serde::{Deserialize, Serialize};
-
-use crate::emotion::AgentEmotion;
 
 // ── Verdict — judge() output ──
 
 /// Health verdict — the sole output of `judge()`, serialized as JSON-LP frame.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Verdict {
-    /// All systems normal.
-    Healthy {
-        level: HealthLevel,
-        emotion: Option<AgentEmotion>,
-    },
-    /// Degraded but operational — warnings present but no critical failure.
-    Degraded {
-        level: HealthLevel,
-        reasons: Vec<String>,
-        advice: String,
-    },
-    /// Requires intervention — circuit breaker tripped, API errors accumulating.
-    Alert {
-        severity: AlertSeverity,
-        source: AlertSource,
-        message: String,
-    },
     /// Process presumed dead — heartbeat timeout exceeded.
     Dead {
         pid: u32,
@@ -41,37 +22,8 @@ pub enum Verdict {
 impl Verdict {
     /// Returns `true` for verdicts that demand immediate attention.
     pub fn is_critical(&self) -> bool {
-        matches!(
-            self,
-            Verdict::Dead { .. }
-                | Verdict::Alert { severity: AlertSeverity::Critical, .. }
-        )
+        matches!(self, Verdict::Dead { .. })
     }
-}
-
-// ── Enums ──
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum HealthLevel {
-    Green,
-    Yellow,
-    Red,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AlertSeverity {
-    Info,
-    Warning,
-    Critical,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AlertSource {
-    Liveness,
-    Monitor,
-    CircuitBreaker,
-    Sentinel,
-    Pipeline,
 }
 
 /// Process types that can register with the HP daemon.
@@ -97,14 +49,8 @@ impl std::fmt::Display for ProcessKind {
 /// Errors returned by the `HealthProbe` service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HpError {
-    #[allow(unused)]
     ProcessNotFound(u32),
-    #[allow(unused)]
     DuplicateRegistration(u32),
-    #[allow(unused)]
-    Timeout,
-    #[allow(unused)]
-    Internal(String),
 }
 
 impl std::fmt::Display for HpError {
@@ -112,8 +58,6 @@ impl std::fmt::Display for HpError {
         match self {
             HpError::ProcessNotFound(pid) => write!(f, "process {pid} not found"),
             HpError::DuplicateRegistration(pid) => write!(f, "process {pid} already registered"),
-            HpError::Timeout => write!(f, "operation timed out"),
-            HpError::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
 }
@@ -131,7 +75,6 @@ pub struct ProcessHealth {
     pub alive: bool,
     /// Unix-epoch seconds of the last received heartbeat.
     pub last_heartbeat: u64,
-    pub missed_heartbeats: u32,
 }
 
 /// Lightweight process descriptor for listing.

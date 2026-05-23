@@ -16,10 +16,12 @@ use tokio::process::Command as TokioCommand;
 /// Used by runner.rs and tools_spawn.rs during init/respawn.
 pub const ESSENTIAL_TOOLS: &[&str] = &[
     "exec", "read_file", "write_file", "edit_file", "edit_file_diff",
-    "explore", "search", "list_dir",
+    "explore", "search", "list_dir", "glance", "ask_user", "status",
     "task_create", "task_update", "task_list",
     "plan_create", "plan_update", "plan_read", "plan_list",
-    "web_fetch", "web_search",
+    "web_fetch", "web_search", "git",
+    "mem_save", "mem_read", "mem_forget", "recall",
+    "pitfall_save", "pitfall_guide",
 ];
 
 // ── Global flags ──

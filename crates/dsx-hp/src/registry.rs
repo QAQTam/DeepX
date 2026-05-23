@@ -102,16 +102,6 @@ impl ProcessRegistry {
         self.entries.get(&pid)
     }
 
-    /// List all registered processes.
-    pub fn list(&self) -> Vec<&Registration> {
-        self.entries.values().collect()
-    }
-
-    /// Number of registered processes.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
     /// Check liveness for every registered process.
     ///
     /// Returns a vector of `(pid, result)` pairs for entries that are not `Alive`.
@@ -125,28 +115,6 @@ impl ProcessRegistry {
             }
         }
         results
-    }
-
-    /// Remove all dead entries and return their metadata.
-    ///
-    /// An entry is dead when `check_liveness` returns `LivenessResult::Dead`.
-    pub fn gc(&mut self) -> Vec<(u32, String)> {
-        let dead: Vec<u32> = self
-            .entries
-            .iter()
-            .filter(|(_, e)| {
-                matches!(liveness::check_liveness(&e.liveness), LivenessResult::Dead { .. })
-            })
-            .map(|(&pid, _)| pid)
-            .collect();
-
-        let mut removed = Vec::with_capacity(dead.len());
-        for pid in dead {
-            if let Some(entry) = self.entries.remove(&pid) {
-                removed.push((pid, entry.name.clone()));
-            }
-        }
-        removed
     }
 
     /// Build a `ProcessHealth` for a given PID.
@@ -163,7 +131,6 @@ impl ProcessRegistry {
             name: entry.name.clone(),
             alive,
             last_heartbeat: elapsed,
-            missed_heartbeats: entry.liveness.missed_heartbeats,
         })
     }
 
@@ -202,7 +169,6 @@ mod tests {
             Err(HpError::DuplicateRegistration(_))
         ));
         assert!(reg.query(1001).is_some());
-        assert_eq!(reg.len(), 1);
     }
 
     #[test]
@@ -211,7 +177,6 @@ mod tests {
         reg.register(ProcessKind::Tools, "test-tools", 2001).unwrap();
         assert!(reg.unregister(2001).is_ok());
         assert!(reg.query(2001).is_none());
-        assert_eq!(reg.len(), 0);
     }
 
     #[test]
@@ -233,24 +198,6 @@ mod tests {
         reg.heartbeat(3001).unwrap();
         let results = reg.check_all();
         assert!(!results.iter().any(|(pid, _)| *pid == 3001));
-    }
-
-    #[test]
-    fn test_gc_removes_dead_entries() {
-        let mut reg = ProcessRegistry::new(30);
-        reg.register(ProcessKind::Agent, "alive", 4001).unwrap();
-        reg.register(ProcessKind::Tools, "dead", 4002).unwrap();
-
-        // Age the second entry past the dead threshold (3x interval)
-        if let Some(e) = reg.entries.get_mut(&4002) {
-            e.liveness.last_activity = Instant::now()
-                - std::time::Duration::from_secs(120);
-        }
-
-        let removed = reg.gc();
-        assert_eq!(removed.len(), 1);
-        assert_eq!(removed[0].0, 4002);
-        assert_eq!(reg.len(), 1);
     }
 
     #[test]

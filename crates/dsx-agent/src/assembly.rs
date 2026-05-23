@@ -286,10 +286,6 @@ impl ContextAssembler {
         }
     }
 
-    /// No-op — annotations are read from the Turn and rendered in the trailing
-    /// context note during prepare_and_compact().
-    pub fn flush_annotations(&mut self) {}
-
     /// Returns true if the current turn has any annotations.
     pub fn has_pending_annotations(&self) -> bool {
         self.turns.last().map_or(false, |t| !t.annotations.is_empty())

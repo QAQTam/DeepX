@@ -7,7 +7,6 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
-use std::process::{Command, Stdio};
 
 use dsx_proto::{
     self, TuiToAgent, AgentToTui, AgentToTools, ToolsToAgent, AgentToHp, HpToAgent,
@@ -23,43 +22,7 @@ use crate::session;
 use crate::tokenizer;
 use crate::tools;
 use crate::tool_parser;
-use dsx_types::{ContentBlock, Message, ToolCall, ToolDef};
-
-// ── HP connection ──
-
-fn hp_port() -> u16 {
-    let path = dsx_types::platform::hp_port_path();
-    std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
-}
-
-/// Connect to HP, register, and return the TCP stream.
-/// Uses set_nonblocking(false) + single stream for reliable read/write.
-fn connect_hp() -> Option<TcpStream> {
-    let port = hp_port();
-    if port == 0 {
-        eprintln!("dsx-agent: HP not running (no hp.port) — continuing without AI");
-        return None;
-    }
-
-    let mut stream = match TcpStream::connect(format!("127.0.0.1:{port}")) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("dsx-agent: cannot connect HP: {e}");
-            return None;
-        }
-    };
-
-    let pid = std::process::id();
-    let reg = AgentToHp::Register {
-        kind: "Agent".into(),
-        name: "dsx-agent".into(),
-        pid,
-    };
-    let _ = dsx_proto::write_frame(&mut stream, &reg);
-
-    eprintln!("dsx-agent: connected to HP on port {port}");
-    Some(stream)
-}
+use dsx_types::{ContentBlock, Message, ToolCall};
 
 // ── Session initialization ──
 
@@ -949,121 +912,6 @@ fn handle_user_input(
         &agent.config.model, agent.config.effort.as_deref(), None);
     session_persistence::maybe_save_session(agent);
 }
-// ── Tools subprocess management ──
-
-/// Spawn the dsx-tools subprocess with piped stdin/stdout.
-/// Returns (child, reader, writer) where reader/writer are boxed for
-/// later handoff to `tools::init_tools_ipc()`.
-fn spawn_tools_process(exe: &std::path::Path) -> (std::process::Child, Box<dyn BufRead + Send>, Box<dyn Write + Send>) {
-    let mut tools_cmd = Command::new(
-        if std::env::var("DSX_SINGLE_BINARY").is_ok() {
-            exe.to_path_buf()
-        } else {
-            exe.with_file_name("dsx-tools")
-        }
-    );
-    if std::env::var("DSX_SINGLE_BINARY").is_ok() {
-        tools_cmd.arg("tools");
-    }
-    let mut child = tools_cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("dsx-agent: failed to spawn dsx-tools");
-
-    let reader: Box<dyn BufRead + Send> = Box::new(BufReader::new(child.stdout.take().unwrap()));
-    let writer: Box<dyn Write + Send> = Box::new(child.stdin.take().unwrap());
-    (child, reader, writer)
-}
-
-/// Respawn the tools subprocess. Kills any existing process, spawns new one,
-/// completes the Init/Ready handshake, and stores the child (with pipes consumed).
-fn respawn_tools(child: &mut Option<std::process::Child>) -> bool {
-    // Kill old process
-    if let Some(mut c) = child.take() {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
-    // Spawn new
-    let exe = match std::env::current_exe() {
-        Ok(e) => e,
-        Err(_) => return false,
-    };
-    let (mut new_child, mut reader, mut writer) = spawn_tools_process(&exe);
-
-    // Send init and read Ready
-    let init = AgentToTools::Init {
-        allowed_tools: vec![], session_seed: "pipe".into(), auto_mode: false,
-    };
-    let _init_ok = dsx_proto::write_frame(&mut writer, &init).is_ok();
-    let ready = dsx_proto::read_frame::<ToolsToAgent>(&mut reader).ok().flatten();
-
-    match ready {
-        Some(ToolsToAgent::Ready { tools }) => {
-            let essential: &[&str] = &["exec","read_file","write_file","edit_file","edit_file_diff","explore","search","list_dir","glance","ask_user","status","task_create","task_update","task_list","plan_create","plan_update","plan_read","plan_list","web_fetch","web_search","git","mem_save","mem_read","mem_forget","recall","pitfall_save","pitfall_guide"];
-            let defs: Vec<ToolDef> = tools.iter().filter(|t| essential.contains(&t.function.name.as_str())).cloned().collect();
-            tools::init_tools_ipc(reader, writer, defs);
-            *child = Some(new_child);
-            eprintln!("dsx-agent: tools respawned");
-            true
-        }
-        _ => {
-            eprintln!("dsx-agent: tools respawn failed (no Ready)");
-            let _ = new_child.kill();
-            let _ = new_child.wait();
-            false
-        }
-    }
-}
-
-// ── HP reconnect helper ──
-
-/// Try to (re)connect to HP daemon. If port file is stale, spawn a new HP.
-fn try_reconnect_hp() -> Option<std::net::TcpStream> {
-    let port_path = dsx_types::platform::hp_port_path();
-
-    let port = std::fs::read_to_string(&port_path).ok()
-        .and_then(|s| s.trim().parse::<u16>().ok());
-
-    if let Some(p) = port {
-        if let Ok(stream) = std::net::TcpStream::connect(format!("127.0.0.1:{p}")) {
-            return Some(stream);
-        }
-        let _ = std::fs::write(&port_path, "");
-    }
-
-    // Try to spawn HP from known paths
-    for dsx_path in &[
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent().and_then(|p| p.parent())
-            .map(|p| p.join("target").join("release").join("dsx"))
-            .unwrap_or_default(),
-        std::env::current_exe().ok()
-            .and_then(|e| e.parent().map(|d| d.join("dsx")))
-            .unwrap_or_default(),
-    ] {
-        if !dsx_path.exists() { continue; }
-        if let Ok(mut child) = std::process::Command::new(dsx_path).arg("hp")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            for _ in 0..10 {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                if let Ok(s) = std::fs::read_to_string(&port_path) {
-                    if let Ok(p) = s.trim().parse::<u16>() {
-                        if let Ok(stream) = std::net::TcpStream::connect(format!("127.0.0.1:{p}")) {
-                            return Some(stream);
-                        }
-                    }
-                }
-                if let Ok(Some(_)) = child.try_wait() { break; }
-            }
-        }
-    }
-    None
-}
-
 // ── Main ──
 
 pub fn run() {
@@ -1090,7 +938,7 @@ pub fn run() {
     agent.health.context_limit = agent.config.context_limit;
 
     // ── 4. Connect to HP (single stream, no try_clone) ──
-    let mut hp_conn: Option<BufReader<TcpStream>> = connect_hp().map(BufReader::new);
+    let mut hp_conn: Option<BufReader<TcpStream>> = crate::hp::connect().map(BufReader::new);
 
     // Drain register response
     if let Some(ref mut hp) = hp_conn {
@@ -1099,7 +947,7 @@ pub fn run() {
 
     // ── 5. Spawn dsx-tools ──
     let exe = std::env::current_exe().unwrap();
-    let (tools_child, mut tools_reader, mut tools_writer) = spawn_tools_process(&exe);
+    let (tools_child, mut tools_reader, mut tools_writer) = crate::tools_spawn::spawn_process(&exe);
     let mut tools_option: Option<std::process::Child> = Some(tools_child);
 
     // Send init frame and read Ready response
@@ -1147,7 +995,7 @@ pub fn run() {
                 // Respawn tools if IPC was lost
                 if tools::all_tools().is_empty() {
                     eprintln!("dsx-agent: tools IPC dead, respawning...");
-                    if respawn_tools(&mut tools_option) {
+                    if crate::tools_spawn::respawn(&mut tools_option) {
                         agent.tool_defs = tools::all_tools();
                         eprintln!("dsx-agent: tools IPC restored ({} tools)", agent.tool_defs.len());
                     } else {
@@ -1168,7 +1016,7 @@ pub fn run() {
 
                 if hp_failed {
                     eprintln!("dsx-agent: HP failed, reconnecting...");
-                    if let Some(stream) = try_reconnect_hp() {
+                    if let Some(stream) = crate::hp::try_reconnect() {
                         let reader = std::io::BufReader::new(stream);
                         hp_conn = Some(reader);
                         eprintln!("dsx-agent: HP reconnected, retry input");

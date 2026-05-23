@@ -179,13 +179,6 @@ pub fn run() {
         }
     });
 
-    // Signal handler (SIGINT/SIGTERM)
-    let svc_shutdown = service.clone();
-    let _sig_handler = thread::spawn(move || {
-        let _ = svc_shutdown;
-        thread::park();
-    });
-
     // Accept connections
     for stream in listener.incoming() {
         match stream {

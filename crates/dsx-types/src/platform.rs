@@ -55,11 +55,6 @@ pub fn skills_dir() -> PathBuf {
     data_dir().join("skills")
 }
 
-/// Temporary directory (cross-platform).
-pub fn temp_dir() -> PathBuf {
-    std::env::temp_dir()
-}
-
 /// Kill a process by PID (cross-platform).
 /// - Windows: `taskkill /F /PID`
 /// - Unix: `kill -9`
