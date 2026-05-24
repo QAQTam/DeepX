@@ -99,6 +99,269 @@ fn emit_tool_result(w: &mut impl Write, id: &str, name: &str, content: &str, suc
     let _ = w.flush();
 }
 
+// ── Shared helpers ──
+
+struct HpStreamResponse {
+    content: String,
+    reasoning_content: Option<String>,
+    thinking_signature: Option<String>,
+    usage: Option<dsx_types::UsageInfo>,
+    tool_calls_raw: serde_json::Value,
+}
+
+/// Read HP streaming response until ApiResponse is received.
+/// Forwards ContentDelta / ToolProgress frames to TUI.
+fn read_hp_stream_response(
+    hp: &mut BufReader<TcpStream>,
+    agent: &mut AgentState,
+    tui_writer: &mut impl Write,
+    round: u32,
+) -> Result<HpStreamResponse, ()> {
+    let content: String;
+    let reasoning_content: Option<String>;
+    let thinking_signature: Option<String>;
+    let usage: Option<dsx_types::UsageInfo>;
+    let tcs_raw: serde_json::Value;
+
+    loop {
+        let hp_resp: HpToAgent = match dsx_proto::read_frame(hp) {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                eprintln!("dsx-agent: HP connection closed (EOF)");
+                agent.health.record_api_error();
+                return Err(());
+            }
+            Err(e) => {
+                eprintln!("dsx-agent: HP parse error: {e}");
+                agent.health.record_api_error();
+                return Err(());
+            }
+        };
+
+        match hp_resp {
+            HpToAgent::ContentDelta { delta, reasoning } => {
+                if agent.stream_cancelled || crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+                    eprintln!("dsx-agent: streaming cancelled");
+                    return Err(());
+                }
+                if round == 0 {
+                    eprintln!("dsx DEBUG: hp.ContentDelta d={} r={}", delta.len(), reasoning.as_ref().map(|s| s.len()).unwrap_or(0));
+                }
+
+                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::ContentDelta {
+                    delta: delta.clone(),
+                    reasoning: reasoning.clone(),
+                });
+                if let Some(ref r) = reasoning {
+                    agent.stream_reasoning.push_str(r);
+                }
+                agent.stream_content.push_str(&delta);
+            }
+            HpToAgent::ToolProgress { id, content: prog_content, stream_type } => {
+                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::ToolProgress {
+                    id: id.clone(),
+                    content: prog_content.clone(),
+                    stream_type: stream_type.clone(),
+                });
+            }
+            HpToAgent::ApiResponse {
+                content: c, tool_calls, stop_reason: _,
+                reasoning_content: rc, thinking_signature: ts, usage: u,
+            } => {
+                content = c;
+                tcs_raw = tool_calls.unwrap_or(serde_json::Value::Null);
+                reasoning_content = rc;
+                thinking_signature = ts;
+                usage = u;
+                return Ok(HpStreamResponse { content, reasoning_content, thinking_signature, usage, tool_calls_raw: tcs_raw });
+            }
+            HpToAgent::Error { message } => {
+                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::Error { message: message.clone() });
+                agent.health.record_api_error();
+                return Err(());
+            }
+            _ => { /* ignore non-stream frames */ }
+        }
+    }
+}
+
+fn build_and_push_assistant(
+    agent: &mut AgentState,
+    content: &str,
+    reasoning_content: &Option<String>,
+    thinking_signature: &Option<String>,
+    parsed: &[ToolCall],
+) -> Message {
+    let mut blocks: Vec<ContentBlock> = Vec::new();
+    if !content.is_empty() || parsed.is_empty() {
+        blocks.push(ContentBlock::Text { text: content.to_string() });
+    }
+    if let Some(ref rc) = reasoning_content {
+        if !rc.is_empty() {
+            blocks.push(ContentBlock::Thinking {
+                thinking: rc.clone(),
+                signature: thinking_signature.clone().unwrap_or_default(),
+            });
+        }
+    }
+    for tc in parsed {
+        let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+        blocks.push(ContentBlock::ToolUse {
+            id: tc.id.clone(),
+            name: tc.function.name.clone(),
+            input,
+        });
+    }
+    let assistant_msg = Message {
+        role: "assistant".into(),
+        content: blocks,
+    };
+
+    if let Err(e) = agent.ctx.push_assistant(assistant_msg.clone()) {
+        log::error!("push_assistant failed: {:?} — repairing", e);
+        agent.ctx.push_assistant_restore(assistant_msg.clone());
+    }
+
+    assistant_msg
+}
+
+/// Outcome of execute_single_tool for the caller's loop control.
+enum ToolOutcome {
+    Continue,
+    Executed,
+    Break,
+}
+
+/// Execute one tool call: gates → intercepts → cancel check → IPC execution → tracking.
+/// Returns `Executed` if the tool actually ran (caller may emit ToolState),
+/// `Continue` if gated/intercepted (caller should skip ToolState),
+/// `Break` if IPC is dead (caller should break the tool loop).
+fn execute_single_tool(
+    agent: &mut AgentState,
+    tc: &ToolCall,
+    tui_writer: &mut impl Write,
+) -> ToolOutcome {
+    let name = &tc.function.name;
+    let id = &tc.id;
+    let args = &tc.function.arguments;
+
+    if gates::phase_check_tool(agent, name, id) {
+        emit_tool_result(tui_writer, id, name, "[BLOCKED] Phase gate prevented this tool.", false);
+        return ToolOutcome::Continue;
+    }
+    if gates::explore_gate(agent, name, id, args) {
+        emit_tool_result(tui_writer, id, name, "[BLOCKED] Explore gate prevented this tool.", false);
+        return ToolOutcome::Continue;
+    }
+    if let Some(err_msg) = gates::pre_tool_health_check(agent, name) {
+        let _ = agent.ctx.push_tool_result(id, &err_msg);
+        agent.health.record_error(name, &err_msg);
+        agent.tool_failures += 1;
+        emit_tool_result(tui_writer, id, name, &err_msg, false);
+        return ToolOutcome::Continue;
+    }
+
+    if name == "status" {
+        let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
+        let state = args_val.get("state").and_then(|v| v.as_str()).unwrap_or("coding");
+        if state == "explore" || state == "chat" {
+            let err = format!("[ERROR] Mode '{state}' no longer exists. Use: plan, coding, debug");
+            let _ = agent.ctx.push_tool_result(id, &err);
+            agent.tool_results.push((id.to_string(), err.clone()));
+            emit_tool_result(tui_writer, id, name, &err, false);
+            return ToolOutcome::Continue;
+        }
+        let tp = match state {
+            "plan" => dsx_types::TaskPhase::Plan,
+            "coding" => dsx_types::TaskPhase::Coding,
+            "debug" => dsx_types::TaskPhase::Debug,
+            _ => dsx_types::TaskPhase::Coding,
+        };
+        let level = dsx_types::DebugLevel::Medium;
+        agent.current_task_phase = tp;
+        router::set_phase(tp, level);
+        if agent.auto_mode {
+            apply_phase_config(agent, tp, level);
+        }
+        let phase_name = format!("{:?}", tp).to_lowercase();
+        let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::PhaseChanged { phase: phase_name });
+        let result = format!("[OK] Switched to {} mode", state);
+        let _ = agent.ctx.push_tool_result(id, &result);
+        agent.tool_results.push((id.to_string(), result.clone()));
+        emit_tool_result(tui_writer, id, name, &result, true);
+        return ToolOutcome::Continue;
+    }
+
+    if name == "ask_user" || name == "ask" {
+        let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
+        let question = args_val.get("question")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let options = args_val.get("options")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+            .filter(|v| !v.is_empty());
+        let frame = AgentToTui::AskUser {
+            id: id.to_string(),
+            question,
+            options,
+        };
+        let _ = dsx_proto::write_frame(tui_writer, &frame);
+        agent.pending_ask_user = Some(id.to_string());
+        agent.tool_results.push((id.to_string(), "[ASK_USER] Awaiting your response.".to_string()));
+        emit_tool_result(tui_writer, id, name, "[ASK_USER] Awaiting your response.", false);
+        return ToolOutcome::Continue;
+    }
+
+    if crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+        crate::tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = agent.ctx.push_tool_result(&tc.id, "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.");
+        emit_tool_result(tui_writer, id, name, "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.", false);
+        return ToolOutcome::Continue;
+    }
+
+    let tr_content = crate::tools::execute_tool_with_id(name, "", args, id);
+    if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
+        let mut appender = ToolResultAppender::new(agent);
+        appender.append(name, &tc.id, args, &tr_content);
+        emit_tool_result(tui_writer, id, name, &tr_content, false);
+        return ToolOutcome::Break;
+    }
+
+    let tr_success = !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
+    let failed = !tr_success;
+
+    agent.health.record_tool_call(name);
+    agent.monitor.tool_calls_this_turn += 1;
+    if failed {
+        agent.tool_failures += 1;
+        agent.health.record_error(name, &tr_content);
+    }
+    gates::post_tool_health_record(agent, name, !failed);
+
+    {
+        let mut appender = ToolResultAppender::new(agent);
+        appender.append(name, &tc.id, args, &tr_content);
+    }
+    emit_tool_result(tui_writer, id, name, &tr_content, tr_success);
+
+    tracker::track_tool_code(agent, name, args, &tr_content);
+    if !failed && name == "file"
+        && crate::orchestrator::arg_parser::tool_action(args) == "write"
+    {
+        tracker::track_file_written(agent, args);
+    }
+    if name == "exec" && crate::orchestrator::arg_parser::tool_action(args) == "explore" {
+        agent.has_explored = true;
+    }
+    if name == "file" && crate::orchestrator::arg_parser::tool_action(args) == "read" {
+        agent.turns_since_last_read = 0;
+    }
+
+    ToolOutcome::Executed
+}
+
 // ── User input handler (fully wired) ──
 
 /// Handle a TuiToAgent::UserInput frame with full module integration.
@@ -106,7 +369,7 @@ fn emit_tool_result(w: &mut impl Write, id: &str, name: &str, content: &str, suc
 fn handle_user_input(
     agent: &mut AgentState,
     text: &str,
-    hp: &mut TcpStream,
+    hp: &mut BufReader<TcpStream>,
     tui_writer: &mut impl Write,
     _tui_reader: &mut impl BufRead,
 ) {
@@ -153,7 +416,7 @@ fn handle_user_input(
                 agent.current_task_phase = phase;
                 apply_phase_config(agent, phase, level);
                 let phase_name = format!("{:?}", phase).to_lowercase();
-                let _ = dsx_proto::write_line(tui_writer, &format!(r#"{{"type":"phase_changed","phase":"{}"}}"#, phase_name));
+                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::PhaseChanged { phase: phase_name });
                 log::info!("auto initial phase: {:?} model={} effort={:?}", phase, agent.config.model, agent.config.effort);
             }
         }
@@ -211,21 +474,15 @@ fn handle_user_input(
             break;
         }
 
-        // Repair + compact context
-        
         let (system, messages, breakdown) =
             crate::assembly::build_context(agent);
 
-        // Send cache prediction to TUI
         let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::CachePrediction { hit_rate: agent.predicted_cache_hit_pct });
 
-        // Filter out system-role messages (sent as `system` field above)
         let msgs_no_system: Vec<&Message> = messages.iter().filter(|m| m.role != "system").collect();
         let messages_json = serde_json::to_value(&msgs_no_system).unwrap_or_default();
-        let token_est = tokenizer::estimate_messages_tokens(&messages);
-        log::debug!("turn round={} messages={} tokens={}", _round, messages.len(), token_est);
+        log::debug!("turn round={} messages={} tokens={}", _round, messages.len(), tokenizer::estimate_messages_tokens(&messages));
 
-        // Send api_chat to HP
         let chat = AgentToHp::ApiChat {
             model: agent.config.model.clone(),
             system: Some(system),
@@ -235,81 +492,18 @@ fn handle_user_input(
             tools: Some(serde_json::to_value(&agent.tool_defs).unwrap_or_default()),
             user_id: Some(agent.session_seed.clone()),
         };
-        let _ = dsx_proto::write_frame(hp, &chat);
+        let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
 
-        // ── Read HP response (streaming loop) ──
-        let mut hp_reader = BufReader::new(&mut *hp);
-        let mut content: String;
-        let reasoning_content: Option<String>;
-        let thinking_signature: Option<String>;
-        let usage: Option<dsx_types::UsageInfo>;
-        let tcs_raw: serde_json::Value;
-
-        loop {
-            let hp_resp: HpToAgent = match dsx_proto::read_frame(&mut hp_reader) {
-                Ok(Some(r)) => r,
-                Ok(None) => {
-                    eprintln!("dsx-agent: HP connection closed (EOF)");
-                    agent.health.record_api_error();
-                    return;
-                }
-                Err(e) => {
-                    eprintln!("dsx-agent: HP parse error: {e}");
-                    agent.health.record_api_error();
-                    return;
-                }
+        let HpStreamResponse { mut content, reasoning_content, thinking_signature, usage, tool_calls_raw } =
+            match read_hp_stream_response(hp, agent, tui_writer, _round) {
+                Ok(r) => r,
+                Err(()) => return,
             };
 
-            match hp_resp {
-                HpToAgent::ContentDelta { delta, reasoning } => {
-                    if agent.stream_cancelled || crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) { eprintln!("dsx-agent: streaming cancelled"); return; }
-                    if _round == 0 { eprintln!("dsx DEBUG: hp.ContentDelta d={} r={}", delta.len(), reasoning.as_ref().map(|s| s.len()).unwrap_or(0)); }
-
-                    let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::ContentDelta {
-                        delta: delta.clone(),
-                        reasoning: reasoning.clone(),
-                    });
-                    // Accumulate for phase detection
-                    if let Some(ref r) = reasoning {
-                        agent.stream_reasoning.push_str(r);
-                    }
-                    agent.stream_content.push_str(&delta);
-                }
-                HpToAgent::ToolProgress { id, content: prog_content, stream_type } => {
-                    let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::ToolProgress {
-                        id: id.clone(),
-                        content: prog_content.clone(),
-                        stream_type: stream_type.clone(),
-                    });
-                }
-                HpToAgent::ApiResponse {
-                    content: c, tool_calls, stop_reason: _,
-                    reasoning_content: rc, thinking_signature: ts, usage: u,
-                } => {
-                    content = c;
-                    reasoning_content = rc;
-                    thinking_signature = ts;
-                    usage = u;
-                    tcs_raw = tool_calls.unwrap_or(serde_json::Value::Null);
-                    break;
-                }
-                HpToAgent::Error { message } => {
-                    let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::Error { message: message.clone() });
-                    agent.health.record_api_error();
-                    return;
-                }
-                _ => { /* ignore non-stream frames */ }
-            }
-        }
-
-        // ── Process final api_response ──
         agent.health.record_api_success(&agent.config.model);
 
-        // Parse tool calls (native Anthropic tool_use blocks)
-        let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tcs_raw);
+        let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
 
-        // DeepSeek v4 outputs <tool_use> XML blocks in text content instead of
-        // native Anthropic tool_use blocks. Parse them as fallback.
         if parsed.is_empty() && (content.contains("<tool_use>") || content.contains("<read>") || content.contains("<exec>") || content.contains("<write>") || content.contains("<search>")) {
             let tool_names: Vec<String> = agent.tool_defs.iter().map(|t| t.function.name.clone()).collect();
             let (cleaned, xml_tcs) = tool_parser::parse_xml_tool_calls(&content, &tool_names);
@@ -319,295 +513,122 @@ fn handle_user_input(
 
         let has_tools = !parsed.is_empty();
 
-                // Usage tracking
-                if let Some(ref u) = usage {
-                    agent.api_usage = Some(u.clone());
-                    agent.session_tokens += u.total_tokens as u64;
+        if let Some(ref u) = usage {
+            agent.api_usage = Some(u.clone());
+            agent.session_tokens += u.total_tokens as u64;
+        }
+        agent.token_estimate = breakdown.total;
+        agent.token_breakdown = Some(breakdown);
+        agent.health.context_tokens = agent.tokens_used();
+        agent.health.context_tier = crate::health::ContextTier::from_tokens(
+            agent.health.context_tokens, agent.config.context_limit,
+        );
+
+        if let Some(ref r) = reasoning_content {
+            if agent.auto_mode {
+                let tp = phase_detector::detect_task_phase_from_reasoning(r);
+                if tp != agent.current_task_phase {
+                    agent.current_task_phase = tp;
+                    router::set_phase(tp, router::read_debug_level());
+                    let level = dsx_types::DebugLevel::Medium;
+                    apply_phase_config(agent, tp, level);
+                    let phase_name = format!("{:?}", tp).to_lowercase();
+                    let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::PhaseChanged { phase: phase_name });
                 }
-                agent.token_estimate = breakdown.total;
-                agent.token_breakdown = Some(breakdown);
-                agent.health.context_tokens = agent.tokens_used();
-                agent.health.context_tier = crate::health::ContextTier::from_tokens(
-                    agent.health.context_tokens, agent.config.context_limit,
-                );
+            }
+        }
 
-                // Phase detection from reasoning
-                if let Some(ref r) = reasoning_content {
-                    if agent.auto_mode {
-                        let tp = phase_detector::detect_task_phase_from_reasoning(r);
-                        if tp != agent.current_task_phase {
-                            agent.current_task_phase = tp;
-                            router::set_phase(tp, router::read_debug_level());
-                            // Apply phase-specific config
-                            let level = dsx_types::DebugLevel::Medium;
-                            apply_phase_config(agent, tp, level);
-                            let phase_name = format!("{:?}", tp).to_lowercase();
-                            let _ = dsx_proto::write_line(tui_writer, &format!(r#"{{"type":"phase_changed","phase":"{}"}}"#, phase_name));
-                        }
-                    }
-                }
+        let assistant_msg = build_and_push_assistant(agent, &content, &reasoning_content, &thinking_signature, &parsed);
 
-                // Build and push assistant Message
-                let mut blocks: Vec<ContentBlock> = Vec::new();
-                if !content.is_empty() || parsed.is_empty() {
-                    blocks.push(ContentBlock::Text { text: content.clone() });
-                }
-                if let Some(ref rc) = reasoning_content {
-                    if !rc.is_empty() {
-                        blocks.push(ContentBlock::Thinking {
-                            thinking: rc.clone(),
-                            signature: thinking_signature.clone().unwrap_or_default(),
-                        });
-                    }
-                }
-                for tc in &parsed {
-                    let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
-                    blocks.push(ContentBlock::ToolUse {
-                        id: tc.id.clone(),
-                        name: tc.function.name.clone(),
-                        input,
-                    });
-                }
-                let assistant_msg = Message {
-                    role: "assistant".into(),
-                    content: blocks,
-                };
+        if !has_tools {
+            let final_reasoning = (!agent.stream_reasoning.is_empty())
+                .then(|| agent.stream_reasoning.clone())
+                .or_else(|| reasoning_content.clone());
+            agent.turn_scores.push(turn_scorer::score_current_turn(agent));
+            agent.stream_content.clear();
+            agent.stream_reasoning.clear();
 
-                if let Err(e) = agent.ctx.push_assistant(assistant_msg.clone()) {
-                    log::error!("push_assistant failed: {:?} — repairing", e);
-                                        agent.ctx.push_assistant_restore(assistant_msg.clone());
-                }
-            
+            learning::auto_extract_memory(agent, &assistant_msg);
 
-                if !has_tools {
-                    // ── Final response ──
-                    let final_reasoning = (!agent.stream_reasoning.is_empty())
-                        .then(|| agent.stream_reasoning.clone())
-                        .or_else(|| reasoning_content.clone());
-                    agent.turn_scores.push(turn_scorer::score_current_turn(agent));
-                    agent.stream_content.clear();
-                    agent.stream_reasoning.clear();
+            agent.health.record_turn(false);
+            agent.health_status_line = health_status(agent);
+            agent.health.reset_turn();
 
-                    // extract_reasoning_insights removed with memory module
-                    learning::auto_extract_memory(agent, &assistant_msg);
+            session::save_live_snapshot(
+                &agent.session_seed, &agent.ctx.to_vec(),
+                &agent.config.model, agent.config.effort.as_deref(), None,
+            );
+            session_persistence::maybe_save_session(agent);
 
-                    agent.health.record_turn(false);
-                    agent.health_status_line = health_status(agent);
-                    agent.health.reset_turn();
+            let tui_resp = AgentToTui::ApiResponse {
+                content,
+                tool_calls: None,
+                stop_reason: None,
+                usage,
+                reasoning_content: final_reasoning,
+            };
+            let _ = dsx_proto::write_frame(tui_writer, &tui_resp);
+            return;
+        }
 
-                    session::save_live_snapshot(
-                        &agent.session_seed, &agent.ctx.to_vec(),
-                        &agent.config.model, agent.config.effort.as_deref(), None,
-                    );
-                    session_persistence::maybe_save_session(agent);
+        // ── Tool call round ──
+        agent.tool_calls_this_turn += parsed.len() as u32;
+        agent.monitor.tool_calls_this_turn = agent.tool_calls_this_turn;
 
-                    // Send structured response to TUI using proto type
-                    let tui_resp = AgentToTui::ApiResponse {
-                        content,
-                        tool_calls: None,
-                        stop_reason: None,
-                        usage,
-                        reasoning_content: final_reasoning,
-                    };
-                    let _ = dsx_proto::write_frame(tui_writer, &tui_resp);
-                    return;
-                }
+        session::save_live_snapshot(
+            &agent.session_seed, &agent.ctx.to_vec(),
+            &agent.config.model, agent.config.effort.as_deref(), None,
+        );
 
-                // ── Tool call round ──
-                agent.tool_calls_this_turn += parsed.len() as u32;
-                agent.monitor.tool_calls_this_turn = agent.tool_calls_this_turn;
+        for tc in &parsed {
+            match execute_single_tool(agent, tc, tui_writer) {
+                ToolOutcome::Break => break,
+                ToolOutcome::Continue => continue,
+                ToolOutcome::Executed => {}
+            }
 
-                session::save_live_snapshot(
-                    &agent.session_seed, &agent.ctx.to_vec(),
-                    &agent.config.model, agent.config.effort.as_deref(), None,
-                );
-
-                for tc in &parsed {
-                    let name = &tc.function.name;
-                    let id = &tc.id;
-                    let args = &tc.function.arguments;
-
-                    // ── Gates ──
-                    if gates::phase_check_tool(agent, name, id) {
-                        emit_tool_result(tui_writer, id, name, "[BLOCKED] Phase gate prevented this tool.", false);
-                        continue;
-                    }
-                    if gates::explore_gate(agent, name, id, args) {
-                        emit_tool_result(tui_writer, id, name, "[BLOCKED] Explore gate prevented this tool.", false);
-                        continue;
-                    }
-                    if let Some(err_msg) = gates::pre_tool_health_check(agent, name) {
-                        let _ = agent.ctx.push_tool_result(id, &err_msg);
-                        agent.health.record_error(name, &err_msg);
-                        agent.tool_failures += 1;
-                        emit_tool_result(tui_writer, id, name, &err_msg, false);
-                        continue;
-                    }
-
-                    // ── Intercept status — apply phase change directly ──
-                    if name == "status" {
-                        let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-                        let state = args_val.get("state").and_then(|v| v.as_str()).unwrap_or("coding");
-                        // Reject removed modes with clear feedback
-                        if state == "explore" || state == "chat" {
-                            let err = format!("[ERROR] Mode '{state}' no longer exists. Use: plan, coding, debug");
-                            let _ = agent.ctx.push_tool_result(id, &err);
-                            agent.tool_results.push((id.to_string(), err.clone()));
-                            emit_tool_result(tui_writer, id, name, &err, false);
-                            continue;
-                        }
-                        let tp = match state {
-                            "plan" => dsx_types::TaskPhase::Plan,
-                            "coding" => dsx_types::TaskPhase::Coding,
-                            "debug" => dsx_types::TaskPhase::Debug,
-                            _ => dsx_types::TaskPhase::Coding,
-                        };
-                        let level = dsx_types::DebugLevel::Medium;
-                        agent.current_task_phase = tp;
-                        router::set_phase(tp, level);
-                        if agent.auto_mode {
-                            apply_phase_config(agent, tp, level);
-                        }
-                        let phase_name = format!("{:?}", tp).to_lowercase();
-                        let _ = dsx_proto::write_line(tui_writer, &format!(r#"{{"type":"phase_changed","phase":"{}"}}"#, phase_name));
-                        let result = format!("[OK] Switched to {} mode", state);
-                        let _ = agent.ctx.push_tool_result(id, &result);
-                        agent.tool_results.push((id.to_string(), result.clone()));
-                        emit_tool_result(tui_writer, id, name, &result, true);
-                        continue;
-                    }
-
-                    // ── Intercept ask_user — ask TUI instead of tools subprocess ──
-                    if name == "ask_user" || name == "ask" {
-                        let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-                        let question = args_val.get("question")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .unwrap_or_default();
-                        let options = args_val.get("options")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
-                            .filter(|v| !v.is_empty());
-
-                        // Send AskUser frame to TUI
-                        let frame = AgentToTui::AskUser {
-                            id: id.to_string(),
-                            question,
-                            options,
-                        };
-                        let _ = dsx_proto::write_frame(tui_writer, &frame);
-
-                        agent.pending_ask_user = Some(id.to_string());
-                        agent.tool_results.push((id.to_string(), "[ASK_USER] Awaiting your response.".to_string()));
-                        emit_tool_result(tui_writer, id, name, "[ASK_USER] Awaiting your response.", false);
-                        continue; // Skip calling execute_tool — inner loop continues for other tools
-                    }
-
-                    // ── Pre-cancel check ──
-                    if crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-                        crate::tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
-                        agent.system_note("system", "用户取消了工具执行。".to_string());
-                        // Append a cancelled result so the turn isn't orphaned on session save/restore
-                        let cancel_msg = "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.";
-                        let _ = agent.ctx.push_tool_result(&tc.id, cancel_msg);
-                        emit_tool_result(tui_writer, id, name, cancel_msg, false);
-                        continue;
-                    }
-
-                    // ── Execute tool via IPC (tools.rs owns the pipe) ──
-                    let tr_content = crate::tools::execute_tool_with_id(name, "", args, id);
-                    // If tools IPC is dead, append this error and stop — don't cascade
-                    if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
-                        let mut appender = ToolResultAppender::new(agent);
-                        appender.append(name, &tc.id, args, &tr_content);
-                        emit_tool_result(tui_writer, id, name, &tr_content, false);
-                        break;
-                    }
-                    let tr_success = !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
-                    let failed = !tr_success;
-
-                    // ── Health tracking ──
-                    agent.health.record_tool_call(name);
-                    agent.monitor.tool_calls_this_turn += 1;
-                    if failed {
-                        agent.tool_failures += 1;
-                        agent.health.record_error(name, &tr_content);
-                    }
-                    gates::post_tool_health_record(agent, name, !failed);
-
-                    // ── ToolResultAppender (single entry point) ──
-                    {
-                        let mut appender = ToolResultAppender::new(agent);
-                        appender.append(name, &tc.id, args, &tr_content);
-                    }
-                    emit_tool_result(tui_writer, id, name, &tr_content, tr_success);
-
-                    // ── Tracker ──
-                    tracker::track_tool_code(agent, name, args, &tr_content);
-                    if !failed && name == "file"
-                        && crate::orchestrator::arg_parser::tool_action(args) == "write"
-                    {
-                        tracker::track_file_written(agent, args);
-                    }
-
-                    // ── Side effects ──
-                    if name == "exec" && crate::orchestrator::arg_parser::tool_action(args) == "explore" {
-                        agent.has_explored = true;
-                    }
-                    if name == "file" && crate::orchestrator::arg_parser::tool_action(args) == "read" {
-                        agent.turns_since_last_read = 0;
-                    }
-
-                    // ── Emit ToolState after tool execution ──
-                    let all_tool_calls: Vec<ToolCall> = agent.ctx.to_vec().iter()
-                        .flat_map(|m| &m.content)
-                        .filter_map(|b| {
-                            if let ContentBlock::ToolUse { id, name, input } = b {
-                                Some(ToolCall {
-                                    id: id.clone(),
-                                    call_type: "function".into(),
-                                    function: dsx_types::FunctionCall {
-                                        name: name.clone(),
-                                        arguments: input.to_string(),
-                                    },
-                                })
-                            } else {
-                                None
-                            }
+            let all_tool_calls: Vec<ToolCall> = agent.ctx.to_vec().iter()
+                .flat_map(|m| &m.content)
+                .filter_map(|b| {
+                    if let ContentBlock::ToolUse { id, name, input } = b {
+                        Some(ToolCall {
+                            id: id.clone(),
+                            call_type: "function".into(),
+                            function: dsx_types::FunctionCall {
+                                name: name.clone(),
+                                arguments: input.to_string(),
+                            },
                         })
-                        .collect();
-                    let tool_state_frame = AgentToTui::ToolState {
-                        explored: agent.has_explored,
-                        declared_files: all_tool_calls.iter()
-                            .filter(|tc| tc.function.name == "explore")
-                            .map(|tc| format!("{}: {}", tc.function.name, tc.function.arguments))
-                            .collect(),
-                        read_files: all_tool_calls.iter()
-                            .filter(|tc| tc.function.name.starts_with("read"))
-                            .map(|tc| tc.function.arguments.clone())
-                            .collect(),
-                        written_this_turn: agent.files_written_this_turn.clone(),
-                    };
-                    let _ = dsx_proto::write_frame(tui_writer, &tool_state_frame);
-                }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let tool_state_frame = AgentToTui::ToolState {
+                explored: agent.has_explored,
+                declared_files: all_tool_calls.iter()
+                    .filter(|tc| tc.function.name == "explore")
+                    .map(|tc| format!("{}: {}", tc.function.name, tc.function.arguments))
+                    .collect(),
+                read_files: all_tool_calls.iter()
+                    .filter(|tc| tc.function.name == "read_file")
+                    .map(|tc| tc.function.arguments.clone())
+                    .collect(),
+                written_this_turn: agent.files_written_this_turn.clone(),
+            };
+            let _ = dsx_proto::write_frame(tui_writer, &tool_state_frame);
+        }
 
-            
+        if agent.pending_ask_user.is_some() {
+            break;
+        }
 
-                // If ask_user was called, break outer loop — wait for user response.
-                // NO placeholder is pushed (was the root cause of the silent-drop bug).
-                if agent.pending_ask_user.is_some() {
-                    break;
-                }
-
-                // Safety gate: 3 consecutive failures
-                if agent.tool_failures >= 3 {
-                    log::warn!("safety gate: 3 consecutive tool failures");
-                    agent.turn_scores.push(turn_scorer::score_current_turn(agent));
-                    agent.turn_annotations.push("[System] 3 consecutive tool failures. Respond with analysis — do not call more tools.".to_string());
-                
-                    agent.tool_failures = 0;
-                }
-        // Continue loop — next api_chat includes tool results
+        if agent.tool_failures >= 3 {
+            log::warn!("safety gate: 3 cumulative tool failures");
+            agent.turn_scores.push(turn_scorer::score_current_turn(agent));
+            agent.turn_annotations.push("[System] 3 consecutive tool failures. Respond with analysis — do not call more tools.".to_string());
+            agent.tool_failures = 0;
+        }
     }
 
     // ── Check for pending ask_user before entering post-tool-loop ──
@@ -620,7 +641,9 @@ fn handle_user_input(
     // We parse DSML/XML here so raw markup doesn't appear in the chat,
     // and if valid tool calls are found, execute them in a mini-loop.
 
-    agent.turn_annotations.push(format!("[System] Max tool rounds ({}) reached. Respond with what you have.", agent.max_tool_rounds));
+    if agent.max_tool_rounds > 0 {
+        agent.turn_annotations.push(format!("[System] Max tool rounds ({}) reached. Respond with what you have.", agent.max_tool_rounds));
+    }
 
     let max_post_rounds = 3u32;
     let mut sent_final_response = false;
@@ -628,7 +651,6 @@ fn handle_user_input(
         let (system, messages, _breakdown) =
             crate::assembly::build_context(agent);
 
-        // Send cache prediction to TUI
         let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::CachePrediction { hit_rate: agent.predicted_cache_hit_pct });
 
         let messages_json = serde_json::to_value(&messages).unwrap_or_default();
@@ -642,67 +664,18 @@ fn handle_user_input(
             tools: None,
             user_id: Some(agent.session_seed.clone()),
         };
-        let _ = dsx_proto::write_frame(hp, &chat);
+        let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
 
-        let mut hp_reader = BufReader::new(&mut *hp);
-        let mut content: String;
-        let reasoning_content: Option<String>;
-        let thinking_signature: Option<String>;
-        let usage: Option<dsx_types::UsageInfo>;
-        let tcs_raw: serde_json::Value;
-
-        loop {
-            let hp_resp: HpToAgent = match dsx_proto::read_frame(&mut hp_reader) {
-                Ok(Some(r)) => r,
-                Ok(None) => {
-                    eprintln!("dsx-agent: HP connection closed (EOF)");
-                    agent.health.record_api_error();
-                    return;
-                }
-                Err(e) => {
-                    eprintln!("dsx-agent: HP parse error: {e}");
-                    agent.health.record_api_error();
-                    return;
-                }
+        let HpStreamResponse { mut content, reasoning_content, thinking_signature, usage, tool_calls_raw } =
+            match read_hp_stream_response(hp, agent, tui_writer, _post_round) {
+                Ok(r) => r,
+                Err(()) => return,
             };
-
-            match hp_resp {
-                HpToAgent::ContentDelta { delta, reasoning } => {
-                    if agent.stream_cancelled || crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) { eprintln!("dsx-agent: streaming cancelled"); return; }
-                    let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::ContentDelta {
-                        delta: delta.clone(),
-                        reasoning: reasoning.clone(),
-                    });
-                    if let Some(ref r) = reasoning {
-                        agent.stream_reasoning.push_str(r);
-                    }
-                    agent.stream_content.push_str(&delta);
-                }
-                HpToAgent::ApiResponse {
-                    content: c, tool_calls,
-                    stop_reason: _,
-                    reasoning_content: rc, thinking_signature: ts, usage: u,
-                } => {
-                    content = c;
-                    tcs_raw = tool_calls.unwrap_or(serde_json::Value::Null);
-                    reasoning_content = rc;
-                    thinking_signature = ts;
-                    usage = u;
-                    break;
-                }
-                HpToAgent::Error { message } => {
-                    let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::Error { message: message.clone() });
-                    agent.health.record_api_error();
-                    return;
-                }
-                _ => { /* ignore non-stream frames */ }
-            }
-        }
 
         agent.health.record_api_success(&agent.config.model);
 
         // ── Parse DSML/XML tool calls from content ──
-        let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tcs_raw);
+        let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
         if content.contains("\u{ff5c}DSML\u{ff5c}tool_calls") {
             let (cleaned, dsml_tcs) = tool_parser::parse_dsml_tool_calls(&content, &agent.tool_defs);
             content = cleaned;
@@ -716,29 +689,8 @@ fn handle_user_input(
         }
 
         if parsed.is_empty() {
-            // No tool calls → this is the final answer
-            let mut blocks: Vec<ContentBlock> = Vec::new();
-            if !content.is_empty() {
-                blocks.push(ContentBlock::Text { text: content.clone() });
-            }
-            if let Some(ref rc) = reasoning_content {
-                if !rc.is_empty() {
-                    blocks.push(ContentBlock::Thinking {
-                        thinking: rc.clone(),
-                        signature: thinking_signature.clone().unwrap_or_default(),
-                    });
-                }
-            }
-            let assistant_msg = Message {
-                role: "assistant".into(),
-                content: blocks,
-            };
-
-            let msg_for_learning = assistant_msg.clone();
-            if let Err(e) = agent.ctx.push_assistant(assistant_msg) {
-                log::error!("push_assistant failed: {:?} — repairing", e);
-                agent.ctx.push_assistant_restore(msg_for_learning.clone());
-            }
+            // No tool calls → final answer
+            let assistant_msg = build_and_push_assistant(agent, &content, &reasoning_content, &thinking_signature, &parsed);
 
             let final_reasoning = (!agent.stream_reasoning.is_empty())
                 .then(|| agent.stream_reasoning.clone())
@@ -747,8 +699,7 @@ fn handle_user_input(
             agent.stream_content.clear();
             agent.stream_reasoning.clear();
 
-            // extract_reasoning_insights removed with memory module
-            learning::auto_extract_memory(agent, &msg_for_learning);
+            learning::auto_extract_memory(agent, &assistant_msg);
 
             agent.health.record_turn(false);
 
@@ -760,134 +711,18 @@ fn handle_user_input(
                 usage,
             });
             sent_final_response = true;
-            break; // exit post-tool-loop
+            break;
         }
 
         // ── DSML/XML tool calls found — execute them ──
-        // Do NOT send ApiResponse here — tools are still running.
-        // The TUI already sees streaming content via ContentDelta frames.
-        // ApiResponse is sent only when the model returns no more tools.
+        build_and_push_assistant(agent, &content, &reasoning_content, &thinking_signature, &parsed);
 
-        let mut blocks: Vec<ContentBlock> = Vec::new();
-        if !content.is_empty() {
-            blocks.push(ContentBlock::Text { text: content.clone() });
-        }
-        if let Some(ref rc) = reasoning_content {
-            if !rc.is_empty() {
-                blocks.push(ContentBlock::Thinking {
-                    thinking: rc.clone(),
-                    signature: thinking_signature.clone().unwrap_or_default(),
-                });
-            }
-        }
         for tc in &parsed {
-            let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
-            blocks.push(ContentBlock::ToolUse {
-                id: tc.id.clone(),
-                name: tc.function.name.clone(),
-                input,
-            });
+            match execute_single_tool(agent, tc, tui_writer) {
+                ToolOutcome::Break => break,
+                _ => {}
+            }
         }
-        let assistant_msg = Message {
-            role: "assistant".into(),
-            content: blocks,
-        };
-
-        let msg_for_learning = assistant_msg.clone();
-        if let Err(e) = agent.ctx.push_assistant(assistant_msg) {
-            log::error!("push_assistant failed: {:?} — repairing", e);
-            agent.ctx.push_assistant_restore(msg_for_learning.clone());
-        }
-
-        // Execute tools (same pattern as main loop)
-        for tc in &parsed {
-            let name = &tc.function.name;
-            let id = &tc.id;
-            let args = &tc.function.arguments;
-
-            if gates::phase_check_tool(agent, name, id) {
-                emit_tool_result(tui_writer, id, name, "[BLOCKED] Phase gate prevented this tool.", false);
-                continue;
-            }
-            if gates::explore_gate(agent, name, id, args) {
-                emit_tool_result(tui_writer, id, name, "[BLOCKED] Explore gate prevented this tool.", false);
-                continue;
-            }
-            if let Some(err_msg) = gates::pre_tool_health_check(agent, name) {
-                let _ = agent.ctx.push_tool_result(id, &err_msg);
-                agent.health.record_error(name, &err_msg);
-                agent.tool_failures += 1;
-                emit_tool_result(tui_writer, id, name, &err_msg, false);
-                continue;
-            }
-
-            if name == "status" {
-                let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-                let state = args_val.get("state").and_then(|v| v.as_str()).unwrap_or("coding");
-                if state == "explore" || state == "chat" {
-                    let err = format!("[ERROR] Mode '{state}' no longer exists. Use: plan, coding, debug");
-                    let _ = agent.ctx.push_tool_result(id, &err);
-                    agent.tool_results.push((id.to_string(), err.clone()));
-                    emit_tool_result(tui_writer, id, name, &err, false);
-                    continue;
-                }
-                let tp = match state { "plan" => dsx_types::TaskPhase::Plan, "coding" => dsx_types::TaskPhase::Coding, "debug" => dsx_types::TaskPhase::Debug, _ => dsx_types::TaskPhase::Coding };
-                let level = dsx_types::DebugLevel::Medium;
-                agent.current_task_phase = tp;
-                router::set_phase(tp, level);
-                if agent.auto_mode {
-                    apply_phase_config(agent, tp, level);
-                }
-                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::PhaseChanged { phase: format!("{:?}", tp).to_lowercase() });
-                let result = format!("[OK] Switched to {} mode", state);
-                let _ = agent.ctx.push_tool_result(id, &result);
-                agent.tool_results.push((id.to_string(), result.clone()));
-                emit_tool_result(tui_writer, id, name, &result, true);
-                continue;
-            }
-
-            if name == "ask_user" || name == "ask" {
-                let _ = agent.ctx.push_tool_result(id, "[ASK_USER] Awaiting your response in the Tauri interface.");
-                emit_tool_result(tui_writer, id, name, "[ASK_USER] Awaiting your response.", false);
-                continue;
-            }
-
-            if crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-                crate::tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
-                let cancel_msg = "[CANCELLED] Tool execution cancelled by user.";
-                let _ = agent.ctx.push_tool_result(&tc.id, cancel_msg);
-                emit_tool_result(tui_writer, id, name, cancel_msg, false);
-                continue;
-            }
-
-            let tr_content = crate::tools::execute_tool_with_id(name, "", args, id);
-            if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
-                let mut appender = ToolResultAppender::new(agent);
-                appender.append(name, &tc.id, args, &tr_content);
-                emit_tool_result(tui_writer, id, name, &tr_content, false);
-                break;
-            }
-            let tr_success = !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
-            let failed = !tr_success;
-
-            agent.health.record_tool_call(name);
-            agent.monitor.tool_calls_this_turn += 1;
-            if failed {
-                agent.tool_failures += 1;
-                agent.health.record_error(name, &tr_content);
-            }
-            gates::post_tool_health_record(agent, name, !failed);
-
-            {
-                let mut appender = ToolResultAppender::new(agent);
-                appender.append(name, &tc.id, args, &tr_content);
-            }
-            emit_tool_result(tui_writer, id, name, &tr_content, tr_success);
-
-            tracker::track_tool_code(agent, name, args, &tr_content);
-        }
-
-        // Loop back for another post-round (with updated context)
     }
 
     // Guard: if post-tool-loop exhausted without sending ApiResponse (all 3 rounds
@@ -1004,9 +839,8 @@ pub fn run() {
                 }
                 // Process input — if HP not connected or fails, try reconnect once
                 let hp_failed = if let Some(ref mut hp) = hp_conn {
-                    let hp_read = hp.get_mut();
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                        || handle_user_input(&mut agent, &text, hp_read, &mut tui_writer, &mut tui_reader)
+                        || handle_user_input(&mut agent, &text, hp, &mut tui_writer, &mut tui_reader)
                     ));
                     result.is_err()
                 } else {
@@ -1022,9 +856,8 @@ pub fn run() {
                         eprintln!("dsx-agent: HP reconnected, retry input");
                         // Retry with new connection
                         if let Some(ref mut hp) = hp_conn {
-                            let hp_read = hp.get_mut();
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                || handle_user_input(&mut agent, &text, hp_read, &mut tui_writer, &mut tui_reader)
+                                || handle_user_input(&mut agent, &text, hp, &mut tui_writer, &mut tui_reader)
                             ));
                         }
                     } else {
@@ -1057,12 +890,10 @@ pub fn run() {
                 agent.current_task_phase = task_phase;
                 router::set_phase(task_phase, router::read_debug_level());
 
-                let _ = dsx_proto::write_line(&mut tui_writer, &format!(r#"{{"type":"phase_changed","phase":"{}"}}"#, phase));
+                let _ = dsx_proto::write_frame(&mut tui_writer, &AgentToTui::PhaseChanged { phase });
             }
 
-            TuiToAgent::ToolConfirm { .. } => {
-                // Confirm flow removed — all tools auto-pass
-            }
+            TuiToAgent::ToolConfirm { .. } => {} // Confirm flow removed — all tools auto-pass
 
             TuiToAgent::Cancel => {
                 crate::tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
