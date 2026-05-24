@@ -1,10 +1,6 @@
-pub mod agent_loop;
 pub mod arg_parser;
 pub mod gates;
-pub mod response_processor;
 pub mod session_persistence;
-pub mod stream_handler;
-pub mod tool_dispatch;
 pub mod tracker;
 
 pub mod turn_scorer;
