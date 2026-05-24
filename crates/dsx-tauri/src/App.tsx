@@ -1,9 +1,13 @@
-import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'preact/hooks'
+import { signal, useSignalEffect } from '@preact/signals'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { AnimatePresence, motion } from 'framer-motion'
 import { T } from './i18n'
 import type { Message } from './types'
-import { clearToolOutputs, execLiveOutput, toolResults } from './state'
+import { useChatStore } from './store/chatStore'
+import { useUIStore } from './store/uiStore'
+import { useToolStore } from './store/toolStore'
 import { ChatMessage } from './components/ChatMessage'
 import { InfoPanel } from './components/InfoPanel'
 import { WorkspacePanel } from './components/WorkspacePanel'
@@ -21,14 +25,16 @@ export default function App() {
     try { const s = localStorage.getItem('dsx-messages'); if (s) { const m = JSON.parse(s); if (Array.isArray(m) && m.length) return m } } catch { /* empty */ }
     return []
   }
-  const [messages, setMessages] = useState<Message[]>(restoreMessages)
+  const setMessages = useChatStore((s) => s.setMessages)
+  const messages = useChatStore((s) => s.messages)
   const [input, setInput] = useState('')
-  const [isStreaming, setIsStreaming] = useState(false)
-  const [streamMode, setStreamMode] = useState<'idle' | 'think' | 'answer'>('idle')
+  const isStreaming = useChatStore((s) => s.isStreaming)
+  const setIsStreaming = useChatStore((s) => s.setIsStreaming)
+  const streamMode = useChatStore((s) => s.streamMode)
+  const setStreamMode = useChatStore((s) => s.setStreamMode)
   const streamModeRef = useRef<'idle' | 'think' | 'answer'>('idle')
-  const [sessionId, setSessionId] = useState(() => {
-    try { return localStorage.getItem('dsx-session-id') || '' } catch { return '' }
-  })
+  const sessionId = useChatStore((s) => s.sessionId)
+  const setSessionId = useChatStore((s) => s.setSessionId)
   const sessionKey = sessionId || '__default__'
   const [tokenUsage, setTokenUsage] = useState<{ used: number; limit: number }>(() => {
     try { const s = localStorage.getItem(`dsx-tokens-${sessionKey}`); if (s) { const c = JSON.parse(s); return c } } catch { /* empty */ }
@@ -48,27 +54,42 @@ export default function App() {
     }).catch(() => {})
   }, [])
   useEffect(() => { if (connected) fetchBalance() }, [connected, fetchBalance])
-  const [showSettings, setShowSettings] = useState(false)
+  const showSettings = useUIStore((s) => s.showSettings)
+  const setShowSettings = useUIStore((s) => s.setShowSettings)
   const [configInfo, setConfigInfo] = useState({ model: '', effort: '' })
   const [modelOptions, setModelOptions] = useState<string[]>([])
-  const [askUser, setAskUser] = useState<{ question: string; options?: string[] } | null>(null)
-  const [toolConfirm, setToolConfirm] = useState<{ id: string; toolName: string; action: string; prompt: string } | null>(null)
-  const [toolState, setToolState] = useState<any>(null)
-  const [askAnswer, setAskAnswer] = useState('')
+  const askUser = useUIStore((s) => s.askUser)
+  const setAskUser = useUIStore((s) => s.setAskUser)
+  const toolConfirm = useUIStore((s) => s.toolConfirm)
+  const setToolConfirm = useUIStore((s) => s.setToolConfirm)
+  const toolState = useUIStore((s) => s.toolState)
+  const setToolState = useUIStore((s) => s.setToolState)
+  const askAnswer = useUIStore((s) => s.askAnswer)
+  const setAskAnswer = useUIStore((s) => s.setAskAnswer)
   const [sessions, setSessions] = useState<any[]>([])
   const refreshSessions = useCallback(() => {
     invoke<any[]>('cmd_sessions').then(setSessions).catch(() => {})
   }, [])
-  const [currentPhase, setCurrentPhase] = useState<string>('coding')
+  const clearToolOutputs = useToolStore((s) => s.clearToolOutputs)
+  const setToolResult = useToolStore((s) => s.setToolResult)
+  const appendExecOutput = useToolStore((s) => s.appendExecOutput)
+  const currentPhase = useChatStore((s) => s.currentPhase)
+  const setCurrentPhase = useChatStore((s) => s.setCurrentPhase)
   const [autoMode, setAutoMode] = useState(true)
-  const [planVersion, setPlanVersion] = useState(0)
-  const [configVersion, setConfigVersion] = useState(0)
+  const planVersion = useChatStore((s) => s.planVersion)
+  const bumpPlanVersion = useChatStore((s) => s.bumpPlanVersion)
+  const configVersion = useUIStore((s) => s.configVersion)
+  const bumpConfigVersion = useUIStore((s) => s.bumpConfigVersion)
 
-  const scRef = useRef(''); const srRef = useRef(''); const stRef = useRef<{ name: string; args: string; output?: string }[]>([])
-  const thinkSegmentsRef = useRef<string[]>([]); const currentThinkRef = useRef('')
-  const [tick, setTick] = useState(0); const chatEnd = useRef<HTMLDivElement>(null); const inputRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    const saved = restoreMessages()
+    if (saved.length > 0) setMessages(saved)
+  }, [])
+
+  const sc = signal(''); const sr = signal(''); const st = signal<{ name: string; args: string; output?: string }[]>([])
+  const thinkSegments = signal<string[]>([]); const currentThink = signal('')
+  const chatEnd = useRef<HTMLDivElement>(null); const inputRef = useRef<HTMLTextAreaElement>(null)
   const listenersSetupRef = useRef(false); const connectingRef = useRef(false)
-  const rerender = () => setTick(n => n + 1)
 
   useEffect(() => { try { localStorage.setItem('dsx-messages', JSON.stringify(messages)) } catch { /* full */ } }, [messages])
   useEffect(() => { try { if (sessionId) localStorage.setItem('dsx-session-id', sessionId) } catch { /* full */ } }, [sessionId])
@@ -127,7 +148,7 @@ export default function App() {
     if (sessionId) clearSessionLocalStorage(sessionId)
     setIsStreaming(false)
     setMessages([])
-    scRef.current = ''; srRef.current = ''; stRef.current = []
+    sc.value = ''; sr.value = ''; st.value = []
     setSessionId('')
     setCacheInfo({ hit: 0, miss: 0 })
     setTokenUsage(p => ({ ...p, used: 0 }))
@@ -139,7 +160,7 @@ export default function App() {
 
   const resumeSession = (seed: string) => {
     setIsStreaming(false); setMessages([])
-    scRef.current = ''; srRef.current = ''; stRef.current = []
+    sc.value = ''; sr.value = ''; st.value = []
     setSessionId(seed)
     clearToolOutputs()
     try {
@@ -150,8 +171,13 @@ export default function App() {
       if (ch) setCacheInfo(JSON.parse(ch))
       else setCacheInfo({ hit: 0, miss: 0 })
     } catch { /* ignore */ }
-    invoke('resume_agent', { seed }).then(() => refreshSessions()).catch((e: any) => {
-      setMessages(p => [...p, { role: 'assistant', content: `⚠ 恢复失败: ${e}` }])
+    invoke('resume_agent', { seed }).then(() => {
+      refreshSessions()
+      invoke<any[]>('get_session_messages', { seed }).then(msgs => {
+        if (msgs?.length) setMessages(msgs)
+      }).catch(() => {})
+    }).catch((e: any) => {
+      setMessages(p => [...p, { role: 'assistant', content: `⚠ 恢复失败: ${e}`, timestamp: Date.now() }])
     })
   }
 
@@ -160,7 +186,8 @@ export default function App() {
     setTokenUsage(p => ({ ...p, used: p.used + tokens + (isUser ? 0 : tokens) }))
   }, [])
 
-  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'auto' }) }, [messages, tick])
+  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'auto' }) }, [messages])
+  useSignalEffect(() => { sc.value; sr.value; queueMicrotask(() => chatEnd.current?.scrollIntoView({ behavior: 'auto' })) })
 
   useEffect(() => {
     invoke<boolean>('check_config').then(e => { setConfigDone(e); setChecking(false) }).catch(() => { setConfigDone(true); setChecking(false) })
@@ -173,7 +200,12 @@ export default function App() {
     const resume = prevSessionId ? invoke<any>('resume_agent', { seed: prevSessionId }) : Promise.reject()
     resume.then(() => {
       setConnected(true)
-      if (prevSessionId) setSessionId(prevSessionId)
+      if (prevSessionId) {
+        setSessionId(prevSessionId)
+        invoke<any[]>('get_session_messages', { seed: prevSessionId }).then(msgs => {
+          if (msgs?.length) setMessages(msgs)
+        }).catch(() => {})
+      }
       invoke<any>('cmd_sessions').then(setSessions).catch(() => {})
     }).catch(() => {
       invoke<any>('start_agent').then((r: any) => {
@@ -181,7 +213,7 @@ export default function App() {
         if (r?.sessions) setSessions(r.sessions)
         if (r?.sessions?.length > 0) setSessionId(r.sessions[0].seed || '')
       }).catch((e: any) => {
-        setConnected(false); setMessages(p => [...p, { role: 'assistant', content: `⚠ ${e}` }])
+        setConnected(false); setMessages(p => [...p, { role: 'assistant', content: `⚠ ${e}`, timestamp: Date.now() }])
       })
     })
   }, [configDone])
@@ -190,29 +222,27 @@ export default function App() {
     if (listenersSetupRef.current) return
     listenersSetupRef.current = true
     listen<any>('content-delta', (e: any) => {
-      if (e.payload.delta) { scRef.current += e.payload.delta; streamModeRef.current = 'answer'; setStreamMode('answer') }
+      if (e.payload.delta) { sc.value += e.payload.delta; streamModeRef.current = 'answer'; setStreamMode('answer') }
       if (e.payload.reasoning) {
-        currentThinkRef.current += e.payload.reasoning; srRef.current += e.payload.reasoning
+        currentThink.value += e.payload.reasoning; sr.value += e.payload.reasoning
         streamModeRef.current = 'think'; setStreamMode('think')
       }
-      rerender()
     })
     listen<any>('tool-progress', (e: any) => {
-      if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      const a = stRef.current; const i = a.findIndex(t => t.name === e.payload.id)
+      if (currentThink.value) { thinkSegments.value.push(currentThink.value); currentThink.value = '' }
+      const a = st.value; const i = a.findIndex(t => t.name === e.payload.id)
       if (i >= 0) a[i] = { name: e.payload.id, args: e.payload.content }; else a.push({ name: e.payload.id, args: e.payload.content })
-      rerender()
     })
     listen<any>('api-response', (e: any) => {
       const { content, tool_calls, usage, reasoning_content } = e.payload
-      if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
-      const finalContent = content || scRef.current || ''
-      const finalReasoning = reasoning_content || srRef.current || undefined
+      if (currentThink.value) { thinkSegments.value.push(currentThink.value); currentThink.value = '' }
+      const segments = thinkSegments.value.length > 0 ? [...thinkSegments.value] : undefined
+      const finalContent = content || sc.value || ''
+      const finalReasoning = reasoning_content || sr.value || undefined
       const finalToolCalls = (tool_calls?.length ? tool_calls.map((tc: any) => ({ id: tc.id || '', name: tc.name || tc.function?.name || '', args: tc.arguments || tc.function?.arguments || '' })) : undefined)
-        || (stRef.current.length ? stRef.current.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined)
-      scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []; streamModeRef.current = 'think'; setStreamMode('think')
-      setMessages(p => [...p, { role: 'assistant', content: finalContent, reasoning: finalReasoning, reasoningSegments: segments, tool_calls: finalToolCalls }])
+        || (st.value.length ? st.value.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined)
+      sc.value = ''; sr.value = ''; st.value = []; thinkSegments.value = []; streamModeRef.current = 'think'; setStreamMode('think')
+      setMessages(p => [...p, { role: 'assistant', content: finalContent, reasoning: finalReasoning, reasoningSegments: segments, tool_calls: finalToolCalls, timestamp: Date.now() }])
       if (usage) {
         setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit }))
         if (usage.prompt_cache_hit_tokens !== undefined || usage.prompt_cache_miss_tokens !== undefined) {
@@ -220,20 +250,44 @@ export default function App() {
         }
         fetchBalance()
       } else if (content) { addTokens(content, false) }
-      rerender()
     })
     listen('agent-done', () => {
-      if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
-      const finalContent = scRef.current
-      const finalReasoning = srRef.current
-      const finalTools = stRef.current.length ? stRef.current.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined
-      scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
-      if (finalContent || finalReasoning || finalTools) { setMessages(p => [...p, { role: 'assistant', content: finalContent || '', reasoning: finalReasoning || undefined, reasoningSegments: segments, tool_calls: finalTools }]) }
-      setIsStreaming(false); setStreamMode('idle'); rerender()
-      setPlanVersion(v => v + 1)
+      if (currentThink.value) { thinkSegments.value.push(currentThink.value); currentThink.value = '' }
+      const segments = thinkSegments.value.length > 0 ? [...thinkSegments.value] : undefined
+      const finalContent = sc.value
+      const finalReasoning = sr.value
+      const finalTools = st.value.length ? st.value.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined
+      sc.value = ''; sr.value = ''; st.value = []; thinkSegments.value = []
+      if (finalContent || finalReasoning || finalTools) { setMessages(p => [...p, { role: 'assistant', content: finalContent || '', reasoning: finalReasoning || undefined, reasoningSegments: segments, tool_calls: finalTools, timestamp: Date.now() }]) }
+      setIsStreaming(false); setStreamMode('idle')
+      bumpPlanVersion()
     })
-    listen('agent-error', () => { setIsStreaming(false); setStreamMode('idle'); rerender() })
+    listen<any>('agent-error', (e: any) => {
+      setIsStreaming(false); setStreamMode('idle')
+      const msg = e.payload?.message || e.payload?.error || ''
+      if (!msg) return
+      const codeMatch = msg.match(/\b(\d{3})\b/)
+      const code = codeMatch ? codeMatch[1] : null
+      const labels: Record<string, string> = {
+        '400': '请求格式错误',
+        '401': 'API Key 认证失败，请在设置中检查',
+        '402': '账户余额不足',
+        '422': '请求参数错误',
+        '429': '请求频率过高，请稍后重试',
+        '500': 'DeepSeek 服务器故障，请重试',
+        '503': 'DeepSeek 服务器繁忙，请稍后重试',
+      }
+      let display: string
+      if (code && labels[code]) {
+        const body = msg.replace(/.*\d{3}:\s*/g, '').replace(/^["'{]|["'}]$/g, '').slice(0, 200)
+        display = `⚠ ${labels[code]}${body ? ' — ' + body : ''}`
+      } else if (code) {
+        display = `⚠ HTTP ${code}${msg.slice(0, 120)}`
+      } else {
+        display = `⚠ ${msg.slice(0, 200)}`
+      }
+      setMessages(p => [...p, { role: 'assistant', content: display, timestamp: Date.now() }])
+    })
     listen('agent-closed', () => { setConnected(false); setIsStreaming(false) })
     listen<any>('ask-user', (e: any) => {
       setAskUser({ question: e.payload.question || '需要输入', options: e.payload.options })
@@ -244,14 +298,11 @@ export default function App() {
     })
     listen<any>('tool-result', (e: any) => {
       const { id, name, content, success } = e.payload
-      toolResults[id] = { content: content || '', success }
-      toolResults[name] = { content: content || '', success }
-      rerender()
+      setToolResult(id, name, content || '', success)
     })
     listen<any>('exec-progress', (e: any) => {
       const { id, line } = e.payload
-      execLiveOutput[id] = (execLiveOutput[id] || '') + line + '\n'
-      rerender()
+      appendExecOutput(id, line)
     })
     listen<any>('tool-state', (e: any) => { setToolState(e.payload) })
     listen<any>('phase-changed', (e: any) => { setCurrentPhase(e.payload.phase || 'coding') })
@@ -265,16 +316,16 @@ export default function App() {
   }, [])
 
   useEffect(() => { if (connected) inputRef.current?.focus() }, [connected])
+  useEffect(() => { if (!isStreaming && connected) setTimeout(() => inputRef.current?.focus(), 50) }, [isStreaming, connected])
 
   const send = useCallback(() => {
     if (!input.trim() || isStreaming || !connected) return
     const text = input.trim(); setInput('')
-    setMessages(p => [...p, { role: 'user', content: text }])
+    setMessages(p => [...p, { role: 'user', content: text, timestamp: Date.now() }])
     addTokens(text, true)
-    scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []; currentThinkRef.current = ''
+    sc.value = ''; sr.value = ''; st.value = []; thinkSegments.value = []; currentThink.value = ''
     streamModeRef.current = 'think'; setStreamMode('think'); setIsStreaming(true)
-    invoke('send_message', { text }).catch(() => setIsStreaming(false))
-    setTimeout(() => inputRef.current?.focus(), 50)
+    invoke('send_message', { text }).catch((e: any) => { setIsStreaming(false); setMessages(p => [...p, { role: 'assistant', content: `⚠ ${e?.message || e || '发送失败'}`, timestamp: Date.now() }]) })
   }, [input, isStreaming, connected, addTokens])
 
   const submitAskAnswer = useCallback(() => {
@@ -292,29 +343,28 @@ export default function App() {
   }, [toolConfirm])
 
   if (checking) return <div className="h-screen flex items-center justify-center bg-[var(--bg-primary)]"><span className="text-[var(--muted)] text-sm">{T.loading}</span></div>
-  if (!configDone) return <ConfigWizard onDone={() => { setConfigDone(true); setConfigVersion(v => v + 1) }} />
+  if (!configDone) return <ConfigWizard onDone={() => { setConfigDone(true); bumpConfigVersion() }} />
 
   return (
     <div className="h-screen flex flex-col bg-[var(--bg-primary)]">
       <div className="flex-1 flex min-h-0">
-        <div className="w-56 border-r border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0">
+        <div className="w-56 border-r border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0 contain-content">
           <InfoPanel
             tokens={tokenUsage} cache={cacheInfo} predictedCacheHitPct={predictedCacheHitPct}
             balance={balance} sessionId={sessionId} sessions={sessions}
             onSettings={() => setShowSettings(true)}
             onNewSession={newSession}
             onResumeSession={resumeSession}
-            onRefreshSessions={refreshSessions}
             onDeleteAllSessions={handleDeleteAllSessions}
             onDeleteSession={handleDeleteSession}
           />
         </div>
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 contain-content">
           <div className="h-9 border-b border-[var(--border)] bg-[var(--bg-secondary)] flex items-center px-4 gap-2 text-xs text-[var(--muted)]">
             <span className={`w-2 h-2 rounded-full ${connected ? 'bg-[var(--success)]' : 'bg-[var(--warning)]'}`} />
             {connected ? T.hpConnected : T.connecting}
             {isStreaming && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+              <span className={`text-[11px] px-1.5 py-0.5 rounded ${
                 streamMode === 'think' ? 'text-[var(--warning)] bg-[var(--warning)]/10' : 'text-[var(--success)] bg-[var(--success)]/10'
               }`}>
                 {streamMode === 'think' ? '🧠 思考中' : streamMode === 'answer' ? '💬 回答中' : ''}
@@ -324,10 +374,10 @@ export default function App() {
             {isStreaming && (
               <button onClick={() => {
                 setIsStreaming(false)
-                setMessages(p => [...p, { role: 'assistant', content: '⚠ 已终止操作' }])
+                setMessages(p => [...p, { role: 'assistant', content: '⚠ 已终止操作', timestamp: Date.now() }])
                 invoke('cancel_agent').catch(() => {})
               }}
-                className="px-2 py-0.5 rounded text-[11px] bg-[var(--error)]/10 text-[var(--error)] border border-[var(--error)]/30 hover:bg-[var(--error)]/20 transition-all">
+                className="px-3 py-1 rounded text-xs bg-[var(--error)]/10 text-[var(--error)] border border-[var(--error)]/30 hover:bg-[var(--error)]/20 transition-all min-h-[32px]">
                 ■ 停止
               </button>
             )}
@@ -341,20 +391,34 @@ export default function App() {
                 <div className="text-center"><div className="text-3xl font-bold text-[var(--text-h)] mb-2">DSX</div><div className="text-sm text-[var(--muted)]">{T.welcome}</div></div>
               </div>
             )}
-            {messages.map((msg, i) => <ChatMessage key={i} msg={msg} />)}
-            {isStreaming && (scRef.current || srRef.current || thinkSegmentsRef.current.length > 0 || currentThinkRef.current || stRef.current.length > 0) &&
-              <ChatMessage msg={{
-                role: 'assistant',
-                content: scRef.current || '',
-                reasoning: srRef.current || undefined,
-                reasoningSegments: [...thinkSegmentsRef.current, ...(currentThinkRef.current ? [currentThinkRef.current] : [])],
-                tool_calls: stRef.current.length > 0 ? stRef.current : undefined
-              }} />}
-            {isStreaming && !scRef.current && !srRef.current && thinkSegmentsRef.current.length === 0 && !currentThinkRef.current && stRef.current.length === 0 &&
-              <div className="text-center text-[var(--muted)] text-xs py-8">{T.thinking}</div>}
+            <AnimatePresence initial={false}>
+              {messages.map((msg, i) => (
+                <motion.div key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
+                  <ChatMessage msg={msg} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+            {isStreaming && (sc.value || sr.value || thinkSegments.value.length > 0 || currentThink.value || st.value.length > 0) &&
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
+                <ChatMessage msg={{
+                  role: 'assistant',
+                  content: sc.value || '',
+                  reasoning: sr.value || undefined,
+                  reasoningSegments: [...thinkSegments.value, ...(currentThink.value ? [currentThink.value] : [])],
+                  tool_calls: st.value.length > 0 ? st.value : undefined
+                }} />
+              </motion.div>}
+            {isStreaming && !sc.value && !sr.value && thinkSegments.value.length === 0 && !currentThink.value && st.value.length === 0 &&
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }}
+                className="text-center text-[var(--muted)] text-xs py-8">
+                <motion.span animate={{ opacity: [0.4, 1, 0.4] }} transition={{ duration: 1.5, repeat: Infinity }}>
+                  {T.thinking}
+                </motion.span>
+              </motion.div>}
             <div ref={chatEnd} />
           </div>
-          <div className="border-t border-[var(--border)] px-4 py-1.5 bg-[var(--bg-secondary)] flex items-center gap-2 text-[10px] text-[var(--muted)]">
+          <div className="border-t border-[var(--border)] px-4 py-1.5 bg-[var(--bg-secondary)] flex items-center gap-2 text-xs text-[var(--muted)]">
             {modelOptions.length > 0 ? (
               <select value={autoMode ? 'auto' : configInfo.model} onChange={e => {
                 const val = e.target.value
@@ -366,7 +430,7 @@ export default function App() {
                 }
                 invoke('reload_agent').catch(() => {})
               }}
-                className="bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-1.5 py-0.5 text-[10px] text-[var(--accent)] font-mono outline-none cursor-pointer">
+                className="bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-2 py-1 text-xs text-[var(--accent)] font-mono outline-none cursor-pointer min-h-[32px]">
                 {modelOptions.slice(0, 2).map(m => <option key={m} value={m}>{m.includes('flash') ? 'Flash' : m.includes('reasoner') ? 'Reasoner' : m.split('-').pop() || m}</option>)}
                 <option value="auto">Auto</option>
               </select>
@@ -375,15 +439,15 @@ export default function App() {
             )}
             {configInfo.effort && <span>· 思考: {configInfo.effort === 'high' ? '高' : configInfo.effort === 'medium' ? '中' : configInfo.effort === 'low' ? '低' : configInfo.effort}</span>}
             <span className="flex-1" />
-            <span className={`px-1 py-0.5 rounded text-[9px] font-medium border ${
+            <span className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
               currentPhase === 'plan' ? 'text-[var(--warning)] border-[var(--warning)]' :
               currentPhase === 'coding' ? 'text-[var(--text-h)] border-[var(--border)]' :
               currentPhase === 'debug' ? 'text-[var(--error)] border-[var(--error)]' :
               'text-[var(--accent)] border-[var(--accent)]'
             }`}>
-              {currentPhase.toUpperCase()}
+              {currentPhase === 'plan' ? '📋 PLAN' : currentPhase === 'coding' ? '💻 CODE' : currentPhase === 'debug' ? '🐛 DEBUG' : currentPhase.toUpperCase()}
             </span>
-            <span className="font-mono">{sessionId ? `#${sessionId.slice(0, 8)}` : ''}</span>
+            <span className="font-mono text-xs">{sessionId ? `#${sessionId.slice(0, 8)}` : ''}</span>
           </div>
           <div className="border-t border-[var(--border)] p-4 bg-[var(--bg-secondary)]">
             <div className="max-w-4xl mx-auto flex gap-3">
@@ -396,15 +460,15 @@ export default function App() {
                 style={{ lineHeight: '1.5', position: 'relative' as any }}
                 className="flex-1 bg-[var(--bg-primary)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm text-[var(--text-h)] placeholder-[var(--muted)] outline-none focus:border-[var(--accent)] disabled:opacity-40 resize-none overflow-hidden" />
               <button onClick={send} disabled={isStreaming || !input.trim() || !connected}
-                className="bg-[var(--accent)] text-white rounded-xl px-5 py-3 text-sm font-medium hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed">{isStreaming ? '…' : '→'}</button>
+                className="bg-[var(--accent)] text-white rounded-xl px-6 py-3 text-sm font-medium hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed min-w-[48px] min-h-[44px] flex items-center justify-center transition-all active:scale-95" aria-label="发送">{isStreaming ? '…' : '→'}</button>
             </div>
           </div>
         </div>
-        <div className="w-56 border-l border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0">
+        <div className="w-56 border-l border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0 contain-content">
           <WorkspacePanel currentPhase={currentPhase} planVersion={planVersion} />
         </div>
       </div>
-      {showSettings && <SettingsDialog onClose={() => { setShowSettings(false); setConfigVersion(v => v + 1) }} />}
+      {showSettings && <SettingsDialog onClose={() => { setShowSettings(false); bumpConfigVersion() }} />}
       {askUser && <AskUserDialog question={askUser.question} options={askUser.options}
         answer={askAnswer} setAnswer={setAskAnswer} onSubmit={submitAskAnswer} />}
       {toolConfirm && <ToolConfirmDialog toolName={toolConfirm.toolName} action={toolConfirm.action}

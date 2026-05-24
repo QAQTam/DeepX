@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState } from 'preact/compat'
 import { invoke } from '@tauri-apps/api/core'
 import { T } from '../i18n'
 

@@ -1,11 +1,54 @@
-import { memo, useState } from 'react'
+import { memo, useState, useRef, useCallback } from 'preact/compat'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
 import { T } from '../i18n'
 import type { Message } from '../types'
-import { execLiveOutput, toolResults } from '../state'
+import { useToolStore } from '../store/toolStore'
+
+const fmtTime = (ts?: number) => {
+  if (!ts) return ''
+  const d = new Date(ts)
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+function PreBlock({ children }: { children: React.ReactNode; className?: string }) {
+  const [copied, setCopied] = useState(false)
+  const preRef = useRef<HTMLPreElement>(null)
+
+  const lang = (() => {
+    if (!preRef.current) return ''
+    const code = preRef.current.querySelector('code')
+    if (!code) return ''
+    const m = /language-(\w+)/.exec(code.className)
+    return m ? m[1] : ''
+  })()
+
+  const handleCopy = useCallback(() => {
+    const code = preRef.current?.querySelector('code')
+    const text = code?.textContent || ''
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }, [])
+
+  return (
+    <div className="group relative my-2 border border-[var(--border)] rounded-lg overflow-hidden bg-[#0d1117]">
+      <div className="flex items-center justify-between px-3 py-1 text-[11px] bg-[#161b22] border-b border-[#30363d] text-[#8b949e]">
+        <span>{lang || 'code'}</span>
+        <button onClick={handleCopy}
+          className="opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded text-[11px] hover:bg-[#30363d] text-[#8b949e] hover:text-[#e6edf3]">
+          {copied ? '✓ 已复制' : '复制'}
+        </button>
+      </div>
+      <pre ref={preRef} className="p-3 overflow-x-auto text-[12px] leading-relaxed !my-0 !border-0 !rounded-none">
+        {children}
+      </pre>
+    </div>
+  )
+}
 
 const ChatMessage = memo(function ChatMessage({ msg }: { msg: Message }) {
   const [openSegments, setOpenSegments] = useState<Record<number, boolean>>({})
@@ -51,7 +94,7 @@ const ChatMessage = memo(function ChatMessage({ msg }: { msg: Message }) {
           })}
         </div>
       )}
-      <div className={`inline-block max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+      <div className={`inline-block max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed text-left ${
         msg.role === 'user'
           ? 'bg-[var(--accent)] text-white rounded-br-md shadow-sm'
           : 'bg-[var(--bg-secondary)] text-[var(--text-h)] border border-[var(--border)] rounded-bl-md'
@@ -79,7 +122,7 @@ const ChatMessage = memo(function ChatMessage({ msg }: { msg: Message }) {
                     <code className="bg-[var(--bg-tertiary)] px-1.5 py-0.5 rounded text-[12px] font-mono text-[var(--accent)]" {...props}>{children}</code>
                   )
                 },
-                pre({ children }) { return <pre className="bg-[#0d1117] p-3 rounded-lg overflow-x-auto text-[12px] leading-relaxed my-2 border border-[var(--border)]">{children}</pre> },
+                pre({ children, className }) { return <PreBlock className={className}>{children}</PreBlock> },
                 a({ children, href }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="text-[var(--accent)] underline hover:opacity-80">{children}</a> },
                 ul({ children }) { return <ul className="list-disc pl-5 my-1 space-y-0.5">{children}</ul> },
                 ol({ children }) { return <ol className="list-decimal pl-5 my-1 space-y-0.5">{children}</ol> },
@@ -96,6 +139,11 @@ const ChatMessage = memo(function ChatMessage({ msg }: { msg: Message }) {
           </div>
         )}
       </div>
+      {msg.timestamp && (
+        <div className={`text-xs text-[var(--muted)] mt-0.5 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
+          {fmtTime(msg.timestamp)}
+        </div>
+      )}
     </div>
   )
 })
@@ -146,6 +194,7 @@ function ToolCard({ tc }: { tc: any }) {
 }
 
 function ExecBody({ tc }: { tc: any }) {
+  const execLiveOutput = useToolStore((s) => s.execLiveOutput)
   return (
     <div className="px-3 py-2 font-mono text-[12px] leading-relaxed text-[#e6edf3]">
       <div className="flex items-center gap-2 text-[#8b949e] mb-1">
@@ -248,12 +297,13 @@ function GitBody({ tc }: { tc: any }) {
 }
 
 function ToolResult({ tc }: { tc: any }) {
+  const toolResults = useToolStore((s) => s.toolResults)
   const r = toolResults[tc.id || ''] || toolResults[tc.name]
   if (!r) return null
   const lines = r.content.split('\n').length
   return (
     <details className="group border-t border-[var(--border)]">
-      <summary className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-mono text-[var(--muted)] cursor-pointer hover:text-[var(--accent)] select-none">
+      <summary className="flex items-center gap-1.5 px-3 py-1 text-xs font-mono text-[var(--muted)] cursor-pointer hover:text-[var(--accent)] select-none">
         <span className="group-open:rotate-90 transition-transform">▸</span>
         <span className={r.success ? 'text-[var(--success)]' : 'text-[var(--error)]'}>{r.success ? '✓' : '✗'}</span>
         <span>{r.success ? '成功' : '失败'} · {lines} 行</span>

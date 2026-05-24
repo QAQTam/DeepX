@@ -4,6 +4,7 @@ export interface Message {
   reasoning?: string
   reasoningSegments?: string[]
   tool_calls?: ToolCallEntry[]
+  timestamp?: number
 }
 
 export interface ToolCallEntry {

@@ -7,7 +7,7 @@ export function ToolStateIndicator({ toolState }: { toolState: any }) {
     { label: '写入', done: written_this_turn?.length > 0, count: written_this_turn?.length, color: 'var(--warning)' },
   ]
   return (
-    <div className="flex items-center gap-2 text-[10px]">
+    <div className="flex items-center gap-2 text-xs">
       {steps.map((s, i) => (
         <div key={i} className="flex items-center gap-1">
           <span className={`w-1.5 h-1.5 rounded-full ${s.done ? '' : 'opacity-30'}`}

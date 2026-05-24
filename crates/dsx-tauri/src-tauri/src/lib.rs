@@ -241,6 +241,14 @@ fn scan_sessions() -> Vec<serde_json::Value> {
             }
         }
     }
+    // Deduplicate by seed (old flat .json + new directory may coexist for same seed)
+    let mut deduped: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    for s in sessions.drain(..) {
+        if let Some(seed) = s["seed"].as_str().map(|s| s.to_string()) {
+            deduped.entry(seed).or_insert(s);
+        }
+    }
+    let mut sessions: Vec<_> = deduped.into_values().collect();
     sessions.sort_by(|a, b| {
         let au = a["updated_at"].as_u64().unwrap_or(0);
         let bu = b["updated_at"].as_u64().unwrap_or(0);
@@ -429,6 +437,33 @@ fn resume_agent(app: AppHandle, state: tauri::State<AgentState>, seed: String) -
 }
 
 #[tauri::command]
+fn get_session_messages(seed: String) -> Result<Vec<serde_json::Value>, String> {
+    let dir = dsx_types::platform::sessions_dir();
+    if !dir.is_dir() { return Ok(vec![]); }
+    for entry in std::fs::read_dir(&dir).map_err(|e| format!("read_dir: {e}"))?.flatten() {
+        let fname = entry.file_name().to_string_lossy().to_string();
+        if !fname.starts_with(&seed) { continue; }
+        let path = if entry.path().is_dir() {
+            entry.path().join("session.json")
+        } else {
+            entry.path()
+        };
+        if !path.is_file() { continue; }
+        let data = std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))?;
+        // Try new SessionFile format first, then legacy
+        if let Ok(file) = serde_json::from_str::<dsx_types::SessionFile>(&data) {
+            return Ok(file.messages.into_iter().map(|m| serde_json::to_value(m).unwrap_or_default()).collect());
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+            if let Some(msgs) = val["messages"].as_array() {
+                return Ok(msgs.clone());
+            }
+        }
+    }
+    Ok(vec![])
+}
+
+#[tauri::command]
 fn set_workspace(path: String) -> Result<(), String> {
     if !std::path::Path::new(&path).exists() {
         return Err("Path does not exist".to_string());
@@ -588,7 +623,7 @@ pub fn run() {
             start_agent, send_message, reload_agent, stop_agent, resume_agent,
             set_workspace, get_workspace, scan_directory,
             confirm_tool, cancel_agent, set_phase,
-            cmd_sessions, delete_session, delete_all_sessions,
+            cmd_sessions, delete_session, delete_all_sessions, get_session_messages,
             list_plans, read_plan, get_balance,
         ])
         .run(tauri::generate_context!())
