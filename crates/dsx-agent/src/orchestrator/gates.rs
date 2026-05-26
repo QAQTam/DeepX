@@ -30,7 +30,7 @@ pub fn post_tool_health_record(state: &mut AgentState, name: &str, success: bool
     state.health.record_tool_outcome(name, success);
 }
 
-use super::arg_parser::{tool_action, parse_file_arg, parse_cmd_arg};
+use dsx_types::arg::{tool_action, parse_file_arg, parse_cmd_arg};
 use super::tracker::last_assistant_content;
 use crate::orchestrator::turn_scorer;
 

@@ -114,12 +114,6 @@ fn exec_context7_resolve(args: &str) -> String {
     if let Some(q) = v.get("query").and_then(|v| v.as_str()) {
         mapped.insert("query".to_string(), serde_json::json!(q));
     }
-    // Also check top-level key directly (IPC ctx passes the original args)
-    if !mapped.contains_key("libraryName") {
-        if let Some(name) = v.get("libraryName").and_then(|v| v.as_str()) {
-            mapped.insert("libraryName".to_string(), serde_json::json!(name));
-        }
-    }
     exec_context7_rpc("resolve-library-id", &serde_json::Value::Object(mapped))
 }
 
@@ -202,7 +196,7 @@ fn exec_web_search(args: &str) -> String {
     let url = format!("https://cn.bing.com/search?q={}&setlang=zh-cn", urlencoding(&query));
     let client = match reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .user_agent("dsx/4.0")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
     {
         Ok(c) => c,
@@ -210,36 +204,52 @@ fn exec_web_search(args: &str) -> String {
     };
     match client.get(&url).send() {
         Ok(resp) => {
-            let _status = resp.status();
             match resp.text() {
                 Ok(body) => {
                     let mut results = Vec::new();
-                    for cap in body.match_indices("<a href=\"http") {
-                        let rest = &body[cap.0..];
-                        if let Some(end) = rest.find("</a>") {
-                            let tag = &rest[..end + 4];
-                            let text = strip_html(tag);
-                            if !text.is_empty() && text.len() > 5 {
-                                results.push(text);
-                            }
-                        }
+                    // Bing wraps results in <li class="b_algo">. Split on this anchor.
+                    for chunk in body.split("<li class=\"b_algo\"") {
                         if results.len() >= 15 { break; }
-                    }
-                    for cap in body.match_indices("<p>") {
-                        let rest = &body[cap.0..];
-                        if let Some(end) = rest.find("</p>") {
-                            let text = strip_html(&rest[..end + 4]);
-                            let t = text.trim();
-                            if t.len() > 10 && !results.contains(&t.to_string()) {
-                                results.push(format!("  {}", t));
+                        // Title: <h2> ... <a href="URL">Title</a>
+                        let title_url = chunk.find("<h2")
+                            .and_then(|h2| chunk[h2..].find("<a ")
+                                .and_then(|a| {
+                                    let seg = &chunk[h2 + a..];
+                                    let href = seg.split("href=\"").nth(1)
+                                        .and_then(|s| s.split('"').next())
+                                        .unwrap_or("");
+                                    let title_start = seg.find('>').map(|i| i + 1).unwrap_or(0);
+                                    let title = seg[title_start..].split("</a>").next()
+                                        .unwrap_or("");
+                                    Some((href.to_string(), strip_html(title)))
+                                }));
+                        // Snippet: <p class="b_lineclamp2"> ... </p>
+                        let snippet = chunk.find("b_lineclamp")
+                            .and_then(|b| {
+                                let seg = &chunk[b..];
+                                seg.find('>').map(|i| &seg[i + 1..])
+                                    .and_then(|s| s.split("</p>").next())
+                            })
+                            .map(|s| {
+                                let t = strip_html(s).replace("&ensp;"," ").replace("&#0183;","·")
+                                    .replace("&amp;","&").replace("&lt;","<").replace("&gt;",">");
+                                t.trim().to_string()
+                            });
+                        if let Some((href, title)) = title_url {
+                            if !title.is_empty() && title.len() > 3 && !results.iter().any(|r: &String| r.contains(&title)) {
+                                results.push(format!("[{}]({})", title, href));
                             }
                         }
-                        if results.len() >= 25 { break; }
+                        if let Some(snip) = snippet {
+                            if snip.len() > 10 {
+                                results.push(format!("  {}", snip));
+                            }
+                        }
                     }
                     if results.is_empty() {
                         format!("[OK] Bing: {}\n\n(no results)", query)
                     } else {
-                        format!("[OK] Bing search: {}\n\n{}", query, results.join("\n"))
+                        format!("[OK] Bing: {}\n\n{}", query, results.join("\n"))
                     }
                 }
                 Err(e) => format!("[ERROR] Cannot read search results: {}", e),
@@ -292,7 +302,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "type": "object",
             "properties": {
                 "url": {"type": "string"},
-                "output": {"type": "string"}
+                "output": {"type": "string", "description": "Optional file path to save the fetched content"}
             },
             "required": ["url"],
             "additionalProperties": false
@@ -303,11 +313,11 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
     mgr.register(ToolHandler {
         key: ToolKey::new("web_search", ""),
-        description: "Search the web (Bing).",
+        description: "Search the web via Bing. Returns titles, URLs, and snippets.",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "query": {"type": "string"}
+                "query": {"type": "string", "description": "Search query string"}
             },
             "required": ["query"],
             "additionalProperties": false
@@ -323,7 +333,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Library name"},
-                "query": {"type": "string"}
+                "query": {"type": "string", "description": "Optional filter to narrow results, e.g. 'hooks'"}
             },
             "required": ["name"],
             "additionalProperties": false
@@ -338,8 +348,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "library_id": {"type": "string"},
-                "query": {"type": "string"}
+                "library_id": {"type": "string", "description": "Context7 library ID obtained from context7_resolve"},
+                "query": {"type": "string", "description": "Documentation query, e.g. 'how to use useState'"}
             },
             "required": ["library_id"],
             "additionalProperties": false

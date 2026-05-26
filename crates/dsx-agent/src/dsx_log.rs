@@ -8,7 +8,7 @@ static HAS_SESSION: AtomicBool = AtomicBool::new(false);
 static LOG_PATH: OnceLock<std::sync::Mutex<PathBuf>> = OnceLock::new();
 
 fn level() -> LevelFilter {
-    match std::env::var("DSC_LOG").as_deref() {
+    match std::env::var("DSX_LOG").as_deref() {
         Ok("trace") => LevelFilter::Trace,
         Ok("debug") => LevelFilter::Debug,
         Ok("info") => LevelFilter::Info,
@@ -26,15 +26,15 @@ fn log_dir() -> PathBuf {
 }
 
 fn config_dir() -> PathBuf {
-    if let Ok(d) = std::env::var("DSC_CONFIG_DIR") {
+    if let Ok(d) = std::env::var("DSX_CONFIG_DIR") {
         return PathBuf::from(d);
     }
-    dsx_types::platform::home_dir().join(".config").join("dsc")
+    dsx_types::platform::home_dir().join(".config").join("dsx")
 }
 
 /// Initialize file logging. Call once at startup.
-/// Logs to ~/.config/dsc/logs/dsc.log (overwritten each run).
-/// Set DSC_LOG=debug|trace|info|warn|error to control verbosity.
+/// Logs to ~/.config/dsx/logs/dsx.log (overwritten each run).
+/// Set DSX_LOG=debug|trace|info|warn|error to control verbosity.
 /// Set runtime log level (for /dev command).
 pub fn set_level(lvl: &str) {
     let filter = match lvl {
@@ -53,7 +53,7 @@ pub fn init() {
     LOGGER_INIT.get_or_init(|| {
         let lvl = level();
         let mut path = log_dir();
-        path.push("dsc.pending.log");
+        path.push("dsx.pending.log");
 
         let config = ConfigBuilder::new()
             .set_max_level(lvl)
@@ -66,7 +66,7 @@ pub fn init() {
 
         match WriteLogger::init(lvl, config, std::fs::File::create(&path).unwrap()) {
             Ok(()) => log::info!("Log started: {}", path.display()),
-            Err(e) => eprintln!("[dsc] log: {}", e),
+            Err(e) => eprintln!("[dsx] log: {}", e),
         }
         true
     });
@@ -80,7 +80,7 @@ pub fn set_session(seed: &str) {
     let date = date_tag();
     let new_name = format!("{}.{}.log", seed, date);
     path.set_file_name(&new_name);
-    let old_path = path.with_file_name("dsc.pending.log");
+    let old_path = path.with_file_name("dsx.pending.log");
     let _ = std::fs::rename(&old_path, &*path);
     log::info!("log: {} → {}", old_path.display(), path.display());
 }

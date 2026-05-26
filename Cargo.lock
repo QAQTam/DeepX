@@ -450,7 +450,6 @@ dependencies = [
  "serde",
  "serde_json",
  "simplelog",
- "thiserror",
  "tokenizers",
  "tokio",
 ]
@@ -460,6 +459,7 @@ name = "dsx-hp"
 version = "4.0.0"
 dependencies = [
  "anyhow",
+ "dsx-proto",
  "dsx-types",
  "futures-util",
  "log",

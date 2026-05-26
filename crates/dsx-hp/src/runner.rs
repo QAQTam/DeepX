@@ -36,6 +36,7 @@ use crate::liveness::LivenessResult;
 use crate::registry::ProcessRegistry;
 use crate::types::{HpError, ProcessKind, Verdict};
 use crate::{GatewayConfig, StreamEvent};
+use dsx_proto::AgentToHp;
 
 static HP_CONFIG: OnceLock<GatewayConfig> = OnceLock::new();
 static HP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -217,7 +218,7 @@ fn handle_connection(
                 if trimmed.is_empty() {
                     continue;
                 }
-                if trimmed.contains("\"api_chat\"") {
+                if let Ok(AgentToHp::ApiChat { .. }) = serde_json::from_str(trimmed) {
                     if let Ok(mut w) = stream.try_clone() {
                         handle_api_chat_streaming(trimmed, &mut w);
                     }
@@ -242,51 +243,43 @@ fn dispatch_frame(
     line: &str,
     service: &Mutex<HealthService>,
 ) -> String {
-    let frame_type: String = serde_json::from_str::<serde_json::Value>(line)
-        .ok()
-        .and_then(|v| v.get("type").and_then(|v| v.as_str().map(String::from)))
-        .unwrap_or_default();
+    let frame: AgentToHp = match serde_json::from_str(line) {
+        Ok(f) => f,
+        Err(e) => return json_response("error", &format!("invalid frame: {e}")),
+    };
 
     let mut svc = service.lock().unwrap();
 
-    match frame_type.as_str() {
-        "register" => {
-            let kind = if line.contains("Agent") {
-                ProcessKind::Agent
-            } else if line.contains("Tools") {
-                ProcessKind::Tools
-            } else {
-                ProcessKind::Tui
+    match frame {
+        AgentToHp::Register { kind, name, pid } => {
+            let pk = match kind.as_str() {
+                "Agent" => ProcessKind::Agent,
+                "Tools" => ProcessKind::Tools,
+                _ => ProcessKind::Tui,
             };
-            let pid = extract_pid(line).unwrap_or(0);
-            let name = extract_name(line).unwrap_or("unknown");
-
-            match svc.register(kind, name, pid) {
+            match svc.register(pk, &name, pid) {
                 Ok(()) => json_response("ok", "registered"),
                 Err(e) => json_response("error", &e.to_string()),
             }
         }
-        "heartbeat" => {
-            let pid = extract_pid(line).unwrap_or(0);
+        AgentToHp::Heartbeat { pid } => {
             match svc.heartbeat(pid) {
                 Ok(()) => json_response("ok", "heartbeat recorded"),
                 Err(e) => json_response("error", &e.to_string()),
             }
         }
-        "unregister" => {
-            let pid = extract_pid(line).unwrap_or(0);
+        AgentToHp::Unregister { pid } => {
             match svc.unregister(pid) {
                 Ok(()) => json_response("ok", "unregistered"),
                 Err(e) => json_response("error", &e.to_string()),
             }
         }
-        "judge" => {
+        AgentToHp::Judge => {
             let verdicts = svc.judge();
             let json = serde_json::to_string(&verdicts).unwrap_or_else(|_| "[]".into());
             format!("{{\"type\":\"verdicts\",\"data\":{json}}}")
         }
-        "query" => {
-            let pid = extract_pid(line).unwrap_or(0);
+        AgentToHp::Query { pid } => {
             match svc.query(pid) {
                 Ok(health) => {
                     let data = serde_json::to_string(&health).unwrap_or_default();
@@ -295,12 +288,12 @@ fn dispatch_frame(
                 Err(e) => json_response("error", &e.to_string()),
             }
         }
-        "list" => {
+        AgentToHp::List => {
             let summaries = svc.list_processes();
             let json = serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".into());
             format!("{{\"type\":\"process_list\",\"data\":{json}}}")
         }
-        _ => json_response("error", &format!("unknown frame type: {frame_type}")),
+        _ => json_response("error", "unsupported frame type"),
     }
 }
 
@@ -322,8 +315,8 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         }
     };
 
-    let v: serde_json::Value = match serde_json::from_str(line) {
-        Ok(v) => v,
+    let frame: AgentToHp = match serde_json::from_str(line) {
+        Ok(f) => f,
         Err(e) => {
             let _ = writeln!(writer, "{}", json_response("error", &format!("invalid api_chat frame: {e}")));
             let _ = writer.flush();
@@ -331,22 +324,24 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         }
     };
 
-    let model = v.get("model").and_then(|v| v.as_str()).unwrap_or("deepseek-v4-flash");
-    let system = v.get("system").and_then(|v| v.as_str()).map(String::from);
-    let effort = v.get("effort").and_then(|v| v.as_str()).map(String::from);
-    let max_tokens = v.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(8192) as u32;
-    let user_id = v.get("user_id").and_then(|v| v.as_str()).map(String::from);
-    let api_key = v.get("api_key")
-        .and_then(|v| v.as_str())
-        .filter(|k| !k.is_empty())
-        .map(String::from)
-        .unwrap_or_else(|| config.api_key.clone());
+    let (model, system, effort, max_tokens, user_id, api_key, messages_val, tools_val) = match frame {
+        AgentToHp::ApiChat { model, system, messages, effort, max_tokens, tools, user_id, api_key } => {
+            let api_key = api_key
+                .filter(|k| !k.0.is_empty())
+                .map(|r| r.0)
+                .unwrap_or_else(|| config.api_key.clone());
+            (model, system, effort, max_tokens.unwrap_or(8192), user_id, api_key, messages, tools)
+        }
+        _ => {
+            let _ = writeln!(writer, "{}", json_response("error", "expected api_chat frame"));
+            let _ = writer.flush();
+            return;
+        }
+    };
 
-    let messages_val: Vec<dsx_types::Message> = match v.get("messages")
-        .and_then(|m| serde_json::from_value::<Vec<dsx_types::Message>>(m.clone()).ok())
-    {
-        Some(msgs) => msgs,
-        None => {
+    let messages_val: Vec<dsx_types::Message> = match serde_json::from_value(messages_val) {
+        Ok(msgs) => msgs,
+        Err(_) => {
             let _ = writeln!(writer, "{}", json_response("error", "api_chat: invalid messages"));
             let _ = writer.flush();
             return;
@@ -362,8 +357,8 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         }
     };
 
-    let tools: Option<Vec<dsx_types::ToolDef>> = v.get("tools")
-        .and_then(|t| serde_json::from_value(t.clone()).ok());
+    let tools: Option<Vec<dsx_types::ToolDef>> = tools_val
+        .and_then(|t| serde_json::from_value(t).ok());
 
     let gateway_cfg = GatewayConfig {
         base_url: config.base_url.clone(),
@@ -528,25 +523,6 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
             }
         }
     });
-}
-
-/// Extract `pid` field from a JSON-LP line (simple parser, no serde).
-fn extract_pid(line: &str) -> Option<u32> {
-    let after = line.split("\"pid\"").nth(1)?;
-    let after_colon = after.split(':').nth(1)?;
-    let trimmed = after_colon.trim_start();
-    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
-}
-
-/// Extract `name` field from a JSON-LP line (simple parser).
-fn extract_name(line: &str) -> Option<&str> {
-    let after = line.split("\"name\"").nth(1)?;
-    let after_colon = after.split(':').nth(1)?;
-    let trimmed = after_colon.trim();
-    let start = trimmed.find('"')? + 1;
-    let end = trimmed[start..].find('"')?;
-    Some(&trimmed[start..start + end])
 }
 
 // ── Port file management ──

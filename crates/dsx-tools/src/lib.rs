@@ -17,7 +17,7 @@ pub mod task;
 
 pub mod ipc;
 pub mod registration;
-pub mod stubs;
+pub mod persistence;
 
 /// Run the tools IPC server (stdin/stdout JSON-LP loop).
 pub fn run() {
@@ -179,6 +179,20 @@ impl ToolManager {
 
     pub fn register(&mut self, handler: ToolHandler) {
         self.handlers.insert(handler.key.clone(), handler);
+    }
+
+    /// Look up a handler by (name, action). Falls back to action="" if the
+    /// exact key is not found. This allows `read_file/read` to match the
+    /// base `read_file/""` registration without needing alias entries.
+    pub fn lookup(&self, name: &str, action: &str) -> Option<&ToolHandler> {
+        let key = ToolKey::new(name, action);
+        self.handlers.get(&key).or_else(|| {
+            if action.is_empty() {
+                None
+            } else {
+                self.handlers.get(&ToolKey::new(name, ""))
+            }
+        })
     }
 
     // ── Init（IPC 中由 ToolsInit 帧触发）──

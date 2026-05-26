@@ -238,7 +238,7 @@ pub fn exec_with_sudo(command: &str, password: &str) -> String {
 pub fn spawn_exec_async(
     tool_call_id: &str,
     args: &str,
-    tx: tokio::sync::mpsc::Sender<crate::stubs::StreamEvent>,
+    tx: tokio::sync::mpsc::Sender<crate::persistence::StreamEvent>,
 ) {
     spawn_exec_async_with_sudo(tool_call_id, args, None, tx)
 }
@@ -247,7 +247,7 @@ pub fn spawn_exec_async_with_sudo(
     tool_call_id: &str,
     args: &str,
     sudo_password: Option<&str>,
-    tx: tokio::sync::mpsc::Sender<crate::stubs::StreamEvent>,
+    tx: tokio::sync::mpsc::Sender<crate::persistence::StreamEvent>,
 ) {
     let command = parse_arg(args, "command");
     let cwd = parse_opt(args, "cwd");
@@ -265,7 +265,7 @@ pub fn spawn_exec_async_with_sudo(
             .map(|o| !o.status.success())
             .unwrap_or(true);
         if needs_pwd {
-            let _ = tx.try_send(crate::stubs::StreamEvent::ExecDone(
+            let _ = tx.try_send(crate::persistence::StreamEvent::ExecDone(
                 id, format!("[SUDO_REQUIRED] {}", command),
             ));
             return;
@@ -289,7 +289,7 @@ pub fn spawn_exec_async_with_sudo(
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(crate::stubs::StreamEvent::ExecDone(
+                    let _ = tx.send(crate::persistence::StreamEvent::ExecDone(
                         id, format!("[ERROR] Failed to spawn sudo: {}", e),
                     )).await;
                     return;
@@ -309,7 +309,7 @@ pub fn spawn_exec_async_with_sudo(
             match cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(crate::stubs::StreamEvent::ExecDone(
+                    let _ = tx.send(crate::persistence::StreamEvent::ExecDone(
                         id, format!("[ERROR] Failed to spawn: {}", e),
                     )).await;
                     return;
@@ -318,7 +318,7 @@ pub fn spawn_exec_async_with_sudo(
         };
 
         if let Some(pid) = child.id() {
-            let _ = tx.send(crate::stubs::StreamEvent::ExecStarted(id.clone(), pid)).await;
+            let _ = tx.send(crate::persistence::StreamEvent::ExecStarted(id.clone(), pid)).await;
         }
 
         let stdout = child.stdout.take();
@@ -331,7 +331,7 @@ pub fn spawn_exec_async_with_sudo(
                 use tokio::io::AsyncBufReadExt;
                 let mut lines = tokio::io::BufReader::new(&mut reader).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx_stdout.send(crate::stubs::StreamEvent::ExecProgress(line)).await;
+                    let _ = tx_stdout.send(crate::persistence::StreamEvent::ExecProgress(line)).await;
                 }
             }
         });
@@ -341,7 +341,7 @@ pub fn spawn_exec_async_with_sudo(
                 use tokio::io::AsyncBufReadExt;
                 let mut lines = tokio::io::BufReader::new(&mut reader).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx_stderr.send(crate::stubs::StreamEvent::ExecProgress(
+                    let _ = tx_stderr.send(crate::persistence::StreamEvent::ExecProgress(
                         format!("stderr: {}", line)
                     )).await;
                 }
@@ -355,7 +355,7 @@ pub fn spawn_exec_async_with_sudo(
             Ok(s) => s,
             Err(_) => {
                 let _ = child.kill().await;
-                let _ = tx.send(crate::stubs::StreamEvent::ExecDone(
+                let _ = tx.send(crate::persistence::StreamEvent::ExecDone(
                     id,
                     format!("[ERROR] exec timed out after {}s\n[HINT] Increase timeout_secs or check if the command is stuck.", timeout_secs),
                 )).await;
@@ -368,7 +368,7 @@ pub fn spawn_exec_async_with_sudo(
         let exit_code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         let status_label = if exit_code == 0 { "OK" } else { "FAIL" };
         let result = format!("[{}] exec: {} (exit {})\n(streaming output shown above)", status_label, command, exit_code);
-        let _ = tx.send(crate::stubs::StreamEvent::ExecDone(id, result)).await;
+        let _ = tx.send(crate::persistence::StreamEvent::ExecDone(id, result)).await;
     });
 }
 
@@ -461,30 +461,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Shell command"},
-                "cwd": {"type": "string"},
-                "timeout_secs": {"type": "integer"}
-            },
-            "required": ["command"],
-            "additionalProperties": false
-        }),
-        handler: handle_run,
-        safety: |ctx| {
-            let cmd = ctx.get_str("command").unwrap_or("");
-            crate::safety::classify_execution(cmd)
-        },
-        default_timeout: Duration::from_secs(300),
-    });
-
-    // exec/execute (alias for orchestrator compat)
-    mgr.register(ToolHandler {
-        key: ToolKey::new("exec", "execute"),
-        description: "Execute a shell command synchronously. Supports timeout_secs and cwd.",
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": {"type": "string", "description": "Shell command"},
-                "cwd": {"type": "string"},
-                "timeout_secs": {"type": "integer"}
+                "cwd": {"type": "string", "description": "Working directory for the command"},
+                "timeout_secs": {"type": "integer", "description": "Max execution time in seconds (1-3600, default 30)"}
             },
             "required": ["command"],
             "additionalProperties": false

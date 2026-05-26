@@ -6,7 +6,7 @@ pub mod runner;
 
 pub mod config;
 pub mod assembly;
-pub mod dsc_log;
+pub mod dsx_log;
 pub mod prompt;
 pub mod router;
 pub mod skills;

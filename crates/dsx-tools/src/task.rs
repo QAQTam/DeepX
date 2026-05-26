@@ -20,7 +20,7 @@ pub(super) fn exec_task_create(args: &str) -> String {
     }
 
     let entry = format!("- [pending] {} — {}", subject, description);
-    crate::stubs::append_memory(&seed, "tasks", &entry);
+    crate::persistence::append_memory(&seed, "tasks", &entry);
 
     format!("[OK] Task created [pending]: {}\nUse task_update(status=in_progress) when you start working on it.", subject)
 }
@@ -39,7 +39,7 @@ pub(super) fn exec_task_update(args: &str) -> String {
     }
 
     // Read tasks.md, find the task line, replace status
-    let content = crate::stubs::read_memory(&seed, "tasks");
+    let content = crate::persistence::read_memory(&seed, "tasks");
     let old_markers = ["[pending]", "[in_progress]", "[completed]", "[cancelled]"];
     let new_marker = format!("[{}]", status);
     let mut found = false;
@@ -67,7 +67,7 @@ pub(super) fn exec_task_update(args: &str) -> String {
         return format!("[ERROR] task_update: task '{}' not found. Use task_list to see tasks.", subject);
     }
 
-    crate::stubs::write_memory(&seed, "tasks", &updated);
+    crate::persistence::write_memory(&seed, "tasks", &updated);
     format!("[OK] Task '{}' → {}", subject, status)
 }
 
@@ -79,7 +79,7 @@ pub(super) fn exec_task_list(args: &str) -> String {
         return "[ERROR] task_list: no active session. Start a conversation first.".to_string();
     }
 
-    let content = crate::stubs::read_memory(&seed, "tasks");
+    let content = crate::persistence::read_memory(&seed, "tasks");
     let task_lines: Vec<&str> = content
         .lines()
         .filter(|l| l.starts_with("- [") && (l.contains("[pending]") || l.contains("[in_progress]") || l.contains("[completed]") || l.contains("[cancelled]")))
@@ -153,7 +153,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Update task status: pending->in_progress->completed.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
-                "subject": {"type": "string"},
+                "subject": {"type": "string", "description": "Exact task subject to update (must match task_create)"},
                 "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]}
             }, "required": ["subject", "status"], "additionalProperties": false
         }),

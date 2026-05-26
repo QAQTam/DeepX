@@ -265,7 +265,7 @@ impl AgentState {
 // Unified entry point for writing tool results to the context.
 // Eliminates the 3+ scattered `push_tool` call sites in the orchestrator.
 
-use crate::orchestrator::{arg_parser, tracker};
+use crate::orchestrator::tracker;
 use crate::tools::wrap_tool_result;
 
 pub struct ToolResultAppender<'a> {
@@ -306,10 +306,10 @@ impl<'a> ToolResultAppender<'a> {
 
         // 4. File tracking (for sandbox enforcement)
         if !failed && tool_name == "file" {
-            let action = arg_parser::tool_action(args);
+            let action = dsx_types::arg::tool_action(args);
             if action == "write" || action == "edit" {
                 tracker::track_file_written(self.state, args);
-                if let Some(path) = arg_parser::parse_file_arg(args) {
+                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
                     self.state.re_read_required = Some(path);
                 }
             }
@@ -317,9 +317,9 @@ impl<'a> ToolResultAppender<'a> {
 
         // 5. Auto-verify on Rust file edit
         if raw.starts_with("[OK]") && tool_name == "file" {
-            let action = arg_parser::tool_action(args);
+            let action = dsx_types::arg::tool_action(args);
             if (action == "write" || action == "edit") && !self.state.auto_verify.contains(&"cargo check".to_string()) {
-                if let Some(path) = arg_parser::parse_file_arg(args) {
+                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
                     if path.ends_with(".rs") {
                         self.state.auto_verify.push("cargo check".to_string());
                     }

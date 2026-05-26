@@ -50,9 +50,7 @@ pub fn respawn(child: &mut Option<Child>) -> bool {
 
     match ready {
         Some(ToolsToAgent::Ready { tools }) => {
-            let defs: Vec<_> = tools.iter()
-                .filter(|t| crate::tools::ESSENTIAL_TOOLS.contains(&t.function.name.as_str()))
-                .cloned().collect();
+            let defs: Vec<_> = tools.iter().cloned().collect();
             crate::tools::init_tools_ipc(reader, writer, defs);
             *child = Some(new_child);
             eprintln!("dsx-agent: tools respawned");

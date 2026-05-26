@@ -74,13 +74,26 @@ pub(super) fn exec_read_file(args: &str) -> String {
 pub(super) fn exec_write_file(args: &str) -> String {
     let path = parse_arg(args, "path");
     let content = parse_arg(args, "content");
+    let append = parse_opt_bool(args, "append").unwrap_or(false);
     if let Some(parent) = std::path::Path::new(&path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let line_count = content.lines().count();
-    match std::fs::write(&path, &content) {
-        Ok(_) => format!("[OK] {} — {} bytes, {} lines", path, content.len(), line_count),
-        Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
+    if append {
+        use std::io::Write;
+        let mut file = match std::fs::OpenOptions::new().append(true).create(true).open(&path) {
+            Ok(f) => f,
+            Err(e) => return format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
+        };
+        match file.write_all(content.as_bytes()) {
+            Ok(_) => format!("[OK] {} — appended {} bytes, {} lines", path, content.len(), line_count),
+            Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
+        }
+    } else {
+        match std::fs::write(&path, &content) {
+            Ok(_) => format!("[OK] {} — {} bytes, {} lines", path, content.len(), line_count),
+            Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
+        }
     }
 }
 
@@ -358,26 +371,300 @@ pub(super) fn exec_search(args: &str) -> String {
     let glob = parse_opt(args, "glob");
     let dir = parse_arg_or(args, "path", ".");
 
-    let mut cmd = Command::new("grep");
-    cmd.arg("-rn").arg("-I").arg("--include");
-    cmd.arg(glob.unwrap_or_else(|| "*".into()));
+    // Phase 1: try ripgrep (cross-platform, fast)
+    let mut cmd = Command::new("rg");
+    cmd.arg("-n").arg("--no-heading");
+    if let Some(ref g) = glob {
+        cmd.arg("-g").arg(g);
+    }
     cmd.arg(&pattern).arg(&dir);
 
     match cmd.output() {
-        Ok(o) => {
+        Ok(o) if o.status.success() => {
             let out = String::from_utf8_lossy(&o.stdout);
-            let lines: Vec<&str> = out.lines().take(200).collect();
+            let all_lines: Vec<&str> = out.lines().collect();
+            let lines: Vec<&str> = all_lines.iter().take(200).copied().collect();
+            if lines.is_empty() {
+                return format!("No matches for '{}'", pattern);
+            }
+            let truncated = if all_lines.len() > 200 {
+                format!("\n... ({} more matches)", all_lines.len() - 200)
+            } else {
+                String::new()
+            };
+            return lines.join("\n") + &truncated;
+        }
+        _ => {} // rg not installed or errored — fall through to pure Rust
+    }
+
+    // Phase 2: pure Rust fallback (regex + manual file walking)
+    match rust_search(&pattern, glob, &dir) {
+        Ok(lines) => {
             if lines.is_empty() {
                 format!("No matches for '{}'", pattern)
             } else {
-                let truncated = if out.lines().count() > 200 {
-                    format!("\n... ({} more matches)", out.lines().count() - 200)
-                } else { String::new() };
-                lines.join("\n") + &truncated
+                let result: Vec<&str> = lines.iter().take(200).map(|s| s.as_str()).collect();
+                let truncated = if lines.len() > 200 {
+                    format!("\n... ({} more matches)", lines.len() - 200)
+                } else {
+                    String::new()
+                };
+                result.join("\n") + &truncated
             }
         }
-        Err(e) => format!("grep error: {}", e),
+        Err(e) => format!("search error: {}", e),
     }
+}
+
+fn rust_search(pattern: &str, glob: Option<String>, dir: &str) -> Result<Vec<String>, String> {
+    let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
+    let mut results = Vec::new();
+    let root = std::path::Path::new(dir);
+    walk_dir(root, glob.as_deref(), &re, &mut results)
+        .map_err(|e| format!("{}: {}", dir, e))?;
+    Ok(results)
+}
+
+fn walk_dir(
+    dir: &std::path::Path,
+    glob: Option<&str>,
+    re: &regex::Regex,
+    results: &mut Vec<String>,
+) -> std::io::Result<()> {
+    if results.len() >= 200 {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+
+        if path.is_dir() {
+            if fname.starts_with('.') || fname == "target" || fname == "node_modules" {
+                continue;
+            }
+            walk_dir(&path, glob, re, results)?;
+        } else if path.is_file() {
+            if results.len() >= 200 {
+                return Ok(());
+            }
+            if let Some(g) = glob {
+                if !simple_glob_match(g, &fname) {
+                    continue;
+                }
+            }
+            if is_binary_file(&path) {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            for (i, line) in content.lines().enumerate() {
+                if re.is_match(line) {
+                    results.push(format!("{}:{}:{}", path.display(), i + 1, line));
+                    if results.len() >= 200 {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn simple_glob_match(glob: &str, filename: &str) -> bool {
+    if glob == "*" {
+        return true;
+    }
+    let starts = glob.starts_with('*');
+    let ends = glob.ends_with('*');
+    let inner = glob.trim_matches('*');
+    match (starts, ends) {
+        (true, true) => filename.contains(inner),
+        (true, false) => filename.ends_with(inner),
+        (false, true) => filename.starts_with(inner),
+        (false, false) => filename == glob,
+    }
+}
+
+fn is_binary_file(path: &std::path::Path) -> bool {
+    match std::fs::read(path) {
+        Ok(data) => {
+            let check = &data[..data.len().min(8192)];
+            check.contains(&0u8)
+        }
+        Err(_) => false,
+    }
+}
+
+pub(super) fn exec_delete_file(args: &str) -> String {
+    let path = parse_arg(args, "path");
+    let p = std::path::Path::new(&path);
+    if p.is_dir() {
+        return format!("[ERROR] {} is a directory. Use delete_dir or exec(\"rm -rf\") instead.", path);
+    }
+    match std::fs::remove_file(p) {
+        Ok(_) => format!("[OK] Deleted {}", path),
+        Err(e) => format!("[ERROR] Cannot delete {}: {}\n[HINT] Check if the file exists and is writable.", path, e),
+    }
+}
+
+pub(super) fn exec_move_file(args: &str) -> String {
+    let source = parse_arg(args, "source");
+    let dest = parse_arg(args, "dest");
+    if let Some(parent) = std::path::Path::new(&dest).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::rename(&source, &dest) {
+        Ok(_) => format!("[OK] Moved {} → {}", source, dest),
+        Err(e) => format!("[ERROR] Cannot move {}: {}", source, e),
+    }
+}
+
+pub(super) fn exec_copy_file(args: &str) -> String {
+    let source = parse_arg(args, "source");
+    let dest = parse_arg(args, "dest");
+    if let Some(parent) = std::path::Path::new(&dest).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::copy(&source, &dest) {
+        Ok(size) => format!("[OK] Copied {} → {} ({} bytes)", source, dest, size),
+        Err(e) => format!("[ERROR] Cannot copy {}: {}", source, e),
+    }
+}
+
+pub(super) fn exec_glob(args: &str) -> String {
+    let pattern = parse_arg(args, "pattern");
+    let path = parse_arg_or(args, "path", ".");
+    // Strip **/ for filename matching (walk is already recursive)
+    let file_pattern = if pattern.contains("**/") {
+        &pattern[pattern.rfind("**/").unwrap() + 3..]
+    } else if pattern.contains("**\\") {
+        &pattern[pattern.rfind("**\\").unwrap() + 3..]
+    } else {
+        pattern.as_str()
+    };
+    let mut results = Vec::new();
+    let root = std::path::Path::new(&path);
+    if let Err(e) = glob_walk(root, file_pattern, &mut results) {
+        return format!("glob error: {}", e);
+    }
+    if results.is_empty() {
+        return format!("No files matching '{}'", pattern);
+    }
+    results.join("\n")
+}
+
+fn glob_walk(dir: &std::path::Path, file_pattern: &str, results: &mut Vec<String>) -> std::io::Result<()> {
+    if results.len() >= 500 {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+        if path.is_dir() {
+            if fname.starts_with('.') || fname == "target" || fname == "node_modules" {
+                continue;
+            }
+            glob_walk(&path, file_pattern, results)?;
+        } else if path.is_file() {
+            if results.len() >= 500 {
+                return Ok(());
+            }
+            if simple_glob_match(file_pattern, &fname) {
+                let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                let sz = if size > 1024 * 1024 {
+                    format!("{:.1}M", size as f64 / 1_048_576.0)
+                } else if size > 1024 {
+                    format!("{}K", size / 1024)
+                } else {
+                    format!("{}B", size)
+                };
+                results.push(format!("{} ({})", path.display(), sz));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn exec_diff(args: &str) -> String {
+    let path_a = parse_arg(args, "path_a");
+    let path_b = parse_arg(args, "path_b");
+
+    let content_a = match std::fs::read_to_string(&path_a) {
+        Ok(c) => c,
+        Err(e) => return format!("[ERROR] Cannot read {}: {}", path_a, e),
+    };
+    let content_b = match std::fs::read_to_string(&path_b) {
+        Ok(c) => c,
+        Err(e) => return format!("[ERROR] Cannot read {}: {}", path_b, e),
+    };
+
+    if content_a == content_b {
+        return "[OK] Files are identical".to_string();
+    }
+
+    let lines_a: Vec<&str> = content_a.lines().collect();
+    let lines_b: Vec<&str> = content_b.lines().collect();
+
+    // Find first differing line
+    let mut first_diff = 0usize;
+    while first_diff < lines_a.len() && first_diff < lines_b.len() && lines_a[first_diff] == lines_b[first_diff] {
+        first_diff += 1;
+    }
+
+    let ctx_start = first_diff.saturating_sub(2);
+    let window = 3; // lines to show on each side of the diff
+
+    let mut result = String::new();
+    let mut line_count = 0usize;
+    let cap = 200usize;
+
+    // Context before
+    for i in ctx_start..first_diff {
+        result.push_str(&format!("  {}\n", lines_a[i]));
+        line_count += 1;
+        if line_count >= cap { return result; }
+    }
+    // Removed lines
+    for i in first_diff..(first_diff + window).min(lines_a.len()) {
+        result.push_str(&format!("- {}\n", lines_a[i]));
+        line_count += 1;
+        if line_count >= cap { return result; }
+    }
+    // Added lines
+    for i in first_diff..(first_diff + window).min(lines_b.len()) {
+        result.push_str(&format!("+ {}\n", lines_b[i]));
+        line_count += 1;
+        if line_count >= cap { return result; }
+    }
+    // Context after
+    let after_start = first_diff + window;
+    let after_end = after_start + 2;
+    for i in after_start..after_end.min(lines_b.len().max(lines_a.len())) {
+        if i < lines_a.len() {
+            result.push_str(&format!("  {}\n", lines_a[i]));
+            line_count += 1;
+            if line_count >= cap { return result; }
+        }
+    }
+    result
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -414,6 +701,31 @@ fn handle_search(ctx: ToolCallCtx) -> ToolResult {
     ToolResult::ok(exec_search(&args))
 }
 
+fn handle_delete_file(ctx: ToolCallCtx) -> ToolResult {
+    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
+    ToolResult::ok(exec_delete_file(&args))
+}
+
+fn handle_move_file(ctx: ToolCallCtx) -> ToolResult {
+    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
+    ToolResult::ok(exec_move_file(&args))
+}
+
+fn handle_copy_file(ctx: ToolCallCtx) -> ToolResult {
+    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
+    ToolResult::ok(exec_copy_file(&args))
+}
+
+fn handle_glob(ctx: ToolCallCtx) -> ToolResult {
+    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
+    ToolResult::ok(exec_glob(&args))
+}
+
+fn handle_diff(ctx: ToolCallCtx) -> ToolResult {
+    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
+    ToolResult::ok(exec_diff(&args))
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Safety classifiers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -447,6 +759,26 @@ fn safety_search(_ctx: &ToolCallCtx) -> SafetyVerdict {
     SafetyVerdict::Allow
 }
 
+fn safety_delete_file(_ctx: &ToolCallCtx) -> SafetyVerdict {
+    SafetyVerdict::Allow
+}
+
+fn safety_move_file(_ctx: &ToolCallCtx) -> SafetyVerdict {
+    SafetyVerdict::Allow
+}
+
+fn safety_copy_file(_ctx: &ToolCallCtx) -> SafetyVerdict {
+    SafetyVerdict::Allow
+}
+
+fn safety_glob(_ctx: &ToolCallCtx) -> SafetyVerdict {
+    SafetyVerdict::Allow
+}
+
+fn safety_diff(_ctx: &ToolCallCtx) -> SafetyVerdict {
+    SafetyVerdict::Allow
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Registration entry point
 // ═══════════════════════════════════════════════════════════════════════════
@@ -472,12 +804,13 @@ pub fn register(mgr: &mut ToolManager) {
 
     mgr.register(ToolHandler {
         key: ToolKey::new("write_file", ""),
-        description: "Create or overwrite a file. Creates parent dirs. For new files or full rewrites; prefer edit_file for small changes.",
+        description: "Create, overwrite, or append to a file. Creates parent dirs. For new files or full rewrites; prefer edit_file for small changes.",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "File path to write"},
-                "content": {"type": "string", "description": "File content"}
+                "content": {"type": "string", "description": "File content"},
+                "append": {"type": "boolean", "description": "Append to file instead of overwriting", "default": false}
             },
             "required": ["path", "content"],
             "additionalProperties": false
@@ -562,30 +895,87 @@ pub fn register(mgr: &mut ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
 
-    // ── Action aliases (orchestrator compat) ──
-    // Register each file tool under its natural action key so lookups
-    // by name+action succeed without falling back to name-only search.
-    let aliases: &[(&str, &[&str])] = &[
-        ("read_file", &["read"]),
-        ("write_file", &["write"]),
-        ("edit_file", &["edit"]),
-        ("edit_file_diff", &["diff"]),
-    ];
-    for (name, actions) in aliases {
-        // Find the base handler registered with action ""
-        let base_key = ToolKey::new(*name, "");
-        let base = mgr.handlers.get(&base_key).cloned();
-        if let Some(handler) = base {
-            for &action in *actions {
-                mgr.register(ToolHandler {
-                    key: ToolKey::new(*name, action),
-                    description: handler.description,
-                    input_schema: handler.input_schema.clone(),
-                    handler: handler.handler,
-                    safety: handler.safety,
-                    default_timeout: handler.default_timeout,
-                });
-            }
-        }
-    }
+    mgr.register(ToolHandler {
+        key: ToolKey::new("delete_file", ""),
+        description: "Delete a file permanently. Use with caution.",
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path to delete"}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        }),
+        handler: handle_delete_file,
+        safety: safety_delete_file,
+        default_timeout: Duration::from_secs(15),
+    });
+
+    mgr.register(ToolHandler {
+        key: ToolKey::new("move_file", ""),
+        description: "Move or rename a file or directory. Creates parent dirs of dest.",
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "Source path"},
+                "dest": {"type": "string", "description": "Destination path"}
+            },
+            "required": ["source", "dest"],
+            "additionalProperties": false
+        }),
+        handler: handle_move_file,
+        safety: safety_move_file,
+        default_timeout: Duration::from_secs(15),
+    });
+
+    mgr.register(ToolHandler {
+        key: ToolKey::new("copy_file", ""),
+        description: "Copy a file. Creates parent dirs of dest.",
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "Source path"},
+                "dest": {"type": "string", "description": "Destination path"}
+            },
+            "required": ["source", "dest"],
+            "additionalProperties": false
+        }),
+        handler: handle_copy_file,
+        safety: safety_copy_file,
+        default_timeout: Duration::from_secs(15),
+    });
+
+    mgr.register(ToolHandler {
+        key: ToolKey::new("glob", ""),
+        description: "Find files matching a glob pattern recursively (e.g. *.rs, src/**/*.rs).",
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Glob pattern (e.g. *.rs, src/**/*.rs)"},
+                "path": {"type": "string", "description": "Directory to search", "default": "."}
+            },
+            "required": ["pattern"],
+            "additionalProperties": false
+        }),
+        handler: handle_glob,
+        safety: safety_glob,
+        default_timeout: Duration::from_secs(15),
+    });
+
+    mgr.register(ToolHandler {
+        key: ToolKey::new("diff", ""),
+        description: "Compare two files line by line. Shows first diff region with context.",
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path_a": {"type": "string", "description": "First file path"},
+                "path_b": {"type": "string", "description": "Second file path"}
+            },
+            "required": ["path_a", "path_b"],
+            "additionalProperties": false
+        }),
+        handler: handle_diff,
+        safety: safety_diff,
+        default_timeout: Duration::from_secs(15),
+    });
 }

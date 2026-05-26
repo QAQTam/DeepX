@@ -10,27 +10,13 @@ use std::io::{BufRead, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
-/// Tools whitelist that the agent exposes to the LLM.
-/// Used by runner.rs and tools_spawn.rs during init/respawn.
-pub const ESSENTIAL_TOOLS: &[&str] = &[
-    "exec", "read_file", "write_file", "edit_file", "edit_file_diff",
-    "explore", "search", "list_dir", "glance", "ask_user", "status",
-    "task_create", "task_update", "task_list",
-    "plan_create", "plan_update", "plan_read", "plan_list",
-    "web_fetch", "web_search", "git",
-    "mem_save", "mem_read", "mem_forget", "recall",
-    "pitfall_save", "pitfall_guide",
-];
-
-// ── Global flags ──
+// ── IPC state ──
 
 /// Global auto-mode flag, read by tool wrappers.
 pub static AUTO_MODE: AtomicBool = AtomicBool::new(false);
 
 /// Global cancel flag, set when user presses Esc.
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
-
-// ── IPC state ──
 
 struct ToolsIpcState {
     reader: Box<dyn BufRead + Send>,

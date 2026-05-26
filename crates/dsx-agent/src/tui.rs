@@ -561,16 +561,10 @@ fn init_tools(exe: &std::path::Path, agent: &mut AgentState) -> Option<Child> {
 
     let ready: Option<ToolsToAgent> = dsx_proto::read_frame(&mut reader).ok().flatten();
     if let Some(ToolsToAgent::Ready { tools }) = &ready {
-        let essential: &[&str] = crate::tools::ESSENTIAL_TOOLS;
-        agent.tool_defs = tools
-            .iter()
-            .filter(|t| essential.contains(&t.function.name.as_str()))
-            .cloned()
-            .collect();
+        agent.tool_defs = tools.clone();
         eprintln!(
-            "dsx: tools → {} (filtered from {})",
+            "dsx: tools → {}",
             agent.tool_defs.len(),
-            tools.len()
         );
     }
 

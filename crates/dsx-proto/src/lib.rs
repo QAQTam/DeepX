@@ -6,18 +6,32 @@
 //!
 //! | Channel | Transport | Direction |
 //! |---------|-----------|-----------|
-//! | TUI ↔ Agent | stdin/stdout pipes | Bidirectional |
+//! | TUI ↔ Agent | mpsc channels (primary) / stdin-stdout (headless) | Bidirectional |
 //! | Agent ↔ Tools | stdin/stdout pipes | Bidirectional |
 //! | Agent → HP | TCP localhost | Bidirectional |
 //!
-//! ## Frame categories
+//! ## Submodules
 //!
-//! - `TuiToAgent` / `AgentToTui` — TUI ↔ Agent JSON-LP over pipes
-//! - `AgentToTools` / `ToolsToAgent` — Agent ↔ Tools JSON-LP over pipes
-//! - `AgentToHp` / `HpToAgent` — Agent ↔ HP JSON-LP over TCP
+//! - `tui` — `TuiToAgent` / `AgentToTui`
+//! - `tools` — `AgentToTools` / `ToolsToAgent`
+//! - `hp` — `AgentToHp` / `HpToAgent`
 
 use serde::{Deserialize, Serialize, Serializer};
 use std::fmt;
+
+// ── Submodule declarations ──────────────────────────────────────────────
+
+mod tui;
+mod tools;
+mod hp;
+
+// ── Re-exports (backward-compatible paths) ──────────────────────────────
+
+pub use tui::{AgentToTui, TuiToAgent};
+pub use tools::{AgentToTools, ToolsToAgent};
+pub use hp::{AgentToHp, HpToAgent};
+
+// ── Redacted (prevents API key leaks in debug logs) ─────────────────────
 
 /// Wrapper that serializes normally but redacts in Debug output.
 /// Prevents API keys from leaking into debug logs.
@@ -32,7 +46,11 @@ impl Serialize for Redacted {
 
 impl fmt::Debug for Redacted {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.0.is_empty() { f.write_str("\"\"") } else { f.write_str("\"***\"") }
+        if self.0.is_empty() {
+            f.write_str("\"\"")
+        } else {
+            f.write_str("\"***\"")
+        }
     }
 }
 
@@ -43,309 +61,16 @@ impl<'de> Deserialize<'de> for Redacted {
 }
 
 impl From<&str> for Redacted {
-    fn from(s: &str) -> Self { Redacted(s.to_string()) }
+    fn from(s: &str) -> Self {
+        Redacted(s.to_string())
+    }
 }
 
 impl From<String> for Redacted {
-    fn from(s: String) -> Self { Redacted(s) }
+    fn from(s: String) -> Self {
+        Redacted(s)
+    }
 }
-
-// ── TUI ↔ Agent ────────────────────────────────────────────────────────
-
-/// TUI → Agent frames (stdin pipe).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum TuiToAgent {
-    #[serde(rename = "user_input")]
-    UserInput { text: String },
-
-    #[serde(rename = "tool_call")]
-    ToolCall {
-        id: String,
-        name: String,
-        action: String,
-        args: serde_json::Value,
-    },
-
-    #[serde(rename = "set_phase")]
-    SetPhase { phase: String },
-
-    #[serde(rename = "tool_confirm")]
-    ToolConfirm { id: String, approved: bool },
-
-    #[serde(rename = "cancel")]
-    Cancel,
-
-    #[serde(rename = "shutdown")]
-    Shutdown,
-}
-
-/// Agent → TUI frames (stdout pipe).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum AgentToTui {
-    /// Streaming content delta (one token or small chunk).
-    #[serde(rename = "content_delta")]
-    ContentDelta {
-        delta: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reasoning: Option<String>,
-    },
-
-    /// Streaming tool progress.
-    #[serde(rename = "tool_progress")]
-    ToolProgress {
-        id: String,
-        content: String,
-        stream_type: String,
-    },
-
-    /// Full API response (non-streaming fallback or final).
-    #[serde(rename = "api_response")]
-    ApiResponse {
-        content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reasoning_content: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tool_calls: Option<Vec<dsx_types::ToolCall>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        stop_reason: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        usage: Option<dsx_types::UsageInfo>,
-    },
-
-    #[serde(rename = "ask_user")]
-    AskUser {
-        id: String,
-        question: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        options: Option<Vec<String>>,
-    },
-
-    #[serde(rename = "phase_changed")]
-    PhaseChanged { phase: String },
-
-    #[serde(rename = "tool_state")]
-    ToolState {
-        explored: bool,
-        declared_files: Vec<String>,
-        read_files: Vec<String>,
-        written_this_turn: Vec<String>,
-    },
-
-    /// End of a turn (agent ready for next input).
-    #[serde(rename = "done")]
-    Done,
-
-    /// Error during processing.
-    #[serde(rename = "error")]
-    Error { message: String },
-
-    /// Predicted KV cache hit rate (client-side estimate).
-    #[serde(rename = "cache_prediction")]
-    CachePrediction { hit_rate: f64 },
-
-    /// Shutdown acknowledgement.
-    #[serde(rename = "shutdown_ack")]
-    ShutdownAck,
-
-    /// Tool execution result.
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        id: String,
-        name: String,
-        content: String,
-        success: bool,
-    },
-
-    /// Session restored from disk (resumed conversation).
-    #[serde(rename = "session_restored")]
-    SessionRestored {
-        seed: String,
-        message_count: u64,
-        summary: String,
-        tokens_used: u32,
-        cache_hit_pct: f64,
-    },
-}
-
-// ── Agent ↔ Tools ──────────────────────────────────────────────────────
-
-/// Agent → Tools frames (stdin pipe).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum AgentToTools {
-    #[serde(rename = "tools_init")]
-    Init {
-        allowed_tools: Vec<String>,
-        session_seed: String,
-        auto_mode: bool,
-    },
-
-    #[serde(rename = "tool_call_req")]
-    CallReq {
-        id: String,
-        name: String,
-        action: String,
-        args: serde_json::Value,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timeout_secs: Option<u64>,
-    },
-
-    #[serde(rename = "tool_cancel")]
-    Cancel {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-
-    #[serde(rename = "tools_shutdown")]
-    Shutdown,
-}
-
-/// Tools → Agent frames (stdout pipe).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum ToolsToAgent {
-    #[serde(rename = "tools_ready")]
-    Ready {
-        tools: Vec<dsx_types::ToolDef>,
-    },
-
-    #[serde(rename = "tool_progress")]
-    Progress {
-        id: String,
-        content: String,
-        stream_type: String,
-    },
-
-    /// Legacy text result (backward compatible).
-    #[serde(rename = "tool_result")]
-    Result {
-        id: String,
-        success: bool,
-        content: String,
-    },
-
-    /// Structured result with is_error flag.
-    #[serde(rename = "tool_result_message")]
-    ToolResultMessage {
-        id: String,
-        name: String,
-        action: String,
-        success: bool,
-        content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
-    },
-
-    #[serde(rename = "tool_error")]
-    ToolError {
-        id: String,
-        error: String,
-        /// "UNKNOWN_TOOL" | "BLOCKED" | "TIMEOUT" | "PANIC" | "FORBIDDEN"
-        code: String,
-    },
-}
-
-// ── Agent ↔ HP ─────────────────────────────────────────────────────────
-
-/// Agent → HP frames (TCP).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum AgentToHp {
-    #[serde(rename = "register")]
-    Register {
-        kind: String,
-        name: String,
-        pid: u32,
-    },
-
-    #[serde(rename = "heartbeat")]
-    Heartbeat { pid: u32 },
-
-    #[serde(rename = "unregister")]
-    Unregister { pid: u32 },
-
-    #[serde(rename = "judge")]
-    Judge,
-
-    #[serde(rename = "query")]
-    Query { pid: u32 },
-
-    #[serde(rename = "list")]
-    List,
-
-    /// API chat request — forwarded to LLM provider.
-    #[serde(rename = "api_chat")]
-    ApiChat {
-        model: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        system: Option<String>,
-        messages: serde_json::Value,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        max_tokens: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tools: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        user_id: Option<String>,
-        /// API key from agent's runtime config (bypasses HP's OnceLock cache).
-        /// Redacted in Debug output to prevent log leakage.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        api_key: Option<Redacted>,
-    },
-}
-
-/// HP → Agent frames (TCP).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum HpToAgent {
-    #[serde(rename = "error")]
-    Error { message: String },
-
-    /// Streaming content delta from LLM.
-    #[serde(rename = "content_delta")]
-    ContentDelta {
-        delta: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reasoning: Option<String>,
-    },
-
-    /// Streaming tool call progress.
-    #[serde(rename = "tool_progress")]
-    ToolProgress {
-        #[serde(default)]
-        id: String,
-        content: String,
-        #[serde(default = "default_stream_type")]
-        stream_type: String,
-    },
-
-    /// Final API response from LLM provider.
-    #[serde(rename = "api_response")]
-    ApiResponse {
-        content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tool_calls: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        stop_reason: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reasoning_content: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        thinking_signature: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        usage: Option<dsx_types::UsageInfo>,
-    },
-}
-
-fn default_stream_type() -> String { "progress".into() }
 
 // ── Frame I/O helpers ──────────────────────────────────────────────────
 
@@ -362,9 +87,7 @@ pub fn read_frame<T: for<'de> Deserialize<'de>>(reader: &mut impl BufRead) -> io
     if trimmed.is_empty() {
         return Ok(None);
     }
-    serde_json::from_str::<T>(trimmed)
-        .map(Some)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    serde_json::from_str::<T>(trimmed).map(Some).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 /// Serialize `frame` and write as one JSON-LP line (append `\n` + flush).

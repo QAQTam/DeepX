@@ -19,7 +19,7 @@ pub(super) fn exec_plan_create(args: &str) -> String {
         return "[ERROR] plan_create: no active session. Start a conversation first.".to_string();
     }
 
-    match crate::stubs::write_plan(&seed, &name, &goal) {
+    match crate::persistence::write_plan(&seed, &name, &goal) {
         Some(path) => {
             let display = path.to_string_lossy().to_string();
             format!("[OK] Plan created: {}\nPath: {}\nNext: elaborate the Steps section in the plan file using write_file, then call plan_update to set status=active when ready to execute.", name, display)
@@ -41,18 +41,18 @@ pub(super) fn exec_plan_update(args: &str) -> String {
         return "[ERROR] plan_update: no active session. Start a conversation first.".to_string();
     }
 
-    match crate::stubs::update_plan_status(&seed, &name, &status) {
+    match crate::persistence::update_plan_status(&seed, &name, &status) {
         Some(_updated) => {
             let mut result = format!("[OK] Plan '{}' status → {}\n", name, status);
             if status == "done" {
                 // Auto-extract plan completion into long-term memory
-                if let Some(content) = crate::stubs::read_plan_content(&seed, &name) {
+                if let Some(content) = crate::persistence::read_plan_content(&seed, &name) {
                     let goal_line = content.lines()
                         .find(|l| l.starts_with("## Goal"))
                         .and_then(|_| content.lines().skip_while(|l| !l.starts_with("## Goal")).nth(1))
                         .unwrap_or("completed");
                     let decision = format!("Plan completed: {} — {}", name, goal_line.trim());
-                    crate::stubs::append_memory(&seed, "long", &format!("- DECISION: {}", decision));
+                    crate::persistence::append_memory(&seed, "long", &format!("- DECISION: {}", decision));
                 }
                 result.push_str("[MEMORY] Plan summary extracted to long-term memory.");
             }
@@ -72,11 +72,11 @@ pub(super) fn exec_plan_read(args: &str) -> String {
 
     if name.is_empty() {
         // Find most recent active or draft plan
-        let plans = crate::stubs::list_plans(&seed);
+        let plans = crate::persistence::list_plans(&seed);
         let active = plans.iter().find(|(_, s, _)| s == "active" || s == "draft");
         match active {
             Some((n, s, _)) => {
-                if let Some(content) = crate::stubs::read_plan_content(&seed, n) {
+                if let Some(content) = crate::persistence::read_plan_content(&seed, n) {
                     return format!("[OK] Plan '{}' ({}):\n{}", n, s, content);
                 }
             }
@@ -84,7 +84,7 @@ pub(super) fn exec_plan_read(args: &str) -> String {
         }
     }
 
-    match crate::stubs::read_plan_content(&seed, &name) {
+    match crate::persistence::read_plan_content(&seed, &name) {
         Some(content) => format!("[OK] Plan '{}':\n{}", name, content),
         None => format!("[ERROR] plan_read: plan '{}' not found. Use plan_list to see available plans.", name),
     }
@@ -96,7 +96,7 @@ pub(super) fn exec_plan_list(_args: &str) -> String {
         return "[ERROR] plan_list: no active session. Start a conversation first.".to_string();
     }
 
-    let plans = crate::stubs::list_plans(&seed);
+    let plans = crate::persistence::list_plans(&seed);
     if plans.is_empty() {
         return "[OK] No plans for this session.".to_string();
     }
@@ -156,7 +156,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Update plan status: draft->active->done.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
-                "name": {"type": "string"},
+                "name": {"type": "string", "description": "Plan name to update (must match plan_create)"},
                 "status": {"type": "string", "enum": ["draft", "active", "done", "cancelled"]}
             }, "required": ["name", "status"], "additionalProperties": false
         }),

@@ -3,7 +3,7 @@ use crate::agent::AgentState;
 
 /// Track a file written/edited this turn for sandbox enforcement.
 pub fn track_file_written(state: &mut AgentState, args: &str) {
-    if let Some(p) = arg_parser::parse_file_arg(args) {
+    if let Some(p) = dsx_types::arg::parse_file_arg(args) {
         // Store both the original relative path and the absolute form
         // so command-text matching works regardless of how the exec tool
         // references the file.
@@ -19,15 +19,15 @@ pub fn track_file_written(state: &mut AgentState, args: &str) {
     }
 }
 
-use super::arg_parser;
+use dsx_types::arg;
 
 /// Track tool execution outcome for bottom-left code preview panel.
 pub fn track_tool_code(state: &mut AgentState, tool_name: &str, args: &str, result: &str) {
     let raw = result.trim();
     match tool_name {
         "file" | "read_file" | "write_file" | "edit_file" | "edit_file_diff" => {
-            let action = arg_parser::tool_action(args);
-            let path = arg_parser::parse_file_arg(args).unwrap_or_default();
+            let action = arg::tool_action(args);
+            let path = arg::parse_file_arg(args).unwrap_or_default();
             state.tool_code_path = path.clone();
             state.tool_code_action = if action.is_empty() {
                 tool_name.trim_end_matches("_file").to_string()
@@ -41,14 +41,14 @@ pub fn track_tool_code(state: &mut AgentState, tool_name: &str, args: &str, resu
             }
         }
         "exec" => {
-            let action = arg_parser::tool_action(args);
+            let action = arg::tool_action(args);
             state.tool_code_action = "exec".into();
             if action == "explore" {
                 state.tool_code_content = format!("── explore ──\n{raw}");
             }
         }
         "agent" => {
-            let action = arg_parser::tool_action(args);
+            let action = arg::tool_action(args);
             state.tool_code_content = format!("── {action} ──\n{raw}");
         }
         _ => {}
