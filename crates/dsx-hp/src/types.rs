@@ -19,12 +19,6 @@ pub enum Verdict {
     },
 }
 
-impl Verdict {
-    /// Returns `true` for verdicts that demand immediate attention.
-    pub fn is_critical(&self) -> bool {
-        matches!(self, Verdict::Dead { .. })
-    }
-}
 
 /// Process types that can register with the HP daemon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

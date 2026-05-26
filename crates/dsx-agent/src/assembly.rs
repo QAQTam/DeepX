@@ -292,12 +292,6 @@ impl ContextAssembler {
         Ok(())
     }
 
-    /// Output messages in flat format (system + conversation + tool results).
-    /// Delegates to [`to_vec`] — the two are identical.
-    pub fn to_messages(&self) -> Vec<Message> {
-        self.to_vec()
-    }
-
     // ── Flat view ──
 
     /// Collect all messages into a flat Vec for UI rendering and session persistence.
@@ -335,10 +329,6 @@ impl ContextAssembler {
         self.turns.last()
             .map(|t| !t.all_steps_satisfied())
             .unwrap_or(false)
-    }
-
-    pub fn last_turn(&self) -> Option<&Turn> {
-        self.turns.last()
     }
 
     /// Whether the last step has unsatisfied tool calls.
@@ -458,7 +448,7 @@ impl ContextAssembler {
 
     /// Return conversation messages (user/assistant/tool), system messages stripped.
     pub fn build(&self, _context_limit: u32) -> Vec<Message> {
-        let mut msgs = self.to_messages();
+        let mut msgs = self.to_vec();
         msgs.retain(|m| m.role != "system");
         msgs
     }

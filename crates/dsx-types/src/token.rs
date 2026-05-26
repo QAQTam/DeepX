@@ -1,4 +1,4 @@
-//! Token counting: CJK heuristic + formatting helpers.
+//! Token counting: CJK heuristic + breakdown types.
 
 // ── Heuristic-only counting (no tokenizer dependency) ──
 
@@ -33,29 +33,4 @@ pub struct TokenBreakdown {
     pub system: u32,
     pub episodic: u32,
     pub total: u32,
-}
-
-// ── Formatting helpers ──
-
-/// Human-friendly token count display.
-///
-/// ```
-/// use dsx_types::token::format_tokens;
-/// assert_eq!(format_tokens(1500), "1.5K");
-/// assert_eq!(format_tokens(2_000_000), "2.0M");
-/// assert_eq!(format_tokens(500), "500");
-/// ```
-pub fn format_tokens(n: u32) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
-
-/// Fraction of the context window consumed, clamped to `[0.0, 1.0]`.
-pub fn context_usage_ratio(used: u32, max_tokens: u32) -> f64 {
-    (used as f64 / max_tokens as f64).clamp(0.0, 1.0)
 }

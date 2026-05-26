@@ -277,7 +277,7 @@ fn walk_ext_files(dir: &std::path::Path, ext: &str) -> Vec<std::path::PathBuf> {
 
 // ── Handler（新 IPC 框架）──
 
-pub fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
+pub(super) fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
     let path = ctx.get_str("path").unwrap_or(".");
     ToolResult::ok(exec_explore_inner(path))
 }

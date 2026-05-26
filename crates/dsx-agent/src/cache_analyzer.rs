@@ -14,20 +14,14 @@ use crate::tokenizer;
 use dsx_types::Message;
 
 /// Snapshot of one API request for cache prediction.
-pub struct RequestSnapshot {
-    pub system: String,
-    pub messages: Vec<Message>,
-    /// Pre-computed message token counts (including overhead).
-    pub msg_tokens: Vec<u32>,
-    /// System prompt token count.
-    pub sys_tokens: u32,
+struct RequestSnapshot {
+    system: String,
+    messages: Vec<Message>,
 }
 
 /// Result of a cache prediction.
 #[derive(Debug, Clone, Copy)]
 pub struct CacheReport {
-    pub cache_hit_tokens: u32,
-    pub cache_miss_tokens: u32,
     pub hit_rate: f64,
 }
 
@@ -52,39 +46,20 @@ impl CacheAnalyzer {
         let total = sys_tokens + msg_tokens.iter().copied().sum::<u32>();
 
         // --- compare with previous request ---
-        let (hit, miss) = if let Some(ref prev) = self.prev {
+        let hit = if let Some(ref prev) = self.prev {
             if prev.system == system {
-                // System prompt is identical → fully cached.
-                // Find how many leading messages byte-match.
-                let common = prev
-                    .messages
-                    .iter()
-                    .zip(messages.iter())
-                    .take_while(|(a, b)| {
-                        a.role == b.role
-                            && a.content == b.content
-                    })
+                let common = prev.messages.iter().zip(messages.iter())
+                    .take_while(|(a, b)| a.role == b.role && a.content == b.content)
                     .count();
-
-                // Cached = system tokens + matching message tokens
                 let cached_msg: u32 = msg_tokens[..common].iter().copied().sum();
-                let hit = sys_tokens + cached_msg;
-                (hit, total.saturating_sub(hit))
-            } else {
-                // System changed — nothing is cached (cold start).
-                (0, total)
-            }
-        } else {
-            // First request — no previous to compare with, everything is a miss.
-            (0, total)
-        };
+                sys_tokens + cached_msg
+            } else { 0 }
+        } else { 0 };
 
         // --- store as previous ---
         self.prev = Some(RequestSnapshot {
             system: system.to_string(),
             messages: messages.to_vec(),
-            msg_tokens,
-            sys_tokens,
         });
 
         let hit_rate = if total > 0 {
@@ -93,15 +68,7 @@ impl CacheAnalyzer {
             0.0
         };
 
-        CacheReport {
-            cache_hit_tokens: hit,
-            cache_miss_tokens: miss,
-            hit_rate,
-        }
+        CacheReport { hit_rate }
     }
 
-    /// Reset the analyzer (e.g. on new session).
-    pub fn reset(&mut self) {
-        self.prev = None;
-    }
 }

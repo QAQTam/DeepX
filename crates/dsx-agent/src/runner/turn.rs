@@ -216,7 +216,7 @@ pub fn execute_single_tool(
         !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
     let failed = !tr_success;
 
-    agent.health.record_tool_call(name);
+    agent.health.record_tool_call();
     if failed {
         agent.tool_failures += 1;
     }
@@ -456,7 +456,7 @@ pub fn handle_user_input(
 
             learning::post_turn_maintenance(agent, &assistant_msg);
 
-            agent.health.record_turn(false);
+            agent.health.record_turn();
             agent.health.reset_turn();
 
             session::save_live_snapshot(
@@ -648,7 +648,7 @@ pub fn handle_user_input(
 
             learning::post_turn_maintenance(agent, &assistant_msg);
 
-            agent.health.record_turn(false);
+            agent.health.record_turn();
 
             let _ = agent_tx.send(AgentToTui::ApiResponse {
                 content,

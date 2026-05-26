@@ -47,21 +47,6 @@ pub enum ToolsToAgent {
         tools: Vec<dsx_types::ToolDef>,
     },
 
-    #[serde(rename = "tool_progress")]
-    Progress {
-        id: String,
-        content: String,
-        stream_type: String,
-    },
-
-    /// Legacy text result (backward compatible).
-    #[serde(rename = "tool_result")]
-    Result {
-        id: String,
-        success: bool,
-        content: String,
-    },
-
     /// Structured result with is_error flag.
     #[serde(rename = "tool_result_message")]
     ToolResultMessage {

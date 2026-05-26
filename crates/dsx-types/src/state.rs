@@ -44,17 +44,3 @@ impl DebugLevel {
         }
     }
 }
-
-// ── Router IPC ──
-
-/// Command to update the router's phase/debug-level via IPC.
-///
-/// Used by the status tool and TUI to communicate phase changes
-/// across process boundaries without direct function calls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RouterCommand {
-    SetPhase {
-        phase: TaskPhase,
-        level: DebugLevel,
-    },
-}

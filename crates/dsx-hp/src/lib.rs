@@ -16,4 +16,3 @@ pub mod liveness;
 // ── Anthropic native API client ──
 
 pub mod anthropic_api;
-pub use anthropic_api::{GatewayConfig, StreamEvent};

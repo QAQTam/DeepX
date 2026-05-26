@@ -35,7 +35,7 @@ use std::time::Duration;
 use crate::liveness::LivenessResult;
 use crate::registry::ProcessRegistry;
 use crate::types::{HpError, ProcessKind, Verdict};
-use crate::{GatewayConfig, StreamEvent};
+use crate::anthropic_api::{GatewayConfig, StreamEvent};
 use dsx_proto::AgentToHp;
 
 static HP_CONFIG: OnceLock<GatewayConfig> = OnceLock::new();

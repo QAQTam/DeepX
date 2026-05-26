@@ -26,7 +26,7 @@ pub mod token;
 
 pub use message::{Message, ContentBlock, ToolCall, FunctionCall};
 pub use tool_def::{ToolDef, ToolFunction};
-pub use state::{TaskPhase, DebugLevel, RouterCommand};
+pub use state::{TaskPhase, DebugLevel};
 pub use config::{PersistentConfig, PhasePerfConfig, ProfileConfig, default_phase_configs};
 pub use session::{SessionFile, SessionMeta};
 pub use api_types::UsageInfo;

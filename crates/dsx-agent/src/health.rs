@@ -48,11 +48,11 @@ impl DsAgentsHealthPlatform {
         self.tool_calls_this_turn = 0;
     }
 
-    pub fn record_turn(&mut self, _had_errors: bool) {
+    pub fn record_turn(&mut self) {
         self.turn += 1;
     }
 
-    pub fn record_tool_call(&mut self, _name: &str) {
+    pub fn record_tool_call(&mut self) {
         self.tool_calls_this_turn += 1;
     }
 }

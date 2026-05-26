@@ -21,7 +21,6 @@ pub struct Registration {
     pub name: String,
     pub started_at: Instant,
     pub liveness: LivenessState,
-    pub metadata: HashMap<String, String>,
 }
 
 impl Registration {
@@ -32,7 +31,6 @@ impl Registration {
             name,
             started_at: Instant::now(),
             liveness: LivenessState::new(timeout_secs),
-            metadata: HashMap::new(),
         }
     }
 }

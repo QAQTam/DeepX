@@ -67,13 +67,6 @@ impl Message {
             content: vec![ContentBlock::text(content)],
         }
     }
-    /// Empty assistant message (blocks added after streaming).
-    pub fn assistant_empty() -> Self {
-        Self {
-            role: "assistant".into(),
-            content: vec![],
-        }
-    }
     /// Internal tool result (assembler merges into user role).
     /// `is_error` is derived from the `[ERROR]`/`[FAIL]` prefix in `result`,
     /// matching Anthropic's tool_result schema.

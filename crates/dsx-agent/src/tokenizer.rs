@@ -5,8 +5,7 @@
 //! the DeepSeek tokenizer binary embedded in this crate is used for
 //! accurate counting, rather than the heuristic-only base implementation.
 //!
-//! Utility functions (`format_tokens`, `context_usage_ratio`, `TokenBreakdown`)
-//! are re-exported from `dsx-types` for caller convenience.
+//! `TokenBreakdown` is re-exported from `dsx-types` for caller convenience.
 
 use dsx_types::Message;
 pub use dsx_types::token::TokenBreakdown;

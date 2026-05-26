@@ -42,22 +42,22 @@ fn c7_url_encode(s: &str) -> String {
 
 // ── Handler 函数（新 IPC 框架）──
 
-pub fn handle_fetch(ctx: ToolCallCtx) -> ToolResult {
+pub(super) fn handle_fetch(ctx: ToolCallCtx) -> ToolResult {
     let args = build_args_json(&ctx);
     ToolResult::ok(exec_web_fetch(&args))
 }
 
-pub fn handle_search(ctx: ToolCallCtx) -> ToolResult {
+pub(super) fn handle_search(ctx: ToolCallCtx) -> ToolResult {
     let args = build_args_json(&ctx);
     ToolResult::ok(exec_web_search(&args))
 }
 
-pub fn handle_c7_resolve(ctx: ToolCallCtx) -> ToolResult {
+pub(super) fn handle_c7_resolve(ctx: ToolCallCtx) -> ToolResult {
     let args = build_args_json(&ctx);
     ToolResult::ok(exec_context7_resolve(&args))
 }
 
-pub fn handle_c7_query(ctx: ToolCallCtx) -> ToolResult {
+pub(super) fn handle_c7_query(ctx: ToolCallCtx) -> ToolResult {
     let args = build_args_json(&ctx);
     ToolResult::ok(exec_context7_query(&args))
 }
@@ -166,7 +166,7 @@ fn exec_context7_query(args: &str) -> String {
 // ── Web fetch ──
 
 fn exec_web_fetch(args: &str) -> String {
-    let url = parse_arg(args, "url");
+    let url = dsx_types::arg::parse_arg(args, "url").unwrap_or_default();
     let resp = match ureq::get(&url)
         .header("User-Agent", "dsx/4.0")
         .call()
@@ -186,7 +186,7 @@ fn exec_web_fetch(args: &str) -> String {
                         let end = find_char_boundary(&readable, 100_000);
                         format!("{}... [truncated: {} total chars]", &readable[..end], readable.len())
                     } else { readable.clone() };
-                    let output_path = parse_opt(args, "output");
+                    let output_path = dsx_types::arg::parse_arg(args, "output");
                     let saved = if let Some(ref path) = output_path {
                         if let Some(parent) = std::path::Path::new(path).parent() {
                             let _ = std::fs::create_dir_all(parent);
@@ -214,7 +214,7 @@ fn find_char_boundary(s: &str, max: usize) -> usize {
 // ── Web search ──
 
 fn exec_web_search(args: &str) -> String {
-    let query = parse_arg(args, "query");
+    let query = dsx_types::arg::parse_arg(args, "query").unwrap_or_default();
     let url = format!("https://cn.bing.com/search?q={}&setlang=zh-cn", urlencoding(&query));
     let body = match (|| -> Result<String, String> {
         let resp = ureq::get(&url)
@@ -372,17 +372,3 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 }
 
-// ── 参数解析（兼容垫片）──
-
-fn parse_arg(args: &str, key: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(args)
-        .ok()
-        .and_then(|v| v.get(key).and_then(|v| v.as_str()).map(String::from))
-        .unwrap_or_default()
-}
-
-fn parse_opt(args: &str, key: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(args)
-        .ok()
-        .and_then(|v| v.get(key).and_then(|v| v.as_str()).map(String::from))
-}

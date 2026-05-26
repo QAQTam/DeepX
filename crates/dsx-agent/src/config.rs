@@ -44,40 +44,39 @@ impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let mut cfg = Self::default();
 
-        if let Some(path) = config_path() {
-            if path.exists() {
-                if let Ok(data) = std::fs::read_to_string(&path) {
-                    if let Ok(pc) = serde_json::from_str::<PersistentConfig>(&data) {
-                        // 1. Load profiles
-                        if let Some(profiles) = pc.profiles {
-                            cfg.profiles = profiles;
-                        }
-                        // 2. Apply active profile
-                        if let Some(ref active) = pc.active_profile {
-                            cfg.active_profile = active.clone();
-                            if let Some(profile) = cfg.profiles.get(active) {
-                                cfg.model = profile.model.clone();
-                                cfg.max_tokens = profile.max_tokens;
-                                cfg.effort = profile.effort.clone();
-                                cfg.context_limit = profile.context_limit;
-                                cfg.base_url = profile.base_url.clone();
-                                cfg.prompt_lang = profile.prompt_lang.clone();
-                            }
-                        }
-                        // 3. Overlay flat fields (backward compat — take precedence)
-                        if let Some(k) = pc.api_key { if !k.is_empty() { cfg.api_key = k; } }
-                        if let Some(m) = pc.model { if !m.is_empty() { cfg.model = m; } }
-                        if let Some(u) = pc.base_url { if !u.is_empty() { cfg.base_url = u; } }
-                        if let Some(mt) = pc.max_tokens { cfg.max_tokens = mt; }
-                        if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
-                        if let Some(ref e) = pc.effort { if !e.is_empty() { cfg.effort = Some(e.clone()); } }
-                        if let Some(pl) = pc.prompt_lang { if !pl.is_empty() { cfg.prompt_lang = pl; } }
-                        if let Some(am) = pc.auto_mode { cfg.auto_mode = am; }
-                        if let Some(pc2) = pc.phase_configs { cfg.phase_configs = pc2; }
+        let path = config_path();
+        if path.exists() {
+        if let Ok(data) = std::fs::read_to_string(&path) {
+            if let Ok(pc) = serde_json::from_str::<PersistentConfig>(&data) {
+                // 1. Load profiles
+                if let Some(profiles) = pc.profiles {
+                    cfg.profiles = profiles;
+                }
+                // 2. Apply active profile
+                if let Some(ref active) = pc.active_profile {
+                    cfg.active_profile = active.clone();
+                    if let Some(profile) = cfg.profiles.get(active) {
+                        cfg.model = profile.model.clone();
+                        cfg.max_tokens = profile.max_tokens;
+                        cfg.effort = profile.effort.clone();
+                        cfg.context_limit = profile.context_limit;
+                        cfg.base_url = profile.base_url.clone();
+                        cfg.prompt_lang = profile.prompt_lang.clone();
                     }
                 }
+                // 3. Overlay flat fields (backward compat — take precedence)
+                if let Some(k) = pc.api_key { if !k.is_empty() { cfg.api_key = k; } }
+                if let Some(m) = pc.model { if !m.is_empty() { cfg.model = m; } }
+                if let Some(u) = pc.base_url { if !u.is_empty() { cfg.base_url = u; } }
+                if let Some(mt) = pc.max_tokens { cfg.max_tokens = mt; }
+                if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
+                if let Some(ref e) = pc.effort { if !e.is_empty() { cfg.effort = Some(e.clone()); } }
+                if let Some(pl) = pc.prompt_lang { if !pl.is_empty() { cfg.prompt_lang = pl; } }
+                if let Some(am) = pc.auto_mode { cfg.auto_mode = am; }
+                if let Some(pc2) = pc.phase_configs { cfg.phase_configs = pc2; }
             }
         }
+    }
 
         // 4. Env vars (highest priority)
         if let Ok(k) = std::env::var("DEEPSEEK_API_KEY") { let k = k.trim().to_string(); if !k.is_empty() { cfg.api_key = k; } }
@@ -101,31 +100,30 @@ impl Config {
     }
 
     pub fn save(&self) {
-        if let Some(path) = config_path() {
-            let _ = std::fs::create_dir_all(path.parent().unwrap());
-            // Sync current values into active profile
-            let mut profiles = self.profiles.clone();
-            profiles.insert(self.active_profile.clone(), dsx_types::ProfileConfig {
-                model: self.model.clone(), max_tokens: self.max_tokens,
-                effort: self.effort.clone(), context_limit: self.context_limit,
-                base_url: self.base_url.clone(), prompt_lang: self.prompt_lang.clone(),
-            });
-            let pc = PersistentConfig {
-                api_key: if self.api_key.is_empty() { None } else { Some(self.api_key.clone()) },
-                model: Some(self.model.clone()),
-                base_url: Some(self.base_url.clone()),
-                max_tokens: Some(self.max_tokens),
-                context_limit: Some(self.context_limit),
-                thinking: None,
-                effort: self.effort.clone(),
-                prompt_lang: Some(self.prompt_lang.clone()),
-                profiles: Some(profiles),
-                active_profile: Some(self.active_profile.clone()),
-                auto_mode: Some(self.auto_mode),
-                phase_configs: Some(self.phase_configs.clone()),
-            };
-            let _ = std::fs::write(&path, serde_json::to_string_pretty(&pc).unwrap_or_default());
-        }
+        let path = config_path();
+        let _ = std::fs::create_dir_all(path.parent().unwrap());
+        // Sync current values into active profile
+        let mut profiles = self.profiles.clone();
+        profiles.insert(self.active_profile.clone(), dsx_types::ProfileConfig {
+            model: self.model.clone(), max_tokens: self.max_tokens,
+            effort: self.effort.clone(), context_limit: self.context_limit,
+            base_url: self.base_url.clone(), prompt_lang: self.prompt_lang.clone(),
+        });
+        let pc = PersistentConfig {
+            api_key: if self.api_key.is_empty() { None } else { Some(self.api_key.clone()) },
+            model: Some(self.model.clone()),
+            base_url: Some(self.base_url.clone()),
+            max_tokens: Some(self.max_tokens),
+            context_limit: Some(self.context_limit),
+            thinking: None,
+            effort: self.effort.clone(),
+            prompt_lang: Some(self.prompt_lang.clone()),
+            profiles: Some(profiles),
+            active_profile: Some(self.active_profile.clone()),
+            auto_mode: Some(self.auto_mode),
+            phase_configs: Some(self.phase_configs.clone()),
+        };
+        let _ = std::fs::write(&path, serde_json::to_string_pretty(&pc).unwrap_or_default());
     }
 
     pub fn apply_profile(&mut self, name: &str) -> Option<String> {
@@ -162,8 +160,8 @@ impl Config {
     pub fn is_ready(&self) -> bool { !self.api_key.is_empty() }
 }
 
-fn config_path() -> Option<PathBuf> {
-    Some(dsx_types::platform::config_path())
+fn config_path() -> PathBuf {
+    dsx_types::platform::config_path()
 }
 
 
@@ -171,9 +169,8 @@ fn config_path() -> Option<PathBuf> {
 
 pub fn handle_reset_command(input: &str, config: &mut Config) -> Option<String> {
     let _ = input.trim().strip_prefix("/reset")?;
-    if let Some(path) = config_path() {
-        let _ = std::fs::remove_file(&path);
-    }
+    let path = config_path();
+    let _ = std::fs::remove_file(&path);
     *config = Config::default();
     Some("Config reset. Restart dsx to enter setup wizard.".into())
 }

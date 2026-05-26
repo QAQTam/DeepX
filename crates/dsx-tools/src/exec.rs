@@ -10,7 +10,7 @@ use crate::{ToolCallCtx, ToolResult};
 // ── Compat helpers ──
 
 pub fn exec_command(args: &str) -> String {
-    let command = parse_arg(args, "command");
+    let command = crate::parse_arg(args, "command");
     if command.trim().is_empty() {
         return "[ERROR] exec: empty command\n[HINT] Provide a shell command in the `cmd` or `command` parameter.".into();
     }
@@ -194,7 +194,7 @@ pub fn exec_command(args: &str) -> String {
 
 // ── Handler ──
 
-pub fn handle_run(ctx: ToolCallCtx) -> ToolResult {
+pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     let command = ctx.get_str("command").unwrap_or("").to_string();
 
     let args = serde_json::json!({
@@ -262,10 +262,6 @@ fn common_prefix(lines: &[&str]) -> String {
 // ── 参数解析（委托至 dsx-types）──
 
 use dsx_types::arg::{parse_opt, parse_opt_u64};
-
-fn parse_arg(args: &str, key: &str) -> String {
-    dsx_types::arg::parse_arg(args, key).unwrap_or_default()
-}
 
 // ── 注册入口 ──
 

@@ -5,7 +5,6 @@
 //! 子模块通过 `pub fn register(mgr: &mut ToolManager)` 注册各自 handler。
 
 pub mod exec;
-pub use exec::exec_command;
 pub mod explore;
 pub mod file;
 mod safety;

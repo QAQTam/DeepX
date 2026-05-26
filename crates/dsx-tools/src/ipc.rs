@@ -4,7 +4,7 @@
 //! (`read_frame`, `write_frame`) come from `dsx-proto`.
 //!
 //! Agent → Tools: tools_init, tool_call_req, tool_cancel, tools_shutdown
-//! Tools → Agent: tools_ready, tool_progress, tool_result, tool_result_message, tool_error
+//! Tools → Agent: tools_ready, tool_result_message, tool_error
 
 use std::io;
 use dsx_proto::{self, AgentToTools, ToolsToAgent};
