@@ -26,12 +26,6 @@ pub fn exec_command(args: &str) -> String {
         .filter(|&n| n > 0 && n <= 3600)
         .unwrap_or(30);
 
-    // Sudo detection: redirect to exec/sudo_run (uses dsx-sudo on Unix)
-    if command.trim().starts_with("sudo ") && !cfg!(target_os = "windows") {
-        let inner = command.trim_start().strip_prefix("sudo ").unwrap_or("").trim();
-        return format!("[ERROR] Use exec/sudo_run not exec/run for sudo.\n[HINT] Call sudo_run with command=\"{}\" instead.", inner);
-    }
-
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
         c.args(["/C", &command]);
@@ -383,11 +377,6 @@ pub fn spawn_exec_async_with_sudo(
 pub fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     let command = ctx.get_str("command").unwrap_or("").to_string();
 
-    // Auto-route sudo commands to dsx-sudo for privilege separation
-    if command.trim().starts_with("sudo ") && !cfg!(target_os = "windows") {
-        return handle_sudo_run(ctx);
-    }
-
     let args = serde_json::json!({
         "command": command,
         "cwd": ctx.get_str("cwd"),
@@ -396,121 +385,6 @@ pub fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     let result = exec_command(&args.to_string());
     let success = result.starts_with("[OK]");
     ToolResult { success, content: result }
-}
-
-pub fn handle_sudo_run(ctx: ToolCallCtx) -> ToolResult {
-    if cfg!(target_os = "windows") {
-        return ToolResult::err("sudo_run: not supported on Windows");
-    }
-
-    let command = ctx.get_str("command").unwrap_or("");
-    let cwd = ctx.get_str("cwd");
-    let timeout_secs = ctx.get_u64("timeout_secs")
-        .filter(|&n| n > 0 && n <= 3600)
-        .unwrap_or(300);
-
-    if command.trim().is_empty() {
-        return ToolResult::err("sudo_run: empty command");
-    }
-
-    // Find dsx-sudo binary: check several locations
-    let sudo_bin = find_dsx_sudo().unwrap_or_else(|| "dsx-sudo".into());
-
-    // Tokenize command string into args for dsx-sudo
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    let (cmd_name, cmd_args) = parts.split_first().unwrap_or((&"", &[]));
-
-    // Build dsx-sudo args: [cmd, args...]
-    let mut dsx_args: Vec<&str> = vec![cmd_name];
-    dsx_args.extend_from_slice(cmd_args);
-
-    let mut cmd = std::process::Command::new(&sudo_bin);
-    cmd.args(&dsx_args);
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-
-    let child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return ToolResult::err(&format!("dsx-sudo spawn: {e}")),
-    };
-    let pid = child.id();
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
-    });
-
-    use std::sync::atomic::Ordering;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    let output = loop {
-        if crate::CANCEL.load(Ordering::SeqCst) {
-            dsx_types::platform::kill_process(pid);
-            return ToolResult::err("sudo command cancelled by user");
-        }
-        let remaining = deadline.checked_duration_since(std::time::Instant::now()).unwrap_or_default();
-        if remaining.is_zero() {
-            dsx_types::platform::kill_process(pid);
-            return ToolResult::err(&format!("sudo timed out after {}s", timeout_secs));
-        }
-        let poll = remaining.min(std::time::Duration::from_secs(1));
-        match rx.recv_timeout(poll) {
-            Ok(Ok(o)) => break o,
-            Ok(Err(e)) => return ToolResult::err(&format!("sudo wait failed: {e}")),
-            Err(_) => continue,
-        }
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    let line = stdout.lines().next().unwrap_or("");
-    if line.starts_with("{\"ok\":") {
-        let success = line.contains("\"ok\":true");
-        let content = if success {
-            extract_json_field(line, "stdout").unwrap_or_else(|| line.to_string())
-        } else {
-            let err = extract_json_field(line, "error").unwrap_or_else(|| "unknown error".into());
-            format!("[ERROR] sudo: {err}")
-        };
-        ToolResult { success, content }
-    } else if output.status.success() {
-        ToolResult::ok(&*stdout)
-    } else {
-        let err_msg = if !stderr.is_empty() { &*stderr } else { &*stdout };
-        ToolResult::err(&format!("sudo failed: {err_msg}"))
-    }
-}
-
-fn find_dsx_sudo() -> Option<String> {
-    let candidates = [
-        "/usr/local/lib/dsx/dsx-sudo",
-        "/usr/lib/dsx/dsx-sudo",
-        "/opt/dsx/dsx-sudo",
-    ];
-    for p in &candidates {
-        if std::path::Path::new(p).exists() {
-            return Some(p.to_string());
-        }
-    }
-    None
-}
-
-fn extract_json_field(json: &str, field: &str) -> Option<String> {
-    let search = format!("\"{field}\":\"");
-    let start = json.find(&search)?;
-    let val_start = start + search.len();
-    let mut val = String::new();
-    let mut chars = json[val_start..].chars();
-    loop {
-        match chars.next() {
-            Some('"') if val.ends_with('\\') => { val.push('"'); }
-            Some('"') => break,
-            Some(c) => val.push(c),
-            None => break,
-        }
-    }
-    Some(val)
 }
 
 // ── 辅助函数 ──
@@ -575,7 +449,7 @@ fn parse_arg(args: &str, key: &str) -> String {
 
 // ── 注册入口 ──
 
-use crate::{ToolHandler, ToolKey, SafetyVerdict};
+use crate::{ToolHandler, ToolKey};
 use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
@@ -620,25 +494,6 @@ pub fn register(mgr: &mut crate::ToolManager) {
             let cmd = ctx.get_str("command").unwrap_or("");
             crate::safety::classify_execution(cmd)
         },
-        default_timeout: Duration::from_secs(300),
-    });
-
-    // exec/sudo_run
-    mgr.register(ToolHandler {
-        key: ToolKey::new("exec", "sudo_run"),
-        description: "Execute a command with sudo via dsx-sudo (setuid helper). No password needed.",
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": {"type": "string"},
-                "cwd": {"type": "string"},
-                "timeout_secs": {"type": "integer"}
-            },
-            "required": ["command"],
-            "additionalProperties": false
-        }),
-        handler: handle_sudo_run,
-        safety: |_| SafetyVerdict::Allow,
         default_timeout: Duration::from_secs(300),
     });
 

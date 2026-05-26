@@ -87,7 +87,7 @@ pub(super) fn extract_sigs(path: &std::path::Path) -> Vec<String> {
             || trimmed.starts_with("pub async fn ")
         {
             let clean = trimmed.split('{').next().unwrap_or(trimmed).trim().to_string();
-            if clean.len() < 80 { sigs.push(clean); }
+            if clean.len() < 120 { sigs.push(clean); }
         }
     }
     sigs
@@ -109,7 +109,9 @@ fn sanitize_first_line(line: &str) -> String {
     let clean = t.trim_start_matches("//! ").trim_start_matches("/// ")
         .trim_start_matches("// ").trim_start_matches("#![").to_string();
     if clean.len() > 90 {
-        format!("{}…", &clean[..90])
+        let mut end = 90;
+        while end > 0 && !clean.is_char_boundary(end) { end -= 1; }
+        format!("{}…", &clean[..end])
     } else {
         clean
     }

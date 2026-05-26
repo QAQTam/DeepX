@@ -53,6 +53,48 @@ struct App {
     exit: bool,
 }
 
+// ── CJK-safe cursor helpers ──
+// `cursor` is a byte offset into `input: String`.
+// All operations must preserve the invariant that `cursor` is always
+// at a UTF-8 character boundary (or == input.len()).
+
+/// Move the byte cursor to the start of the previous character.
+fn cursor_prev(s: &str, pos: usize) -> usize {
+    if pos == 0 { return 0; }
+    let mut p = pos - 1;
+    while p > 0 && !s.is_char_boundary(p) {
+        p -= 1;
+    }
+    p
+}
+
+/// Move the byte cursor to the start of the next character.
+fn cursor_next(s: &str, pos: usize) -> usize {
+    if pos >= s.len() { return s.len(); }
+    let mut p = pos + 1;
+    while p < s.len() && !s.is_char_boundary(p) {
+        p += 1;
+    }
+    p
+}
+
+/// Remove the character before the cursor (Backspace), returning true if anything was removed.
+fn backspace_at(s: &mut String, cursor: &mut usize) -> bool {
+    if *cursor == 0 { return false; }
+    let prev = cursor_prev(s, *cursor);
+    s.remove(prev);
+    *cursor = prev;
+    true
+}
+
+/// Remove the character after the cursor (Delete).
+fn delete_at(s: &mut String, cursor: usize) -> bool {
+    if cursor >= s.len() { return false; }
+    // Remove one char — cursor is at a char boundary, s.remove(cursor) is safe
+    s.remove(cursor);
+    true
+}
+
 impl App {
     fn run(mut self) -> anyhow::Result<()> {
         let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
@@ -95,24 +137,19 @@ impl App {
                             }
                             KeyCode::Char(c) => {
                                 self.input.insert(self.cursor, c);
-                                self.cursor += 1;
+                                self.cursor += c.len_utf8();
                             }
                             KeyCode::Backspace => {
-                                if self.cursor > 0 {
-                                    self.input.remove(self.cursor - 1);
-                                    self.cursor -= 1;
-                                }
+                                backspace_at(&mut self.input, &mut self.cursor);
                             }
                             KeyCode::Delete => {
-                                if self.cursor < self.input.len() {
-                                    self.input.remove(self.cursor);
-                                }
+                                delete_at(&mut self.input, self.cursor);
                             }
                             KeyCode::Left => {
-                                self.cursor = self.cursor.saturating_sub(1);
+                                self.cursor = cursor_prev(&self.input, self.cursor);
                             }
                             KeyCode::Right => {
-                                self.cursor = (self.cursor + 1).min(self.input.len());
+                                self.cursor = cursor_next(&self.input, self.cursor);
                             }
                             KeyCode::Home => {
                                 self.cursor = 0;
@@ -189,9 +226,6 @@ impl App {
                 self.phase = phase;
             }
             AgentToTui::ToolState { .. } => {}
-            AgentToTui::Status { message } => {
-                self.status = message;
-            }
             AgentToTui::Error { message } => {
                 self.messages.push(("error".into(), message));
             }

@@ -32,14 +32,12 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use crate::config::Config;
-use crate::ipc_traits::HealthProbe;
 use crate::liveness::LivenessResult;
 use crate::registry::ProcessRegistry;
 use crate::types::{HpError, ProcessKind, Verdict};
 use crate::{GatewayConfig, StreamEvent};
 
-static HP_CONFIG: OnceLock<Config> = OnceLock::new();
+static HP_CONFIG: OnceLock<GatewayConfig> = OnceLock::new();
 static HP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 // ── Health service implementation ──
@@ -58,10 +56,8 @@ impl HealthService {
             registry: ProcessRegistry::new(timeout_secs),
         }
     }
-}
 
-impl HealthProbe for HealthService {
-    fn register(
+    pub fn register(
         &mut self,
         kind: ProcessKind,
         name: &str,
@@ -108,18 +104,18 @@ impl HealthProbe for HealthService {
 // ── Main ──
 
 /// Load API config: config.json (priority) then env vars, then defaults.
-fn load_hp_config() -> Config {
+fn load_hp_config() -> GatewayConfig {
     let cfg_path = dsx_types::platform::config_path();
 
     if let Ok(data) = std::fs::read_to_string(&cfg_path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
             let api_key = v.get("api_key").and_then(|k| k.as_str()).unwrap_or("").to_string();
             let base_url = v.get("base_url").and_then(|b| b.as_str()).unwrap_or("https://api.deepseek.com/anthropic").to_string();
-            return Config { base_url, api_key };
+            return GatewayConfig { base_url, api_key };
         }
     }
 
-    Config { base_url: "https://api.deepseek.com/anthropic".into(), api_key: String::new() }
+    GatewayConfig { base_url: "https://api.deepseek.com/anthropic".into(), api_key: String::new() }
 }
 
 pub fn run() {
@@ -423,7 +419,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                         let tail = &full_content[full_content.char_indices().map(|(i,_)| i).nth(full_content.chars().count().saturating_sub(100)).unwrap_or(0)..];
                         // If the last 100 chars have >60% same character, it's degenerate
                         if let Some(most_common) = tail.chars().max_by_key(|c| tail.matches(*c).count()) {
-                            let ratio = tail.matches(most_common).count() as f64 / tail.len() as f64;
+                            let ratio = tail.matches(most_common).count() as f64 / tail.chars().count().max(1) as f64;
                             if ratio > 0.60 && most_common != ' ' {
                                 log::warn!("hp: degenerate output detected ({:.0}% '{:?}'), cutting off", ratio * 100.0, most_common);
                                 let _ = writeln!(writer, "{}", serde_json::json!({

@@ -261,13 +261,22 @@ fn strip_html(s: &str) -> String {
 }
 
 fn urlencoding(s: &str) -> String {
-    s.chars().map(|c| {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' || c == ' ' {
-            if c == ' ' { '+'.to_string() } else { c.to_string() }
+    let mut out = String::with_capacity(s.len() * 3);
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+            out.push(c);
+        } else if c == ' ' {
+            out.push('+');
         } else {
-            format!("%{:02X}", c as u8)
+            // Encode multi-byte UTF-8 chars correctly (e.g. '你' → %E4%BD%A0)
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            for b in encoded.bytes() {
+                out.push_str(&format!("%{:02X}", b));
+            }
         }
-    }).collect()
+    }
+    out
 }
 
 // ── 注册入口 ──

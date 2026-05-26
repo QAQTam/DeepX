@@ -239,7 +239,6 @@ pub async fn chat_stream(
                             total_tokens: it + ot,
                             prompt_cache_hit_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
                             prompt_cache_miss_tokens: u.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                            completion_tokens_details: None,
                         });
                     }
                 }

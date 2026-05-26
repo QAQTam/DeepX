@@ -1,8 +1,6 @@
 //! Agent-side health tracking: error rates, tool outcomes, context pressure, emotion.
 //! This is the canonical health implementation (HP's duplicate has been removed).
 
-use std::collections::HashMap;
-
 // ── Health enums ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -126,10 +124,6 @@ impl DsAgentsHealthPlatform {
 
     pub fn record_tool_outcome(&mut self, _name: &str, _success: bool) {}
 
-    pub fn track_tool(&mut self, _name: &str, _args: &str) -> Option<String> {
-        None
-    }
-
     pub fn reset_turn(&mut self) {
         self.tool_calls_this_turn = 0;
     }
@@ -161,10 +155,6 @@ impl DsAgentsHealthPlatform {
 
     pub fn record_api_success(&mut self, _model: &str) {}
 
-    pub fn should_escalate(&self) -> Option<String> {
-        None
-    }
-
     pub fn should_block(&self, _tool_name: &str) -> Option<String> {
         None
     }
@@ -193,238 +183,9 @@ impl Default for Assessment {
     }
 }
 
-// ── Gate module ──
+// ── Monitor (kept minimal — only tool_calls_this_turn is used by runner) ──
 
-pub mod gate {
-    
-    use crate::assembly::ContextAssembler;
-
-    pub struct GateContext<'a> {
-        pub assembler: &'a ContextAssembler,
-        pub has_orphan_tool_uses: bool,
-    }
-
-    pub fn check_gate(ctx: &GateContext) -> GateResult {
-        // 1. Previous 400 flagged orphan tool_uses → context corruption
-        if ctx.has_orphan_tool_uses {
-            return GateResult::Block {
-                reason: "Orphan tool_uses detected from previous API 400. Context repair needed.".into(),
-                repairable: true,
-            };
-        }
-
-        // 2. Unfulfilled tool calls from previous assistant → premature API request
-        if ctx.assembler.has_unfulfilled_tool_calls() {
-            return GateResult::Block {
-                reason: "Tool calls from previous assistant response not yet satisfied. Cannot start new request.".into(),
-                repairable: false,
-            };
-        }
-
-        // 3. Assembler structural validation (orphan tool_results, alternation)
-        if let Err(e) = ctx.assembler.validate() {
-            return GateResult::Block {
-                reason: format!("Assembler validation failed: {}", e),
-                repairable: e.contains("orphan"),
-            };
-        }
-
-        GateResult::Pass
-    }
-
-    /// Validate message array format.
-    /// Catches: orphan tool results, broken alternation, duplicate tool_call_ids.
-    pub fn validate_messages(
-        msgs: &[dsx_types::Message],
-    ) -> Result<(), GateResult> {
-        let mut i = 0;
-        while i < msgs.len() {
-            match msgs[i].role.as_str() {
-                "system" => {
-                    // system messages must be at the start
-                    if i > 0 && msgs[i-1].role != "system" {
-                        return Err(GateResult::Block {
-                            reason: "System message after non-system content".into(),
-                            repairable: false,
-                        });
-                    }
-                }
-                "user" => {
-                    // user must follow assistant or another user (first non-system)
-                    if i > 0 {
-                        let prev = msgs[i-1].role.as_str();
-                        if !matches!(prev, "assistant" | "tool" | "user") {
-                            return Err(GateResult::Block {
-                                reason: format!("User message after '{}' — invalid alternation", prev),
-                                repairable: false,
-                            });
-                        }
-                    }
-                }
-                "assistant" => {
-                    if i > 0 {
-                        let prev = msgs[i-1].role.as_str();
-                        if !matches!(prev, "user" | "tool") {
-                            return Err(GateResult::Block {
-                                reason: format!("Assistant message after '{}' — expected user or tool", prev),
-                                repairable: false,
-                            });
-                        }
-                    }
-                    // If assistant has ToolUse blocks, subsequent messages must be tool results
-                    let tool_uses: Vec<&dsx_types::ContentBlock> = msgs[i].content.iter()
-                        .filter(|b| matches!(b, dsx_types::ContentBlock::ToolUse { .. }))
-                        .collect();
-                    if !tool_uses.is_empty() {
-                        let mut j = i + 1;
-                        while j < msgs.len() && msgs[j].role == "tool" {
-                            j += 1;
-                        }
-                        let tool_results = &msgs[i+1..j];
-                        for tc in &tool_uses {
-                            let (id, name) = match tc {
-                                dsx_types::ContentBlock::ToolUse { id, name, .. } => (id, name),
-                                _ => unreachable!(),
-                            };
-                            let has_result = tool_results.iter().any(|tr| {
-                                tr.content.iter().any(|b| {
-                                    matches!(b, dsx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id)
-                                })
-                            });
-                            if !has_result {
-                                return Err(GateResult::Block {
-                                    reason: format!("Tool call '{}' ('{}') has no matching tool result", id, name),
-                                    repairable: true,
-                                });
-                            }
-                        }
-                        // Check for orphan tool results (no matching tool_call)
-                        for tr in tool_results {
-                            let tr_id = tr.content.iter().find_map(|b| {
-                                if let dsx_types::ContentBlock::ToolResult { tool_use_id, .. } = b {
-                                    Some(tool_use_id.as_str())
-                                } else {
-                                    None
-                                }
-                            });
-                            let has_call = tool_uses.iter().any(|tc| {
-                                match tc {
-                                    dsx_types::ContentBlock::ToolUse { id, .. } => tr_id == Some(id.as_str()),
-                                    _ => false,
-                                }
-                            });
-                            if !has_call {
-                                return Err(GateResult::Block {
-                                    reason: format!("Orphan tool result for '{}' — no matching tool_call", tr_id.unwrap_or("?")),
-                                    repairable: true,
-                                });
-                            }
-                        }
-                    }
-                }
-                "tool" => {
-                    // tool must follow assistant with matching tool_calls
-                    if i == 0 {
-                        return Err(GateResult::Block {
-                            reason: "Tool message at position 0 with no preceding assistant".into(),
-                            repairable: true,
-                        });
-                    }
-                    let prev = &msgs[i-1];
-                    if prev.role != "assistant" && prev.role != "tool" {
-                        return Err(GateResult::Block {
-                            reason: format!("Tool message after '{}' — must follow assistant or tool", prev.role),
-                            repairable: true,
-                        });
-                    }
-                }
-                other => {
-                    return Err(GateResult::Block {
-                        reason: format!("Unknown message role: '{}'", other),
-                        repairable: false,
-                    });
-                }
-            }
-            i += 1;
-        }
-        Ok(())
-    }
-
-    #[derive(Debug, Clone)]
-    pub enum GateResult {
-        Pass,
-        Block {
-            reason: String,
-            repairable: bool,
-        },
-    }
-
-    impl GateResult {
-        pub fn is_pass(&self) -> bool {
-            matches!(self, GateResult::Pass)
-        }
-        pub fn is_block(&self) -> bool {
-            matches!(self, GateResult::Block { .. })
-        }
-    }
-}
-
-// ── Monitor module ──
-
-pub mod monitor {
-    use super::*;
-
-    #[derive(Debug, Clone)]
-    pub struct MonitorState {
-        pub tool_calls_this_turn: u32,
-        pub consecutive_tool_turns: u32,
-        pub tool_fail_counts: HashMap<String, u32>,
-        pub disabled_tools: Vec<String>,
-        pub tool_trail: Vec<(String, String)>,
-        pub tool_loop_count: u32,
-        pub reasoning_sample: Vec<String>,
-        pub content_buffer: String,
-    }
-
-    impl MonitorState {
-        pub fn new() -> Self {
-            MonitorState {
-                tool_calls_this_turn: 0,
-                consecutive_tool_turns: 0,
-                tool_fail_counts: HashMap::new(),
-                disabled_tools: Vec::new(),
-                tool_trail: Vec::new(),
-                tool_loop_count: 0,
-                reasoning_sample: Vec::new(),
-                content_buffer: String::new(),
-            }
-        }
-    }
-
-    impl Default for MonitorState {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    pub enum PreToolResult {
-        Pass,
-        Block { reason: String },
-        Warn { reason: String },
-    }
-
-    pub fn pre_tool_gate(
-        _tool_name: &str,
-        _args: &str,
-        _monitor: &MonitorState,
-    ) -> PreToolResult {
-        PreToolResult::Pass
-    }
-
-    pub fn post_tool_record(
-        _tool_name: &str,
-        _success: bool,
-        _monitor: &mut MonitorState,
-    ) {}
+#[derive(Debug, Clone, Default)]
+pub struct MonitorState {
+    pub tool_calls_this_turn: u32,
 }

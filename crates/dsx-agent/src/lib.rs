@@ -15,7 +15,6 @@ pub mod tokenizer;
 // ── Missing top-level modules ──
 pub mod agent;
 pub mod health;
-pub mod api;
 pub mod tools;
 
 pub mod orchestrator;

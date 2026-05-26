@@ -21,8 +21,7 @@ pub mod arg;
 // Platform-specific utilities
 pub mod platform;
 
-// Crates contributed by A03 (shared utilities)
-pub mod error;
+// Serde utilities
 pub mod serde;
 pub mod token;
 
@@ -34,7 +33,7 @@ pub use tool_def::{ToolDef, ToolFunction};
 pub use state::{TaskPhase, DebugLevel, RouterCommand};
 pub use config::{PersistentConfig, PhasePerfConfig, ProfileConfig, default_phase_configs};
 pub use session::{SessionFile, SessionMeta, StreamState};
-pub use api_types::{UsageInfo, TokenDetails, BalanceInfo, BalanceEntry};
+pub use api_types::UsageInfo;
 
 // ── Unified arg parsers ──
 pub use arg::{
@@ -42,9 +41,8 @@ pub use arg::{
 };
 
 // ── A03: shared utilities ──
-pub use error::{DsxError, IpcError, ApiError, ToolError, HealthError};
 pub use token::{
-    TokenCount, TokenBreakdown,
-    estimate_messages_tokens, count_tokens, format_tokens, context_usage_ratio,
+    TokenBreakdown,
+    count_tokens, format_tokens, context_usage_ratio,
 };
 pub use serde::{SerdeError, encode_msg, encode_msg_with_max, decode_msg, try_decode_msg, MAX_FRAME_SIZE};

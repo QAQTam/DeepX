@@ -135,13 +135,6 @@ pub enum AgentToTui {
         written_this_turn: Vec<String>,
     },
 
-    #[serde(rename = "status")]
-    Status { message: String },
-
-    /// Echo back a raw frame (passthrough mode, no HP).
-    #[serde(rename = "echo")]
-    Echo { data: serde_json::Value },
-
     /// End of a turn (agent ready for next input).
     #[serde(rename = "done")]
     Done,
@@ -208,12 +201,6 @@ pub enum AgentToTools {
         id: Option<String>,
     },
 
-    #[serde(rename = "tool_confirm_resp")]
-    ConfirmResp {
-        id: String,
-        approved: bool,
-    },
-
     #[serde(rename = "tools_shutdown")]
     Shutdown,
 }
@@ -261,15 +248,6 @@ pub enum ToolsToAgent {
         error: String,
         /// "UNKNOWN_TOOL" | "BLOCKED" | "TIMEOUT" | "PANIC" | "FORBIDDEN"
         code: String,
-    },
-
-    #[serde(rename = "tool_confirm_req")]
-    ToolConfirmReq {
-        id: String,
-        tool_name: String,
-        action: String,
-        danger_level: String,
-        prompt: String,
     },
 }
 
@@ -329,20 +307,8 @@ pub enum AgentToHp {
 #[serde(tag = "type")]
 #[non_exhaustive]
 pub enum HpToAgent {
-    #[serde(rename = "ok")]
-    Ok { message: String },
-
     #[serde(rename = "error")]
     Error { message: String },
-
-    #[serde(rename = "verdicts")]
-    Verdicts { data: serde_json::Value },
-
-    #[serde(rename = "health")]
-    Health { data: serde_json::Value },
-
-    #[serde(rename = "process_list")]
-    ProcessList { data: serde_json::Value },
 
     /// Streaming content delta from LLM.
     #[serde(rename = "content_delta")]

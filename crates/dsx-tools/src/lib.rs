@@ -215,11 +215,11 @@ impl ToolManager {
     // ── IPC 路由 ──
 
     /// 处理一个入站 CallReq 帧，返回对应的出站帧。
-    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, _timeout_secs: Option<u64>) -> ipc::OutboundFrame {
+    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, _timeout_secs: Option<u64>) -> dsx_proto::ToolsToAgent {
         // 授权检查
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                return ipc::OutboundFrame::ToolError {
+                return dsx_proto::ToolsToAgent::ToolError {
                     id, error: format!("Tool '{}' not in allowed list", name), code: "FORBIDDEN".into(),
                 };
             }
@@ -232,7 +232,7 @@ impl ToolManager {
                 // Fallback: try to find handler by name only (ignore action)
                 match self.handlers.iter().find(|(k, _)| k.name == name) {
                     Some((_, h)) => h,
-                    None => return ipc::OutboundFrame::ToolError {
+                    None => return dsx_proto::ToolsToAgent::ToolError {
                         id, error: format!("Unknown tool: {}/{}", name, action), code: "UNKNOWN_TOOL".into(),
                     },
                 }
@@ -249,7 +249,7 @@ impl ToolManager {
         };
         match (handler.safety)(&ctx) {
             SafetyVerdict::Block(reason) => {
-                return ipc::OutboundFrame::ToolError {
+                return dsx_proto::ToolsToAgent::ToolError {
                     id, error: reason, code: "BLOCKED".into(),
                 };
             }
@@ -284,7 +284,7 @@ impl ToolManager {
             }
         };
 
-        ipc::OutboundFrame::ToolResultMessage {
+        dsx_proto::ToolsToAgent::ToolResultMessage {
             id,
             name: name.into(),
             action: action.into(),

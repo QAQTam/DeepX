@@ -12,8 +12,6 @@ use dsx_types::Message;
 
 mod persist;
 mod index;
-mod plan_io;
-mod memory_io;
 mod restore;
 mod snapshot;
 
@@ -25,18 +23,6 @@ pub use persist::{
 };
 pub use index::{
     load_index,
-};
-pub use plan_io::{
-    list_plans,
-    read_plan_content,
-    write_plan,
-    update_plan_status,
-};
-pub use memory_io::{
-    append_learning,
-    append_memory,
-    read_memory,
-    write_memory,
 };
 pub use restore::{find_live_sessions};
 pub use snapshot::{delete_live_snapshot, load_live_snapshot, save_live_snapshot};
@@ -123,42 +109,8 @@ pub fn live_path(seed: &str) -> Option<PathBuf> {
     sessions_dir().map(|d| d.join(format!("{}.live.json", seed)))
 }
 
-/// Path to a memory file for a session.
-pub fn memory_path(seed: &str, tier: &str) -> Option<PathBuf> {
-    session_dir(seed).map(|d| d.join(format!("{}-mem.md", tier)))
-}
-
 pub fn index_path() -> Option<PathBuf> {
     sessions_dir().map(|d| d.join("index.json"))
-}
-
-pub fn pitfalls_path() -> Option<PathBuf> {
-    sessions_dir().map(|d| d.join("pitfalls.json"))
-}
-
-// ── Plan paths ──
-
-pub fn plans_dir() -> Option<PathBuf> {
-    Some(dsx_types::platform::plans_dir())
-}
-
-fn slugify(name: &str) -> String {
-    let slug: String = name
-        .chars()
-        .filter_map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' { Some(c.to_ascii_lowercase()) }
-            else if c.is_alphanumeric() { Some(c) }  // CJK and other Unicode letters pass through
-            else { Some('-') }
-        })
-        .collect();
-    let trimmed = slug.trim_matches('-');
-    if trimmed.is_empty() { "plan".to_string() } else { trimmed.to_string() }
-}
-
-pub fn plan_path(seed: &str, name: &str) -> Option<PathBuf> {
-    let slug = slugify(name);
-    let date = chrono_date();
-    plans_dir().map(|d| d.join(format!("{}-{}-{}.md", seed, slug, date)))
 }
 
 // ── Shared helpers (crate-internal) ──

@@ -79,10 +79,6 @@ impl Step {
 #[derive(Debug, Clone)]
 pub struct Turn {
     pub(crate) user: Message,
-    /// Accumulated annotations for this turn (tagged notes like [health] ...).
-    /// Rendered as part of the trailing context note in prepare_and_compact
-    /// so they never mutate the stored user message.
-    pub(crate) annotations: Vec<String>,
     pub(crate) steps: Vec<Step>,
 }
 
@@ -90,7 +86,6 @@ impl Turn {
     fn new(user: Message) -> Self {
         Self {
             user,
-            annotations: Vec::new(),
             steps: Vec::new(),
         }
     }
@@ -274,23 +269,6 @@ impl ContextAssembler {
         Err(AssemblerError::OrphanToolResult { tool_call_id: tool_call_id.into() })
     }
 
-    // ── Annotations ──
-
-    /// Record a per-turn annotation. Stored on the current turn and rendered in the
-    /// trailing context note during prepare_and_compact(). Does NOT mutate user messages.
-    /// If no turn exists yet, the annotation is silently dropped.
-    pub fn annotate(&mut self, tag: &str, msg: &str) {
-        if let Some(turn) = self.turns.last_mut() {
-            turn.annotations.push(format!("[{}] {}", tag, msg));
-            self.dirty = true;
-        }
-    }
-
-    /// Returns true if the current turn has any annotations.
-    pub fn has_pending_annotations(&self) -> bool {
-        self.turns.last().map_or(false, |t| !t.annotations.is_empty())
-    }
-
     // ── Validation ──
 
     pub fn validate(&self) -> Result<(), String> {
@@ -344,16 +322,9 @@ impl ContextAssembler {
     }
 
     /// Output messages in flat format (system + conversation + tool results).
+    /// Delegates to [`to_vec`] — the two are identical.
     pub fn to_messages(&self) -> Vec<Message> {
-        let mut out = self.system_messages.clone();
-        for turn in &self.turns {
-            out.push(turn.user.clone());
-            for step in &turn.steps {
-                out.push(step.assistant.clone());
-                out.extend(step.tool_results.clone());
-            }
-        }
-        out
+        self.to_vec()
     }
 
     // ── Flat view ──
@@ -575,34 +546,6 @@ impl ContextAssembler {
     }
 }
 
-/// Rough token estimation for OpenAI-format messages.
-fn estimate_message_tokens(msgs: &[Message]) -> u32 {
-    let mut t = 0u32;
-    for msg in msgs {
-        t += 4;
-        for block in &msg.content {
-            match block {
-                dsx_types::ContentBlock::Text { text } => {
-                    t += tokenizer::count_tokens(text);
-                }
-                dsx_types::ContentBlock::Thinking { thinking, .. } => {
-                    t += tokenizer::count_tokens(thinking);
-                }
-                dsx_types::ContentBlock::ToolUse { name, input, .. } => {
-                    t += tokenizer::count_tokens(name);
-                    t += tokenizer::count_tokens(&input.to_string());
-                    t += 8;
-                }
-                dsx_types::ContentBlock::ToolResult { content, .. } => {
-                    t += tokenizer::count_tokens(content);
-                    t += 2;
-                }
-            }
-        }
-    }
-    t
-}
-
 // ── build_context ──
 
 /// Build context for the next API request.
@@ -708,7 +651,7 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     // === Token breakdown ===
     let mut bd = TokenBreakdown::default();
     bd.system = base_tokens + tool_help_tokens + phase_tokens + reminder_tokens;
-    bd.episodic = estimate_message_tokens(&messages);
+    bd.episodic = tokenizer::estimate_messages_tokens(&messages);
     bd.total = bd.system + bd.episodic;
 
     state.token_estimate = bd.total;

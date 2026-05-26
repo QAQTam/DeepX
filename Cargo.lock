@@ -479,13 +479,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "dsx-sudo"
-version = "4.0.0"
-
-[[package]]
 name = "dsx-tools"
 version = "4.0.0"
 dependencies = [
+ "dsx-proto",
  "dsx-types",
  "html2text",
  "log",

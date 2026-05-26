@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::config;
 use crate::assembly::ContextAssembler;
-use crate::health::monitor::MonitorState;
+use crate::health::MonitorState;
 use crate::health::DsAgentsHealthPlatform;
 // memory module removed — will be redesigned later
 use crate::session;
@@ -61,7 +61,6 @@ pub struct AgentState {
     // ── Tool chain safety ──
     pub tool_failures: u32,
     pub tool_calls_this_turn: u32,
-    pub turn_scores: Vec<f32>,
     pub auto_verify: Vec<String>,
     pub consecutive_tool_turns: u32,
 
@@ -166,7 +165,6 @@ impl AgentState {
             last_snapshot: Instant::now(),
             tool_failures: 0,
             tool_calls_this_turn: 0,
-            turn_scores: Vec::new(),
             auto_verify: Vec::new(),
             consecutive_tool_turns: 0,
             tool_defs: Vec::new(),
@@ -188,7 +186,7 @@ impl AgentState {
             tool_code_content: String::new(),
             tool_code_action: String::new(),
             tool_code_status: None,
-            monitor: MonitorState::new(),
+            monitor: MonitorState::default(),
             health: DsAgentsHealthPlatform::new(),
             files_written_this_turn: Vec::new(),
             skip_all: false,

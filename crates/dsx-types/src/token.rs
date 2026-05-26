@@ -1,47 +1,4 @@
-//! Token counting: trait + CJK heuristic + helpers.
-//!
-//! `dsx-types` provides the trait and a character-count heuristic.
-//! Precise tokenizer-backed [`TokenCount`] impls live in the crate that
-//! owns the tokenizer binary (e.g. `dsx-agent`).
-
-// ── Trait ──
-
-/// Any unit that consumes tokens can implement [`TokenCount`].
-///
-/// # Example (in dsx-agent)
-///
-/// ```ignore
-/// impl TokenCount for Message {
-///     fn count_tokens(&self) -> u32 {
-///         let mut t = 4u32;
-///         if let Some(ref c) = self.content { t += c.count_tokens(); }
-///         if let Some(ref r) = self.reasoning_content { t += r.count_tokens(); }
-///         // ...
-///         t
-///     }
-/// }
-/// ```
-pub trait TokenCount {
-    /// Returns the estimated number of tokens this value consumes.
-    fn count_tokens(&self) -> u32;
-}
-
-impl TokenCount for str {
-    fn count_tokens(&self) -> u32 {
-        count_tokens(self)
-    }
-}
-
-impl TokenCount for String {
-    fn count_tokens(&self) -> u32 {
-        count_tokens(self)
-    }
-}
-
-/// Estimate total tokens for a slice of [`TokenCount`] items.
-pub fn estimate_messages_tokens<T: TokenCount>(messages: &[T]) -> u32 {
-    messages.iter().map(|m| m.count_tokens()).sum()
-}
+//! Token counting: CJK heuristic + formatting helpers.
 
 // ── Heuristic-only counting (no tokenizer dependency) ──
 

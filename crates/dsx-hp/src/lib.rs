@@ -4,15 +4,10 @@
 
 pub mod runner;
 
-// ── Local modules ──
-
-pub mod config;
-
-// ── Health-platform modules (B01: guardian core) ──
+// ── Health-platform modules ──
 
 pub mod types;
 pub mod registry;
-pub mod ipc_traits;
 
 // ── Health subsystems ──
 

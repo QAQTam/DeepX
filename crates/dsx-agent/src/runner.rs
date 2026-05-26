@@ -19,7 +19,7 @@ use crate::agent::{AgentState, ToolResultAppender};
 use crate::assembly::AssemblerError;
 use crate::config::Config;
 use crate::dsc_log;
-use crate::orchestrator::{gates, learning, phase_detector, tracker, turn_scorer, session_persistence};
+use crate::orchestrator::{gates, learning, phase_detector, tracker, session_persistence};
 use crate::router;
 use crate::session;
 use crate::tokenizer;
@@ -538,7 +538,6 @@ fn handle_user_input(
             let final_reasoning = (!agent.stream_reasoning.is_empty())
                 .then(|| agent.stream_reasoning.clone())
                 .or_else(|| reasoning_content.clone());
-            agent.turn_scores.push(turn_scorer::score_current_turn(agent));
             agent.stream_content.clear();
             agent.stream_reasoning.clear();
 
@@ -617,7 +616,6 @@ fn handle_user_input(
 
         if agent.tool_failures >= 3 {
             log::warn!("safety gate: 3 cumulative tool failures");
-            agent.turn_scores.push(turn_scorer::score_current_turn(agent));
             agent.turn_annotations.push("[System] 3 consecutive tool failures. Respond with analysis — do not call more tools.".to_string());
             agent.tool_failures = 0;
         }
@@ -686,7 +684,6 @@ fn handle_user_input(
             let final_reasoning = (!agent.stream_reasoning.is_empty())
                 .then(|| agent.stream_reasoning.clone())
                 .or_else(|| reasoning_content.clone());
-            agent.turn_scores.push(turn_scorer::score_current_turn(agent));
             agent.stream_content.clear();
             agent.stream_reasoning.clear();
 

@@ -88,7 +88,9 @@ impl PitfallGuide {
                 }
                 entry.lesson = format!("{}\n{}", entry.lesson, lesson);
                 if entry.lesson.len() > 500 {
-                    entry.lesson = entry.lesson[..500].to_string();
+                    let mut end = 500;
+                    while end > 0 && !entry.lesson.is_char_boundary(end) { end -= 1; }
+                    entry.lesson = entry.lesson[..end].to_string();
                 }
                 return;
             }
@@ -215,7 +217,8 @@ pub fn append_memory(seed: &str, tier: &str, line: &str) {
 
     const MAX_CHARS: usize = 32000;
     if existing.len() > MAX_CHARS {
-        let cut = existing.len().saturating_sub(MAX_CHARS / 2);
+        let mut cut = existing.len().saturating_sub(MAX_CHARS / 2);
+        while cut < existing.len() && !existing.is_char_boundary(cut) { cut += 1; }
         existing = existing[cut..].to_string();
         if let Some(nl) = existing.find('\n') {
             existing = existing[nl + 1..].to_string();
@@ -315,9 +318,12 @@ fn extract_plan_name(fname: &str, prefix: &str) -> String {
     let core = fname.strip_prefix(prefix).unwrap_or(fname);
     let core = core.strip_suffix(".md").unwrap_or(core);
     if core.len() > 11 {
-        let date_part = &core[core.len().saturating_sub(11)..];
-        if date_part.starts_with('-') && date_part[1..].chars().all(|c| c.is_ascii_digit() || c == '-') {
-            return core[..core.len() - 11].to_string();
+        let offset = core.len().saturating_sub(11);
+        if core.is_char_boundary(offset) {
+            let date_part = &core[offset..];
+            if date_part.starts_with('-') && date_part[1..].chars().all(|c| c.is_ascii_digit() || c == '-') {
+                return core[..offset].to_string();
+            }
         }
     }
     core.to_string()

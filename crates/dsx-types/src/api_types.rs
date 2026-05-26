@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 // ── Usage ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct UsageInfo {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -12,31 +11,4 @@ pub struct UsageInfo {
     pub prompt_cache_hit_tokens: u32,
     #[serde(default)]
     pub prompt_cache_miss_tokens: u32,
-    #[serde(default)]
-    pub completion_tokens_details: Option<TokenDetails>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct TokenDetails {
-    #[serde(default)]
-    pub reasoning_tokens: u32,
-}
-
-// ── Balance ──
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct BalanceInfo {
-    pub is_available: bool,
-    pub balance_infos: Vec<BalanceEntry>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct BalanceEntry {
-    pub currency: String,
-    pub total_balance: String,
-    pub granted_balance: String,
-    pub topped_up_balance: String,
 }
