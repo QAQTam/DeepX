@@ -123,71 +123,18 @@ pub fn exec_command(args: &str) -> String {
                 result.push('\n');
             }
         }
-        // ── Error summary with 2-line context ──
-        if !error_indices.is_empty() {
-            result.push_str("── errors ──\n");
-            let mut last = 0usize;
-            for &ei in error_indices.iter().take(20) {
-                let start = ei.saturating_sub(2);
-                if start <= last { continue; }
-                if ei > 2 && ei != error_indices[0] {
-                    result.push_str("┊\n");
-                }
-                for li in start..=ei.saturating_add(2).min(total - 1) {
-                    result.push_str(lines[li]);
-                    result.push('\n');
-                }
-                last = ei.saturating_add(2);
-            }
-            if error_indices.len() > 20 {
-                result.push_str(&format!("... ({} more errors)\n", error_indices.len() - 20));
-            }
-        }
-
-        // ── Warning summary ──
-        if !warning_indices.is_empty() {
-            result.push_str("── warnings ──\n");
-            for &wi in warning_indices.iter().take(10) {
-                result.push_str(lines[wi]);
-                result.push('\n');
-            }
-            if warning_indices.len() > 10 {
-                result.push_str(&format!("... ({} more warnings)\n", warning_indices.len() - 10));
-            }
-        }
-
-        if exit_code != 0 {
-            result.push_str(&format!("── exit: {} ──\n", exit_code));
-        }
+        append_error_summary(&mut result, &lines, &error_indices, total, true);
+        append_warning_summary(&mut result, &lines, &warning_indices, true);
+        append_exit_footer(&mut result, exit_code);
         result
     } else {
         for &l in &lines {
             result.push_str(l);
             result.push('\n');
         }
-        if !error_indices.is_empty() {
-            result.push_str("── errors ──\n");
-            let mut last = 0usize;
-            for &ei in error_indices.iter().take(20) {
-                let start = ei.saturating_sub(2);
-                if start <= last { continue; }
-                for li in start..=ei.saturating_add(2).min(total - 1) {
-                    result.push_str(lines[li]);
-                    result.push('\n');
-                }
-                last = ei.saturating_add(2);
-            }
-        }
-        if !warning_indices.is_empty() {
-            result.push_str("── warnings ──\n");
-            for &wi in warning_indices.iter().take(10) {
-                result.push_str(lines[wi]);
-                result.push('\n');
-            }
-        }
-        if exit_code != 0 {
-            result.push_str(&format!("── exit: {} ──\n", exit_code));
-        }
+        append_error_summary(&mut result, &lines, &error_indices, total, false);
+        append_warning_summary(&mut result, &lines, &warning_indices, false);
+        append_exit_footer(&mut result, exit_code);
         result
     }
 }
@@ -257,6 +204,51 @@ fn common_prefix(lines: &[&str]) -> String {
         }
     }
     first.chars().take(prefix_len).collect()
+}
+
+// ── Output summary helpers (shared by truncated and full output paths) ──
+
+fn append_error_summary(result: &mut String, lines: &[&str], error_indices: &[usize], total: usize, truncated: bool) {
+    if error_indices.is_empty() {
+        return;
+    }
+    result.push_str("\u{2500}\u{2500} errors \u{2500}\u{2500}\n");
+    let mut last = 0usize;
+    for &ei in error_indices.iter().take(20) {
+        let start = ei.saturating_sub(2);
+        if start <= last { continue; }
+        if truncated && ei > 2 && ei != error_indices[0] {
+            result.push_str("\u{250a}\n");
+        }
+        for li in start..=ei.saturating_add(2).min(total - 1) {
+            result.push_str(lines[li]);
+            result.push('\n');
+        }
+        last = ei.saturating_add(2);
+    }
+    if truncated && error_indices.len() > 20 {
+        result.push_str(&format!("... ({} more errors)\n", error_indices.len() - 20));
+    }
+}
+
+fn append_warning_summary(result: &mut String, lines: &[&str], warning_indices: &[usize], truncated: bool) {
+    if warning_indices.is_empty() {
+        return;
+    }
+    result.push_str("\u{2500}\u{2500} warnings \u{2500}\u{2500}\n");
+    for &wi in warning_indices.iter().take(10) {
+        result.push_str(lines[wi]);
+        result.push('\n');
+    }
+    if truncated && warning_indices.len() > 10 {
+        result.push_str(&format!("... ({} more warnings)\n", warning_indices.len() - 10));
+    }
+}
+
+fn append_exit_footer(result: &mut String, exit_code: i32) {
+    if exit_code != 0 {
+        result.push_str(&format!("\u{2500}\u{2500} exit: {} \u{2500}\u{2500}\n", exit_code));
+    }
 }
 
 // ── 参数解析（委托至 dsx-types）──

@@ -113,30 +113,38 @@ pub fn phase_prompt_suffix(phase: TaskPhase, lang: &str) -> Option<&'static str>
     }
 }
 
-/// Detect initial phase from user input (used when auto_mode is ON and
-/// no status() has been called yet). Simple keyword scoring — no API call.
-pub fn detect_initial_phase(input: &str) -> TaskPhase {
-    let lower = input.to_lowercase();
-    // Plan keywords: design, architecture, analyze, review, plan, refactor, 设计, 架构, 分析, 规划
-    let plan_kws = ["design", "architect", "analyze", "review", "plan", "refactor",
-        "方案", "架构", "分析", "规划", "审查", "重构"];
-    // Debug keywords: debug, error, bug, crash, fail, fix, 调试, 错误, bug, 修复
-    let debug_kws = ["debug", "error", "bug", "crash", "fail", "broken",
-        "调试", "错误", "故障", "崩溃"];
-    // Code keywords: implement, write, create, build, add, 实现, 写, 创建, 添加
-    let code_kws = ["implement", "write", "create", "build", "add", "make",
-        "实现", "写", "创建", "添加", "修改"];
+// ── Unified keyword lists for phase detection (merged from phase_detector + router) ──
 
-    for kw in &plan_kws {
-        if lower.contains(kw) { return TaskPhase::Plan; }
-    }
-    for kw in &debug_kws {
-        if lower.contains(kw) { return TaskPhase::Debug; }
-    }
-    for kw in &code_kws {
-        if lower.contains(kw) { return TaskPhase::Coding; }
-    }
-    TaskPhase::Coding
+const PLAN_KWS: &[&str] = &["plan", "design", "architect", "approach", "analyze", "outline",
+    "review", "refactor", "方案", "设计", "架构", "分析", "规划", "审查", "重构"];
+const CODE_KWS: &[&str] = &["implement", "write", "create", "build", "add", "modify", "edit",
+    "code", "make", "实现", "编写", "创建", "添加", "修改", "写", "编码"];
+const DEBUG_KWS: &[&str] = &["error", "bug", "crash", "wrong", "failed", "debug", "issue",
+    "fix", "fail", "broken", "错误", "崩溃", "调试", "修复", "故障"];
+
+/// Score-based phase detection from a lowercase scan string.
+fn score_phase(scan: &str) -> TaskPhase {
+    let p_score = PLAN_KWS.iter().filter(|kw| scan.contains(*kw)).count();
+    let c_score = CODE_KWS.iter().filter(|kw| scan.contains(*kw)).count();
+    let d_score = DEBUG_KWS.iter().filter(|kw| scan.contains(*kw)).count();
+
+    if p_score >= c_score && p_score >= d_score && p_score >= 2 { TaskPhase::Plan }
+    else if d_score >= p_score && d_score >= c_score && d_score >= 2 { TaskPhase::Debug }
+    else if c_score >= p_score && c_score >= d_score && c_score >= 2 { TaskPhase::Coding }
+    else { TaskPhase::Coding }
+}
+
+/// Detect task phase from AI reasoning stream (first ~300 chars).
+/// Used for auto-mode phase tracking.
+pub fn detect_task_phase_from_reasoning(reasoning: &str) -> TaskPhase {
+    let scan: String = reasoning.chars().take(300).collect::<String>().to_lowercase();
+    score_phase(&scan)
+}
+
+/// Detect initial phase from user input (used when auto_mode is ON and
+/// no status() has been called yet). Same keyword lists and scoring as reasoning detection.
+pub fn detect_initial_phase(input: &str) -> TaskPhase {
+    score_phase(&input.to_lowercase())
 }
 
 

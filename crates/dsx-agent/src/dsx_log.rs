@@ -75,8 +75,21 @@ fn date_tag() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     let days = secs / 86400;
-    let y = 1970 + (days as f64 / 365.25) as u64;
-    let rem = days - ((y as f64 - 1970.0) * 365.25) as u64;
-    format!("{:04}-{:02}-{:02}",
-        y.min(9999), (1 + rem / 30).min(12), (1 + rem % 30).min(31))
+    let (y, m, d) = civil_from_days(days as i64 + 719468); // 719468 = days from 0000-01-01 to 1970-01-01
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    // Algorithm from Howard Hinnant
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
 }

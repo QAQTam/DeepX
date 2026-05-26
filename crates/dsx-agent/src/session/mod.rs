@@ -11,21 +11,17 @@ use std::path::PathBuf;
 use dsx_types::Message;
 
 mod persist;
-mod index;
 mod restore;
-mod snapshot;
 
 // ── Re-exports ──
 pub use persist::{
     finalize_session,
+    load_index,
     load_session,
     load_session_or_live,
-};
-pub use index::{
-    load_index,
+    save_live_snapshot,
 };
 pub use restore::{find_live_sessions};
-pub use snapshot::save_live_snapshot;
 
 // ── Seed generation ──
 

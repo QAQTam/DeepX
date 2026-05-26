@@ -20,8 +20,6 @@ impl Default for PhasePerfConfig {
 
 pub fn default_phase_configs() -> HashMap<String, PhasePerfConfig> {
     let mut m = HashMap::new();
-    m.insert("chat".into(), PhasePerfConfig { model: "deepseek-v4-flash".into(), context_limit: 1_000_000, max_tokens: 8192, effort: Some("high".into()) });
-    m.insert("explore".into(), PhasePerfConfig { model: "deepseek-v4-flash".into(), context_limit: 1_000_000, max_tokens: 8192, effort: Some("high".into()) });
     m.insert("plan".into(), PhasePerfConfig { model: "deepseek-v4-pro".into(), context_limit: 1_000_000, max_tokens: 4096, effort: Some("max".into()) });
     m.insert("coding".into(), PhasePerfConfig { model: "deepseek-v4-flash".into(), context_limit: 1_000_000, max_tokens: 16384, effort: Some("high".into()) });
     m.insert("debug".into(), PhasePerfConfig { model: "deepseek-v4-pro".into(), context_limit: 1_000_000, max_tokens: 8192, effort: Some("high".into()) });

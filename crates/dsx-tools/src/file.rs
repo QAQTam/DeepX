@@ -144,7 +144,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
         let count = content.matches(&old).count();
         match std::fs::write(&path, &new_content) {
             Ok(_) => {
-                let diff = build_diff(&content, &new_content, &old, &new, &path, true);
+                let diff = build_diff(&content, &new_content, &old, &new, &path);
                 format!("[OK] {} — replaced {} occurrences, +{} -{}\n\n{}", path, count, new.len() * count, old.len() * count, diff)
             }
             Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
@@ -156,7 +156,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
                 let line = content[..pos].lines().count() + 1;
                 match std::fs::write(&path, &new_content) {
                     Ok(_) => {
-                        let diff = build_diff(&content, &new_content, &old, &new, &path, false);
+                        let diff = build_diff(&content, &new_content, &old, &new, &path);
                         format!("[OK] {}:{} +{} -{}\n\n{}", path, line, new.len(), old.len(), diff)
                     }
                     Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
@@ -168,7 +168,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
 }
 
 /// Build a diff display with 3 lines of context
-pub(super) fn build_diff(before: &str, after: &str, old: &str, new: &str, path: &str, _all: bool) -> String {
+pub(super) fn build_diff(before: &str, after: &str, old: &str, new: &str, path: &str) -> String {
     let before_lines: Vec<&str> = before.lines().collect();
     let after_lines: Vec<&str> = after.lines().collect();
 
@@ -204,6 +204,99 @@ pub(super) fn build_diff(before: &str, after: &str, old: &str, new: &str, path: 
     diff
 }
 
+/// Score candidates by context-before/context-after proximity and pick the best match.
+/// Returns Ok(index) on success, or Err(partial-message) when context is missing.
+fn disambiguate_match(
+    candidates: &[usize],
+    context_before: &[String],
+    context_after: &[String],
+    file_lines: &[&str],
+    path: &str,
+    win: usize,
+) -> Result<usize, String> {
+    if candidates.len() == 1 {
+        return Ok(candidates[0]);
+    }
+    let norm_before: Vec<String> = context_before.iter().map(|l| l.trim_end().to_string()).collect();
+    let norm_after: Vec<String> = context_after.iter().map(|l| l.trim_end().to_string()).collect();
+    if norm_before.is_empty() && norm_after.is_empty() {
+        let locs: Vec<String> = candidates.iter().take(5).map(|&i| format!("L{}", i+1)).collect();
+        return Err(format!("[PARTIAL] {} — old_lines matches at {} locations: {}\n[HINT] Add context_before/context_after to disambiguate.", path, candidates.len(), locs.join(", ")));
+    }
+    let mut best = candidates[0];
+    let mut best_score: i32 = -1000;
+    for &pos in candidates {
+        let mut score = 0i32;
+        for (j, cl) in norm_before.iter().enumerate() {
+            let fi = pos as i32 - norm_before.len() as i32 + j as i32;
+            if fi >= 0 && (fi as usize) < file_lines.len() {
+                let fl = file_lines[fi as usize].trim_end().to_string();
+                if fl == *cl { score += 3; } else if fl.trim() == cl.trim() { score += 1; } else { score -= 1; }
+            } else { score -= 2; }
+        }
+        for (j, cl) in norm_after.iter().enumerate() {
+            let fi = pos + win + j;
+            if fi < file_lines.len() {
+                let fl = file_lines[fi].trim_end().to_string();
+                if fl == *cl { score += 3; } else if fl.trim() == cl.trim() { score += 1; } else { score -= 1; }
+            } else { score -= 2; }
+        }
+        if score > best_score { best = pos; best_score = score; }
+    }
+    Ok(best)
+}
+
+/// Apply the diff (remove old_lines, insert new_lines) and format the result.
+fn apply_diff_and_format(
+    path: &str,
+    file_lines: &[&str],
+    match_idx: usize,
+    win: usize,
+    new_lines: &[String],
+    description: &str,
+    was_fuzzy: bool,
+) -> String {
+    let mut out_lines: Vec<&str> = file_lines.to_vec();
+    out_lines.splice(match_idx..match_idx + win, std::iter::empty());
+    for (j, line) in new_lines.iter().enumerate() {
+        out_lines.insert(match_idx + j, line);
+    }
+    let new_content = out_lines.join("\n");
+    let added = new_lines.len() as u32;
+    let removed = win as u32;
+
+    match std::fs::write(path, &new_content) {
+        Ok(_) => {
+            let line = match_idx + 1;
+            let mut result = format!("[OK] {}:{}\n", path, line);
+            if was_fuzzy {
+                result.push_str("\u{26a0} fuzzy match (indentation normalized)\n");
+            }
+            let ctx_start = match_idx.saturating_sub(2);
+            let ctx_end = (match_idx + win + 2).min(out_lines.len()).max(match_idx + 1);
+            result.push_str("\u{2500}\u{2500} change \u{2500}\u{2500}\n");
+            for i in ctx_start..match_idx {
+                result.push_str(&format!("  {:>4}  {}\n", i+1, file_lines[i]));
+            }
+            for i in match_idx..match_idx + win {
+                result.push_str(&format!("- {:>4}  {}\n", i+1, file_lines[i]));
+            }
+            for (j, l) in new_lines.iter().enumerate() {
+                result.push_str(&format!("+ {:>4}  {}\n", match_idx + 1 + j, l));
+            }
+            for i in (match_idx + win)..ctx_end {
+                if i < out_lines.len() {
+                    result.push_str(&format!("  {:>4}  {}\n", i+1, out_lines[i]));
+                }
+            }
+            let desc = if description.is_empty() { "edited" } else { description };
+            result.push_str(&format!("\n[CHANGE] {}:{} +{} -{} | {}", path, line, added, removed, desc));
+            result
+        }
+        Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.", path, e),
+    }
+}
+
 pub(super) fn exec_edit_file_diff(args: &str) -> String {
     let v: serde_json::Value = match serde_json::from_str(args) {
         Ok(v) => v, Err(_) => return "[ERROR] Invalid JSON arguments".to_string(),
@@ -235,8 +328,7 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
         }
     };
     let file_lines: Vec<&str> = content.lines().collect();
-    let normalize = |s: &str| s.trim_end().to_string();
-    let norm_old: Vec<String> = old_lines.iter().map(|l| normalize(l)).collect();
+    let norm_old: Vec<String> = old_lines.iter().map(|l| l.trim_end().to_string()).collect();
     let win = norm_old.len();
     if win > file_lines.len() {
         return format!("[ERROR] old_lines ({} lines) longer than file ({} lines)", win, file_lines.len());
@@ -246,14 +338,14 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
     let mut candidates: Vec<usize> = Vec::new();
     let mut was_fuzzy = false;
     for i in 0..=file_lines.len() - win {
-        let window: Vec<String> = file_lines[i..i+win].iter().map(|l| normalize(l)).collect();
+        let window: Vec<String> = file_lines[i..i+win].iter().map(|l| l.trim_end().to_string()).collect();
         if window == norm_old { candidates.push(i); }
     }
     // Phase 2: fuzzy match
     if candidates.is_empty() {
         was_fuzzy = true;
         for i in 0..=file_lines.len() - win {
-            let window: Vec<String> = file_lines[i..i+win].iter().map(|l| normalize(l)).collect();
+            let window: Vec<String> = file_lines[i..i+win].iter().map(|l| l.trim_end().to_string()).collect();
             if window.iter().zip(&norm_old).all(|(w, o)| w.trim() == o.trim()) {
                 candidates.push(i);
             }
@@ -264,78 +356,13 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
     }
 
     // Disambiguate with context
-    let match_idx = if candidates.len() == 1 {
-        candidates[0]
-    } else {
-        let norm_before: Vec<String> = context_before.iter().map(|l| normalize(l)).collect();
-        let norm_after: Vec<String> = context_after.iter().map(|l| normalize(l)).collect();
-        if norm_before.is_empty() && norm_after.is_empty() {
-            let locs: Vec<String> = candidates.iter().take(5).map(|&i| format!("L{}", i+1)).collect();
-            return format!("[PARTIAL] {} — old_lines matches at {} locations: {}\n[HINT] Add context_before/context_after to disambiguate.", path, candidates.len(), locs.join(", "));
-        }
-        let mut best = candidates[0];
-        let mut best_score: i32 = -1000;
-        for &pos in &candidates {
-            let mut score = 0i32;
-            for (j, cl) in norm_before.iter().enumerate() {
-                let fi = pos as i32 - norm_before.len() as i32 + j as i32;
-                if fi >= 0 && (fi as usize) < file_lines.len() {
-                    let fl = normalize(file_lines[fi as usize]);
-                    if fl == *cl { score += 3; } else if fl.trim() == cl.trim() { score += 1; } else { score -= 1; }
-                } else { score -= 2; }
-            }
-            for (j, cl) in norm_after.iter().enumerate() {
-                let fi = pos + win + j;
-                if fi < file_lines.len() {
-                    let fl = normalize(file_lines[fi]);
-                    if fl == *cl { score += 3; } else if fl.trim() == cl.trim() { score += 1; } else { score -= 1; }
-                } else { score -= 2; }
-            }
-            if score > best_score { best = pos; best_score = score; }
-        }
-        best
+    let match_idx = match disambiguate_match(&candidates, &context_before, &context_after, &file_lines, path, win) {
+        Ok(idx) => idx,
+        Err(msg) => return msg,
     };
 
-    // Apply: remove old, insert new
-    let mut out_lines: Vec<&str> = file_lines.to_vec();
-    out_lines.splice(match_idx..match_idx + win, std::iter::empty());
-    for (j, line) in new_lines.iter().enumerate() {
-        out_lines.insert(match_idx + j, line);
-    }
-    let new_content = out_lines.join("\n");
-    let added = new_lines.len() as u32;
-    let removed = win as u32;
-
-    match std::fs::write(path, &new_content) {
-        Ok(_) => {
-            let line = match_idx + 1;
-            let mut result = format!("[OK] {}:{}\n", path, line);
-            if was_fuzzy {
-                result.push_str("⚠ fuzzy match (indentation normalized)\n");
-            }
-            let ctx_start = match_idx.saturating_sub(2);
-            let ctx_end = (match_idx + win + 2).min(out_lines.len()).max(match_idx + 1);
-            result.push_str("── change ──\n");
-            for i in ctx_start..match_idx {
-                result.push_str(&format!("  {:>4}  {}\n", i+1, file_lines[i]));
-            }
-            for i in match_idx..match_idx + win {
-                result.push_str(&format!("- {:>4}  {}\n", i+1, file_lines[i]));
-            }
-            for (j, l) in new_lines.iter().enumerate() {
-                result.push_str(&format!("+ {:>4}  {}\n", match_idx + 1 + j, l));
-            }
-            for i in (match_idx + win)..ctx_end {
-                if i < out_lines.len() {
-                    result.push_str(&format!("  {:>4}  {}\n", i+1, out_lines[i]));
-                }
-            }
-            let desc = if description.is_empty() { "edited" } else { description };
-            result.push_str(&format!("\n[CHANGE] {}:{} +{} -{} | {}", path, line, added, removed, desc));
-            result
-        }
-        Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.", path, e),
-    }
+    // Apply diff and format result
+    apply_diff_and_format(path, &file_lines, match_idx, win, &new_lines, description, was_fuzzy)
 }
 
 pub(super) fn exec_list_dir(args: &str) -> String {
@@ -671,66 +698,32 @@ pub(super) fn exec_diff(args: &str) -> String {
 // Handler wrappers (bridge ToolCallCtx → old-style exec_* string-args)
 // ═══════════════════════════════════════════════════════════════════════════
 
-fn handle_read_file(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_read_file(&args))
+macro_rules! handler {
+    ($name:ident, $exec:ident) => {
+        fn $name(ctx: ToolCallCtx) -> ToolResult {
+            let args = serde_json::to_string(&ctx.args).unwrap_or_default();
+            ToolResult::ok($exec(&args))
+        }
+    };
 }
 
-fn handle_write_file(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_write_file(&args))
-}
-
-fn handle_edit_file(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_edit_file(&args))
-}
-
-fn handle_edit_file_diff(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_edit_file_diff(&args))
-}
-
-fn handle_list_dir(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_list_dir(&args))
-}
-
-fn handle_search(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_search(&args))
-}
-
-fn handle_delete_file(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_delete_file(&args))
-}
-
-fn handle_move_file(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_move_file(&args))
-}
-
-fn handle_copy_file(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_copy_file(&args))
-}
-
-fn handle_glob(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_glob(&args))
-}
-
-fn handle_diff(ctx: ToolCallCtx) -> ToolResult {
-    let args = serde_json::to_string(&ctx.args).unwrap_or_default();
-    ToolResult::ok(exec_diff(&args))
-}
+handler!(handle_read_file, exec_read_file);
+handler!(handle_write_file, exec_write_file);
+handler!(handle_edit_file, exec_edit_file);
+handler!(handle_edit_file_diff, exec_edit_file_diff);
+handler!(handle_list_dir, exec_list_dir);
+handler!(handle_search, exec_search);
+handler!(handle_delete_file, exec_delete_file);
+handler!(handle_move_file, exec_move_file);
+handler!(handle_copy_file, exec_copy_file);
+handler!(handle_glob, exec_glob);
+handler!(handle_diff, exec_diff);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Safety classifiers
 // ═══════════════════════════════════════════════════════════════════════════
 
-fn safety_read_file(_ctx: &ToolCallCtx) -> SafetyVerdict {
+fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict {
     SafetyVerdict::Allow
 }
 
@@ -740,42 +733,6 @@ fn safety_write_file(ctx: &ToolCallCtx) -> SafetyVerdict {
             return SafetyVerdict::Allow;
         }
     }
-    SafetyVerdict::Allow
-}
-
-fn safety_edit_file(_ctx: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
-}
-
-fn safety_edit_file_diff(_ctx: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
-}
-
-fn safety_list_dir(_ctx: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
-}
-
-fn safety_search(_ctx: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
-}
-
-fn safety_delete_file(_ctx: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
-}
-
-fn safety_move_file(_ctx: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
-}
-
-fn safety_copy_file(_ctx: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
-}
-
-fn safety_glob(_ctx: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
-}
-
-fn safety_diff(_ctx: &ToolCallCtx) -> SafetyVerdict {
     SafetyVerdict::Allow
 }
 
@@ -798,7 +755,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_read_file,
-        safety: safety_read_file,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -836,7 +793,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_edit_file,
-        safety: safety_edit_file,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -857,7 +814,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_edit_file_diff,
-        safety: safety_edit_file_diff,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -873,7 +830,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_list_dir,
-        safety: safety_list_dir,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -891,7 +848,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_search,
-        safety: safety_search,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -907,7 +864,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_delete_file,
-        safety: safety_delete_file,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -924,7 +881,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_move_file,
-        safety: safety_move_file,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -941,7 +898,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_copy_file,
-        safety: safety_copy_file,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -958,7 +915,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_glob,
-        safety: safety_glob,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 
@@ -975,7 +932,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_diff,
-        safety: safety_diff,
+        safety: default_allow,
         default_timeout: Duration::from_secs(15),
     });
 }

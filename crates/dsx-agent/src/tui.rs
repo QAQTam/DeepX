@@ -471,6 +471,8 @@ impl App {
         if let Some(r) = crate::config::handle_profile_command(msg, &mut self.config) { return r; }
         if msg.trim() == "/auto" {
             self.config.auto_mode = !self.config.auto_mode;
+            crate::tools::AUTO_MODE.store(self.config.auto_mode, std::sync::atomic::Ordering::Relaxed);
+            dsx_tools::AUTO_MODE.store(self.config.auto_mode, std::sync::atomic::Ordering::Relaxed);
             self.config.save();
             return format!("Auto mode: {}", if self.config.auto_mode { "ON" } else { "OFF" });
         }

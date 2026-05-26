@@ -330,7 +330,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                 .filter(|k| !k.0.is_empty())
                 .map(|r| r.0)
                 .unwrap_or_else(|| config.api_key.clone());
-            (model, system, effort, max_tokens.unwrap_or(8192), user_id, api_key, messages, tools)
+            (model, system, effort, max_tokens.unwrap_or(16000), user_id, api_key, messages, tools)
         }
         _ => {
             let _ = writeln!(writer, "{}", json_response("error", "expected api_chat frame"));
@@ -390,42 +390,13 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         while let Some(event) = rx.recv().await {
             match event {
                 StreamEvent::ContentDelta(delta) => {
-                    // Repetition guard: if the same delta repeats many times, cut off
-                    if delta == last_delta {
-                        repeat_count += 1;
-                        if repeat_count > 20 {
-                            log::warn!("hp: repetition detected ({}x same delta), cutting off", repeat_count);
-                            let _ = writeln!(writer, "{}", serde_json::json!({
-                                "type": "api_response",
-                                "content": full_content,
-                                "stop_reason": "repetition",
-                            }));
-                            let _ = writer.flush();
-                            return;
-                        }
-                    } else {
-                        repeat_count = 0;
+                    if check_repetition_guard(&delta, &mut last_delta, &mut repeat_count, &full_content, writer) {
+                        return;
                     }
-                    last_delta = delta.clone();
 
                     full_content.push_str(&delta);
-                    // Also check overall content for degenerate patterns
-                    if full_content.chars().count() > 100 {
-                        let tail = &full_content[full_content.char_indices().map(|(i,_)| i).nth(full_content.chars().count().saturating_sub(100)).unwrap_or(0)..];
-                        // If the last 100 chars have >60% same character, it's degenerate
-                        if let Some(most_common) = tail.chars().max_by_key(|c| tail.matches(*c).count()) {
-                            let ratio = tail.matches(most_common).count() as f64 / tail.chars().count().max(1) as f64;
-                            if ratio > 0.60 && most_common != ' ' {
-                                log::warn!("hp: degenerate output detected ({:.0}% '{:?}'), cutting off", ratio * 100.0, most_common);
-                                let _ = writeln!(writer, "{}", serde_json::json!({
-                                    "type": "api_response",
-                                    "content": full_content,
-                                    "stop_reason": "degenerate",
-                                }));
-                                let _ = writer.flush();
-                                return;
-                            }
-                        }
+                    if check_degenerate_output(&full_content, writer) {
+                        return;
                     }
 
                     let frame = serde_json::json!({
@@ -462,56 +433,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                     }
                 }
                 StreamEvent::Done { raw_message, stop_reason: sr, usage } => {
-                    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-                    let mut thinking_sig: Option<String> = None;
-                    for block in &raw_message.content {
-                        match block {
-                            dsx_types::ContentBlock::Text { text } => {
-                                full_content.push_str(text);
-                            }
-                            dsx_types::ContentBlock::Thinking { thinking, signature } => {
-                                reasoning.push_str(thinking);
-                                thinking_sig = Some(signature.clone());
-                            }
-                            dsx_types::ContentBlock::ToolUse { id, name, input } => {
-                                tool_calls.push(serde_json::json!({
-                                    "id": id,
-                                    "name": name,
-                                    "arguments": serde_json::to_string(input).unwrap_or_default(),
-                                }));
-                            }
-                            _ => {}
-                        }
-                    }
-                    let mut resp = serde_json::json!({
-                        "type": "api_response",
-                        "content": full_content,
-                    });
-                    if !reasoning.is_empty() {
-                        resp["reasoning_content"] = serde_json::json!(reasoning);
-                    }
-                    if let Some(ref sig) = thinking_sig {
-                        resp["thinking_signature"] = serde_json::json!(sig);
-                    }
-                    if !tool_calls.is_empty() {
-                        resp["tool_calls"] = serde_json::Value::Array(tool_calls);
-                    }
-                    if let Some(ref s) = sr {
-                        resp["stop_reason"] = serde_json::json!(s);
-                    }
-                    if let Some(ref u) = usage {
-                        resp["usage"] = serde_json::json!({
-                            "prompt_tokens": u.prompt_tokens,
-                            "completion_tokens": u.completion_tokens,
-                            "total_tokens": u.total_tokens,
-                            "prompt_cache_hit_tokens": u.prompt_cache_hit_tokens,
-                            "prompt_cache_miss_tokens": u.prompt_cache_miss_tokens,
-                        });
-                    }
-                    if let Ok(s) = serde_json::to_string(&resp) {
-                        let _ = writeln!(writer, "{s}");
-                        let _ = writer.flush();
-                    }
+                    build_final_response(raw_message, sr, usage, &mut full_content, &mut reasoning, writer);
                     return;
                 }
                 StreamEvent::Error(e) => {
@@ -523,6 +445,119 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
             }
         }
     });
+}
+
+// ── Streaming helpers ──
+
+/// Check if the same delta repeats excessively, indicating a stuck model.
+/// Returns `true` if repetition was detected and the stream was cut off.
+fn check_repetition_guard(
+    delta: &str,
+    last_delta: &mut String,
+    repeat_count: &mut u32,
+    full_content: &str,
+    writer: &mut impl Write,
+) -> bool {
+    if delta == *last_delta {
+        *repeat_count += 1;
+        if *repeat_count > 20 {
+            log::warn!("hp: repetition detected ({}x same delta), cutting off", repeat_count);
+            let _ = writeln!(writer, "{}", serde_json::json!({
+                "type": "api_response",
+                "content": full_content,
+                "stop_reason": "repetition",
+            }));
+            let _ = writer.flush();
+            return true;
+        }
+    } else {
+        *repeat_count = 0;
+    }
+    *last_delta = delta.to_string();
+    false
+}
+
+/// Check if the accumulated output has become degenerate (e.g., same character
+/// repeated). Returns `true` if degenerate output was detected and cut off.
+fn check_degenerate_output(full_content: &str, writer: &mut impl Write) -> bool {
+    if full_content.chars().count() > 100 {
+        let tail = &full_content[full_content.char_indices().map(|(i,_)| i).nth(full_content.chars().count().saturating_sub(100)).unwrap_or(0)..];
+        if let Some(most_common) = tail.chars().max_by_key(|c| tail.matches(*c).count()) {
+            let ratio = tail.matches(most_common).count() as f64 / tail.chars().count().max(1) as f64;
+            if ratio > 0.60 && most_common != ' ' {
+                log::warn!("hp: degenerate output detected ({:.0}% '{:?}'), cutting off", ratio * 100.0, most_common);
+                let _ = writeln!(writer, "{}", serde_json::json!({
+                    "type": "api_response",
+                    "content": full_content,
+                    "stop_reason": "degenerate",
+                }));
+                let _ = writer.flush();
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Build and write the final API response from the Done stream event.
+fn build_final_response(
+    raw_message: dsx_types::Message,
+    stop_reason: Option<String>,
+    usage: Option<dsx_types::UsageInfo>,
+    full_content: &mut String,
+    reasoning: &mut String,
+    writer: &mut impl Write,
+) {
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut thinking_sig: Option<String> = None;
+    for block in &raw_message.content {
+        match block {
+            dsx_types::ContentBlock::Text { text } => {
+                full_content.push_str(text);
+            }
+            dsx_types::ContentBlock::Thinking { thinking, signature } => {
+                reasoning.push_str(thinking);
+                thinking_sig = Some(signature.clone());
+            }
+            dsx_types::ContentBlock::ToolUse { id, name, input } => {
+                tool_calls.push(serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "arguments": serde_json::to_string(input).unwrap_or_default(),
+                }));
+            }
+            _ => {}
+        }
+    }
+    let mut resp = serde_json::json!({
+        "type": "api_response",
+        "content": full_content,
+    });
+    if !reasoning.is_empty() {
+        resp["reasoning_content"] = serde_json::json!(reasoning);
+    }
+    if let Some(ref sig) = thinking_sig {
+        resp["thinking_signature"] = serde_json::json!(sig);
+    }
+    if !tool_calls.is_empty() {
+        resp["tool_calls"] = serde_json::Value::Array(tool_calls);
+    }
+    if let Some(ref s) = stop_reason {
+        resp["stop_reason"] = serde_json::json!(s);
+    }
+    if let Some(ref u) = usage {
+        resp["usage"] = serde_json::json!({
+            "prompt_tokens": u.prompt_tokens,
+            "completion_tokens": u.completion_tokens,
+            "total_tokens": u.total_tokens,
+            "prompt_cache_hit_tokens": u.prompt_cache_hit_tokens,
+            "prompt_cache_miss_tokens": u.prompt_cache_miss_tokens,
+        });
+    }
+    if let Ok(s) = serde_json::to_string(&resp) {
+        let _ = writeln!(writer, "{s}");
+        let _ = writer.flush();
+    }
 }
 
 // ── Port file management ──

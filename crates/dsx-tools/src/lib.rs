@@ -75,6 +75,7 @@ pub struct ToolCallCtx {
     pub args: serde_json::Value,
     /// 可选进度发送通道 — handler 可在执行期间推送进度帧。
     pub tx_progress: Option<std::sync::mpsc::Sender<String>>,
+    pub timeout_secs: Option<u64>,
 }
 
 impl ToolCallCtx {
@@ -224,7 +225,7 @@ impl ToolManager {
     // ── IPC 路由 ──
 
     /// 处理一个入站 CallReq 帧，返回对应的出站帧。
-    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, _timeout_secs: Option<u64>) -> dsx_proto::ToolsToAgent {
+    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>) -> dsx_proto::ToolsToAgent {
         // 授权检查
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
@@ -255,6 +256,7 @@ impl ToolManager {
             action: action.to_string(),
             args: args.clone(),
             tx_progress: None,
+            timeout_secs,
         };
         match (handler.safety)(&ctx) {
             SafetyVerdict::Block(reason) => {
@@ -275,6 +277,7 @@ impl ToolManager {
             action: action.to_string(),
             args,
             tx_progress: None,
+            timeout_secs,
         };
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

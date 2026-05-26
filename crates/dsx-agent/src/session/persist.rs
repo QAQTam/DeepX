@@ -1,6 +1,6 @@
 //! Session file persistence: save and load conversation sessions.
 
-use dsx_types::{Message, SessionFile};
+use dsx_types::{Message, SessionFile, SessionMeta};
 
 // ── Session loading ──
 
@@ -132,7 +132,7 @@ fn save_session(
 
     let now = super::now_epoch();
     // Preserve created_at from existing meta if available
-    let created_at = super::index::load_index().iter()
+    let created_at = load_index().iter()
         .find(|m| m.seed == seed)
         .map(|m| m.created_at)
         .unwrap_or(now);
@@ -153,7 +153,7 @@ fn save_session(
     let tmp_path = sfile_path.with_extension("json.tmp");
     let _ = std::fs::write(&tmp_path, &serialized);
     let _ = std::fs::rename(&tmp_path, &sfile_path);
-    super::index::update_index_entry(&file);
+    update_index_entry(&file);
 }
 
 pub fn finalize_session(
@@ -165,5 +165,79 @@ pub fn finalize_session(
     // Save completed .json
     save_session(seed, messages, model, effort);
     // Clean up .live file
-    super::snapshot::cleanup_live(seed);
+    cleanup_live(seed);
+}
+
+// ── Session index (merged from index.rs) ──
+
+fn save_index(metas: &[SessionMeta]) {
+    let Some(path) = super::index_path() else { return };
+    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(metas).unwrap_or_default());
+}
+
+pub fn load_index() -> Vec<SessionMeta> {
+    let Some(path) = super::index_path() else { return vec![] };
+    if !path.exists() { return vec![]; }
+    let Ok(data) = std::fs::read_to_string(&path) else { return vec![] };
+    serde_json::from_str::<Vec<SessionMeta>>(&data).unwrap_or_default()
+}
+
+pub(super) fn update_index_entry(file: &SessionFile) {
+    let mut metas = load_index();
+    let meta = SessionMeta {
+        seed: file.seed.clone(),
+        created_at: file.created_at,
+        updated_at: file.updated_at,
+        model: file.model.clone(),
+        effort: file.effort.clone(),
+        message_count: file.messages.len(),
+        last_summary: file.last_summary.clone(),
+    };
+    if let Some(existing) = metas.iter_mut().find(|m| m.seed == meta.seed) {
+        *existing = meta;
+    } else {
+        metas.push(meta);
+    }
+    save_index(&metas);
+}
+
+// ── Live snapshot (merged from snapshot.rs) ──
+
+pub fn save_live_snapshot(
+    seed: &str,
+    messages: &[Message],
+    model: &str,
+    effort: Option<&str>,
+) {
+    let Some(lp) = super::live_path(seed) else { return };
+    let _ = std::fs::create_dir_all(lp.parent().unwrap());
+
+    let now = super::now_epoch();
+    let created_at = load_index().iter()
+        .find(|m| m.seed == seed)
+        .map(|m| m.created_at)
+        .unwrap_or(now);
+
+    let last_summary = super::extract_last_summary(messages);
+
+    let file = SessionFile {
+        seed: seed.to_string(),
+        created_at,
+        updated_at: now,
+        model: model.to_string(),
+        effort: effort.map(|s| s.to_string()),
+        messages: messages.to_vec(),
+        last_summary,
+    };
+
+    let tmp_path = lp.with_extension("live.tmp");
+    let _ = std::fs::write(&tmp_path, serde_json::to_string_pretty(&file).unwrap_or_default());
+    let _ = std::fs::rename(&tmp_path, &lp);
+}
+
+pub(crate) fn cleanup_live(seed: &str) {
+    if let Some(lp) = super::live_path(seed) {
+        let _ = std::fs::remove_file(&lp);
+    }
 }

@@ -13,7 +13,7 @@ use dsx_types::{ContentBlock, Message, ToolCall};
 
 use crate::agent::{AgentState, ToolResultAppender};
 use crate::assembly::AssemblerError;
-use crate::orchestrator::{gates, learning, phase_detector, tracker};
+use crate::orchestrator::{gates, learning, tracker};
 use crate::router;
 use crate::session;
 use crate::tokenizer;
@@ -73,6 +73,93 @@ pub fn build_and_push_assistant(
     assistant_msg
 }
 
+/// Handle the `status` tool: validate the requested phase and apply it.
+fn handle_status_tool(
+    agent: &mut AgentState,
+    agent_tx: &mpsc::Sender<AgentToTui>,
+    id: &str,
+    name: &str,
+    args: &str,
+) -> ToolOutcome {
+    let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
+    let state = args_val
+        .get("state")
+        .and_then(|v| v.as_str())
+        .unwrap_or("coding");
+    if state == "explore" || state == "chat" {
+        let err = format!("[ERROR] Mode '{state}' no longer exists. Use: plan, coding, debug");
+        let _ = agent.ctx.push_tool_result(id, &err);
+        agent.tool_results.push((id.to_string(), err.clone()));
+        emit_tool_result(agent_tx, id, name, &err, false);
+        return ToolOutcome::Continue;
+    }
+    let tp = match state {
+        "plan" => dsx_types::TaskPhase::Plan,
+        "coding" => dsx_types::TaskPhase::Coding,
+        "debug" => dsx_types::TaskPhase::Debug,
+        _ => dsx_types::TaskPhase::Coding,
+    };
+    let level = dsx_types::DebugLevel::Medium;
+    agent.current_task_phase = tp;
+    router::set_phase(tp, level);
+    if agent.auto_mode {
+        apply_phase_config(agent, tp, level);
+    }
+    let phase_name = format!("{:?}", tp).to_lowercase();
+    let _ = agent_tx.send(AgentToTui::PhaseChanged {
+        phase: phase_name,
+    });
+    let result = format!("[OK] Switched to {} mode", state);
+    let _ = agent.ctx.push_tool_result(id, &result);
+    agent.tool_results.push((id.to_string(), result.clone()));
+    emit_tool_result(agent_tx, id, name, &result, true);
+    ToolOutcome::Continue
+}
+
+/// Handle the `ask_user` / `ask` tool: send an AskUser frame and await the reply.
+fn handle_ask_user_tool(
+    agent: &mut AgentState,
+    agent_tx: &mpsc::Sender<AgentToTui>,
+    id: &str,
+    name: &str,
+    args: &str,
+) -> ToolOutcome {
+    let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
+    let question = args_val
+        .get("question")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let options = args_val
+        .get("options")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty());
+    let frame = AgentToTui::AskUser {
+        id: id.to_string(),
+        question,
+        options,
+    };
+    let _ = agent_tx.send(frame);
+    agent.pending_ask_user = Some(id.to_string());
+    agent.tool_results.push((
+        id.to_string(),
+        "[ASK_USER] Awaiting your response.".to_string(),
+    ));
+    emit_tool_result(
+        agent_tx,
+        id,
+        name,
+        "[ASK_USER] Awaiting your response.",
+        false,
+    );
+    ToolOutcome::Continue
+}
+
 /// Execute one tool call: gates → intercepts → cancel check → IPC → tracking.
 pub fn execute_single_tool(
     agent: &mut AgentState,
@@ -115,77 +202,11 @@ pub fn execute_single_tool(
     }
 
     if name == "status" {
-        let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-        let state = args_val
-            .get("state")
-            .and_then(|v| v.as_str())
-            .unwrap_or("coding");
-        if state == "explore" || state == "chat" {
-            let err =
-                format!("[ERROR] Mode '{state}' no longer exists. Use: plan, coding, debug");
-            let _ = agent.ctx.push_tool_result(id, &err);
-            agent.tool_results.push((id.to_string(), err.clone()));
-            emit_tool_result(agent_tx, id, name, &err, false);
-            return ToolOutcome::Continue;
-        }
-        let tp = match state {
-            "plan" => dsx_types::TaskPhase::Plan,
-            "coding" => dsx_types::TaskPhase::Coding,
-            "debug" => dsx_types::TaskPhase::Debug,
-            _ => dsx_types::TaskPhase::Coding,
-        };
-        let level = dsx_types::DebugLevel::Medium;
-        agent.current_task_phase = tp;
-        router::set_phase(tp, level);
-        if agent.auto_mode {
-            apply_phase_config(agent, tp, level);
-        }
-        let phase_name = format!("{:?}", tp).to_lowercase();
-        let _ = agent_tx.send(AgentToTui::PhaseChanged {
-            phase: phase_name,
-        });
-        let result = format!("[OK] Switched to {} mode", state);
-        let _ = agent.ctx.push_tool_result(id, &result);
-        agent.tool_results.push((id.to_string(), result.clone()));
-        emit_tool_result(agent_tx, id, name, &result, true);
-        return ToolOutcome::Continue;
+        return handle_status_tool(agent, agent_tx, id, name, args);
     }
 
     if name == "ask_user" || name == "ask" {
-        let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-        let question = args_val
-            .get("question")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        let options = args_val
-            .get("options")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect::<Vec<_>>()
-            })
-            .filter(|v| !v.is_empty());
-        let frame = AgentToTui::AskUser {
-            id: id.to_string(),
-            question,
-            options,
-        };
-        let _ = agent_tx.send(frame);
-        agent.pending_ask_user = Some(id.to_string());
-        agent.tool_results.push((
-            id.to_string(),
-            "[ASK_USER] Awaiting your response.".to_string(),
-        ));
-        emit_tool_result(
-            agent_tx,
-            id,
-            name,
-            "[ASK_USER] Awaiting your response.",
-            false,
-        );
-        return ToolOutcome::Continue;
+        return handle_ask_user_tool(agent, agent_tx, id, name, args);
     }
 
     if crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
@@ -230,14 +251,184 @@ pub fn execute_single_tool(
     if !failed && name == "file" && dsx_types::arg::tool_action(args) == "write" {
         tracker::track_file_written(agent, args);
     }
-    if name == "exec" && dsx_types::arg::tool_action(args) == "explore" {
-        agent.has_explored = true;
-    }
     if name == "file" && dsx_types::arg::tool_action(args) == "read" {
         agent.turns_since_last_read = 0;
     }
 
     ToolOutcome::Executed
+}
+
+/// Process a pending ask_user reply, pushing the user's text as a tool result.
+/// Returns `true` if a pending ask_user was handled (caller skips normal push flow).
+fn process_ask_user_response(agent: &mut AgentState, text: &str) -> bool {
+    if let Some(tool_call_id) = agent.pending_ask_user.take() {
+        if let Err(e) = agent.ctx.push_tool_result(&tool_call_id, text) {
+            log::error!("push_tool_result for ask_user failed: {:?} — text dropped", e);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Push `text` to the ContextAssembler, repairing TurnIncomplete deadlocks.
+/// Returns `false` on a fatal error (caller should abort the turn).
+fn push_user_message_with_repair(agent: &mut AgentState, text: &str) -> bool {
+    match agent.ctx.push_user(text) {
+        Ok(()) => true,
+        Err(AssemblerError::TurnIncomplete { .. }) => {
+            log::warn!("push_user TurnIncomplete — repairing (cancellation deadlock)");
+            agent.ctx.remove_last_step_if_incomplete();
+            agent.ctx.push_user_restore(text);
+            true
+        }
+        Err(e) => {
+            log::error!("push_user failed: {:?}", e);
+            false
+        }
+    }
+}
+
+/// Initialize the session on the first user message: restore summary, auto-detect
+/// initial phase, and apply phase config.
+fn init_session_on_first_message(
+    agent: &mut AgentState,
+    text: &str,
+    agent_tx: &mpsc::Sender<AgentToTui>,
+) {
+    if agent.session_seed.is_empty() {
+        let seed = agent.resume_seed.clone();
+        super::lifecycle::init_session(agent, seed.as_deref());
+        if seed.is_some() {
+            let msg_count = agent.ctx.message_count();
+            let summary = agent
+                .ctx
+                .turns()
+                .last()
+                .and_then(|t| t.steps.last())
+                .and_then(|s| {
+                    s.assistant.content.iter().find_map(|b| {
+                        if let ContentBlock::Text { text } = b {
+                            Some(text.chars().take(100).collect::<String>())
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or_default();
+            let tokens_used = agent.token_estimate;
+            let cache_hit_pct = agent.predicted_cache_hit_pct;
+            let _ = agent_tx.send(AgentToTui::SessionRestored {
+                seed: agent.session_seed.clone(),
+                message_count: msg_count as u64,
+                summary,
+                tokens_used,
+                cache_hit_pct,
+            });
+        }
+        if agent.auto_mode {
+            let phase = router::detect_initial_phase(text);
+            let level = dsx_types::DebugLevel::Medium;
+            router::set_phase(phase, level);
+            agent.current_task_phase = phase;
+            apply_phase_config(agent, phase, level);
+            let phase_name = format!("{:?}", phase).to_lowercase();
+            let _ = agent_tx.send(AgentToTui::PhaseChanged {
+                phase: phase_name,
+            });
+            log::info!(
+                "auto initial phase: {:?} model={} effort={:?}",
+                phase,
+                agent.config.model,
+                agent.config.effort
+            );
+        }
+    }
+}
+
+/// Run one API turn: build context → send ApiChat → read HP stream response.
+///
+/// When `allow_tools` is `true`, system messages are filtered out of the serialized
+/// messages and `tool_defs` are sent; when `false`, all messages are included and
+/// no tools are sent.
+///
+/// Returns `Err(())` to signal that the caller should exit `handle_user_input`
+/// entirely (stream error or cancellation).
+fn run_api_turn(
+    agent: &mut AgentState,
+    hp: &mut BufReader<TcpStream>,
+    agent_tx: &mpsc::Sender<AgentToTui>,
+    round: u32,
+    allow_tools: bool,
+) -> Result<
+    (
+        String,
+        Option<String>,
+        Option<String>,
+        serde_json::Value,
+        Option<dsx_types::UsageInfo>,
+        tokenizer::TokenBreakdown,
+    ),
+    (),
+> {
+    let (system, messages, breakdown) = crate::assembly::build_context(agent);
+
+    let _ = agent_tx.send(AgentToTui::CachePrediction {
+        hit_rate: agent.predicted_cache_hit_pct,
+    });
+
+    let messages_json = if allow_tools {
+        let msgs_no_system: Vec<&Message> =
+            messages.iter().filter(|m| m.role != "system").collect();
+        log::debug!(
+            "turn round={} messages={} tokens={}",
+            round,
+            messages.len(),
+            tokenizer::estimate_messages_tokens(&messages)
+        );
+        serde_json::to_value(&msgs_no_system).unwrap_or_default()
+    } else {
+        serde_json::to_value(&messages).unwrap_or_default()
+    };
+
+    let chat = AgentToHp::ApiChat {
+        model: agent.config.model.clone(),
+        system: Some(system),
+        messages: messages_json,
+        effort: agent.config.effort.clone(),
+        max_tokens: Some(agent.config.max_tokens),
+        tools: if allow_tools {
+            Some(serde_json::to_value(&agent.tool_defs).unwrap_or_default())
+        } else {
+            None
+        },
+        user_id: Some(agent.session_seed.clone()),
+        api_key: Some(dsx_proto::Redacted(agent.config.api_key.clone())),
+    };
+    let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
+
+    let HpStreamResponse {
+        content,
+        reasoning_content,
+        thinking_signature,
+        usage,
+        tool_calls_raw,
+    } = match read_hp_stream_response(hp, agent, agent_tx, round) {
+        Ok(r) => r,
+        Err(()) => {
+            agent.stream_cancelled = false;
+            return Err(());
+        }
+    };
+
+    Ok((
+        content,
+        reasoning_content,
+        thinking_signature,
+        tool_calls_raw,
+        usage,
+        breakdown,
+    ))
 }
 
 /// Handle a user input message with full module integration.
@@ -249,78 +440,17 @@ pub fn handle_user_input(
     agent_tx: &mpsc::Sender<AgentToTui>,
 ) {
     // ── Handle ask_user response ──
-    if let Some(tool_call_id) = agent.pending_ask_user.take() {
-        if let Err(e) = agent.ctx.push_tool_result(&tool_call_id, text) {
-            log::error!("push_tool_result for ask_user failed: {:?} — text dropped", e);
-        }
-    } else {
+    if !process_ask_user_response(agent, text) {
         if text.is_empty() {
             return;
         }
 
         // ── Session init on first message ──
-        if agent.session_seed.is_empty() {
-            let seed = agent.resume_seed.clone();
-            super::lifecycle::init_session(agent, seed.as_deref());
-            if seed.is_some() {
-                let msg_count = agent.ctx.message_count();
-                let summary = agent
-                    .ctx
-                    .turns()
-                    .last()
-                    .and_then(|t| t.steps.last())
-                    .and_then(|s| {
-                        s.assistant.content.iter().find_map(|b| {
-                            if let ContentBlock::Text { text } = b {
-                                Some(text.chars().take(100).collect::<String>())
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .unwrap_or_default();
-                let tokens_used = agent.token_estimate;
-                let cache_hit_pct = agent.predicted_cache_hit_pct;
-                let _ = agent_tx.send(AgentToTui::SessionRestored {
-                    seed: agent.session_seed.clone(),
-                    message_count: msg_count as u64,
-                    summary,
-                    tokens_used,
-                    cache_hit_pct,
-                });
-            }
-            if agent.auto_mode {
-                let phase = router::detect_initial_phase(text);
-                let level = dsx_types::DebugLevel::Medium;
-                router::set_phase(phase, level);
-                agent.current_task_phase = phase;
-                apply_phase_config(agent, phase, level);
-                let phase_name = format!("{:?}", phase).to_lowercase();
-                let _ = agent_tx.send(AgentToTui::PhaseChanged {
-                    phase: phase_name,
-                });
-                log::info!(
-                    "auto initial phase: {:?} model={} effort={:?}",
-                    phase,
-                    agent.config.model,
-                    agent.config.effort
-                );
-            }
-        }
+        init_session_on_first_message(agent, text, agent_tx);
 
         // ── Push user message to ContextAssembler ──
-        if let Err(e) = agent.ctx.push_user(text) {
-            match e {
-                AssemblerError::TurnIncomplete { .. } => {
-                    log::warn!("push_user TurnIncomplete — repairing (cancellation deadlock)");
-                    agent.ctx.remove_last_step_if_incomplete();
-                    agent.ctx.push_user_restore(text);
-                }
-                _ => {
-                    log::error!("push_user failed: {:?}", e);
-                    return;
-                }
-            }
+        if !push_user_message_with_repair(agent, text) {
+            return;
         }
     }
 
@@ -351,46 +481,11 @@ pub fn handle_user_input(
             break;
         }
 
-        let (system, messages, breakdown) = crate::assembly::build_context(agent);
-
-        let _ = agent_tx.send(AgentToTui::CachePrediction {
-            hit_rate: agent.predicted_cache_hit_pct,
-        });
-
-        let msgs_no_system: Vec<&Message> =
-            messages.iter().filter(|m| m.role != "system").collect();
-        log::debug!(
-            "turn round={} messages={} tokens={}",
-            _round,
-            messages.len(),
-            tokenizer::estimate_messages_tokens(&messages)
-        );
-
-        let chat = AgentToHp::ApiChat {
-            model: agent.config.model.clone(),
-            system: Some(system),
-            messages: serde_json::to_value(&msgs_no_system).unwrap_or_default(),
-            effort: agent.config.effort.clone(),
-            max_tokens: Some(agent.config.max_tokens),
-            tools: Some(serde_json::to_value(&agent.tool_defs).unwrap_or_default()),
-            user_id: Some(agent.session_seed.clone()),
-            api_key: Some(dsx_proto::Redacted(agent.config.api_key.clone())),
-        };
-        let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
-
-        let HpStreamResponse {
-            mut content,
-            reasoning_content,
-            thinking_signature,
-            usage,
-            tool_calls_raw,
-        } = match read_hp_stream_response(hp, agent, agent_tx, _round) {
-            Ok(r) => r,
-            Err(()) => {
-                agent.stream_cancelled = false;
-                return;
-            }
-        };
+        let (mut content, reasoning_content, thinking_signature, tool_calls_raw, usage, breakdown) =
+            match run_api_turn(agent, hp, agent_tx, _round, true) {
+                Ok(v) => v,
+                Err(()) => return,
+            };
 
 
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
@@ -425,7 +520,7 @@ pub fn handle_user_input(
 
         if let Some(ref r) = reasoning_content {
             if agent.auto_mode {
-                let tp = phase_detector::detect_task_phase_from_reasoning(r);
+                let tp = router::detect_task_phase_from_reasoning(r);
                 if tp != agent.current_task_phase {
                     agent.current_task_phase = tp;
                     router::set_phase(tp, router::read_debug_level());
@@ -573,39 +668,11 @@ pub fn handle_user_input(
     let max_post_rounds = 3u32;
     let mut sent_final_response = false;
     for _post_round in 0..max_post_rounds {
-        let (system, messages, _breakdown) = crate::assembly::build_context(agent);
-
-        let _ = agent_tx.send(AgentToTui::CachePrediction {
-            hit_rate: agent.predicted_cache_hit_pct,
-        });
-
-        let messages_json = serde_json::to_value(&messages).unwrap_or_default();
-
-        let chat = AgentToHp::ApiChat {
-            model: agent.config.model.clone(),
-            system: Some(system),
-            messages: messages_json,
-            effort: agent.config.effort.clone(),
-            max_tokens: Some(agent.config.max_tokens),
-            tools: None,
-            user_id: Some(agent.session_seed.clone()),
-            api_key: Some(dsx_proto::Redacted(agent.config.api_key.clone())),
-        };
-        let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
-
-        let HpStreamResponse {
-            mut content,
-            reasoning_content,
-            thinking_signature,
-            usage,
-            tool_calls_raw,
-        } = match read_hp_stream_response(hp, agent, agent_tx, _post_round) {
-            Ok(r) => r,
-            Err(()) => {
-                agent.stream_cancelled = false;
-                return;
-            }
-        };
+        let (mut content, reasoning_content, thinking_signature, tool_calls_raw, usage, _breakdown) =
+            match run_api_turn(agent, hp, agent_tx, _post_round, false) {
+                Ok(v) => v,
+                Err(()) => return,
+            };
 
 
         // ── Parse DSML/XML tool calls from content ──
