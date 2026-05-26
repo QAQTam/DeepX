@@ -10,20 +10,15 @@ fn c7_key() -> String {
 }
 
 fn c7_get(path: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("dsx/4.0")
-        .build()
-        .map_err(|e| format!("HTTP client: {}", e))?;
-    let resp = client
-        .get(format!("{C7_BASE}{path}"))
-        .header("Authorization", format!("Bearer {}", c7_key()))
-        .send()
+    let resp = ureq::get(&format!("{C7_BASE}{path}"))
+        .header("Authorization", &format!("Bearer {}", c7_key()))
+        .header("User-Agent", "dsx/4.0")
+        .call()
         .map_err(|e| format!("request failed: {e}"))?;
     let status = resp.status();
-    let text = resp.text().map_err(|e| format!("read response: {e}"))?;
-    if !status.is_success() {
-        return Err(format!("HTTP {}: {}", status.as_u16(), text.chars().take(200).collect::<String>()));
+    let text = resp.into_body().read_to_string().map_err(|e| format!("read response: {e}"))?;
+    if status != 200 {
+        return Err(format!("HTTP {}: {}", status, text.chars().take(200).collect::<String>()));
     }
     Ok(text)
 }
@@ -172,19 +167,16 @@ fn exec_context7_query(args: &str) -> String {
 
 fn exec_web_fetch(args: &str) -> String {
     let url = parse_arg(args, "url");
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent("dsx/4.0")
-        .build()
+    let resp = match ureq::get(&url)
+        .header("User-Agent", "dsx/4.0")
+        .call()
     {
-        Ok(c) => c,
-        Err(e) => return format!("[ERROR] Cannot create HTTP client: {}\n[HINT] Internal error.", e),
+        Ok(r) => r,
+        Err(e) => return format!("[ERROR] Cannot fetch {}: {}\n[HINT] Check the URL or network.", url, e),
     };
-    match client.get(&url).send() {
-        Ok(resp) => {
-            let status = resp.status();
-            match resp.text() {
-                Ok(body) => {
+    let status = resp.status();
+    match resp.into_body().read_to_string() {
+        Ok(body) => {
                     let readable = match html2text::from_read(body.as_bytes(), body.len().min(120_000)) {
                         Ok(t) => t,
                         Err(e) => return format!("[ERROR] html2text: {}", e),
@@ -204,7 +196,7 @@ fn exec_web_fetch(args: &str) -> String {
                             Err(e) => format!("\n[HINT] Could not save to {}: {}", path, e),
                         }
                     } else { String::new() };
-                    if status.is_success() {
+                    if status == 200 {
                         format!("[OK] {} ({} chars)\n\n{}{}", status, display.len(), display, saved)
                     } else {
                         format!("[PARTIAL] HTTP {}\n\n{}{}", status, display, saved)
@@ -212,10 +204,7 @@ fn exec_web_fetch(args: &str) -> String {
                 }
                 Err(e) => format!("[ERROR] Cannot read response body: {}\n[HINT] The URL may not return text.", e),
             }
-        }
-        Err(e) => format!("[ERROR] Cannot fetch {}: {}\n[HINT] Check the URL or network.", url, e),
     }
-}
 
 fn find_char_boundary(s: &str, max: usize) -> usize {
     if max >= s.len() { return s.len(); }
@@ -227,68 +216,58 @@ fn find_char_boundary(s: &str, max: usize) -> usize {
 fn exec_web_search(args: &str) -> String {
     let query = parse_arg(args, "query");
     let url = format!("https://cn.bing.com/search?q={}&setlang=zh-cn", urlencoding(&query));
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return format!("[ERROR] Cannot create HTTP client: {}", e),
+    let body = match (|| -> Result<String, String> {
+        let resp = ureq::get(&url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .call()
+            .map_err(|e| format!("request: {e}"))?;
+        resp.into_body().read_to_string().map_err(|e| format!("read: {e}"))
+    })() {
+        Ok(b) => b,
+        Err(e) => return format!("[ERROR] Search failed: {}\n[HINT] Check network connection.", e),
     };
-    match client.get(&url).send() {
-        Ok(resp) => {
-            match resp.text() {
-                Ok(body) => {
-                    let mut results = Vec::new();
-                    // Bing wraps results in <li class="b_algo">. Split on this anchor.
-                    for chunk in body.split("<li class=\"b_algo\"") {
-                        if results.len() >= 15 { break; }
-                        // Title: <h2> ... <a href="URL">Title</a>
-                        let title_url = chunk.find("<h2")
-                            .and_then(|h2| chunk[h2..].find("<a ")
-                                .and_then(|a| {
-                                    let seg = &chunk[h2 + a..];
-                                    let href = seg.split("href=\"").nth(1)
-                                        .and_then(|s| s.split('"').next())
-                                        .unwrap_or("");
-                                    let title_start = seg.find('>').map(|i| i + 1).unwrap_or(0);
-                                    let title = seg[title_start..].split("</a>").next()
-                                        .unwrap_or("");
-                                    Some((href.to_string(), strip_html(title)))
-                                }));
-                        // Snippet: <p class="b_lineclamp2"> ... </p>
-                        let snippet = chunk.find("b_lineclamp")
-                            .and_then(|b| {
-                                let seg = &chunk[b..];
-                                seg.find('>').map(|i| &seg[i + 1..])
-                                    .and_then(|s| s.split("</p>").next())
-                            })
-                            .map(|s| {
-                                let t = strip_html(s).replace("&ensp;"," ").replace("&#0183;","·")
-                                    .replace("&amp;","&").replace("&lt;","<").replace("&gt;",">");
-                                t.trim().to_string()
-                            });
-                        if let Some((href, title)) = title_url {
-                            if !title.is_empty() && title.len() > 3 && !results.iter().any(|r: &String| r.contains(&title)) {
-                                results.push(format!("[{}]({})", title, href));
-                            }
-                        }
-                        if let Some(snip) = snippet {
-                            if snip.len() > 10 {
-                                results.push(format!("  {}", snip));
-                            }
-                        }
-                    }
-                    if results.is_empty() {
-                        format!("[OK] Bing: {}\n\n(no results)", query)
-                    } else {
-                        format!("[OK] Bing: {}\n\n{}", query, results.join("\n"))
-                    }
-                }
-                Err(e) => format!("[ERROR] Cannot read search results: {}", e),
+    let mut results = Vec::new();
+    // Bing wraps results in <li class="b_algo">. Split on this anchor.
+    for chunk in body.split("<li class=\"b_algo\"") {
+        if results.len() >= 15 { break; }
+        // Title: <h2> ... <a href="URL">Title</a>
+        let title_url = chunk.find("<h2")
+            .and_then(|h2| chunk[h2..].find("<a ")
+                .and_then(|a| {
+                    let seg = &chunk[h2 + a..];
+                    let href = seg.split("href=\"").nth(1)
+                        .and_then(|s| s.split('"').next())
+                        .unwrap_or("");
+                    let title_start = seg.find('>').map(|i| i + 1).unwrap_or(0);
+                    let title = seg[title_start..].split("</a>").next().unwrap_or("");
+                    Some((href.to_string(), strip_html(title)))
+                }));
+        let snippet = chunk.find("b_lineclamp")
+            .and_then(|b| {
+                let seg = &chunk[b..];
+                seg.find('>').map(|i| &seg[i + 1..])
+                    .and_then(|s| s.split("</p>").next())
+            })
+            .map(|s| {
+                let t = strip_html(s).replace("&ensp;"," ").replace("&#0183;","·")
+                    .replace("&amp;","&").replace("&lt;","<").replace("&gt;",">");
+                t.trim().to_string()
+            });
+        if let Some((href, title)) = title_url {
+            if !title.is_empty() && title.len() > 3 && !results.iter().any(|r: &String| r.contains(&title)) {
+                results.push(format!("[{}]({})", title, href));
             }
         }
-        Err(e) => format!("[ERROR] Search failed: {}\n[HINT] Check network connection.", e),
+        if let Some(snip) = snippet {
+            if snip.len() > 10 {
+                results.push(format!("  {}", snip));
+            }
+        }
+    }
+    if results.is_empty() {
+        format!("[OK] Bing: {}\n\n(no results)", query)
+    } else {
+        format!("[OK] Bing: {}\n\n{}", query, results.join("\n"))
     }
 }
 

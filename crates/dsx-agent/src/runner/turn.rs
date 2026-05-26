@@ -20,7 +20,7 @@ use crate::tokenizer;
 use crate::tool_parser;
 
 use super::hp_bridge::{emit_tool_result, read_hp_stream_response, HpStreamResponse};
-use super::lifecycle::{apply_phase_config, health_status};
+use super::lifecycle::apply_phase_config;
 
 /// Outcome of `execute_single_tool` for the caller's loop control.
 pub enum ToolOutcome {
@@ -280,7 +280,7 @@ pub fn handle_user_input(
                     })
                     .unwrap_or_default();
                 let tokens_used = agent.token_estimate;
-                let cache_hit_pct = agent.cache_hit_pct;
+                let cache_hit_pct = agent.predicted_cache_hit_pct;
                 let _ = agent_tx.send(AgentToTui::SessionRestored {
                     seed: agent.session_seed.clone(),
                     message_count: msg_count as u64,
@@ -305,15 +305,6 @@ pub fn handle_user_input(
                     agent.config.model,
                     agent.config.effort
                 );
-            }
-        }
-
-        // ── Skill matching ──
-        let matched = agent.skill_index.match_skills(text);
-        agent.active_skill_bodies.clear();
-        for skill in &matched {
-            if let Some(body) = agent.skill_index.load_skill_body(&skill.name) {
-                agent.active_skill_bodies.push((skill.name.clone(), body));
             }
         }
 
@@ -345,11 +336,15 @@ pub fn handle_user_input(
         &agent.ctx.to_vec(),
         &agent.config.model,
         agent.config.effort.as_deref(),
-        None,
     );
+
+    let mut ipc_broken = false;
 
     // ── Tool-calling loop ──
     for _round in 0..agent.max_tool_rounds {
+        if ipc_broken {
+            break;
+        }
         if agent.stream_cancelled {
             agent.stream_cancelled = false;
             agent.system_note("system", "用户终止了当前操作。".to_string());
@@ -422,7 +417,6 @@ pub fn handle_user_input(
             agent.session_tokens += u.total_tokens as u64;
         }
         agent.token_estimate = breakdown.total;
-        agent.token_breakdown = Some(breakdown);
         agent.health.context_tokens = agent.tokens_used();
         agent.health.context_tier = crate::health::ContextTier::from_tokens(
             agent.health.context_tokens,
@@ -460,10 +454,9 @@ pub fn handle_user_input(
             agent.stream_content.clear();
             agent.stream_reasoning.clear();
 
-            learning::auto_extract_memory(agent, &assistant_msg);
+            learning::post_turn_maintenance(agent, &assistant_msg);
 
             agent.health.record_turn(false);
-            agent.health_status_line = health_status(agent);
             agent.health.reset_turn();
 
             session::save_live_snapshot(
@@ -471,7 +464,6 @@ pub fn handle_user_input(
                 &agent.ctx.to_vec(),
                 &agent.config.model,
                 agent.config.effort.as_deref(),
-                None,
             );
             crate::orchestrator::maybe_save_session(agent);
 
@@ -481,6 +473,7 @@ pub fn handle_user_input(
                 stop_reason: None,
                 usage,
                 reasoning_content: final_reasoning,
+                context_tokens: agent.token_estimate,
             });
             return;
         }
@@ -493,12 +486,23 @@ pub fn handle_user_input(
             &agent.ctx.to_vec(),
             &agent.config.model,
             agent.config.effort.as_deref(),
-            None,
         );
 
-        for tc in &parsed {
+        for (tc_idx, tc) in parsed.iter().enumerate() {
             match execute_single_tool(agent, tc, agent_tx) {
-                ToolOutcome::Break => break,
+                ToolOutcome::Break => {
+                    ipc_broken = true;
+                    // Push error tool_results for ALL remaining unexecuted tools.
+                    // Without this, the context has orphaned tool_use blocks
+                    // → next API call → HTTP 400 "tool_use without tool_result".
+                    for remaining in &parsed[tc_idx + 1..] {
+                        let err = "[ERROR] Tools process disconnected — this tool was not executed.";
+                        let mut appender = ToolResultAppender::new(agent);
+                        appender.append(&remaining.function.name, &remaining.id, &remaining.function.arguments, err);
+                        emit_tool_result(agent_tx, &remaining.id, &remaining.function.name, err, false);
+                    }
+                    break;
+                }
                 ToolOutcome::Continue => continue,
                 ToolOutcome::Executed => {}
             }
@@ -642,7 +646,7 @@ pub fn handle_user_input(
             agent.stream_content.clear();
             agent.stream_reasoning.clear();
 
-            learning::auto_extract_memory(agent, &assistant_msg);
+            learning::post_turn_maintenance(agent, &assistant_msg);
 
             agent.health.record_turn(false);
 
@@ -652,6 +656,7 @@ pub fn handle_user_input(
                 tool_calls: None,
                 stop_reason: None,
                 usage,
+                context_tokens: agent.token_estimate,
             });
             sent_final_response = true;
             break;
@@ -666,9 +671,18 @@ pub fn handle_user_input(
             &parsed,
         );
 
-        for tc in &parsed {
+        for (tc_idx, tc) in parsed.iter().enumerate() {
             match execute_single_tool(agent, tc, agent_tx) {
-                ToolOutcome::Break => break,
+                ToolOutcome::Break => {
+                    // Push error results for remaining unexecuted tools
+                    for remaining in &parsed[tc_idx + 1..] {
+                        let err = "[ERROR] Tools process disconnected — this tool was not executed.";
+                        let mut appender = ToolResultAppender::new(agent);
+                        appender.append(&remaining.function.name, &remaining.id, &remaining.function.arguments, err);
+                        emit_tool_result(agent_tx, &remaining.id, &remaining.function.name, err, false);
+                    }
+                    break;
+                }
                 _ => {}
             }
         }
@@ -684,11 +698,11 @@ pub fn handle_user_input(
             stop_reason: Some("max_rounds".into()),
             usage: None,
             reasoning_content: None,
+            context_tokens: agent.token_estimate,
         });
     }
 
     // End of post-tool-loop — finalize turn
-    agent.health_status_line = health_status(agent);
     agent.health.reset_turn();
 
     session::save_live_snapshot(
@@ -696,7 +710,6 @@ pub fn handle_user_input(
         &agent.ctx.to_vec(),
         &agent.config.model,
         agent.config.effort.as_deref(),
-        None,
     );
     super::maybe_save_session(agent);
 }

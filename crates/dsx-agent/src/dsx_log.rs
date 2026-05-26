@@ -29,26 +29,12 @@ fn config_dir() -> PathBuf {
     if let Ok(d) = std::env::var("DSX_CONFIG_DIR") {
         return PathBuf::from(d);
     }
-    dsx_types::platform::home_dir().join(".config").join("dsx")
+    dsx_types::platform::data_dir()
 }
 
 /// Initialize file logging. Call once at startup.
-/// Logs to ~/.config/dsx/logs/dsx.log (overwritten each run).
+/// Logs to {data_dir}/logs/ (overwritten each run).
 /// Set DSX_LOG=debug|trace|info|warn|error to control verbosity.
-/// Set runtime log level (for /dev command).
-pub fn set_level(lvl: &str) {
-    let filter = match lvl {
-        "trace" => LevelFilter::Trace,
-        "debug" => LevelFilter::Debug,
-        "info" => LevelFilter::Info,
-        "warn" => LevelFilter::Warn,
-        "error" => LevelFilter::Error,
-        _ => return,
-    };
-    log::set_max_level(filter);
-    log::info!("Log level set to {}", lvl);
-}
-
 pub fn init() {
     LOGGER_INIT.get_or_init(|| {
         let lvl = level();

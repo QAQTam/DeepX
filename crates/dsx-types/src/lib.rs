@@ -7,7 +7,6 @@
 // ── Sub-module declarations (each file = one logical group) ──
 
 pub mod message;
-pub mod safety;
 pub mod tool_def;
 pub mod state;
 pub mod config;
@@ -21,18 +20,15 @@ pub mod arg;
 // Platform-specific utilities
 pub mod platform;
 
-// Serde utilities
-pub mod serde;
 pub mod token;
 
 // ── Re-exports: flat public API ──
 
 pub use message::{Message, ContentBlock, ToolCall, FunctionCall};
-pub use safety::SafetyLevel;
 pub use tool_def::{ToolDef, ToolFunction};
 pub use state::{TaskPhase, DebugLevel, RouterCommand};
 pub use config::{PersistentConfig, PhasePerfConfig, ProfileConfig, default_phase_configs};
-pub use session::{SessionFile, SessionMeta, StreamState};
+pub use session::{SessionFile, SessionMeta};
 pub use api_types::UsageInfo;
 
 // ── Unified arg parsers ──
@@ -40,9 +36,5 @@ pub use arg::{
     parse_arg, parse_arg_or, parse_opt, parse_opt_u64, tool_action, parse_file_arg, parse_cmd_arg,
 };
 
-// ── A03: shared utilities ──
-pub use token::{
-    TokenBreakdown,
-    count_tokens, format_tokens, context_usage_ratio,
-};
-pub use serde::{SerdeError, encode_msg, encode_msg_with_max, decode_msg, try_decode_msg, MAX_FRAME_SIZE};
+// ── Shared utilities ──
+pub use token::{TokenBreakdown, count_tokens};

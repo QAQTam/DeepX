@@ -266,32 +266,22 @@ pub fn is_command(input: &str) -> bool {
 pub fn all_commands(lang: &str) -> Vec<(&'static str, &'static str)> {
     if lang == "zh" {
         vec![
-            ("/balance",  "查询余额"),
-            ("/clear",    "清空对话"),
-            ("/compact",  "压缩上下文"),
             ("/effort",   "思考强度 high/max"),
-            ("/lang",     "切换语言 zh/en (含提示词)"),
+            ("/lang",     "切换语言 zh/en"),
             ("/model",    "切换模型"),
             ("/profile",  "管理配置档案"),
             ("/reset",    "重置全部配置"),
             ("/re-config","重置配置(保留API key)"),
-            ("/tools",    "工具开关"),
             ("/auto",     "AI自动选择model/effort"),
-        ("/dev",      "开发模式(调试日志+状态)"),
         ]
     } else {
         vec![
-            ("/balance",  "Check balance"),
-            ("/clear",    "Clear conversation"),
-            ("/compact",  "Compact context"),
             ("/effort",   "Reasoning effort high/max"),
             ("/lang",     "Switch language zh/en"),
             ("/model",    "Switch model"),
             ("/profile",  "Manage config profiles"),
             ("/reset",    "Reset all config"),
             ("/re-config","Reset config (keep API key)"),
-            ("/tools",    "Toggle tools on/off"),
-        ("/dev",      "Dev mode (debug logging + status)"),
             ("/auto",     "AI-driven model/effort routing"),
         ]
     }

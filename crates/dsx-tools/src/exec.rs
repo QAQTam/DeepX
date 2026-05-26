@@ -3,18 +3,11 @@
 //! 保留旧函数（exec_command, exec_with_sudo, spawn_exec_async 等）供向后兼容。
 //! 安全检测逻辑已移至 safety.rs。
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::{ToolCallCtx, ToolResult};
 
-/// Get system shell: prefer bash for feature parity, fall back to sh (Alpine/busybox).
-fn shell() -> &'static str {
-    if cfg!(target_os = "windows") { "cmd" }
-    else if std::path::Path::new("/bin/bash").exists() { "bash" }
-    else { "sh" }
-}
-
-// ── 旧函数：向后兼容 ──
+// ── Compat helpers ──
 
 pub fn exec_command(args: &str) -> String {
     let command = parse_arg(args, "command");
@@ -28,11 +21,15 @@ pub fn exec_command(args: &str) -> String {
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
-        c.args(["/C", &command]);
+        c.args(["/C", &command])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         c
     } else {
         let mut c = Command::new("sh");
-        c.args(["-c", &command]);
+        c.args(["-c", &command])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         c
     };
 
@@ -195,184 +192,7 @@ pub fn exec_command(args: &str) -> String {
     }
 }
 
-pub fn exec_with_sudo(command: &str, password: &str) -> String {
-    use std::io::Write;
-    let mut child = match std::process::Command::new("sudo")
-        .args(["-S", "-p", "", "--"])
-        .arg(shell())
-        .arg("-c")
-        .arg(command.trim_start_matches("sudo ").trim())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => return format!("[ERROR] Cannot spawn sudo: {}\n[HINT] Is sudo installed?", e),
-    };
-
-    if let Some(ref mut stdin) = child.stdin {
-        let _ = stdin.write_all(password.as_bytes());
-        let _ = stdin.write_all(b"\n");
-    }
-
-    match child.wait_with_output() {
-        Ok(o) => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            if stderr.contains("incorrect password") || stderr.contains("3 incorrect") {
-                return format!("[ERROR] Incorrect sudo password\n[HINT] Try again.");
-            }
-            if !o.status.success() {
-                let se = if stderr.is_empty() { String::new() }
-                    else { format!("\n── stderr ──\n{}", stderr.trim_end()) };
-                format!("[FAIL] sudo {} (exit {})\n{}{}", command, o.status.code().unwrap_or(-1), stdout.trim_end(), se)
-            } else {
-                format!("[OK] sudo: {}\n{}", command, stdout.trim_end())
-            }
-        }
-        Err(e) => format!("[ERROR] sudo wait failed: {}", e),
-    }
-}
-
-pub fn spawn_exec_async(
-    tool_call_id: &str,
-    args: &str,
-    tx: tokio::sync::mpsc::Sender<crate::persistence::StreamEvent>,
-) {
-    spawn_exec_async_with_sudo(tool_call_id, args, None, tx)
-}
-
-pub fn spawn_exec_async_with_sudo(
-    tool_call_id: &str,
-    args: &str,
-    sudo_password: Option<&str>,
-    tx: tokio::sync::mpsc::Sender<crate::persistence::StreamEvent>,
-) {
-    let command = parse_arg(args, "command");
-    let cwd = parse_opt(args, "cwd");
-    let timeout_secs = parse_opt_u64(args, "timeout_secs")
-        .filter(|&n| n > 0 && n <= 3600)
-        .unwrap_or(300);
-    let id = tool_call_id.to_string();
-    let is_sudo = command.trim().starts_with("sudo ");
-    let has_password: Option<String> = sudo_password.filter(|p| !p.is_empty()).map(|s| s.to_string());
-
-    if is_sudo && !cfg!(target_os = "windows") && has_password.is_none() {
-        let needs_pwd = std::process::Command::new("sudo")
-            .args(["-n", "true"])
-            .output()
-            .map(|o| !o.status.success())
-            .unwrap_or(true);
-        if needs_pwd {
-            let _ = tx.try_send(crate::persistence::StreamEvent::ExecDone(
-                id, format!("[SUDO_REQUIRED] {}", command),
-            ));
-            return;
-        }
-    }
-
-    tokio::spawn(async move {
-        let pwd_for_stdin = has_password.clone();
-        let mut child: tokio::process::Child = if is_sudo && pwd_for_stdin.is_some() {
-            let pwd = pwd_for_stdin.unwrap();
-            use tokio::io::AsyncWriteExt;
-            let mut cmd = tokio::process::Command::new("sudo");
-            cmd.args(["-S", "-p", "", "--"])
-                .arg(shell())
-                .arg("-c")
-                .arg(command.trim_start_matches("sudo ").trim())
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            if let Some(dir) = cwd { cmd.current_dir(dir); }
-            let mut child = match cmd.spawn() {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx.send(crate::persistence::StreamEvent::ExecDone(
-                        id, format!("[ERROR] Failed to spawn sudo: {}", e),
-                    )).await;
-                    return;
-                }
-            };
-            if let Some(ref mut stdin) = child.stdin {
-                let _ = stdin.write_all(pwd.as_bytes()).await;
-                let _ = stdin.write_all(b"\n").await;
-            }
-            child
-        } else {
-            let mut cmd = tokio::process::Command::new(shell());
-            cmd.args(["-c", &command])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            if let Some(dir) = cwd { cmd.current_dir(dir); }
-            match cmd.spawn() {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx.send(crate::persistence::StreamEvent::ExecDone(
-                        id, format!("[ERROR] Failed to spawn: {}", e),
-                    )).await;
-                    return;
-                }
-            }
-        };
-
-        if let Some(pid) = child.id() {
-            let _ = tx.send(crate::persistence::StreamEvent::ExecStarted(id.clone(), pid)).await;
-        }
-
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let tx_stdout = tx.clone();
-        let tx_stderr = tx.clone();
-
-        let stdout_handle = tokio::spawn(async move {
-            if let Some(mut reader) = stdout {
-                use tokio::io::AsyncBufReadExt;
-                let mut lines = tokio::io::BufReader::new(&mut reader).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx_stdout.send(crate::persistence::StreamEvent::ExecProgress(line)).await;
-                }
-            }
-        });
-
-        let stderr_handle = tokio::spawn(async move {
-            if let Some(mut reader) = stderr {
-                use tokio::io::AsyncBufReadExt;
-                let mut lines = tokio::io::BufReader::new(&mut reader).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx_stderr.send(crate::persistence::StreamEvent::ExecProgress(
-                        format!("stderr: {}", line)
-                    )).await;
-                }
-            }
-        });
-
-        let status = match tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            child.wait(),
-        ).await {
-            Ok(s) => s,
-            Err(_) => {
-                let _ = child.kill().await;
-                let _ = tx.send(crate::persistence::StreamEvent::ExecDone(
-                    id,
-                    format!("[ERROR] exec timed out after {}s\n[HINT] Increase timeout_secs or check if the command is stuck.", timeout_secs),
-                )).await;
-                return;
-            }
-        };
-        let _ = stdout_handle.await;
-        let _ = stderr_handle.await;
-
-        let exit_code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-        let status_label = if exit_code == 0 { "OK" } else { "FAIL" };
-        let result = format!("[{}] exec: {} (exit {})\n(streaming output shown above)", status_label, command, exit_code);
-        let _ = tx.send(crate::persistence::StreamEvent::ExecDone(id, result)).await;
-    });
-}
-
-// ── Handler 函数（新 IPC 框架）──
+// ── Handler ──
 
 pub fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     let command = ctx.get_str("command").unwrap_or("").to_string();

@@ -6,7 +6,7 @@
 //! ## IPC protocol
 //!
 //! JSON-LP frames over TCP `localhost`. Port written to
-//! `~/.dsx/hp.port`.
+//! `{data_dir}/hp.port`.
 //!
 //! ## Build
 //!
@@ -22,7 +22,7 @@
 //!
 //! 1. Parse CLI args (port, log level).
 //! 2. Bind TCP listener on `127.0.0.1:{port}`.
-//! 3. Write port to `$XDG_RUNTIME_DIR/dsx/hp.port`.
+//! 3. Write port to `{data_dir}/hp.port`.
 //! 4. Enter accept loop — one thread per connection.
 //! 5. On SIGTERM/SIGINT: write empty port file, drain connections, exit.
 

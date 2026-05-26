@@ -1,4 +1,4 @@
-use dsx_types::{DebugLevel, RouterCommand, TaskPhase};
+use dsx_types::{DebugLevel, TaskPhase};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Global phase + debug level set by the status tool, read by start_agent_loop().
@@ -41,16 +41,6 @@ pub fn read_debug_level() -> DebugLevel {
 
 pub fn set_phase(phase: TaskPhase, level: DebugLevel) {
     CURRENT_PHASE.store(encode(phase, level), Ordering::Relaxed);
-}
-
-/// Process a [`RouterCommand`] from IPC, returning a human-readable ack string.
-pub fn handle_router_command(cmd: RouterCommand) -> String {
-    match cmd {
-        RouterCommand::SetPhase { phase, level } => {
-            set_phase(phase, level);
-            format!("[OK] Router: phase={:?} level={:?}", phase, level)
-        }
-    }
 }
 
 // ── Routing table ──
@@ -149,27 +139,4 @@ pub fn detect_initial_phase(input: &str) -> TaskPhase {
     TaskPhase::Coding
 }
 
-// ── Parse status tool arguments ──
 
-pub fn parse_status_args(args: &str) -> (TaskPhase, DebugLevel) {
-    let state = parse_string_arg(args, "state").unwrap_or_default();
-    let difficulty = parse_string_arg(args, "difficulty");
-    let phase = TaskPhase::from_str(&state);
-    let level = difficulty
-        .as_deref()
-        .map(|d| DebugLevel::from_str(d))
-        .unwrap_or_default();
-    (phase, level)
-}
-
-fn parse_string_arg(args: &str, key: &str) -> Option<String> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-        if let Some(val) = v.get(key) {
-            return match val {
-                serde_json::Value::String(s) => Some(s.clone()),
-                other => Some(other.to_string()),
-            };
-        }
-    }
-    None
-}

@@ -5,10 +5,7 @@ pub mod turn_scorer;
 pub mod learning;
 pub mod phase_detector;
 
-// Re-exports from dsx_types::arg (was: pub mod arg_parser)
-pub use dsx_types::arg::{tool_action, parse_file_arg, parse_cmd_arg, parse_arg, parse_arg_or};
-
-// ── maybe_save_session (was: pub mod session_persistence) ──
+// ── maybe_save_session ──
 
 use crate::session;
 use crate::agent::AgentState;

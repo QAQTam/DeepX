@@ -5,7 +5,7 @@
 //! 子模块通过 `pub fn register(mgr: &mut ToolManager)` 注册各自 handler。
 
 pub mod exec;
-pub use exec::{exec_command, exec_with_sudo, spawn_exec_async, spawn_exec_async_with_sudo};
+pub use exec::exec_command;
 pub mod explore;
 pub mod file;
 mod safety;
@@ -102,10 +102,6 @@ pub struct ToolResult {
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
         Self { success: true, content: content.into() }
-    }
-
-    pub fn err(content: impl Into<String>) -> Self {
-        Self { success: false, content: content.into() }
     }
 }
 

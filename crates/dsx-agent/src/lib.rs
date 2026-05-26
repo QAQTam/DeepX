@@ -9,7 +9,6 @@ pub mod assembly;
 pub mod dsx_log;
 pub mod prompt;
 pub mod router;
-pub mod skills;
 pub mod tokenizer;
 
 // ── Missing top-level modules ──
@@ -22,5 +21,4 @@ pub mod session;
 pub mod tool_parser;
 pub mod cache_analyzer;
 pub mod hp;
-pub mod tools_spawn;
 pub mod tui;

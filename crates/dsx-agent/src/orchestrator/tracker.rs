@@ -32,8 +32,3 @@ pub fn last_assistant_content(state: &AgentState) -> String {
         .unwrap_or_default()
 }
 
-/// Read the active plan text from session persistence.
-pub fn read_active_plan(_state: &AgentState) -> String {
-    let path = std::env::temp_dir().join("dsx_active_plan.txt");
-    std::fs::read_to_string(path).unwrap_or_default()
-}

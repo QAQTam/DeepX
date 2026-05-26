@@ -13,7 +13,7 @@ use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, AgentToTools, AgentToTui, HpToAgent, ToolsToAgent, TuiToAgent};
+use dsx_proto::{self, AgentToHp, AgentToTui, HpToAgent, TuiToAgent};
 
 use crate::agent::AgentState;
 use crate::orchestrator::maybe_save_session;
@@ -38,27 +38,14 @@ pub fn run_agent_loop(
             Err(_) => break,
         };
 
-        eprintln!(
+        log::debug!(
             "dsx-agent: tui ← {:?}",
             std::mem::discriminant(&frame)
         );
 
         match frame {
             TuiToAgent::UserInput { text } => {
-                // Respawn tools if IPC was lost
-                if crate::tools::all_tools().is_empty() {
-                    eprintln!("dsx-agent: tools IPC dead, respawning...");
-                    let mut tools_opt: Option<std::process::Child> = None;
-                    if crate::tools_spawn::respawn(&mut tools_opt) {
-                        agent.tool_defs = crate::tools::all_tools();
-                        eprintln!(
-                            "dsx-agent: tools IPC restored ({} tools)",
-                            agent.tool_defs.len()
-                        );
-                    } else {
-                        eprintln!("dsx-agent: tools respawn FAILED");
-                    }
-                }
+                // Tools are now in-process — always available, no respawn needed
                 // Process input — if HP not connected or fails, try reconnect once
                 let hp_failed = if let Some(ref mut hp) = hp_conn {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
@@ -70,18 +57,18 @@ pub fn run_agent_loop(
                 };
 
                 if hp_failed {
-                    eprintln!("dsx-agent: HP failed, reconnecting...");
+                    log::warn!("dsx-agent: HP failed, reconnecting...");
                     if let Some(stream) = crate::hp::try_reconnect() {
                         let reader = BufReader::new(stream);
                         hp_conn = Some(reader);
-                        eprintln!("dsx-agent: HP reconnected, retry input");
+                        log::info!("dsx-agent: HP reconnected, retry input");
                         if let Some(ref mut hp) = hp_conn {
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                                 || turn::handle_user_input(&mut agent, &text, hp, &agent_tx),
                             ));
                         }
                     } else {
-                        eprintln!("dsx-agent: HP reconnect failed");
+                        log::error!("dsx-agent: HP reconnect failed");
                         let _ = agent_tx.send(AgentToTui::Error {
                             message: "HP disconnected. Please try again.".into(),
                         });
@@ -104,6 +91,7 @@ pub fn run_agent_loop(
                     tool_calls: None,
                     stop_reason: None,
                     usage: None,
+                    context_tokens: agent.token_estimate,
                 });
                 let _ = agent_tx.send(AgentToTui::Done);
             }
@@ -150,7 +138,7 @@ pub fn run_agent_loop(
         let _ = dsx_proto::write_frame(hp.get_mut(), &unreg);
     }
 
-    eprintln!(
+    log::info!(
         "dsx-agent: shutdown complete (session {}, {} turns, {} tokens)",
         agent.session_seed,
         agent.ctx.turn_count(),
@@ -191,29 +179,10 @@ pub fn run() {
     // ── 5. Connect to HP ──
     let hp_conn = crate::hp::connect().map(BufReader::new);
 
-    // ── 6. Spawn dsx-tools ──
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("dsx"));
-    let (tools_child, mut tools_reader, mut tools_writer) =
-        crate::tools_spawn::spawn_process(&exe);
-    let mut tools_option = Some(tools_child);
-
-    // Send init frame and read Ready response
-    let init = AgentToTools::Init {
-        allowed_tools: vec![],
-        session_seed: "pipe".into(),
-        auto_mode: agent.auto_mode,
-    };
-    let _ = dsx_proto::write_frame(&mut tools_writer, &init);
-    let ready: Option<ToolsToAgent> = dsx_proto::read_frame(&mut tools_reader).ok().flatten();
-    if let Some(ToolsToAgent::Ready { tools }) = &ready {
-        agent.tool_defs = tools.clone();
-        eprintln!(
-            "dsx-agent: tools → {}",
-            agent.tool_defs.len(),
-        );
-    }
-
-    crate::tools::init_tools_ipc(tools_reader, tools_writer, agent.tool_defs.clone());
+    // ── 6. Init in-process tools ──
+    crate::tools::init_tools("pipe", agent.auto_mode);
+    agent.tool_defs = crate::tools::all_tools();
+    eprintln!("dsx-agent: tools → {}", agent.tool_defs.len());
 
     // ── 7. Session check ──
     let lives = crate::session::find_live_sessions();
@@ -262,11 +231,7 @@ pub fn run() {
     run_agent_loop(agent, hp_conn, tui_rx, agent_tx);
 
     // ── 10. Cleanup ──
-    if let Some(mut c) = tools_option.take() {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
-
+    crate::tools::shutdown_tools();
     stdin_handle.join().ok();
     stdout_handle.join().ok();
 }

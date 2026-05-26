@@ -1,6 +1,5 @@
 //! Session file persistence: save and load conversation sessions.
 
-use crate::router;
 use dsx_types::{Message, SessionFile};
 
 // ── Session loading ──
@@ -117,9 +116,6 @@ fn migrate_legacy_session(data: &str, seed: &str) -> Option<SessionFile> {
         effort: v.get("effort").and_then(|e| e.as_str()).map(String::from),
         messages: new_msgs,
         last_summary: v.get("last_summary").and_then(|l| l.as_str()).unwrap_or("").to_string(),
-        stream_state: None,
-        semantic_memory: v.get("semantic_memory").cloned(),
-        task_phase: v.get("task_phase").and_then(|t| serde_json::from_value(t.clone()).ok()),
     })
 }
 
@@ -151,9 +147,6 @@ fn save_session(
         effort: effort.map(|s| s.to_string()),
         messages: messages.to_vec(),
         last_summary,
-        stream_state: None,
-        semantic_memory: None,
-        task_phase: Some(router::read_phase()),
     };
 
     let serialized = serde_json::to_string_pretty(&file).unwrap_or_default();

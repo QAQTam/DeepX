@@ -40,17 +40,17 @@ pub fn read_hp_stream_response(
     hp: &mut BufReader<TcpStream>,
     agent: &mut AgentState,
     agent_tx: &mpsc::Sender<AgentToTui>,
-    round: u32,
+    _round: u32,
 ) -> Result<HpStreamResponse, ()> {
     loop {
         let hp_resp: HpToAgent = match dsx_proto::read_frame(hp) {
             Ok(Some(r)) => r,
             Ok(None) => {
-                eprintln!("dsx-agent: HP connection closed (EOF)");
+                log::warn!("dsx-agent: HP connection closed (EOF)");
                 return Err(());
             }
             Err(e) => {
-                eprintln!("dsx-agent: HP parse error: {e}");
+                log::warn!("dsx-agent: HP parse error: {e}");
                 return Err(());
             }
         };
@@ -60,15 +60,8 @@ pub fn read_hp_stream_response(
                 if agent.stream_cancelled
                     || crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
                 {
-                    eprintln!("dsx-agent: streaming cancelled");
+                    log::info!("dsx-agent: streaming cancelled");
                     return Err(());
-                }
-                if round == 0 {
-                    eprintln!(
-                        "dsx DEBUG: hp.ContentDelta d={} r={}",
-                        delta.len(),
-                        reasoning.as_ref().map(|s| s.len()).unwrap_or(0)
-                    );
                 }
 
                 let _ = agent_tx.send(AgentToTui::ContentDelta {

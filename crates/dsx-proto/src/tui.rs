@@ -68,6 +68,9 @@ pub enum AgentToTui {
         stop_reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<dsx_types::UsageInfo>,
+        /// Full context token count (system + tools + messages).
+        #[serde(default)]
+        context_tokens: u32,
     },
 
     #[serde(rename = "ask_user")]

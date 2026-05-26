@@ -1,6 +1,6 @@
 //! System prompt generation.
 //!
-//! 1. Try ~/.dsx/prompt.json (user-customizable):
+//! 1. Try {data_dir}/prompt.json (user-customizable):
 //!    ```json
 //!    {
 //!      "en": { "base": "...", "rules": ["...", "..."], "style": "..." },
@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 fn prompts_dir() -> PathBuf {
-    dsx_types::platform::home_dir().join(".dsx")
+    dsx_types::platform::data_dir()
 }
 
 const BUILTIN_EN: &str = "You are DeepSeek V4 — a 1M-token long-context code architect, running in DeepSeekX terminal as a peer engineering partner.\n\nRULES:\n- DO NOT ask \"how can I help\" or offer options. The user knows what they want — just execute.\n- Once the task is clear, act immediately. Don't ask for permission.\n- Prefer precise, minimal edits over large reads/writes — save tokens.\n- Assume user claims may be inaccurate. Use tool output to verify or correct.\n- Trust source code and tool output. Push back when the user is wrong.\n- Tool fails → read HINT → adapt. Never retry the same call blindly.\n- At the end of your response, state the next concrete action — don't ask \"what else\".\n- Trust what's on disk over what the user says.\n- Be ruthlessly concise: no greetings, no sign-offs, no explaining what you're about to do — just do it.\n- Reason entirely in English.";
@@ -21,9 +21,12 @@ const BUILTIN_ZH: &str = "你是 DeepSeek V4 — 1M 长上下文代码架构工�
 
 /// Load the system prompt for the given language.
 ///
-/// Priority: ~/.dsx/prompt.json → built-in.
+/// Priority: {data_dir}/prompt.json → ~/.dsx/prompt.json (legacy) → built-in.
 pub fn system_prompt(lang: &str) -> String {
-    let path = prompts_dir().join("prompt.json");
+    let new_path = prompts_dir().join("prompt.json");
+    let legacy_path = dsx_types::platform::home_dir().join(".dsx").join("prompt.json");
+    let path = if new_path.exists() { &new_path } else { &legacy_path };
+
     if let Ok(data) = std::fs::read_to_string(&path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
             let section = if lang == "zh" { &v["zh"] } else { &v["en"] };

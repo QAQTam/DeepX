@@ -22,13 +22,9 @@ impl SafetyVerdict {
         SafetyVerdict::Allow
     }
 
-    /// Block with a reason.
-    pub fn blocked(reason: impl Into<String>) -> Self {
-        SafetyVerdict::Block(reason.into())
-    }
 }
 
-// ── Exec 安全分类（从 exec.rs 移入）──
+// ── Exec safety classification ──
 
 pub fn is_danger_command(cmd: &str) -> bool {
     let dangerous = [

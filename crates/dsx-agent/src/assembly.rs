@@ -66,13 +66,6 @@ impl Step {
         ids.iter().filter(|id| !self.tool_result_has_id(id)).count()
     }
 
-    fn pending_tool_ids(&self) -> Vec<String> {
-        let ids = self.assistant_tool_ids();
-        ids.into_iter()
-            .filter(|id| !self.tool_result_has_id(id))
-            .collect()
-    }
-
 }
 
 /// A single conversation turn: one user message + a chain of assistant steps.
@@ -124,7 +117,6 @@ impl Turn {
 pub struct ContextAssembler {
     system_messages: Vec<Message>,
     turns: Vec<Turn>,
-    dirty: bool,
 }
 
 impl ContextAssembler {
@@ -134,7 +126,6 @@ impl ContextAssembler {
         Self {
             system_messages: Vec::new(),
             turns: Vec::new(),
-            dirty: false,
         }
     }
 
@@ -143,12 +134,7 @@ impl ContextAssembler {
     pub fn push_system(&mut self, msg: Message) {
         assert_eq!(msg.role, "system", "push_system requires role=system");
         self.system_messages.push(msg);
-        self.dirty = true;
-    }
-
-    pub fn set_system_messages(&mut self, msgs: Vec<Message>) {
-        self.system_messages = msgs;
-        self.dirty = true;
+        
     }
 
     // ── User messages ──
@@ -171,7 +157,7 @@ impl ContextAssembler {
             }
         }
         self.turns.push(Turn::new(Message::user(text)));
-        self.dirty = true;
+        
         Ok(())
     }
 
@@ -189,12 +175,12 @@ impl ContextAssembler {
                     }
                 }).unwrap_or_default();
                 last.user.content = vec![dsx_types::ContentBlock::text(&format!("{}\n\n{}", prefix, text))];
-                self.dirty = true;
+                
                 return;
             }
         }
         self.turns.push(Turn::new(Message::user(text)));
-        self.dirty = true;
+        
     }
 
     // ── Assistant messages ──
@@ -218,7 +204,7 @@ impl ContextAssembler {
             }
         }
         turn.steps.push(Step::new(msg));
-        self.dirty = true;
+        
         Ok(())
     }
 
@@ -231,7 +217,7 @@ impl ContextAssembler {
         }
         let turn = self.turns.last_mut().unwrap();
         turn.steps.push(Step::new(msg));
-        self.dirty = true;
+        
     }
 
     // ── Tool results ──
@@ -249,7 +235,7 @@ impl ContextAssembler {
 
         if !step.tool_result_has_id(tool_call_id) {
             step.tool_results.push(Message::tool(tool_call_id, result));
-            self.dirty = true;
+            
         }
         Ok(())
     }
@@ -261,7 +247,7 @@ impl ContextAssembler {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
                 if !step.tool_result_has_id(tool_call_id) {
                     step.tool_results.push(Message::tool(tool_call_id, result));
-                    self.dirty = true;
+                    
                 }
                 return Ok(());
             }
@@ -302,21 +288,6 @@ impl ContextAssembler {
             if m.role != "system" {
                 return Err(format!("System[{}]: expected role=system, got {}", i, m.role));
             }
-        }
-        Ok(())
-    }
-
-    pub fn ready_for_api(&self) -> Result<(), String> {
-        self.validate()?;
-        if self.turns.is_empty() {
-            return Err("No conversation turns".into());
-        }
-        let last = self.turns.last().unwrap();
-        if last.steps.is_empty() {
-            return Err("Last turn has no assistant response".into());
-        }
-        if !last.all_steps_satisfied() {
-            return Err(format!("{} missing tool result(s)", last.total_missing_tools()));
         }
         Ok(())
     }
@@ -370,10 +341,6 @@ impl ContextAssembler {
         self.turns.last()
     }
 
-    pub fn last_turn_mut(&mut self) -> Option<&mut Turn> {
-        self.turns.last_mut()
-    }
-
     /// Whether the last step has unsatisfied tool calls.
     pub fn has_pending_tools(&self) -> bool {
         self.turns.last()
@@ -381,47 +348,6 @@ impl ContextAssembler {
             .map(|s| !s.all_tools_satisfied())
             .unwrap_or(false)
     }
-
-    pub fn pending_tool_count(&self) -> usize {
-        self.turns.last()
-            .and_then(|t| t.current_step())
-            .map(|s| s.missing_tool_count())
-            .unwrap_or(0)
-    }
-
-    pub fn pending_tool_call_ids(&self) -> Vec<String> {
-        self.turns.last()
-            .and_then(|t| t.current_step())
-            .map(|s| s.pending_tool_ids())
-            .unwrap_or_default()
-    }
-
-    pub fn last_assistant_tool_calls(&self) -> Vec<dsx_types::ToolCall> {
-        self.turns.last()
-            .and_then(|t| t.current_step())
-            .map(|s| {
-                s.assistant.content.iter()
-                    .filter_map(|b| {
-                        if let dsx_types::ContentBlock::ToolUse { id, name, input } = b {
-                            Some(dsx_types::ToolCall {
-                                id: id.clone(),
-                                call_type: "function".into(),
-                                function: dsx_types::FunctionCall {
-                                    name: name.clone(),
-                                    arguments: input.to_string(),
-                                },
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn is_dirty(&self) -> bool { self.dirty }
-    pub fn mark_clean(&mut self) { self.dirty = false; }
 
     // ── Import from legacy Vec<Message> (session restore) ──
 
@@ -520,20 +446,12 @@ impl ContextAssembler {
             if let Some(step) = turn.steps.last() {
                 if !step.all_tools_satisfied() {
                     turn.steps.pop();
-                    self.dirty = true;
+                    
                     return true;
                 }
             }
         }
         false
-    }
-
-    /// Remove the last step entirely (cancelled assistant).
-    pub fn remove_last_step(&mut self) {
-        if let Some(turn) = self.turns.last_mut() {
-            turn.steps.pop();
-            self.dirty = true;
-        }
     }
 
     // ── Build: conversation messages with truncation ──
@@ -554,7 +472,7 @@ impl ContextAssembler {
 ///
 /// DeepSeek caches via exact-match prefix detection. To maximise reuse,
 /// the system prompt contains ONLY stable content. Dynamic per-round
-/// content (skills, annotations) is appended to the LAST user message
+/// content (annotations) is appended to the LAST user message
 /// so it sits at the very end of the combined prefix and never shifts
 /// the offset of history messages.
 ///
@@ -567,7 +485,7 @@ impl ContextAssembler {
 ///
 /// Messages (history cached, only tail misses):
 ///   Conversation history    ← stable prefix (cached)
-///   Last user message      ← appended with dynamic skills + annotations (uncached suffix)
+///   Last user message      ← appended with dynamic annotations (uncached suffix)
 /// ```
 pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBreakdown) {
 
@@ -600,24 +518,10 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     // === Messages: conversation from ctx, dynamic content appended to LAST user message ===
     let mut messages = state.ctx.build(state.config.context_limit);
 
-    // Layer 4: Active skills → appended to last user message (dynamic, per user input)
-    // Appending (not prepending) preserves the prefix cache for ALL history messages.
-    let mut skill_tokens = 0u32;
+    // Turn annotations → appended to last user message (dynamic, per round)
     let mut dyn_suffix = String::new();
-    if !state.active_skill_bodies.is_empty() {
-        dyn_suffix.push_str("\n\n## Active Skills\n");
-        for (name, body) in &state.active_skill_bodies {
-            let s = format!("### {}\n{}---\n", name, body);
-            skill_tokens += tokenizer::count_tokens(&s);
-            dyn_suffix.push_str(&s);
-        }
-    }
-
-    // Layer 5: Turn annotations → appended to last user message (dynamic, per round)
-    let mut annotation_tokens = 0u32;
     if !state.turn_annotations.is_empty() {
         let ann = state.turn_annotations.join("\n");
-        annotation_tokens = tokenizer::count_tokens(&ann);
         dyn_suffix.push_str("\n\n## Notes\n");
         dyn_suffix.push_str(&ann);
     }
@@ -650,7 +554,6 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     bd.total = bd.system + bd.episodic;
 
     state.token_estimate = bd.total;
-    state.token_breakdown = Some(bd);
     state.health.context_tokens = state.tokens_used();
     state.health.context_tier = crate::health::ContextTier::from_tokens(
         state.health.context_tokens, state.config.context_limit,
@@ -661,9 +564,8 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     state.predicted_cache_hit_pct = report.hit_rate;
 
     log::info!(
-        "context (tokens): base={} tools={} phase={} skills={} annotations={} messages={} total={}",
-        base_tokens, tool_help_tokens, phase_tokens,
-        skill_tokens, annotation_tokens, bd.episodic, bd.total,
+        "context (tokens): base={} tools={} phase={} messages={} total={}",
+        base_tokens, tool_help_tokens, phase_tokens, bd.episodic, bd.total,
     );
 
     (system, messages, bd)

@@ -1,121 +1,11 @@
-//! Real implementations for shared types and session I/O.
+//! Session I/O: memory and plan persistence.
 //!
-//! dsx-tools runs as a subprocess. For memory/plan/pitfall persistence, it accesses
+//! dsx-tools runs as a subprocess. For memory/plan persistence, it accesses
 //! the session filesystem directly (same paths as dsx-agent), avoiding IPC round-trips
 //! for simple read/write operations.
 
 use dsx_types;
 use std::path::PathBuf;
-
-use serde::{Deserialize, Serialize};
-
-// ── StreamEvent (used by exec.rs async spawners) ──
-
-#[derive(Debug, Clone)]
-pub enum StreamEvent {
-    ExecDone(String, String),
-    ExecProgress(String),
-    ExecStarted(String, u32),
-    Error(String),
-}
-
-// ── AgentEmotion (used by pitfall_save tool) ──
-
-#[derive(Debug, Clone)]
-pub enum AgentEmotion {
-    Flow, Calm, Anxious, Frustrated, Confused, Panic,
-}
-
-// ── ErrorKind (used by pitfall_save tool) ──
-
-#[derive(Debug, Clone)]
-pub enum ErrorKind {
-    ToolParameter, FileAccess, ExecFailure, NetworkFailure, ApiError,
-    SudoFailure, Panic, SessionMissing, ToolNotFound,
-    Unknown, Permission, Config, Io, Timeout,
-}
-
-// ── Pitfall types ──
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PitfallEntry {
-    pub emotion: String,
-    pub error_kind: String,
-    pub tool: String,
-    pub description: String,
-    pub lesson: String,
-    #[serde(default)]
-    pub files: Vec<String>,
-    #[serde(default)]
-    pub frequency: u32,
-    #[serde(default)]
-    pub first_seen: u64,
-    #[serde(default)]
-    pub last_seen: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PitfallGuide {
-    pub entries: Vec<PitfallEntry>,
-}
-
-impl Default for PitfallGuide {
-    fn default() -> Self {
-        Self { entries: Vec::new() }
-    }
-}
-
-impl PitfallGuide {
-    pub fn upsert(&mut self, emotion: AgentEmotion, kind: ErrorKind, tool: &str,
-                  description: &str, lesson: &str, files: &[String]) {
-        let kind_name = format!("{:?}", kind);
-        let emotion_label = format!("{:?}", emotion);
-        let now = now_epoch();
-        let desc_prefix: String = description.chars().take(40).collect();
-
-        for entry in &mut self.entries {
-            if entry.error_kind == kind_name && entry.tool == tool
-                && entry.description.starts_with(&desc_prefix)
-            {
-                entry.frequency += 1;
-                entry.last_seen = now;
-                if !files.is_empty() {
-                    for f in files {
-                        if !entry.files.contains(f) {
-                            entry.files.push(f.clone());
-                        }
-                    }
-                }
-                entry.lesson = format!("{}\n{}", entry.lesson, lesson);
-                if entry.lesson.len() > 500 {
-                    let end = entry.lesson.floor_char_boundary(500);
-                    entry.lesson = entry.lesson[..end].to_string();
-                }
-                return;
-            }
-        }
-
-        self.entries.push(PitfallEntry {
-            emotion: emotion_label,
-            error_kind: kind_name,
-            tool: tool.to_string(),
-            description: description.chars().take(300).collect(),
-            lesson: lesson.chars().take(200).collect(),
-            files: files.to_vec(),
-            frequency: 1,
-            first_seen: now,
-            last_seen: now,
-        });
-
-        if self.entries.len() > 50 {
-            self.entries.sort_by(|a, b| {
-                a.frequency.cmp(&b.frequency)
-                    .then_with(|| a.last_seen.cmp(&b.last_seen))
-            });
-            self.entries.remove(0);
-        }
-    }
-}
 
 // ── Path resolution (same as dsx-agent::session) ──
 
@@ -149,10 +39,6 @@ fn session_dir(seed: &str) -> Option<PathBuf> {
 
 fn memory_path(seed: &str, tier: &str) -> Option<PathBuf> {
     session_dir(seed).map(|d| d.join(format!("{}-mem.md", tier)))
-}
-
-fn pitfalls_path() -> Option<PathBuf> {
-    sessions_dir().map(|d| d.join("pitfalls.json"))
 }
 
 fn plans_dir() -> Option<PathBuf> {
@@ -225,39 +111,6 @@ pub fn append_memory(seed: &str, tier: &str, line: &str) {
     existing.push_str(line);
     existing.push('\n');
     let _ = std::fs::write(&path, &existing);
-}
-
-pub fn forget_memory_key(seed: &str, key: &str) {
-    for tier in ["long", "short", "tasks"] {
-        let Some(path) = memory_path(seed, tier) else { continue };
-        if !path.exists() { continue; }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            let filtered: String = content
-                .lines()
-                .filter(|l| !l.contains(key))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let out = if filtered.is_empty() { filtered } else { format!("{}\n", filtered) };
-            let _ = std::fs::write(&path, out);
-        }
-    }
-}
-
-// ── Pitfall I/O ──
-
-pub fn load_pitfalls() -> PitfallGuide {
-    let Some(path) = pitfalls_path() else { return PitfallGuide::default(); };
-    if !path.exists() { return PitfallGuide::default(); }
-    let Ok(data) = std::fs::read_to_string(&path) else { return PitfallGuide::default(); };
-    serde_json::from_str(&data).unwrap_or_default()
-}
-
-pub fn save_pitfalls(guide: &PitfallGuide) {
-    let Some(path) = pitfalls_path() else { return };
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
-    if let Ok(json) = serde_json::to_string(guide) {
-        let _ = std::fs::write(&path, json);
-    }
 }
 
 // ── Plan I/O ──

@@ -9,7 +9,7 @@
 //! are re-exported from `dsx-types` for caller convenience.
 
 use dsx_types::Message;
-pub use dsx_types::token::{TokenBreakdown, format_tokens, context_usage_ratio};
+pub use dsx_types::token::TokenBreakdown;
 use std::sync::OnceLock;
 use tokenizers::Tokenizer;
 
@@ -22,7 +22,7 @@ fn get_tokenizer() -> Option<&'static Tokenizer> {
         let bytes = include_bytes!("tokenizer.json");
         match Tokenizer::from_bytes(bytes) {
             Ok(tok) => Some(tok),
-            Err(e) => { eprintln!("[dsx] tokenizer load failed: {} — using heuristic", e); None }
+            Err(e) => { log::warn!("[dsx] tokenizer load failed: {} — using heuristic", e); None }
         }
     }).as_ref()
 }

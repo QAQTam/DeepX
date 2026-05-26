@@ -11,7 +11,7 @@ pub fn home_dir() -> PathBuf {
     }
 }
 
-/// DSX data directory (config, sessions, plans, skills).
+/// DSX data directory (config, sessions, plans).
 /// - Windows: `%USERPROFILE%\.dsx`
 /// - Unix: `$XDG_CONFIG_HOME/dsx` or `$HOME/.config/dsx`
 pub fn data_dir() -> PathBuf {
@@ -32,12 +32,7 @@ pub fn config_path() -> PathBuf {
 
 /// DSX HP port file path.
 pub fn hp_port_path() -> PathBuf {
-    home_dir().join(".dsx").join("hp.port")
-}
-
-/// DSX workspace file path.
-pub fn workspace_path() -> PathBuf {
-    home_dir().join(".dsx").join("workspace.txt")
+    data_dir().join("hp.port")
 }
 
 /// DSX sessions directory.
@@ -48,11 +43,6 @@ pub fn sessions_dir() -> PathBuf {
 /// DSX plans directory.
 pub fn plans_dir() -> PathBuf {
     data_dir().join("plans")
-}
-
-/// DSX skills directory.
-pub fn skills_dir() -> PathBuf {
-    data_dir().join("skills")
 }
 
 /// Kill a process by PID (cross-platform).
@@ -70,17 +60,3 @@ pub fn kill_process(pid: u32) {
     }
 }
 
-/// Terminate a process gracefully by PID (cross-platform).
-/// - Windows: `taskkill /PID` (no /F)
-/// - Unix: `kill`
-pub fn terminate_process(pid: u32) {
-    if cfg!(target_os = "windows") {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string()])
-            .output();
-    } else {
-        let _ = std::process::Command::new("kill")
-            .args([&pid.to_string()])
-            .output();
-    }
-}

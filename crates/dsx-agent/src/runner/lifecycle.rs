@@ -18,7 +18,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
 
             dsx_log::set_session(&agent.session_seed);
             tools::set_current_session(&agent.session_seed);
-            eprintln!(
+            log::info!(
                 "dsx-agent: restored session {} ({} msgs)",
                 agent.session_seed,
                 agent.ctx.message_count()
@@ -28,7 +28,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
             }
             return;
         }
-        eprintln!("dsx-agent: session {seed} not found, creating new");
+        log::info!("dsx-agent: session {seed} not found, creating new");
     }
     agent.session_seed = session::generate_seed();
     agent.session_start = session::now_epoch();
@@ -39,29 +39,8 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
         &agent.ctx.to_vec(),
         &agent.config.model,
         agent.config.effort.as_deref(),
-        None,
     );
-    eprintln!("dsx-agent: new session {}", agent.session_seed);
-}
-
-/// Build a one-line health status string for the TUI status bar.
-pub fn health_status(agent: &AgentState) -> String {
-    let assessment = agent.health.assess();
-    format!(
-        "[{} {} {} | tier:{:?} | {}% | t{}]",
-        if assessment.level == crate::health::HealthLevel::Red {
-            "RED"
-        } else if assessment.level == crate::health::HealthLevel::Yellow {
-            "YLW"
-        } else {
-            "OK"
-        },
-        assessment.emotion.emoji(),
-        assessment.emotion.label(),
-        agent.health.context_tier,
-        (assessment.success_rate * 100.0) as u32,
-        agent.health.turn,
-    )
+    log::info!("dsx-agent: new session {}", agent.session_seed);
 }
 
 /// Apply phase-specific model config (auto or user-specified).

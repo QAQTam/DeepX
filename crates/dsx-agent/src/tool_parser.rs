@@ -1,4 +1,4 @@
-use dsx_types::{ContentBlock, ToolCall, FunctionCall, ToolDef};
+use dsx_types::{ToolCall, FunctionCall, ToolDef};
 
 /// Parse DeepSeek v4 XML-style tool calls from text content.
 pub fn parse_xml_tool_calls(content: &str, tool_names: &[String]) -> (String, Vec<ToolCall>) {
@@ -308,20 +308,3 @@ pub fn parse_tool_calls(tcs: &serde_json::Value) -> Vec<ToolCall> {
     }).collect()
 }
 
-/// Extract ToolCall list from ContentBlock::ToolUse blocks in a message.
-pub fn extract_tool_use_blocks(content: &[ContentBlock]) -> Vec<ToolCall> {
-    content.iter().filter_map(|block| {
-        if let ContentBlock::ToolUse { id, name, input } = block {
-            Some(ToolCall {
-                id: id.clone(),
-                call_type: "function".into(),
-                function: FunctionCall {
-                    name: name.clone(),
-                    arguments: serde_json::to_string(input).unwrap_or_default(),
-                },
-            })
-        } else {
-            None
-        }
-    }).collect()
-}
