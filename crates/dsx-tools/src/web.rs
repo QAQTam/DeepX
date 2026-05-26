@@ -2,14 +2,47 @@
 
 use crate::{ToolCallCtx, ToolResult};
 
-// Context7 API key from environment variable (not hardcoded).
-// Fallback for backward compatibility during transition.
-const CONTEXT7_ENDPOINT: &str = "https://mcp.context7.com/mcp";
+// Context7 REST API v2.
+const C7_BASE: &str = "https://context7.com/api/v2";
 
-fn context7_key() -> String {
-    std::env::var("CONTEXT7_API_KEY").unwrap_or_else(|_| {
-        "ctx7sk-91c0b5c4-6ca0-4d01-857a-50edbb0d4a33".to_string()
-    })
+fn c7_key() -> String {
+    std::env::var("CONTEXT7_API_KEY").unwrap_or_default()
+}
+
+fn c7_get(path: &str) -> Result<String, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("dsx/4.0")
+        .build()
+        .map_err(|e| format!("HTTP client: {}", e))?;
+    let resp = client
+        .get(format!("{C7_BASE}{path}"))
+        .header("Authorization", format!("Bearer {}", c7_key()))
+        .send()
+        .map_err(|e| format!("request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().map_err(|e| format!("read response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status.as_u16(), text.chars().take(200).collect::<String>()));
+    }
+    Ok(text)
+}
+
+fn c7_url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+            out.push(c);
+        } else if c == ' ' {
+            out.push('+');
+        } else {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    out
 }
 
 // ── Handler 函数（新 IPC 框架）──
@@ -38,99 +71,101 @@ fn build_args_json(ctx: &ToolCallCtx) -> String {
     serde_json::to_string(&ctx.args).unwrap_or_default()
 }
 
-// ── Context7 tools (live documentation) ──
-
-fn exec_context7_rpc(method: &str, args: &serde_json::Value) -> String {
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("dsx/4.0")
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return format!("[ERROR] HTTP client: {}", e),
-    };
-
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": { "name": method, "arguments": args },
-        "id": 1,
-    });
-
-    let resp = match client
-        .post(CONTEXT7_ENDPOINT)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream")
-        .header("CONTEXT7_API_KEY", context7_key())
-        .json(&body)
-        .send()
-    {
-        Ok(r) => r,
-        Err(e) => return format!("[ERROR] Context7 request failed: {}", e),
-    };
-
-    let text = match resp.text() {
-        Ok(t) => t,
-        Err(e) => return format!("[ERROR] Read response: {}", e),
-    };
-
-    for line in text.lines() {
-        if let Some(json_str) = line.strip_prefix("data: ") {
-            if let Ok(data) = serde_json::from_str::<serde_json::Value>(json_str) {
-                if let Some(content) = data.get("result").and_then(|r| r.get("content")) {
-                    if let Some(arr) = content.as_array() {
-                        let mut out = String::from("[OK] Context7:\n");
-                        for item in arr {
-                            if let Some(text_val) = item.get("text").and_then(|t| t.as_str()) {
-                                if text_val.len() > 15000 {
-                                    let cut = text_val.char_indices().nth(15000).map(|(i, _)| i).unwrap_or(text_val.len());
-                                    out.push_str(&text_val[..cut]);
-                                    out.push_str(&format!("\n... [truncated: {} total chars]", text_val.len()));
-                                } else {
-                                    out.push_str(text_val);
-                                }
-                                out.push('\n');
-                            }
-                        }
-                        return out;
-                    }
-                }
-                if let Some(err) = data.get("error") {
-                    let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
-                    return format!("[ERROR] Context7: {}", msg);
-                }
-            }
-        }
-    }
-    format!("[ERROR] No result from Context7\n[HINT] The library may not exist. Try context7_resolve with a different name.")
-}
+// ── Context7 tools (REST API v2) ──
 
 fn exec_context7_resolve(args: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-    let mut mapped = serde_json::Map::new();
-    if let Some(name) = v.get("name").and_then(|v| v.as_str()) {
-        mapped.insert("libraryName".to_string(), serde_json::json!(name));
+    let name = v.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    if name.is_empty() {
+        return "[ERROR] context7_resolve: missing 'name' parameter".into();
     }
-    if let Some(q) = v.get("query").and_then(|v| v.as_str()) {
-        mapped.insert("query".to_string(), serde_json::json!(q));
+    let q = v.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let mut path = format!("/libs/search?libraryName={}", c7_url_encode(name));
+    if !q.is_empty() {
+        path.push_str(&format!("&query={}", c7_url_encode(q)));
     }
-    exec_context7_rpc("resolve-library-id", &serde_json::Value::Object(mapped))
+    let resp = match c7_get(&path) {
+        Ok(r) => r,
+        Err(e) => return format!("[ERROR] Context7: {e}"),
+    };
+    let data: serde_json::Value = match serde_json::from_str(&resp) {
+        Ok(d) => d,
+        Err(e) => return format!("[ERROR] Context7 parse: {e}"),
+    };
+    let results = match data.get("results").and_then(|r| r.as_array()) {
+        Some(arr) if !arr.is_empty() => arr,
+        _ => return format!("[OK] Context7: no results for '{name}'"),
+    };
+    let mut out = format!("[OK] Context7: {} results for '{}'\n\n", results.len(), name);
+    for r in results.iter().take(8) {
+        let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let desc = r.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        let score = r.get("benchmarkScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        out.push_str(&format!("  {id}  ({score:.1})\n  {title}\n  {desc}\n\n"));
+    }
+    out
 }
 
 fn exec_context7_query(args: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-    let mut mapped = serde_json::Map::new();
-    if let Some(lid) = v.get("library_id").and_then(|v| v.as_str()) {
-        mapped.insert("libraryId".to_string(), serde_json::json!(lid));
-    } else if let Some(lid) = v.get("libraryId").and_then(|v| v.as_str()) {
-        mapped.insert("libraryId".to_string(), serde_json::json!(lid));
+    let library_id = v.get("library_id").and_then(|v| v.as_str()).unwrap_or("");
+    if library_id.is_empty() {
+        return "[ERROR] context7_query: missing 'library_id' parameter".into();
+    }
+    let q = v.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let path = format!(
+        "/context?libraryId={}&query={}&type=json",
+        c7_url_encode(library_id),
+        c7_url_encode(q)
+    );
+    let resp = match c7_get(&path) {
+        Ok(r) => r,
+        Err(e) => return format!("[ERROR] Context7: {e}"),
+    };
+    let data: serde_json::Value = match serde_json::from_str(&resp) {
+        Ok(d) => d,
+        Err(e) => return format!("[ERROR] Context7 parse: {e}"),
+    };
+
+    let mut out = String::from("[OK] Context7:\n");
+
+    if let Some(snippets) = data.get("codeSnippets").and_then(|s| s.as_array()) {
+        for s in snippets.iter().take(5) {
+            let title = s.get("codeTitle").and_then(|v| v.as_str()).unwrap_or("");
+            let desc = s.get("codeDescription").and_then(|v| v.as_str()).unwrap_or("");
+            let lang = s.get("codeLanguage").and_then(|v| v.as_str()).unwrap_or("");
+            out.push_str(&format!("\n## {title}\n{desc}\n[{lang}]\n"));
+            if let Some(list) = s.get("codeList").and_then(|l| l.as_array()) {
+                for c in list.iter().take(2) {
+                    if let Some(code) = c.get("code").and_then(|v| v.as_str()) {
+                        if code.len() > 2000 {
+                            let cut = code.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(code.len());
+                            out.push_str(&code[..cut]);
+                            out.push_str("\n... [truncated]");
+                        } else {
+                            out.push_str(code);
+                        }
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(snippets) = data.get("infoSnippets").and_then(|s| s.as_array()) {
+        for s in snippets.iter().take(3) {
+            let bc = s.get("breadcrumb").and_then(|v| v.as_str()).unwrap_or("");
+            let content = s.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            out.push_str(&format!("\n  {bc}: {content}"));
+        }
+    }
+
+    if out == "[OK] Context7:\n" {
+        format!("[OK] Context7: no results for '{}' in {}", q, library_id)
     } else {
-        return "[ERROR] Missing required field: library_id".to_string();
+        out
     }
-    if let Some(q) = v.get("query").and_then(|v| v.as_str()) {
-        mapped.insert("query".to_string(), serde_json::json!(q));
-    }
-    exec_context7_rpc("query-docs", &serde_json::Value::Object(mapped))
 }
 
 // ── Web fetch ──

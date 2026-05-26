@@ -223,6 +223,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "context7-cli"
+version = "4.0.0"
+dependencies = [
+ "reqwest",
+ "serde_json",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
