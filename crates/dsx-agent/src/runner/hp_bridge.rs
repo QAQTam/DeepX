@@ -47,12 +47,10 @@ pub fn read_hp_stream_response(
             Ok(Some(r)) => r,
             Ok(None) => {
                 eprintln!("dsx-agent: HP connection closed (EOF)");
-                agent.health.record_api_error();
                 return Err(());
             }
             Err(e) => {
                 eprintln!("dsx-agent: HP parse error: {e}");
-                agent.health.record_api_error();
                 return Err(());
             }
         };
@@ -113,7 +111,6 @@ pub fn read_hp_stream_response(
                 let _ = agent_tx.send(AgentToTui::Error {
                     message: message.clone(),
                 });
-                agent.health.record_api_error();
                 return Err(());
             }
             _ => { /* ignore non-stream frames */ }

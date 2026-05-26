@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use crate::config;
 use crate::assembly::ContextAssembler;
-use crate::health::MonitorState;
 use crate::health::DsAgentsHealthPlatform;
 // memory module removed — will be redesigned later
 use crate::session;
@@ -62,7 +61,6 @@ pub struct AgentState {
     pub tool_failures: u32,
     pub tool_calls_this_turn: u32,
     pub auto_verify: Vec<String>,
-    pub consecutive_tool_turns: u32,
 
     // ── Registered tool definitions (from dsx-tools) ──
     pub tool_defs: Vec<dsx_types::ToolDef>,
@@ -78,10 +76,6 @@ pub struct AgentState {
     pub skill_index: SkillIndex,
     pub active_skill_bodies: Vec<(String, String)>,
 
-    // ── Exec orchestration ──
-    pub exec_pending: usize,
-    pub exec_started_at: Option<Instant>,
-    pub exec_child_pids: Vec<u32>,
 
     // ── Sudo ──
     pub sudo_pending: Vec<(ToolCall, String)>,
@@ -95,14 +89,7 @@ pub struct AgentState {
     pub current_task_phase: TaskPhase,
     pub dev_mode: bool,
 
-    // ── Tool code view state ──
-    pub tool_code_path: String,
-    pub tool_code_content: String,
-    pub tool_code_action: String,
-    pub tool_code_status: Option<&'static str>,
-
     // ── Health / monitoring ──
-    pub monitor: MonitorState,
     pub health: DsAgentsHealthPlatform,
     pub files_written_this_turn: Vec<String>,
     pub skip_all: bool,
@@ -166,27 +153,18 @@ impl AgentState {
             tool_failures: 0,
             tool_calls_this_turn: 0,
             auto_verify: Vec::new(),
-            consecutive_tool_turns: 0,
             tool_defs: Vec::new(),
             intent_question: String::new(),
             intent_options: Vec::new(),
             pending_ask_user: None,
             skill_index,
             active_skill_bodies: Vec::new(),
-            exec_pending: 0,
-            exec_started_at: None,
-            exec_child_pids: Vec::new(),
             sudo_pending: Vec::new(),
             sudo_password: String::new(),
             project_map: String::new(),
             auto_mode,
             current_task_phase: TaskPhase::Coding,
             dev_mode: false,
-            tool_code_path: String::new(),
-            tool_code_content: String::new(),
-            tool_code_action: String::new(),
-            tool_code_status: None,
-            monitor: MonitorState::default(),
             health: DsAgentsHealthPlatform::new(),
             files_written_this_turn: Vec::new(),
             skip_all: false,
@@ -224,19 +202,6 @@ impl AgentState {
     /// in the system prompt tail by build_context().
     pub fn system_note(&mut self, tag: &str, msg: String) {
         self.turn_annotations.push(format!("[{}] {}", tag, msg));
-    }
-
-    /// Flush pending annotations (no-op — annotations cleared by build_context).
-    pub fn flush_notes(&mut self) {}
-
-    // ── Exec tracking ──
-
-    /// Decrement exec_pending counter. Resets exec_started_at when reaches 0.
-    pub fn decrement_exec_pending(&mut self) {
-        self.exec_pending = self.exec_pending.saturating_sub(1);
-        if self.exec_pending == 0 {
-            self.exec_started_at = None;
-        }
     }
 
     // ── Persist ──
@@ -297,14 +262,7 @@ impl<'a> ToolResultAppender<'a> {
 
         // 2. Side-effect tracking
         self.state.tool_results.push((tool_name.to_string(), result.clone()));
-        if failed {
-            self.state.health.record_error(tool_name, raw);
-        }
-
-        // 3. Tool-code preview
-        tracker::track_tool_code(self.state, tool_name, args, raw);
-
-        // 4. File tracking (for sandbox enforcement)
+        // 3. File tracking (for sandbox enforcement)
         if !failed && tool_name == "file" {
             let action = dsx_types::arg::tool_action(args);
             if action == "write" || action == "edit" {

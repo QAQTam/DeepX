@@ -3,33 +3,22 @@ use std::process::{Child, Command, Stdio};
 
 use dsx_proto::{self, AgentToTools, ToolsToAgent};
 
-/// Spawn the dsx-tools subprocess with piped stdin/stdout.
-/// Returns (child, reader, writer) where reader/writer are boxed for
-/// later handoff to `tools::init_tools_ipc()`.
+/// Spawn dsx as a tools subprocess (dsx.exe tools).
+/// Returns (child, reader, writer) for IPC init.
 pub fn spawn_process(exe: &std::path::Path) -> (Child, Box<dyn BufRead + Send>, Box<dyn Write + Send>) {
-    let mut tools_cmd = Command::new(
-        if std::env::var("DSX_SINGLE_BINARY").is_ok() {
-            exe.to_path_buf()
-        } else {
-            exe.with_file_name("dsx-tools")
-        }
-    );
-    if std::env::var("DSX_SINGLE_BINARY").is_ok() {
-        tools_cmd.arg("tools");
-    }
-    let mut child = tools_cmd
+    let mut child = Command::new(exe)
+        .arg("tools")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
-        .expect("dsx-agent: failed to spawn dsx-tools");
+        .expect("dsx-agent: failed to spawn tools subprocess");
 
     let reader: Box<dyn BufRead + Send> = Box::new(BufReader::new(child.stdout.take().unwrap()));
     let writer: Box<dyn Write + Send> = Box::new(child.stdin.take().unwrap());
     (child, reader, writer)
 }
 
-/// Respawn the tools subprocess. Kills any existing process, spawns new one,
-/// completes the Init/Ready handshake, and stores the child.
+/// Respawn the tools subprocess.
 pub fn respawn(child: &mut Option<Child>) -> bool {
     if let Some(mut c) = child.take() {
         let _ = c.kill();

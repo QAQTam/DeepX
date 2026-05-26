@@ -109,8 +109,7 @@ fn sanitize_first_line(line: &str) -> String {
     let clean = t.trim_start_matches("//! ").trim_start_matches("/// ")
         .trim_start_matches("// ").trim_start_matches("#![").to_string();
     if clean.len() > 90 {
-        let mut end = 90;
-        while end > 0 && !clean.is_char_boundary(end) { end -= 1; }
+        let end = clean.floor_char_boundary(90);
         format!("{}…", &clean[..end])
     } else {
         clean
@@ -151,8 +150,7 @@ fn derive_rust_graph(root: &str) -> String {
                 let path = t.trim_start_matches("use ")
                     .trim_end_matches(';').trim().to_string();
                 imports.push(if path.len() > 60 {
-                    let mut end = 60;
-                    while !path.is_char_boundary(end) { end -= 1; }
+                    let end = path.floor_char_boundary(60);
                     format!("{}…", &path[..end])
                 } else { path });
             }

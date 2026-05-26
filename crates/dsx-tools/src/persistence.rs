@@ -88,8 +88,7 @@ impl PitfallGuide {
                 }
                 entry.lesson = format!("{}\n{}", entry.lesson, lesson);
                 if entry.lesson.len() > 500 {
-                    let mut end = 500;
-                    while end > 0 && !entry.lesson.is_char_boundary(end) { end -= 1; }
+                    let end = entry.lesson.floor_char_boundary(500);
                     entry.lesson = entry.lesson[..end].to_string();
                 }
                 return;
@@ -187,8 +186,7 @@ pub fn read_memory(seed: &str, tier: &str) -> String {
     let Ok(content) = std::fs::read_to_string(&path) else { return String::new(); };
     if content.len() > 16000 {
         let start = content.len() - 16000;
-        let mut s = start;
-        while s < content.len() && !content.is_char_boundary(s) { s += 1; }
+        let s = content.ceil_char_boundary(start);
         if let Some(nl) = content[s..].find('\n') {
             content[s + nl + 1..].to_string()
         } else {
@@ -217,8 +215,7 @@ pub fn append_memory(seed: &str, tier: &str, line: &str) {
 
     const MAX_CHARS: usize = 32000;
     if existing.len() > MAX_CHARS {
-        let mut cut = existing.len().saturating_sub(MAX_CHARS / 2);
-        while cut < existing.len() && !existing.is_char_boundary(cut) { cut += 1; }
+        let cut = existing.ceil_char_boundary(existing.len().saturating_sub(MAX_CHARS / 2));
         existing = existing[cut..].to_string();
         if let Some(nl) = existing.find('\n') {
             existing = existing[nl + 1..].to_string();

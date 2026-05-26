@@ -103,14 +103,6 @@ pub fn execute_single_tool(
         );
         return ToolOutcome::Continue;
     }
-    if let Some(err_msg) = gates::pre_tool_health_check(agent, name) {
-        let _ = agent.ctx.push_tool_result(id, &err_msg);
-        agent.health.record_error(name, &err_msg);
-        agent.tool_failures += 1;
-        emit_tool_result(agent_tx, id, name, &err_msg, false);
-        return ToolOutcome::Continue;
-    }
-
     if gates::re_read_gate(agent, name, id, args) {
         emit_tool_result(
             agent_tx,
@@ -225,12 +217,9 @@ pub fn execute_single_tool(
     let failed = !tr_success;
 
     agent.health.record_tool_call(name);
-    agent.monitor.tool_calls_this_turn += 1;
     if failed {
         agent.tool_failures += 1;
-        agent.health.record_error(name, &tr_content);
     }
-    gates::post_tool_health_record(agent, name, !failed);
 
     {
         let mut appender = ToolResultAppender::new(agent);
@@ -238,7 +227,6 @@ pub fn execute_single_tool(
     }
     emit_tool_result(agent_tx, id, name, &tr_content, tr_success);
 
-    tracker::track_tool_code(agent, name, args, &tr_content);
     if !failed && name == "file" && dsx_types::arg::tool_action(args) == "write" {
         tracker::track_file_written(agent, args);
     }
@@ -347,14 +335,9 @@ pub fn handle_user_input(
 
     // ── Reset per-turn state ──
     agent.tool_results.clear();
-    agent.tool_code_content.clear();
-    agent.tool_code_path.clear();
-    agent.tool_code_action.clear();
-    agent.tool_code_status = None;
     agent.tool_failures = 0;
     agent.tool_calls_this_turn = 0;
     agent.files_written_this_turn.clear();
-    agent.monitor.tool_calls_this_turn = 0;
 
     // Live snapshot after user message
     session::save_live_snapshot(
@@ -414,7 +397,6 @@ pub fn handle_user_input(
             }
         };
 
-        agent.health.record_api_success(&agent.config.model);
 
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
 
@@ -505,7 +487,6 @@ pub fn handle_user_input(
 
         // ── Tool call round ──
         agent.tool_calls_this_turn += parsed.len() as u32;
-        agent.monitor.tool_calls_this_turn = agent.tool_calls_this_turn;
 
         session::save_live_snapshot(
             &agent.session_seed,
@@ -622,7 +603,6 @@ pub fn handle_user_input(
             }
         };
 
-        agent.health.record_api_success(&agent.config.model);
 
         // ── Parse DSML/XML tool calls from content ──
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);

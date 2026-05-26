@@ -570,11 +570,6 @@ impl ContextAssembler {
 ///   Last user message      ← appended with dynamic skills + annotations (uncached suffix)
 /// ```
 pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBreakdown) {
-    debug_assert_eq!(
-        state.exec_pending, 0,
-        "build_context called with {} exec(s) still pending",
-        state.exec_pending,
-    );
 
     let base_prompt = crate::config::system_prompt(&state.config.prompt_lang);
     let base_tokens = tokenizer::count_tokens(&base_prompt);

@@ -15,21 +15,6 @@ pub fn phase_check_tool(state: &mut AgentState, tool_name: &str, tc_id: &str) ->
     true
 }
 
-/// Pre-tool health check: circuit breaker.
-/// Returns Some(error_msg) if tool should be blocked, None if allowed.
-/// Caller is responsible for recording tool call outcome.
-pub fn pre_tool_health_check(state: &mut AgentState, name: &str) -> Option<String> {
-    if state.health.should_block(name).is_some() {
-        return Some(format!("[ERROR] tool '{}' blocked by health platform", name));
-    }
-    None
-}
-
-/// Record tool outcome.
-pub fn post_tool_health_record(state: &mut AgentState, name: &str, success: bool) {
-    state.health.record_tool_outcome(name, success);
-}
-
 use dsx_types::arg::{tool_action, parse_file_arg, parse_cmd_arg};
 use super::tracker::last_assistant_content;
 use crate::orchestrator::turn_scorer;

@@ -120,10 +120,6 @@ impl DsAgentsHealthPlatform {
         }
     }
 
-    pub fn record_error(&mut self, _tool: &str, _raw_result: &str) {}
-
-    pub fn record_tool_outcome(&mut self, _name: &str, _success: bool) {}
-
     pub fn reset_turn(&mut self) {
         self.tool_calls_this_turn = 0;
     }
@@ -132,31 +128,12 @@ impl DsAgentsHealthPlatform {
         self.turn += 1;
     }
 
-    pub fn render_health(&self) -> String {
-        format!(
-            "level:{:?} turn:{} tier:{:?} tokens:{}/{}",
-            HealthLevel::Green,
-            self.turn,
-            self.context_tier,
-            self.context_tokens,
-            self.context_limit,
-        )
-    }
-
     pub fn assess(&self) -> Assessment {
         Assessment::default()
     }
 
     pub fn record_tool_call(&mut self, _name: &str) {
         self.tool_calls_this_turn += 1;
-    }
-
-    pub fn record_api_error(&mut self) {}
-
-    pub fn record_api_success(&mut self, _model: &str) {}
-
-    pub fn should_block(&self, _tool_name: &str) -> Option<String> {
-        None
     }
 }
 

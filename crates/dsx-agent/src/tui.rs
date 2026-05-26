@@ -1,8 +1,7 @@
 //! DSX TUI — single-process terminal UI for the coding agent.
 //!
-//! Runs the ratatui event loop on the main thread and the agent turn loop
-//! on a background thread. Communication via mpsc channels carrying
-//! TuiToAgent / AgentToTui enums (zero serialization).
+//! Threading: ratatui event loop on main thread, agent turn loop on background
+//! thread. Communication via mpsc channels (zero serialization).
 
 use std::io::BufReader;
 use std::net::TcpStream;
@@ -14,20 +13,40 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use dsx_proto::{AgentToTui, TuiToAgent};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, LineGauge, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::{Frame, Terminal};
+use tui_textarea::TextArea;
 
 use crate::agent::AgentState;
+
+// ── Semantic colors (catppuccin mocha) ──
+
+mod theme {
+    use ratatui::style::Color;
+    pub const BG: Color = Color::from_u32(0x001e1e2e);
+    pub const SURFACE: Color = Color::from_u32(0x00313244);
+    pub const TEXT: Color = Color::from_u32(0x00cdd6f4);
+    pub const SUBTEXT: Color = Color::from_u32(0x00a6adc8);
+    pub const MUTED: Color = Color::from_u32(0x006c7086);
+    pub const GREEN: Color = Color::from_u32(0x00a6e3a1);
+    pub const RED: Color = Color::from_u32(0x00f38ba8);
+    pub const YELLOW: Color = Color::from_u32(0x00f9e2af);
+    pub const BLUE: Color = Color::from_u32(0x0089b4fa);
+    pub const CYAN: Color = Color::from_u32(0x0089dceb);
+    pub const MAUVE: Color = Color::from_u32(0x00cba6f7);
+    #[allow(dead_code)]
+    pub const PEACH: Color = Color::from_u32(0x00fab387);
+}
 
 // ── ToolEntry ──
 
 struct ToolEntry {
-    id: String,
     name: String,
     output: String,
     success: bool,
+    running: bool,
 }
 
 // ── App ──
@@ -44,55 +63,25 @@ struct App {
     session_seed: String,
     status: String,
 
-    input: String,
-    cursor: usize,
+    /// Model info (static, from config)
+    model: String,
+    context_limit: u32,
+
+    /// New data — from previously ignored events
+    explored: bool,
+    files_read_this_turn: Vec<String>,
+    files_written_this_turn: Vec<String>,
+    ask_question: Option<String>,
+    is_streaming: bool,
+
+    /// tui-textarea replaces manual input + cursor
+    textarea: TextArea<'static>,
     scroll: usize,
+    scroll_state: ScrollbarState,
 
     agent_tx: mpsc::Sender<TuiToAgent>,
     agent_rx: mpsc::Receiver<AgentToTui>,
     exit: bool,
-}
-
-// ── CJK-safe cursor helpers ──
-// `cursor` is a byte offset into `input: String`.
-// All operations must preserve the invariant that `cursor` is always
-// at a UTF-8 character boundary (or == input.len()).
-
-/// Move the byte cursor to the start of the previous character.
-fn cursor_prev(s: &str, pos: usize) -> usize {
-    if pos == 0 { return 0; }
-    let mut p = pos - 1;
-    while p > 0 && !s.is_char_boundary(p) {
-        p -= 1;
-    }
-    p
-}
-
-/// Move the byte cursor to the start of the next character.
-fn cursor_next(s: &str, pos: usize) -> usize {
-    if pos >= s.len() { return s.len(); }
-    let mut p = pos + 1;
-    while p < s.len() && !s.is_char_boundary(p) {
-        p += 1;
-    }
-    p
-}
-
-/// Remove the character before the cursor (Backspace), returning true if anything was removed.
-fn backspace_at(s: &mut String, cursor: &mut usize) -> bool {
-    if *cursor == 0 { return false; }
-    let prev = cursor_prev(s, *cursor);
-    s.remove(prev);
-    *cursor = prev;
-    true
-}
-
-/// Remove the character after the cursor (Delete).
-fn delete_at(s: &mut String, cursor: usize) -> bool {
-    if cursor >= s.len() { return false; }
-    // Remove one char — cursor is at a char boundary, s.remove(cursor) is safe
-    s.remove(cursor);
-    true
 }
 
 impl App {
@@ -116,13 +105,18 @@ impl App {
                         }
                         match key.code {
                             KeyCode::Enter => {
-                                let msg = std::mem::take(&mut self.input);
-                                self.cursor = 0;
+                                let lines: Vec<String> = self.textarea.lines().to_vec();
+                                let msg = lines.join("\n").trim().to_string();
+                                self.textarea = TextArea::default();
                                 if !msg.is_empty() {
                                     self.messages.push(("user".into(), msg.clone()));
                                     let _ = self.agent_tx.send(TuiToAgent::UserInput { text: msg });
                                     self.status.clear();
                                     self.tools.clear();
+                                    self.explored = false;
+                                    self.files_read_this_turn.clear();
+                                    self.files_written_this_turn.clear();
+                                    self.ask_question = None;
                                 }
                             }
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -135,35 +129,19 @@ impl App {
                             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.show_reasoning = !self.show_reasoning;
                             }
-                            KeyCode::Char(c) => {
-                                self.input.insert(self.cursor, c);
-                                self.cursor += c.len_utf8();
-                            }
-                            KeyCode::Backspace => {
-                                backspace_at(&mut self.input, &mut self.cursor);
-                            }
-                            KeyCode::Delete => {
-                                delete_at(&mut self.input, self.cursor);
-                            }
-                            KeyCode::Left => {
-                                self.cursor = cursor_prev(&self.input, self.cursor);
-                            }
-                            KeyCode::Right => {
-                                self.cursor = cursor_next(&self.input, self.cursor);
-                            }
-                            KeyCode::Home => {
-                                self.cursor = 0;
-                            }
-                            KeyCode::End => {
-                                self.cursor = self.input.len();
-                            }
                             KeyCode::PageUp => {
                                 self.scroll = self.scroll.saturating_add(10);
                             }
                             KeyCode::PageDown => {
                                 self.scroll = self.scroll.saturating_sub(10);
                             }
-                            _ => {}
+                            KeyCode::Esc => {
+                                let _ = self.agent_tx.send(TuiToAgent::Cancel);
+                            }
+                            _ => {
+                                // tui-textarea handles all other keys
+                                self.textarea.input(ev);
+                            }
                         }
                     }
                     _ => {}
@@ -182,127 +160,167 @@ impl App {
     fn handle_frame(&mut self, frame: AgentToTui) {
         match frame {
             AgentToTui::ContentDelta { delta, reasoning } => {
+                self.is_streaming = true;
                 self.streaming_content.push_str(&delta);
                 if let Some(r) = reasoning {
                     self.streaming_reasoning.push_str(&r);
                 }
             }
-            AgentToTui::ToolProgress { id, content, .. } => {
-                if let Some(t) = self.tools.iter_mut().find(|t| t.id == id) {
+            AgentToTui::ToolProgress { id: _, content, .. } => {
+                if let Some(t) = self.tools.last_mut() {
                     t.output.push_str(&content);
                 }
             }
-            AgentToTui::ToolResult {
-                id,
-                name,
-                content,
-                success,
-            } => {
-                let icon = if success { "OK" } else { "ER" };
-                let preview = content
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .chars()
-                    .take(80)
-                    .collect::<String>();
-                self.messages.push((
-                    "tool".into(),
-                    format!("{} {} → {}", icon, name, preview),
-                ));
-                self.tools.push(ToolEntry {
-                    id,
-                    name,
-                    output: content,
-                    success,
-                });
+            AgentToTui::ToolResult { id: _, name, content, success } => {
+                let preview = content.lines().next().unwrap_or("")
+                    .chars().take(80).collect::<String>();
+                self.messages.push(("tool".into(),
+                    format!("{} {}", if success { "OK" } else { "ER" }, preview)));
+                // Mark the matching running tool as done
+                for t in &mut self.tools {
+                    if t.name == name && t.running {
+                        t.output = content;
+                        t.success = success;
+                        t.running = false;
+                        break;
+                    }
+                }
             }
-            AgentToTui::ApiResponse { usage, .. } => {
+            AgentToTui::ApiResponse { usage, stop_reason, .. } => {
+                self.is_streaming = false;
                 if let Some(u) = usage {
                     self.tokens_used = (u.prompt_tokens + u.completion_tokens) as u32;
+                }
+                if let Some(reason) = stop_reason {
+                    if reason != "end_turn" && reason != "stop_sequence" {
+                        self.status = reason;
+                    }
                 }
             }
             AgentToTui::PhaseChanged { phase } => {
                 self.phase = phase;
             }
-            AgentToTui::ToolState { .. } => {}
+            AgentToTui::ToolState { explored, declared_files: _, read_files, written_this_turn } => {
+                self.explored = explored;
+                self.files_read_this_turn = read_files;
+                self.files_written_this_turn = written_this_turn;
+            }
             AgentToTui::Error { message } => {
                 self.messages.push(("error".into(), message));
             }
             AgentToTui::CachePrediction { hit_rate } => {
                 self.cache_hit_pct = hit_rate;
             }
-            AgentToTui::SessionRestored {
-                seed,
-                message_count,
-                tokens_used,
-                cache_hit_pct,
-                ..
-            } => {
+            AgentToTui::SessionRestored { seed, message_count, tokens_used, cache_hit_pct, .. } => {
                 self.session_seed = seed;
                 self.tokens_used = tokens_used;
                 self.cache_hit_pct = cache_hit_pct;
                 self.status = format!("Resumed: {} messages", message_count);
             }
             AgentToTui::Done => {
+                self.is_streaming = false;
                 if !self.streaming_content.is_empty() {
-                    self.messages.push((
-                        "assistant".into(),
-                        std::mem::take(&mut self.streaming_content),
-                    ));
+                    self.messages.push(("assistant".into(),
+                        std::mem::take(&mut self.streaming_content)));
                 }
                 self.streaming_reasoning.clear();
+            }
+            AgentToTui::AskUser { question, .. } => {
+                self.ask_question = Some(question);
             }
             _ => {}
         }
     }
 
     fn ui(&mut self, f: &mut Frame) {
+        let area = f.area();
+        // Full-screen surface background
+        f.render_widget(Paragraph::new("").bg(theme::BG), area);
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
-                Constraint::Min(0),
-                Constraint::Length(1),
-                Constraint::Length(3),
+                Constraint::Length(1),  // status bar
+                Constraint::Min(0),     // main area
+                Constraint::Length(3),  // input
             ])
-            .split(f.area());
+            .split(area);
 
         self.render_status(f, chunks[0]);
         self.render_main(f, chunks[1]);
-        self.render_input(f, chunks[3]);
+        self.render_input(f, chunks[2]);
     }
 
     fn render_status(&self, f: &mut Frame, area: Rect) {
         let phase_display = match self.phase.as_str() {
-            "plan" => "[Plan]",
-            "debug" => "[Debug]",
-            _ => "[Code]",
+            "plan" => "[Plan]", "debug" => "[Debug]", _ => "[Code]",
         };
-        let text = format!(
-            " DSX {} {} | Cache {:.0}% | {} tokens | {}",
-            &self.session_seed.chars().take(8).collect::<String>(),
-            phase_display,
-            self.cache_hit_pct * 100.0,
-            self.tokens_used,
-            if self.status.is_empty() {
-                "Ready"
-            } else {
-                &self.status
-            },
-        );
-        f.render_widget(
-            Paragraph::new(text).style(Style::default().fg(Color::Gray)),
-            area,
-        );
+
+        let ctx_pct = if self.context_limit > 0 {
+            self.tokens_used as f64 / self.context_limit as f64
+        } else { 0.0 };
+        let ctx_color = if ctx_pct > 0.8 { theme::RED }
+            else if ctx_pct > 0.3 { theme::YELLOW }
+            else { theme::GREEN };
+
+        let spinner = if self.is_streaming {
+            const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let idx = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| (d.as_millis() / 80) as usize % FRAMES.len())
+                .unwrap_or(0);
+            FRAMES[idx]
+        } else { "" };
+
+        let status_text = if !self.status.is_empty() { self.status.as_str() }
+            else if self.is_streaming { "Processing" }
+            else { "Ready" };
+
+        let left = Line::from(vec![
+            Span::styled(format!(" {} ", self.model.chars().take(16).collect::<String>()),
+                Style::default().fg(theme::BLUE)),
+            Span::styled(format!("{phase_display} "), Style::default().fg(theme::MAUVE)),
+            Span::styled(spinner, Style::default().fg(theme::CYAN)),
+            Span::styled(format!("{status_text} "), Style::default().fg(theme::SUBTEXT)),
+        ]);
+
+        let right = Line::from(vec![
+            Span::styled(format!("cache:{:.0}% ", self.cache_hit_pct * 100.0),
+                Style::default().fg(theme::SUBTEXT)),
+            Span::styled(format!("{}tk", self.tokens_used),
+                Style::default().fg(theme::MUTED)),
+        ]);
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(45),
+                Constraint::Percentage(20),
+                Constraint::Percentage(35),
+            ])
+            .split(area);
+
+        f.render_widget(Paragraph::new(left), chunks[0]);
+
+        // Context pressure LineGauge
+        let gauge = LineGauge::default()
+            .ratio(ctx_pct.clamp(0.0, 1.0))
+            .label(format!("ctx:{:.0}%", ctx_pct * 100.0))
+            .filled_style(Style::default().fg(ctx_color))
+            .style(Style::default().fg(theme::SURFACE));
+        f.render_widget(gauge, chunks[1]);
+
+        f.render_widget(Paragraph::new(right).alignment(ratatui::layout::Alignment::Right), chunks[2]);
     }
 
     fn render_main(&self, f: &mut Frame, area: Rect) {
-        let has_tools = !self.tools.is_empty();
-        let chunks = if has_tools {
+        let has_side = !self.tools.is_empty() || !self.files_written_this_turn.is_empty()
+            || self.explored;
+
+        let chunks = if has_side {
             Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+                .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
                 .split(area)
         } else {
             Layout::default()
@@ -312,8 +330,8 @@ impl App {
         };
 
         self.render_chat(f, chunks[0]);
-        if has_tools {
-            self.render_tools(f, chunks[1]);
+        if has_side {
+            self.render_side(f, chunks[1]);
         }
     }
 
@@ -322,159 +340,174 @@ impl App {
 
         for (role, content) in &self.messages {
             let (prefix, style) = match role.as_str() {
-                "user" => ("▸", Style::default().fg(Color::Cyan)),
-                "error" => ("✗", Style::default().fg(Color::Red)),
-                "tool" => ("⚙", Style::default().fg(Color::Yellow)),
-                _ => ("", Style::default().fg(Color::White)),
+                "user" => ("▸ ", Style::default().fg(theme::BLUE)),
+                "error" => ("✗ ", Style::default().fg(theme::RED)),
+                "tool" => ("⚙ ", Style::default().fg(theme::MUTED)),
+                _ => ("", Style::default()),
+            };
+            let body_style = match role.as_str() {
+                "assistant" => Style::default().fg(theme::GREEN),
+                "tool" => Style::default().fg(theme::SUBTEXT),
+                _ => Style::default().fg(theme::TEXT),
             };
             for line in content.lines() {
-                if role == "assistant" {
-                    lines.push(Line::from(vec![Span::styled(
-                        line,
-                        Style::default().fg(Color::Green),
-                    )]));
-                } else if role == "tool" {
-                    lines.push(Line::from(vec![Span::styled(
-                        line,
-                        Style::default().fg(Color::Yellow),
-                    )]));
+                if role == "assistant" || role == "tool" {
+                    lines.push(Line::from(vec![Span::styled(line, body_style)]));
                 } else {
-                    lines.push(Line::from(vec![Span::styled(prefix, style), Span::raw(line)]));
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix, style),
+                        Span::styled(line, body_style),
+                    ]));
                 }
             }
             lines.push(Line::from(""));
         }
 
-        let is_streaming =
-            !self.streaming_content.is_empty() || !self.streaming_reasoning.is_empty();
-
         if self.show_reasoning && !self.streaming_reasoning.is_empty() {
             lines.push(Line::from(vec![Span::styled(
-                "-- Reasoning --",
-                Style::default().fg(Color::DarkGray),
+                "── Thinking ──", Style::default().fg(theme::MAUVE),
             )]));
-            for line in self.streaming_reasoning.lines() {
-                lines.push(Line::from(vec![Span::styled(
-                    line,
-                    Style::default().fg(Color::Gray),
-                )]));
+            for l in self.streaming_reasoning.lines() {
+                lines.push(Line::from(vec![Span::styled(l, Style::default().fg(theme::SUBTEXT))]));
             }
             lines.push(Line::from(vec![Span::styled(
-                "-- Response --",
-                Style::default().fg(Color::DarkGray),
+                "── Response ──", Style::default().fg(theme::MAUVE),
             )]));
         }
 
         if !self.streaming_content.is_empty() {
-            for line in self.streaming_content.lines() {
-                lines.push(Line::from(vec![Span::styled(
-                    line,
-                    Style::default().fg(Color::Green),
-                )]));
+            for l in self.streaming_content.lines() {
+                lines.push(Line::from(vec![Span::styled(l, Style::default().fg(theme::GREEN))]));
             }
             if !self.show_reasoning && !self.streaming_reasoning.is_empty() {
-                let preview: String = self
-                    .streaming_reasoning
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .chars()
-                    .take(60)
-                    .collect();
+                let preview: String = self.streaming_reasoning.lines().next()
+                    .unwrap_or("").chars().take(60).collect();
                 lines.push(Line::from(vec![Span::styled(
-                    format!("[Ctrl+R to see thinking: {}...]", preview),
-                    Style::default().fg(Color::DarkGray),
+                    format!("Ctrl+R: {preview}..."), Style::default().fg(theme::MUTED),
                 )]));
             }
         }
 
-        if is_streaming {
-            lines.push(Line::from(""));
+        if self.is_streaming {
+            lines.push(Line::from(vec![Span::styled("⏳", Style::default().fg(theme::CYAN))]));
         }
 
-        let content_height = area.height.saturating_sub(2) as usize;
-        let total_lines = lines.len();
-        let start = self
-            .scroll
-            .min(total_lines.saturating_sub(content_height));
-        let visible: Vec<Line> = lines.into_iter().skip(start).take(content_height).collect();
+        let content_h = area.height.saturating_sub(2) as usize;
+        let total = lines.len();
+        let start = self.scroll.min(total.saturating_sub(content_h));
+        let visible: Vec<Line> = lines.into_iter().skip(start).take(content_h).collect();
 
         f.render_widget(
             Paragraph::new(Text::from(visible))
-                .block(Block::default().borders(Borders::ALL).title(" Chat ")),
+                .block(Block::default().borders(Borders::ALL).title(" Chat ")
+                    .border_style(Style::default().fg(theme::SURFACE))),
             area,
         );
+
+        // Scrollbar
+        if total > content_h {
+            let mut s = self.scroll_state.clone();
+            s = s.content_length(total);
+            s = s.position(start);
+            let scroll_area = Rect {
+                x: area.right().saturating_sub(1),
+                y: area.y + 1,
+                width: 1,
+                height: content_h as u16,
+            };
+            f.render_stateful_widget(
+                Scrollbar::default()
+                    .orientation(ScrollbarOrientation::VerticalRight)
+                    .thumb_symbol("┃"),
+                scroll_area,
+                &mut s,
+            );
+        }
     }
 
-    fn render_tools(&self, f: &mut Frame, area: Rect) {
-        let items: Vec<ListItem> = self
-            .tools
-            .iter()
-            .map(|t| {
-                let icon = if t.success { "OK" } else { "ER" };
-                let style = if t.success {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::Red)
-                };
-                ListItem::new(format!("[{}] {}", icon, t.name)).style(style)
-            })
-            .collect();
+    fn render_side(&self, f: &mut Frame, area: Rect) {
+        let mut items: Vec<ListItem> = Vec::new();
+
+        // Tool results
+        for t in &self.tools {
+            let style = if t.running {
+                Style::default().fg(theme::YELLOW)
+            } else if t.success {
+                Style::default().fg(theme::GREEN)
+            } else {
+                Style::default().fg(theme::RED)
+            };
+            let marker = if t.running { "●" } else if t.success { "✓" } else { "✗" };
+            items.push(ListItem::new(format!("{marker} {name}", name = t.name)).style(style));
+        }
+
+        // Files written this turn
+        if !self.files_written_this_turn.is_empty() {
+            items.push(ListItem::new("── Files ──").style(Style::default().fg(theme::MUTED)));
+            for f in &self.files_written_this_turn {
+                items.push(ListItem::new(format!("  {}", f)));
+            }
+        }
+
+        if self.explored {
+            items.push(ListItem::new("✓ explored").style(Style::default().fg(theme::GREEN)));
+        }
 
         f.render_widget(
-            List::new(items).block(Block::default().borders(Borders::ALL).title(" Tools ")),
+            List::new(items)
+                .block(Block::default().borders(Borders::ALL).title(" Tools ")
+                    .border_style(Style::default().fg(theme::SURFACE))),
             area,
         );
     }
 
     fn render_input(&self, f: &mut Frame, area: Rect) {
-        let display = if self.input.is_empty() {
-            Span::styled(
-                "Type a message (Ctrl+D exit, Ctrl+C cancel, Ctrl+R toggle thinking)...",
-                Style::default().fg(Color::DarkGray),
-            )
+        let hint = if let Some(ref q) = self.ask_question {
+            format!("🤖 {}  |  Enter to respond, Esc cancel", q)
         } else {
-            Span::raw(&self.input)
+            "Ctrl+D exit | Ctrl+C cancel | Ctrl+R thinking | Esc cancel".into()
         };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+
+        f.render_widget(&self.textarea, chunks[0]);
         f.render_widget(
-            Paragraph::new(Line::from(display))
-                .block(Block::default().borders(Borders::ALL).title(" Input ")),
-            area,
+            Paragraph::new(Line::from(vec![Span::styled(hint, Style::default().fg(theme::MUTED))])),
+            chunks[1],
         );
     }
 }
 
 // ── HP daemon lifecycle ──
 
-fn ensure_hp(exe: &std::path::Path) -> anyhow::Result<()> {
+fn ensure_hp(exe: &std::path::Path) -> anyhow::Result<Option<Child>> {
     use dsx_types::platform::hp_port_path;
     let port_path = hp_port_path();
     if let Ok(port_str) = std::fs::read_to_string(&port_path) {
         if let Ok(port) = port_str.trim().parse::<u16>() {
             if TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
-                return Ok(());
+                return Ok(None); // already running, not our child
             }
         }
     }
     let _ = std::fs::write(&port_path, "");
-    let mut hp = Command::new(exe)
-        .arg("hp")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+    let mut hp = Command::new(exe).arg("hp")
+        .stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
     for _ in 0..10 {
         std::thread::sleep(Duration::from_millis(500));
         if let Ok(s) = std::fs::read_to_string(&port_path) {
             if let Ok(p) = s.trim().parse::<u16>() {
                 if TcpStream::connect(format!("127.0.0.1:{p}")).is_ok() {
-                    return Ok(());
+                    return Ok(Some(hp));
                 }
             }
         }
-        if hp.try_wait()?.is_some() {
-            break;
-        }
+        if hp.try_wait()?.is_some() { break; }
     }
+    let _ = hp.kill();
     anyhow::bail!("HP startup timeout. Run 'dsx config' to set API key.")
 }
 
@@ -483,36 +516,26 @@ fn ensure_hp(exe: &std::path::Path) -> anyhow::Result<()> {
 pub fn run_tui(seed: Option<String>) -> anyhow::Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("dsx"));
 
-    // 1. Ensure HP daemon running
-    ensure_hp(&exe)?;
+    let hp_child = ensure_hp(&exe)?;
 
-    // 2. Load config, create AgentState
     let config = crate::config::Config::load().unwrap_or_default();
-    eprintln!(
-        "dsx: model={} effort={:?} context_limit={}",
-        config.model, config.effort, config.context_limit
-    );
+    eprintln!("dsx: model={} effort={:?} context_limit={}",
+        config.model, config.effort, config.context_limit);
 
-    let mut agent = AgentState::new(config);
+    let mut agent = AgentState::new(config.clone());
     agent.resume_seed = seed.clone();
     agent.health.context_limit = agent.config.context_limit;
 
-    // 3. Connect HP
     let hp_conn = crate::hp::connect().map(BufReader::new);
-
-    // 4. Spawn tools subprocess and complete Init/Ready handshake
     let tools_child = init_tools(&exe, &mut agent);
 
-    // 5. Create channels
     let (tui_tx, tui_rx) = mpsc::channel::<TuiToAgent>();
     let (agent_tx, agent_rx) = mpsc::channel::<AgentToTui>();
 
-    // 6. Spawn agent background thread
     let _agent_handle = std::thread::spawn(move || {
         crate::runner::run_agent_loop(agent, hp_conn, tui_rx, agent_tx);
     });
 
-    // 7. Create App and run TUI
     let app = App {
         messages: Vec::new(),
         streaming_content: String::new(),
@@ -524,9 +547,16 @@ pub fn run_tui(seed: Option<String>) -> anyhow::Result<()> {
         tokens_used: 0,
         session_seed: seed.unwrap_or_default(),
         status: String::new(),
-        input: String::new(),
-        cursor: 0,
+        model: config.model,
+        context_limit: config.context_limit,
+        explored: false,
+        files_read_this_turn: Vec::new(),
+        files_written_this_turn: Vec::new(),
+        ask_question: None,
+        is_streaming: false,
+        textarea: TextArea::default(),
         scroll: 0,
+        scroll_state: ScrollbarState::default(),
         agent_tx: tui_tx,
         agent_rx,
         exit: false,
@@ -538,8 +568,12 @@ pub fn run_tui(seed: Option<String>) -> anyhow::Result<()> {
     let _ = crossterm::terminal::disable_raw_mode();
     let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
 
-    // Cleanup
+    // Cleanup: kill all spawned subprocesses
     if let Some(mut c) = tools_child {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    if let Some(mut c) = hp_child {
         let _ = c.kill();
         let _ = c.wait();
     }
@@ -562,10 +596,7 @@ fn init_tools(exe: &std::path::Path, agent: &mut AgentState) -> Option<Child> {
     let ready: Option<ToolsToAgent> = dsx_proto::read_frame(&mut reader).ok().flatten();
     if let Some(ToolsToAgent::Ready { tools }) = &ready {
         agent.tool_defs = tools.clone();
-        eprintln!(
-            "dsx: tools → {}",
-            agent.tool_defs.len(),
-        );
+        eprintln!("dsx: tools → {}", agent.tool_defs.len());
     }
 
     crate::tools::init_tools_ipc(reader, writer, agent.tool_defs.clone());

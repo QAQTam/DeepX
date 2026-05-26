@@ -219,9 +219,7 @@ fn exec_web_fetch(args: &str) -> String {
 
 fn find_char_boundary(s: &str, max: usize) -> usize {
     if max >= s.len() { return s.len(); }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) { end -= 1; }
-    end
+    s.floor_char_boundary(max)
 }
 
 // ── Web search ──
