@@ -1,11 +1,17 @@
-use std::io::{BufRead, BufReader, Write};
+//! DSX TUI — single-process terminal UI for the coding agent.
+//!
+//! Runs the ratatui event loop on the main thread and the agent turn loop
+//! on a background thread. Communication via mpsc channels carrying
+//! TuiToAgent / AgentToTui enums (zero serialization).
+
+use std::io::BufReader;
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-use dsx_proto::AgentToTui;
+use dsx_proto::{AgentToTui, TuiToAgent};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -13,12 +19,18 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::{Frame, Terminal};
 
+use crate::agent::AgentState;
+
+// ── ToolEntry ──
+
 struct ToolEntry {
     id: String,
     name: String,
     output: String,
     success: bool,
 }
+
+// ── App ──
 
 struct App {
     messages: Vec<(String, String)>,
@@ -36,9 +48,8 @@ struct App {
     cursor: usize,
     scroll: usize,
 
-    agent_stdin: Box<dyn Write + Send>,
-    rx: mpsc::Receiver<AgentToTui>,
-    agent: Child,
+    agent_tx: mpsc::Sender<TuiToAgent>,
+    agent_rx: mpsc::Receiver<AgentToTui>,
     exit: bool,
 }
 
@@ -50,35 +61,33 @@ impl App {
         loop {
             terminal.draw(|f| self.ui(f))?;
 
-            if self.exit { break; }
+            if self.exit {
+                break;
+            }
 
             if crossterm::event::poll(Duration::from_millis(30))? {
                 let ev = crossterm::event::read()?;
                 match ev {
                     Event::Key(key) => {
-                        if key.kind != KeyEventKind::Press { continue; }
+                        if key.kind != KeyEventKind::Press {
+                            continue;
+                        }
                         match key.code {
                             KeyCode::Enter => {
                                 let msg = std::mem::take(&mut self.input);
                                 self.cursor = 0;
                                 if !msg.is_empty() {
                                     self.messages.push(("user".into(), msg.clone()));
-                                    let frame = serde_json::json!({"type": "user_input", "text": msg});
-                                    let _ = writeln!(self.agent_stdin, "{}", serde_json::to_string(&frame)?);
-                                    let _ = self.agent_stdin.flush();
+                                    let _ = self.agent_tx.send(TuiToAgent::UserInput { text: msg });
                                     self.status.clear();
                                     self.tools.clear();
                                 }
                             }
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                let frame = serde_json::json!({"type": "cancel"});
-                                let _ = writeln!(self.agent_stdin, "{}", serde_json::to_string(&frame)?);
-                                let _ = self.agent_stdin.flush();
+                                let _ = self.agent_tx.send(TuiToAgent::Cancel);
                             }
                             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                let frame = serde_json::json!({"type": "shutdown"});
-                                let _ = writeln!(self.agent_stdin, "{}", serde_json::to_string(&frame)?);
-                                let _ = self.agent_stdin.flush();
+                                let _ = self.agent_tx.send(TuiToAgent::Shutdown);
                                 self.exit = true;
                             }
                             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -99,12 +108,24 @@ impl App {
                                     self.input.remove(self.cursor);
                                 }
                             }
-                            KeyCode::Left => { self.cursor = self.cursor.saturating_sub(1); }
-                            KeyCode::Right => { self.cursor = (self.cursor + 1).min(self.input.len()); }
-                            KeyCode::Home => { self.cursor = 0; }
-                            KeyCode::End => { self.cursor = self.input.len(); }
-                            KeyCode::PageUp => { self.scroll = self.scroll.saturating_add(10); }
-                            KeyCode::PageDown => { self.scroll = self.scroll.saturating_sub(10); }
+                            KeyCode::Left => {
+                                self.cursor = self.cursor.saturating_sub(1);
+                            }
+                            KeyCode::Right => {
+                                self.cursor = (self.cursor + 1).min(self.input.len());
+                            }
+                            KeyCode::Home => {
+                                self.cursor = 0;
+                            }
+                            KeyCode::End => {
+                                self.cursor = self.input.len();
+                            }
+                            KeyCode::PageUp => {
+                                self.scroll = self.scroll.saturating_add(10);
+                            }
+                            KeyCode::PageDown => {
+                                self.scroll = self.scroll.saturating_sub(10);
+                            }
                             _ => {}
                         }
                     }
@@ -112,12 +133,11 @@ impl App {
                 }
             }
 
-            while let Ok(frame) = self.rx.try_recv() {
+            while let Ok(frame) = self.agent_rx.try_recv() {
                 self.handle_frame(frame);
             }
         }
 
-        let _ = self.agent.wait();
         terminal.clear()?;
         Ok(())
     }
@@ -135,11 +155,30 @@ impl App {
                     t.output.push_str(&content);
                 }
             }
-            AgentToTui::ToolResult { id, name, content, success } => {
+            AgentToTui::ToolResult {
+                id,
+                name,
+                content,
+                success,
+            } => {
                 let icon = if success { "OK" } else { "ER" };
-                let preview = content.lines().next().unwrap_or("").chars().take(80).collect::<String>();
-                self.messages.push(("tool".into(), format!("{} {} → {}", icon, name, preview)));
-                self.tools.push(ToolEntry { id, name, output: content, success });
+                let preview = content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(80)
+                    .collect::<String>();
+                self.messages.push((
+                    "tool".into(),
+                    format!("{} {} → {}", icon, name, preview),
+                ));
+                self.tools.push(ToolEntry {
+                    id,
+                    name,
+                    output: content,
+                    success,
+                });
             }
             AgentToTui::ApiResponse { usage, .. } => {
                 if let Some(u) = usage {
@@ -159,7 +198,13 @@ impl App {
             AgentToTui::CachePrediction { hit_rate } => {
                 self.cache_hit_pct = hit_rate;
             }
-            AgentToTui::SessionRestored { seed, message_count, tokens_used, cache_hit_pct, .. } => {
+            AgentToTui::SessionRestored {
+                seed,
+                message_count,
+                tokens_used,
+                cache_hit_pct,
+                ..
+            } => {
                 self.session_seed = seed;
                 self.tokens_used = tokens_used;
                 self.cache_hit_pct = cache_hit_pct;
@@ -167,7 +212,10 @@ impl App {
             }
             AgentToTui::Done => {
                 if !self.streaming_content.is_empty() {
-                    self.messages.push(("assistant".into(), std::mem::take(&mut self.streaming_content)));
+                    self.messages.push((
+                        "assistant".into(),
+                        std::mem::take(&mut self.streaming_content),
+                    ));
                 }
                 self.streaming_reasoning.clear();
             }
@@ -203,9 +251,16 @@ impl App {
             phase_display,
             self.cache_hit_pct * 100.0,
             self.tokens_used,
-            if self.status.is_empty() { "Ready" } else { &self.status },
+            if self.status.is_empty() {
+                "Ready"
+            } else {
+                &self.status
+            },
         );
-        f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::Gray)), area);
+        f.render_widget(
+            Paragraph::new(text).style(Style::default().fg(Color::Gray)),
+            area,
+        );
     }
 
     fn render_main(&self, f: &mut Frame, area: Rect) {
@@ -240,36 +295,62 @@ impl App {
             };
             for line in content.lines() {
                 if role == "assistant" {
-                    lines.push(Line::from(vec![Span::styled(line, Style::default().fg(Color::Green))]));
+                    lines.push(Line::from(vec![Span::styled(
+                        line,
+                        Style::default().fg(Color::Green),
+                    )]));
                 } else if role == "tool" {
-                    lines.push(Line::from(vec![Span::styled(line, Style::default().fg(Color::Yellow))]));
+                    lines.push(Line::from(vec![Span::styled(
+                        line,
+                        Style::default().fg(Color::Yellow),
+                    )]));
                 } else {
-                    lines.push(Line::from(vec![
-                        Span::styled(prefix, style),
-                        Span::raw(line),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(prefix, style), Span::raw(line)]));
                 }
             }
             lines.push(Line::from(""));
         }
 
-        let is_streaming = !self.streaming_content.is_empty() || !self.streaming_reasoning.is_empty();
+        let is_streaming =
+            !self.streaming_content.is_empty() || !self.streaming_reasoning.is_empty();
 
         if self.show_reasoning && !self.streaming_reasoning.is_empty() {
-            lines.push(Line::from(vec![Span::styled("-- Reasoning --", Style::default().fg(Color::DarkGray))]));
+            lines.push(Line::from(vec![Span::styled(
+                "-- Reasoning --",
+                Style::default().fg(Color::DarkGray),
+            )]));
             for line in self.streaming_reasoning.lines() {
-                lines.push(Line::from(vec![Span::styled(line, Style::default().fg(Color::Gray))]));
+                lines.push(Line::from(vec![Span::styled(
+                    line,
+                    Style::default().fg(Color::Gray),
+                )]));
             }
-            lines.push(Line::from(vec![Span::styled("-- Response --", Style::default().fg(Color::DarkGray))]));
+            lines.push(Line::from(vec![Span::styled(
+                "-- Response --",
+                Style::default().fg(Color::DarkGray),
+            )]));
         }
 
         if !self.streaming_content.is_empty() {
             for line in self.streaming_content.lines() {
-                lines.push(Line::from(vec![Span::styled(line, Style::default().fg(Color::Green))]));
+                lines.push(Line::from(vec![Span::styled(
+                    line,
+                    Style::default().fg(Color::Green),
+                )]));
             }
             if !self.show_reasoning && !self.streaming_reasoning.is_empty() {
-                let preview: String = self.streaming_reasoning.lines().next().unwrap_or("").chars().take(60).collect();
-                lines.push(Line::from(vec![Span::styled(format!("[Ctrl+R to see thinking: {}...]", preview), Style::default().fg(Color::DarkGray))]));
+                let preview: String = self
+                    .streaming_reasoning
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect();
+                lines.push(Line::from(vec![Span::styled(
+                    format!("[Ctrl+R to see thinking: {}...]", preview),
+                    Style::default().fg(Color::DarkGray),
+                )]));
             }
         }
 
@@ -279,7 +360,9 @@ impl App {
 
         let content_height = area.height.saturating_sub(2) as usize;
         let total_lines = lines.len();
-        let start = self.scroll.min(total_lines.saturating_sub(content_height));
+        let start = self
+            .scroll
+            .min(total_lines.saturating_sub(content_height));
         let visible: Vec<Line> = lines.into_iter().skip(start).take(content_height).collect();
 
         f.render_widget(
@@ -290,11 +373,19 @@ impl App {
     }
 
     fn render_tools(&self, f: &mut Frame, area: Rect) {
-        let items: Vec<ListItem> = self.tools.iter().map(|t| {
-            let icon = if t.success { "OK" } else { "ER" };
-            let style = if t.success { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Red) };
-            ListItem::new(format!("[{}] {}", icon, t.name)).style(style)
-        }).collect();
+        let items: Vec<ListItem> = self
+            .tools
+            .iter()
+            .map(|t| {
+                let icon = if t.success { "OK" } else { "ER" };
+                let style = if t.success {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Red)
+                };
+                ListItem::new(format!("[{}] {}", icon, t.name)).style(style)
+            })
+            .collect();
 
         f.render_widget(
             List::new(items).block(Block::default().borders(Borders::ALL).title(" Tools ")),
@@ -304,7 +395,10 @@ impl App {
 
     fn render_input(&self, f: &mut Frame, area: Rect) {
         let display = if self.input.is_empty() {
-            Span::styled("Type a message (Ctrl+D exit, Ctrl+C cancel, Ctrl+R toggle thinking)...", Style::default().fg(Color::DarkGray))
+            Span::styled(
+                "Type a message (Ctrl+D exit, Ctrl+C cancel, Ctrl+R toggle thinking)...",
+                Style::default().fg(Color::DarkGray),
+            )
         } else {
             Span::raw(&self.input)
         };
@@ -315,6 +409,8 @@ impl App {
         );
     }
 }
+
+// ── HP daemon lifecycle ──
 
 fn ensure_hp(exe: &std::path::Path) -> anyhow::Result<()> {
     use dsx_types::platform::hp_port_path;
@@ -341,44 +437,48 @@ fn ensure_hp(exe: &std::path::Path) -> anyhow::Result<()> {
                 }
             }
         }
-        if hp.try_wait()?.is_some() { break; }
+        if hp.try_wait()?.is_some() {
+            break;
+        }
     }
     anyhow::bail!("HP startup timeout. Run 'dsx config' to set API key.")
 }
 
-pub fn run(seed: Option<String>) -> anyhow::Result<()> {
+// ── Public entry point ──
+
+pub fn run_tui(seed: Option<String>) -> anyhow::Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("dsx"));
 
+    // 1. Ensure HP daemon running
     ensure_hp(&exe)?;
 
-    let mut cmd = Command::new(&exe);
-    if let Some(s) = &seed {
-        cmd.arg("agent").arg("--session").arg(s);
-    } else {
-        cmd.arg("agent");
-    }
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    // 2. Load config, create AgentState
+    let config = crate::config::Config::load().unwrap_or_default();
+    eprintln!(
+        "dsx: model={} effort={:?} context_limit={}",
+        config.model, config.effort, config.context_limit
+    );
 
-    let mut agent = cmd.spawn()?;
+    let mut agent = AgentState::new(config);
+    agent.resume_seed = seed.clone();
+    agent.health.context_limit = agent.config.context_limit;
 
-    let stdin = agent.stdin.take().unwrap();
-    let stdout = agent.stdout.take().unwrap();
+    // 3. Connect HP
+    let hp_conn = crate::hp::connect().map(BufReader::new);
 
-    let (tx, rx) = mpsc::channel::<AgentToTui>();
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                if line.trim().is_empty() { continue; }
-                if let Ok(frame) = serde_json::from_str::<AgentToTui>(&line) {
-                    if tx.send(frame).is_err() { break; }
-                }
-            }
-        }
+    // 4. Spawn tools subprocess and complete Init/Ready handshake
+    let tools_child = init_tools(&exe, &mut agent);
+
+    // 5. Create channels
+    let (tui_tx, tui_rx) = mpsc::channel::<TuiToAgent>();
+    let (agent_tx, agent_rx) = mpsc::channel::<AgentToTui>();
+
+    // 6. Spawn agent background thread
+    let _agent_handle = std::thread::spawn(move || {
+        crate::runner::run_agent_loop(agent, hp_conn, tui_rx, agent_tx);
     });
 
+    // 7. Create App and run TUI
     let app = App {
         messages: Vec::new(),
         streaming_content: String::new(),
@@ -393,9 +493,8 @@ pub fn run(seed: Option<String>) -> anyhow::Result<()> {
         input: String::new(),
         cursor: 0,
         scroll: 0,
-        agent_stdin: Box::new(stdin),
-        rx,
-        agent,
+        agent_tx: tui_tx,
+        agent_rx,
         exit: false,
     };
 
@@ -405,5 +504,42 @@ pub fn run(seed: Option<String>) -> anyhow::Result<()> {
     let _ = crossterm::terminal::disable_raw_mode();
     let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
 
+    // Cleanup
+    if let Some(mut c) = tools_child {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+
     result
+}
+
+fn init_tools(exe: &std::path::Path, agent: &mut AgentState) -> Option<Child> {
+    use dsx_proto::{AgentToTools, ToolsToAgent};
+
+    let (child, mut reader, mut writer) = crate::tools_spawn::spawn_process(exe);
+
+    let init = AgentToTools::Init {
+        allowed_tools: vec![],
+        session_seed: "pipe".into(),
+        auto_mode: agent.auto_mode,
+    };
+    let _ = dsx_proto::write_frame(&mut writer, &init);
+
+    let ready: Option<ToolsToAgent> = dsx_proto::read_frame(&mut reader).ok().flatten();
+    if let Some(ToolsToAgent::Ready { tools }) = &ready {
+        let essential: &[&str] = crate::tools::ESSENTIAL_TOOLS;
+        agent.tool_defs = tools
+            .iter()
+            .filter(|t| essential.contains(&t.function.name.as_str()))
+            .cloned()
+            .collect();
+        eprintln!(
+            "dsx: tools → {} (filtered from {})",
+            agent.tool_defs.len(),
+            tools.len()
+        );
+    }
+
+    crate::tools::init_tools_ipc(reader, writer, agent.tool_defs.clone());
+    Some(child)
 }

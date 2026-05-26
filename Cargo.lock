@@ -431,7 +431,6 @@ dependencies = [
  "dsx-agent",
  "dsx-hp",
  "dsx-tools",
- "dsx-tui",
  "dsx-types",
  "serde_json",
 ]
@@ -442,9 +441,11 @@ version = "4.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "crossterm",
  "dsx-proto",
  "dsx-types",
  "log",
+ "ratatui",
  "regex",
  "serde",
  "serde_json",
@@ -493,18 +494,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "dsx-tui"
-version = "4.0.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "dsx-proto",
- "dsx-types",
- "ratatui",
- "serde_json",
 ]
 
 [[package]]

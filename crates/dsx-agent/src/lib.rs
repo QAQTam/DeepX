@@ -24,3 +24,4 @@ pub mod tool_parser;
 pub mod cache_analyzer;
 pub mod hp;
 pub mod tools_spawn;
+pub mod tui;

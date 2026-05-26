@@ -3,10 +3,13 @@
 //! Wires all intelligence modules (session, memory, orchestrator, context,
 //! skills, router, tokenizer, health) into the HP-bridged conversation loop.
 //!
-//! Uses shared dsx-proto types for all IPC channels (TUI, Tools, HP).
+//! Two entry points:
+//! - `run_agent_loop()` — channel-based, driven by tui.rs (primary)
+//! - `run()` — stdin/stdout pipe, backward-compat headless mode
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::net::TcpStream;
+use std::sync::mpsc;
 
 use dsx_proto::{
     self, TuiToAgent, AgentToTui, AgentToTools, ToolsToAgent, AgentToHp, HpToAgent,
@@ -27,14 +30,13 @@ use dsx_types::{ContentBlock, Message, ToolCall};
 // ── Session initialization ──
 
 fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
-    // Check if a specific session seed was requested via CLI
     if let Some(seed) = restore_seed {
         if let Some(file) = session::load_session(seed) {
             agent.session_seed = file.seed.clone();
             agent.session_start = file.created_at;
             let (ctx, repairs) = crate::assembly::ContextAssembler::from_legacy(file.messages);
             agent.ctx = ctx;
-        
+
             dsc_log::set_session(&agent.session_seed);
             tools::set_current_session(&agent.session_seed);
             eprintln!("dsx-agent: restored session {} ({} msgs)", agent.session_seed, agent.ctx.message_count());
@@ -85,10 +87,10 @@ fn apply_phase_config(agent: &mut AgentState, phase: dsx_types::TaskPhase, level
     }
 }
 
-// ── Helper: write a tool_result JSON-LP frame to TUI ──
+// ── Helper: send a ToolResult frame via channel ──
 
-fn emit_tool_result(w: &mut impl Write, id: &str, name: &str, content: &str, success: bool) {
-    let _ = dsx_proto::write_frame(w, &AgentToTui::ToolResult {
+fn emit_tool_result(tx: &mpsc::Sender<AgentToTui>, id: &str, name: &str, content: &str, success: bool) {
+    let _ = tx.send(AgentToTui::ToolResult {
         id: id.to_string(),
         name: name.to_string(),
         content: content.to_string(),
@@ -107,19 +109,13 @@ struct HpStreamResponse {
 }
 
 /// Read HP streaming response until ApiResponse is received.
-/// Forwards ContentDelta / ToolProgress frames to TUI.
+/// Sends ContentDelta / ToolProgress frames via channel.
 fn read_hp_stream_response(
     hp: &mut BufReader<TcpStream>,
     agent: &mut AgentState,
-    tui_writer: &mut impl Write,
+    agent_tx: &mpsc::Sender<AgentToTui>,
     round: u32,
 ) -> Result<HpStreamResponse, ()> {
-    let content: String;
-    let reasoning_content: Option<String>;
-    let thinking_signature: Option<String>;
-    let usage: Option<dsx_types::UsageInfo>;
-    let tcs_raw: serde_json::Value;
-
     loop {
         let hp_resp: HpToAgent = match dsx_proto::read_frame(hp) {
             Ok(Some(r)) => r,
@@ -145,7 +141,7 @@ fn read_hp_stream_response(
                     eprintln!("dsx DEBUG: hp.ContentDelta d={} r={}", delta.len(), reasoning.as_ref().map(|s| s.len()).unwrap_or(0));
                 }
 
-                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::ContentDelta {
+                let _ = agent_tx.send(AgentToTui::ContentDelta {
                     delta: delta.clone(),
                     reasoning: reasoning.clone(),
                 });
@@ -155,7 +151,7 @@ fn read_hp_stream_response(
                 agent.stream_content.push_str(&delta);
             }
             HpToAgent::ToolProgress { id, content: prog_content, stream_type } => {
-                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::ToolProgress {
+                let _ = agent_tx.send(AgentToTui::ToolProgress {
                     id: id.clone(),
                     content: prog_content.clone(),
                     stream_type: stream_type.clone(),
@@ -165,15 +161,16 @@ fn read_hp_stream_response(
                 content: c, tool_calls, stop_reason: _,
                 reasoning_content: rc, thinking_signature: ts, usage: u,
             } => {
-                content = c;
-                tcs_raw = tool_calls.unwrap_or(serde_json::Value::Null);
-                reasoning_content = rc;
-                thinking_signature = ts;
-                usage = u;
-                return Ok(HpStreamResponse { content, reasoning_content, thinking_signature, usage, tool_calls_raw: tcs_raw });
+                return Ok(HpStreamResponse {
+                    content: c,
+                    tool_calls_raw: tool_calls.unwrap_or(serde_json::Value::Null),
+                    reasoning_content: rc,
+                    thinking_signature: ts,
+                    usage: u,
+                });
             }
             HpToAgent::Error { message } => {
-                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::Error { message: message.clone() });
+                let _ = agent_tx.send(AgentToTui::Error { message: message.clone() });
                 agent.health.record_api_error();
                 return Err(());
             }
@@ -230,36 +227,33 @@ enum ToolOutcome {
 }
 
 /// Execute one tool call: gates → intercepts → cancel check → IPC execution → tracking.
-/// Returns `Executed` if the tool actually ran (caller may emit ToolState),
-/// `Continue` if gated/intercepted (caller should skip ToolState),
-/// `Break` if IPC is dead (caller should break the tool loop).
 fn execute_single_tool(
     agent: &mut AgentState,
     tc: &ToolCall,
-    tui_writer: &mut impl Write,
+    agent_tx: &mpsc::Sender<AgentToTui>,
 ) -> ToolOutcome {
     let name = &tc.function.name;
     let id = &tc.id;
     let args = &tc.function.arguments;
 
     if gates::phase_check_tool(agent, name, id) {
-        emit_tool_result(tui_writer, id, name, "[BLOCKED] Phase gate prevented this tool.", false);
+        emit_tool_result(agent_tx, id, name, "[BLOCKED] Phase gate prevented this tool.", false);
         return ToolOutcome::Continue;
     }
     if gates::explore_gate(agent, name, id, args) {
-        emit_tool_result(tui_writer, id, name, "[BLOCKED] Explore gate prevented this tool.", false);
+        emit_tool_result(agent_tx, id, name, "[BLOCKED] Explore gate prevented this tool.", false);
         return ToolOutcome::Continue;
     }
     if let Some(err_msg) = gates::pre_tool_health_check(agent, name) {
         let _ = agent.ctx.push_tool_result(id, &err_msg);
         agent.health.record_error(name, &err_msg);
         agent.tool_failures += 1;
-        emit_tool_result(tui_writer, id, name, &err_msg, false);
+        emit_tool_result(agent_tx, id, name, &err_msg, false);
         return ToolOutcome::Continue;
     }
 
     if gates::re_read_gate(agent, name, id, args) {
-        emit_tool_result(tui_writer, id, name, "[BLOCKED] Re-read gate prevented this tool.", false);
+        emit_tool_result(agent_tx, id, name, "[BLOCKED] Re-read gate prevented this tool.", false);
         return ToolOutcome::Continue;
     }
 
@@ -270,7 +264,7 @@ fn execute_single_tool(
             let err = format!("[ERROR] Mode '{state}' no longer exists. Use: plan, coding, debug");
             let _ = agent.ctx.push_tool_result(id, &err);
             agent.tool_results.push((id.to_string(), err.clone()));
-            emit_tool_result(tui_writer, id, name, &err, false);
+            emit_tool_result(agent_tx, id, name, &err, false);
             return ToolOutcome::Continue;
         }
         let tp = match state {
@@ -286,11 +280,11 @@ fn execute_single_tool(
             apply_phase_config(agent, tp, level);
         }
         let phase_name = format!("{:?}", tp).to_lowercase();
-        let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::PhaseChanged { phase: phase_name });
+        let _ = agent_tx.send(AgentToTui::PhaseChanged { phase: phase_name });
         let result = format!("[OK] Switched to {} mode", state);
         let _ = agent.ctx.push_tool_result(id, &result);
         agent.tool_results.push((id.to_string(), result.clone()));
-        emit_tool_result(tui_writer, id, name, &result, true);
+        emit_tool_result(agent_tx, id, name, &result, true);
         return ToolOutcome::Continue;
     }
 
@@ -309,17 +303,17 @@ fn execute_single_tool(
             question,
             options,
         };
-        let _ = dsx_proto::write_frame(tui_writer, &frame);
+        let _ = agent_tx.send(frame);
         agent.pending_ask_user = Some(id.to_string());
         agent.tool_results.push((id.to_string(), "[ASK_USER] Awaiting your response.".to_string()));
-        emit_tool_result(tui_writer, id, name, "[ASK_USER] Awaiting your response.", false);
+        emit_tool_result(agent_tx, id, name, "[ASK_USER] Awaiting your response.", false);
         return ToolOutcome::Continue;
     }
 
     if crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
         crate::tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
         let _ = agent.ctx.push_tool_result(&tc.id, "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.");
-        emit_tool_result(tui_writer, id, name, "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.", false);
+        emit_tool_result(agent_tx, id, name, "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.", false);
         return ToolOutcome::Continue;
     }
 
@@ -327,7 +321,7 @@ fn execute_single_tool(
     if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
         let mut appender = ToolResultAppender::new(agent);
         appender.append(name, &tc.id, args, &tr_content);
-        emit_tool_result(tui_writer, id, name, &tr_content, false);
+        emit_tool_result(agent_tx, id, name, &tr_content, false);
         return ToolOutcome::Break;
     }
 
@@ -346,7 +340,7 @@ fn execute_single_tool(
         let mut appender = ToolResultAppender::new(agent);
         appender.append(name, &tc.id, args, &tr_content);
     }
-    emit_tool_result(tui_writer, id, name, &tr_content, tr_success);
+    emit_tool_result(agent_tx, id, name, &tr_content, tr_success);
 
     tracker::track_tool_code(agent, name, args, &tr_content);
     if !failed && name == "file"
@@ -364,23 +358,21 @@ fn execute_single_tool(
     ToolOutcome::Executed
 }
 
-// ── User input handler (fully wired) ──
+// ── User input handler ──
 
-/// Handle a TuiToAgent::UserInput frame with full module integration.
-#[allow(unused_variables)]
+/// Handle a user input message with full module integration.
+/// Sends AgentToTui events via the provided channel sender.
 fn handle_user_input(
     agent: &mut AgentState,
     text: &str,
     hp: &mut BufReader<TcpStream>,
-    tui_writer: &mut impl Write,
-    _tui_reader: &mut impl BufRead,
+    agent_tx: &mpsc::Sender<AgentToTui>,
 ) {
     // ── Handle ask_user response ──
     if let Some(tool_call_id) = agent.pending_ask_user.take() {
         if let Err(e) = agent.ctx.push_tool_result(&tool_call_id, text) {
             log::error!("push_tool_result for ask_user failed: {:?} — text dropped", e);
         }
-        // Skip session init, skill matching, push_user — this is a tool continuation
     } else {
         if text.is_empty() { return; }
 
@@ -404,7 +396,7 @@ fn handle_user_input(
                     .unwrap_or_default();
                 let tokens_used = agent.token_estimate;
                 let cache_hit_pct = agent.cache_hit_pct;
-                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::SessionRestored {
+                let _ = agent_tx.send(AgentToTui::SessionRestored {
                     seed: agent.session_seed.clone(),
                     message_count: msg_count as u64,
                     summary,
@@ -419,7 +411,7 @@ fn handle_user_input(
                 agent.current_task_phase = phase;
                 apply_phase_config(agent, phase, level);
                 let phase_name = format!("{:?}", phase).to_lowercase();
-                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::PhaseChanged { phase: phase_name });
+                let _ = agent_tx.send(AgentToTui::PhaseChanged { phase: phase_name });
                 log::info!("auto initial phase: {:?} model={} effort={:?}", phase, agent.config.model, agent.config.effort);
             }
         }
@@ -437,9 +429,6 @@ fn handle_user_input(
         if let Err(e) = agent.ctx.push_user(text) {
             match e {
                 AssemblerError::TurnIncomplete { .. } => {
-                    // Recovery: cancellation deadlock where the last turn has no assistant
-                    // response (or unfulfilled tool calls). Remove the broken step and
-                    // append text to the existing user message so the conversation continues.
                     log::warn!("push_user TurnIncomplete — repairing (cancellation deadlock)");
                     agent.ctx.remove_last_step_if_incomplete();
                     agent.ctx.push_user_restore(text);
@@ -451,7 +440,6 @@ fn handle_user_input(
             }
         }
     }
-
 
     // ── Reset per-turn state ──
     agent.tool_results.clear();
@@ -480,16 +468,15 @@ fn handle_user_input(
         let (system, messages, breakdown) =
             crate::assembly::build_context(agent);
 
-        let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::CachePrediction { hit_rate: agent.predicted_cache_hit_pct });
+        let _ = agent_tx.send(AgentToTui::CachePrediction { hit_rate: agent.predicted_cache_hit_pct });
 
         let msgs_no_system: Vec<&Message> = messages.iter().filter(|m| m.role != "system").collect();
-        let messages_json = serde_json::to_value(&msgs_no_system).unwrap_or_default();
         log::debug!("turn round={} messages={} tokens={}", _round, messages.len(), tokenizer::estimate_messages_tokens(&messages));
 
         let chat = AgentToHp::ApiChat {
             model: agent.config.model.clone(),
             system: Some(system),
-            messages: messages_json,
+            messages: serde_json::to_value(&msgs_no_system).unwrap_or_default(),
             effort: agent.config.effort.clone(),
             max_tokens: Some(agent.config.max_tokens),
             tools: Some(serde_json::to_value(&agent.tool_defs).unwrap_or_default()),
@@ -499,7 +486,7 @@ fn handle_user_input(
         let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
 
         let HpStreamResponse { mut content, reasoning_content, thinking_signature, usage, tool_calls_raw } =
-            match read_hp_stream_response(hp, agent, tui_writer, _round) {
+            match read_hp_stream_response(hp, agent, agent_tx, _round) {
                 Ok(r) => r,
                 Err(()) => {
                     agent.stream_cancelled = false;
@@ -540,7 +527,7 @@ fn handle_user_input(
                     let level = dsx_types::DebugLevel::Medium;
                     apply_phase_config(agent, tp, level);
                     let phase_name = format!("{:?}", tp).to_lowercase();
-                    let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::PhaseChanged { phase: phase_name });
+                    let _ = agent_tx.send(AgentToTui::PhaseChanged { phase: phase_name });
                 }
             }
         }
@@ -567,14 +554,13 @@ fn handle_user_input(
             );
             session_persistence::maybe_save_session(agent);
 
-            let tui_resp = AgentToTui::ApiResponse {
+            let _ = agent_tx.send(AgentToTui::ApiResponse {
                 content,
                 tool_calls: None,
                 stop_reason: None,
                 usage,
                 reasoning_content: final_reasoning,
-            };
-            let _ = dsx_proto::write_frame(tui_writer, &tui_resp);
+            });
             return;
         }
 
@@ -588,7 +574,7 @@ fn handle_user_input(
         );
 
         for tc in &parsed {
-            match execute_single_tool(agent, tc, tui_writer) {
+            match execute_single_tool(agent, tc, agent_tx) {
                 ToolOutcome::Break => break,
                 ToolOutcome::Continue => continue,
                 ToolOutcome::Executed => {}
@@ -611,7 +597,7 @@ fn handle_user_input(
                     }
                 })
                 .collect();
-            let tool_state_frame = AgentToTui::ToolState {
+            let _ = agent_tx.send(AgentToTui::ToolState {
                 explored: agent.has_explored,
                 declared_files: all_tool_calls.iter()
                     .filter(|tc| tc.function.name == "explore")
@@ -622,8 +608,7 @@ fn handle_user_input(
                     .map(|tc| tc.function.arguments.clone())
                     .collect(),
                 written_this_turn: agent.files_written_this_turn.clone(),
-            };
-            let _ = dsx_proto::write_frame(tui_writer, &tool_state_frame);
+            });
         }
 
         if agent.pending_ask_user.is_some() {
@@ -644,10 +629,6 @@ fn handle_user_input(
     }
 
     // ── Post-tool-loop: one more API call to let the model wrap up ──
-    // Even with tools:None, DeepSeek V4 may output DSML tool calls inline.
-    // We parse DSML/XML here so raw markup doesn't appear in the chat,
-    // and if valid tool calls are found, execute them in a mini-loop.
-
     if agent.max_tool_rounds > 0 {
         agent.turn_annotations.push(format!("[System] Max tool rounds ({}) reached. Respond with what you have.", agent.max_tool_rounds));
     }
@@ -658,7 +639,7 @@ fn handle_user_input(
         let (system, messages, _breakdown) =
             crate::assembly::build_context(agent);
 
-        let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::CachePrediction { hit_rate: agent.predicted_cache_hit_pct });
+        let _ = agent_tx.send(AgentToTui::CachePrediction { hit_rate: agent.predicted_cache_hit_pct });
 
         let messages_json = serde_json::to_value(&messages).unwrap_or_default();
 
@@ -675,7 +656,7 @@ fn handle_user_input(
         let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
 
         let HpStreamResponse { mut content, reasoning_content, thinking_signature, usage, tool_calls_raw } =
-            match read_hp_stream_response(hp, agent, tui_writer, _post_round) {
+            match read_hp_stream_response(hp, agent, agent_tx, _post_round) {
                 Ok(r) => r,
                 Err(()) => {
                     agent.stream_cancelled = false;
@@ -700,7 +681,6 @@ fn handle_user_input(
         }
 
         if parsed.is_empty() {
-            // No tool calls → final answer
             let assistant_msg = build_and_push_assistant(agent, &content, &reasoning_content, &thinking_signature, &parsed);
 
             let final_reasoning = (!agent.stream_reasoning.is_empty())
@@ -714,7 +694,7 @@ fn handle_user_input(
 
             agent.health.record_turn(false);
 
-            let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::ApiResponse {
+            let _ = agent_tx.send(AgentToTui::ApiResponse {
                 content,
                 reasoning_content: final_reasoning,
                 tool_calls: None,
@@ -729,24 +709,21 @@ fn handle_user_input(
         build_and_push_assistant(agent, &content, &reasoning_content, &thinking_signature, &parsed);
 
         for tc in &parsed {
-            match execute_single_tool(agent, tc, tui_writer) {
+            match execute_single_tool(agent, tc, agent_tx) {
                 ToolOutcome::Break => break,
                 _ => {}
             }
         }
     }
 
-    // Guard: if post-tool-loop exhausted without sending ApiResponse (all 3 rounds
-    // returned XML tool calls), send a fallback to prevent TUI ghost hang.
     if !sent_final_response {
-        let fallback = AgentToTui::ApiResponse {
+        let _ = agent_tx.send(AgentToTui::ApiResponse {
             content: format!("[System] Max post-tool rounds ({}) reached.", max_post_rounds),
             tool_calls: None,
             stop_reason: Some("max_rounds".into()),
             usage: None,
             reasoning_content: None,
-        };
-        let _ = dsx_proto::write_frame(tui_writer, &fallback);
+        });
     }
 
     // End of post-tool-loop — finalize turn
@@ -758,10 +735,133 @@ fn handle_user_input(
         &agent.config.model, agent.config.effort.as_deref(), None);
     session_persistence::maybe_save_session(agent);
 }
-// ── Main ──
+
+// ── Channel-based main loop (primary entry point, called by tui.rs) ──
+
+pub fn run_agent_loop(
+    mut agent: AgentState,
+    mut hp_conn: Option<BufReader<TcpStream>>,
+    tui_rx: mpsc::Receiver<TuiToAgent>,
+    agent_tx: mpsc::Sender<AgentToTui>,
+) {
+    // Drain HP register response
+    if let Some(ref mut hp) = hp_conn {
+        let _: Option<HpToAgent> = dsx_proto::read_frame(hp).ok().flatten();
+    }
+
+    loop {
+        let frame: TuiToAgent = match tui_rx.recv() {
+            Ok(f) => f,
+            Err(_) => break,
+        };
+
+        eprintln!("dsx-agent: tui ← {:?}", std::mem::discriminant(&frame));
+
+        match frame {
+            TuiToAgent::UserInput { text } => {
+                // Respawn tools if IPC was lost
+                if crate::tools::all_tools().is_empty() {
+                    eprintln!("dsx-agent: tools IPC dead, respawning...");
+                    let mut tools_opt: Option<std::process::Child> = None;
+                    if crate::tools_spawn::respawn(&mut tools_opt) {
+                        agent.tool_defs = crate::tools::all_tools();
+                        eprintln!("dsx-agent: tools IPC restored ({} tools)", agent.tool_defs.len());
+                    } else {
+                        eprintln!("dsx-agent: tools respawn FAILED");
+                    }
+                }
+                // Process input — if HP not connected or fails, try reconnect once
+                let hp_failed = if let Some(ref mut hp) = hp_conn {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                        || handle_user_input(&mut agent, &text, hp, &agent_tx)
+                    ));
+                    result.is_err()
+                } else {
+                    true
+                };
+
+                if hp_failed {
+                    eprintln!("dsx-agent: HP failed, reconnecting...");
+                    if let Some(stream) = crate::hp::try_reconnect() {
+                        let reader = BufReader::new(stream);
+                        hp_conn = Some(reader);
+                        eprintln!("dsx-agent: HP reconnected, retry input");
+                        if let Some(ref mut hp) = hp_conn {
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                || handle_user_input(&mut agent, &text, hp, &agent_tx)
+                            ));
+                        }
+                    } else {
+                        eprintln!("dsx-agent: HP reconnect failed");
+                        let _ = agent_tx.send(AgentToTui::Error {
+                            message: "HP disconnected. Please try again.".into(),
+                        });
+                    }
+                }
+                let _ = agent_tx.send(AgentToTui::Done);
+            }
+
+            TuiToAgent::ToolCall { id: _, name, action, args } => {
+                let args_str = args.to_string();
+                let content = crate::tools::execute_tool(&name, &action, &args_str);
+                let _ = agent_tx.send(AgentToTui::ApiResponse {
+                    content,
+                    reasoning_content: None,
+                    tool_calls: None,
+                    stop_reason: None,
+                    usage: None,
+                });
+                let _ = agent_tx.send(AgentToTui::Done);
+            }
+
+            TuiToAgent::SetPhase { phase } => {
+                let task_phase = match phase.as_str() {
+                    "plan" => dsx_types::TaskPhase::Plan,
+                    "coding" | "code" => dsx_types::TaskPhase::Coding,
+                    "debug" => dsx_types::TaskPhase::Debug,
+                    _ => dsx_types::TaskPhase::Coding,
+                };
+                agent.current_task_phase = task_phase;
+                router::set_phase(task_phase, router::read_debug_level());
+                let _ = agent_tx.send(AgentToTui::PhaseChanged { phase });
+            }
+
+            TuiToAgent::ToolConfirm { .. } => {}
+
+            TuiToAgent::Cancel => {
+                crate::tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+                agent.stream_cancelled = true;
+                crate::tools::cancel_current_tool();
+            }
+
+            TuiToAgent::Shutdown => {
+                session_persistence::maybe_save_session(&mut agent);
+                let _ = agent_tx.send(AgentToTui::ShutdownAck);
+                break;
+            }
+
+            _ => {}
+        }
+    }
+
+    // ── Cleanup ──
+    crate::tools::shutdown_tools();
+
+    agent.maybe_save_session();
+
+    if let Some(ref mut hp) = hp_conn {
+        let unreg = AgentToHp::Unregister { pid: std::process::id() };
+        let _ = dsx_proto::write_frame(hp.get_mut(), &unreg);
+    }
+
+    eprintln!("dsx-agent: shutdown complete (session {}, {} turns, {} tokens)",
+        agent.session_seed, agent.ctx.turn_count(), agent.session_tokens);
+}
+
+// ── Backward-compat headless mode (stdin/stdout pipes) ──
 
 pub fn run() {
-    eprintln!("dsx-agent starting");
+    eprintln!("dsx-agent starting (headless mode)");
 
     // ── 1. Initialize logging ──
     dsc_log::init();
@@ -783,18 +883,13 @@ pub fn run() {
     agent.resume_seed = resume_seed;
     agent.health.context_limit = agent.config.context_limit;
 
-    // ── 4. Connect to HP (single stream, no try_clone) ──
-    let mut hp_conn: Option<BufReader<TcpStream>> = crate::hp::connect().map(BufReader::new);
+    // ── 5. Connect to HP ──
+    let hp_conn = crate::hp::connect().map(BufReader::new);
 
-    // Drain register response
-    if let Some(ref mut hp) = hp_conn {
-        let _: Option<HpToAgent> = dsx_proto::read_frame(hp).ok().flatten();
-    }
-
-    // ── 5. Spawn dsx-tools ──
+    // ── 6. Spawn dsx-tools ──
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("dsx"));
     let (tools_child, mut tools_reader, mut tools_writer) = crate::tools_spawn::spawn_process(&exe);
-    let mut tools_option: Option<std::process::Child> = Some(tools_child);
+    let mut tools_option = Some(tools_child);
 
     // Send init frame and read Ready response
     let init = AgentToTools::Init {
@@ -805,138 +900,62 @@ pub fn run() {
     let _ = dsx_proto::write_frame(&mut tools_writer, &init);
     let ready: Option<ToolsToAgent> = dsx_proto::read_frame(&mut tools_reader).ok().flatten();
     if let Some(ToolsToAgent::Ready { tools }) = &ready {
-        let essential: &[&str] = &["exec", "read_file", "write_file", "edit_file", "edit_file_diff", "explore", "search", "list_dir", "glance", "ask_user", "status", "task_create", "task_update", "task_list", "plan_create", "plan_update", "plan_read", "plan_list", "web_fetch", "web_search", "git", "mem_save", "mem_read", "mem_forget", "recall", "pitfall_save", "pitfall_guide"];
+        let essential = crate::tools::ESSENTIAL_TOOLS;
         agent.tool_defs = tools.iter().filter(|t| essential.contains(&t.function.name.as_str())).cloned().collect();
         eprintln!("dsx-agent: tools → {} (filtered from {})", agent.tool_defs.len(), tools.len());
     }
 
-    // Hand pipes over to tools.rs for the compatibility execute_tool() layer
-    tools::init_tools_ipc(tools_reader, tools_writer, agent.tool_defs.clone());
+    crate::tools::init_tools_ipc(tools_reader, tools_writer, agent.tool_defs.clone());
 
-    // ── 6. Session check ──
+    // ── 7. Session check ──
     let lives = session::find_live_sessions();
     if !lives.is_empty() {
         eprintln!("dsx-agent: {} live session(s) available for resume", lives.len());
     }
 
-    // ── 7. Main loop ──
-    let stdin = std::io::stdin();
-    let mut tui_reader = BufReader::new(stdin.lock());
-    let mut tui_writer = std::io::stdout();
+    // ── 8. Create channels + adapter threads ──
+    let (tui_tx, tui_rx) = mpsc::channel::<TuiToAgent>();
+    let (agent_tx, agent_rx) = mpsc::channel::<AgentToTui>();
 
-    loop {
-        let frame: TuiToAgent = match dsx_proto::read_frame(&mut tui_reader) {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(e) => {
-                eprintln!("dsx-agent: TUI parse error: {e}");
-                continue;
-            }
-        };
-
-        eprintln!("dsx-agent: tui ← {:?}", std::mem::discriminant(&frame));
-
-        match frame {
-            TuiToAgent::UserInput { text } => {
-                // Respawn tools if IPC was lost
-                if tools::all_tools().is_empty() {
-                    eprintln!("dsx-agent: tools IPC dead, respawning...");
-                    if crate::tools_spawn::respawn(&mut tools_option) {
-                        agent.tool_defs = tools::all_tools();
-                        eprintln!("dsx-agent: tools IPC restored ({} tools)", agent.tool_defs.len());
-                    } else {
-                        eprintln!("dsx-agent: tools respawn FAILED");
+    // Thread: read TuiToAgent frames from stdin, forward to channel
+    let stdin_handle = std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut reader = BufReader::new(stdin.lock());
+        loop {
+            match dsx_proto::read_frame::<TuiToAgent>(&mut reader) {
+                Ok(Some(frame)) => {
+                    if tui_tx.send(frame).is_err() {
+                        break;
                     }
                 }
-                // Process input — if HP not connected or fails, try reconnect once
-                let hp_failed = if let Some(ref mut hp) = hp_conn {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                        || handle_user_input(&mut agent, &text, hp, &mut tui_writer, &mut tui_reader)
-                    ));
-                    result.is_err()
-                } else {
-                    // HP was never connected — try reconnect now
-                    true
-                };
-
-                if hp_failed {
-                    eprintln!("dsx-agent: HP failed, reconnecting...");
-                    if let Some(stream) = crate::hp::try_reconnect() {
-                        let reader = std::io::BufReader::new(stream);
-                        hp_conn = Some(reader);
-                        eprintln!("dsx-agent: HP reconnected, retry input");
-                        // Retry with new connection
-                        if let Some(ref mut hp) = hp_conn {
-                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                || handle_user_input(&mut agent, &text, hp, &mut tui_writer, &mut tui_reader)
-                            ));
-                        }
-                    } else {
-                        eprintln!("dsx-agent: HP reconnect failed");
-                        let _ = dsx_proto::write_frame(&mut tui_writer,
-                            &AgentToTui::Error { message: "HP disconnected. Please try again.".into() });
-                    }
+                Ok(None) => break,
+                Err(e) => {
+                    eprintln!("dsx-agent: stdin parse error: {e}");
+                    continue;
                 }
-                let _ = dsx_proto::write_frame(&mut tui_writer, &AgentToTui::Done);
             }
+        }
+    });
 
-            TuiToAgent::ToolCall { id: _, name, action, args } => {
-                // Execute tool via IPC and forward result to TUI
-                let args_str = args.to_string();
-                let content = crate::tools::execute_tool(&name, &action, &args_str);
-                let tui_resp = AgentToTui::ApiResponse {
-                    content, reasoning_content: None, tool_calls: None, stop_reason: None, usage: None,
-                };
-                let _ = dsx_proto::write_frame(&mut tui_writer, &tui_resp);
-                let _ = dsx_proto::write_frame(&mut tui_writer, &AgentToTui::Done);
-            }
-
-            TuiToAgent::SetPhase { phase } => {
-                let task_phase = match phase.as_str() {
-                    "plan" => dsx_types::TaskPhase::Plan,
-                    "coding" | "code" => dsx_types::TaskPhase::Coding,
-                    "debug" => dsx_types::TaskPhase::Debug,
-                    _ => dsx_types::TaskPhase::Coding,
-                };
-                agent.current_task_phase = task_phase;
-                router::set_phase(task_phase, router::read_debug_level());
-
-                let _ = dsx_proto::write_frame(&mut tui_writer, &AgentToTui::PhaseChanged { phase });
-            }
-
-            TuiToAgent::ToolConfirm { .. } => {} // Confirm flow removed — all tools auto-pass
-
-            TuiToAgent::Cancel => {
-                crate::tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
-                agent.stream_cancelled = true;
-                // Also send cancel to tools subprocess
-                crate::tools::cancel_current_tool();
-            }
-
-            TuiToAgent::Shutdown => {
-                session_persistence::maybe_save_session(&mut agent);
-                let _ = dsx_proto::write_frame(&mut tui_writer, &AgentToTui::ShutdownAck);
+    // Thread: receive AgentToTui frames from channel, write JSON-LP to stdout
+    let stdout_handle = std::thread::spawn(move || {
+        let mut stdout = std::io::stdout();
+        while let Ok(frame) = agent_rx.recv() {
+            if dsx_proto::write_frame(&mut stdout, &frame).is_err() {
                 break;
             }
-
-            _ => {} // Future variants — silently ignored
         }
-    }
+    });
 
-    // ── Cleanup ──
-    crate::tools::shutdown_tools();
+    // ── 9. Run agent loop ──
+    run_agent_loop(agent, hp_conn, tui_rx, agent_tx);
+
+    // ── 10. Cleanup ──
     if let Some(mut c) = tools_option.take() {
         let _ = c.kill();
         let _ = c.wait();
     }
 
-    agent.maybe_save_session();
-
-    if let Some(ref mut hp) = hp_conn {
-        let unreg = AgentToHp::Unregister { pid: std::process::id() };
-        let _ = dsx_proto::write_frame(hp.get_mut(), &unreg);
-    }
-
-    eprintln!("dsx-agent: shutdown complete (session {}, {} turns, {} tokens)",
-        agent.session_seed, agent.ctx.turn_count(), agent.session_tokens);
+    stdin_handle.join().ok();
+    stdout_handle.join().ok();
 }

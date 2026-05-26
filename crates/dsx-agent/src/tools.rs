@@ -109,7 +109,7 @@ pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: 
     } else {
         tool_call_id.to_string()
     };
-    let has_id = !tool_call_id.is_empty();
+    let _has_id = !tool_call_id.is_empty();
 
     let result = with_ipc(|state| {
         // Check cancel before proceeding
@@ -143,20 +143,8 @@ pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: 
                 return Ok("[CANCELLED] Tool execution cancelled.".to_string());
             }
 
-            // Forward Progress frames to Tauri
-            if let ToolsToAgent::Progress { id, content, stream_type } = &response {
-                if has_id {
-                    let frame = serde_json::json!({
-                        "type": "tool_progress",
-                        "id": id,
-                        "content": content,
-                        "stream_type": stream_type,
-                    });
-                    if let Ok(s) = serde_json::to_string(&frame) {
-                        let _ = writeln!(std::io::stdout(), "{s}");
-                        let _ = std::io::stdout().flush();
-                    }
-                }
+            // Skip Progress frames (no-op in merged architecture)
+            if let ToolsToAgent::Progress { .. } = &response {
                 continue;
             }
 
@@ -428,24 +416,14 @@ fn exec_direct(args: &str, tool_call_id: &str) -> String {
 
     let out_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let err_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    let has_id = !tool_call_id.is_empty();
-    let id_owned = tool_call_id.to_string();
+    let _has_id = !tool_call_id.is_empty();
+    let _id_owned = tool_call_id.to_string();
 
     if let Some(out) = child.stdout.take() {
         let buf = out_buf.clone();
-        let id = id_owned.clone();
         std::thread::spawn(move || {
             for line in std::io::BufReader::new(out).lines() {
                 let Ok(l) = line else { break };
-                if has_id {
-                    let frame = serde_json::json!({
-                        "type": "exec_progress", "id": id, "line": l,
-                    });
-                    if let Ok(s) = serde_json::to_string(&frame) {
-                        let _ = writeln!(std::io::stdout(), "{s}");
-                        let _ = std::io::stdout().flush();
-                    }
-                }
                 buf.lock().unwrap().push_str(&l);
                 buf.lock().unwrap().push('\n');
             }
@@ -453,19 +431,9 @@ fn exec_direct(args: &str, tool_call_id: &str) -> String {
     }
     if let Some(err) = child.stderr.take() {
         let buf = err_buf.clone();
-        let id = id_owned;
         std::thread::spawn(move || {
             for line in std::io::BufReader::new(err).lines() {
                 let Ok(l) = line else { break };
-                if has_id {
-                    let frame = serde_json::json!({
-                        "type": "exec_progress", "id": id, "line": format!("[stderr] {l}"),
-                    });
-                    if let Ok(s) = serde_json::to_string(&frame) {
-                        let _ = writeln!(std::io::stdout(), "{s}");
-                        let _ = std::io::stdout().flush();
-                    }
-                }
                 buf.lock().unwrap().push_str(&l);
                 buf.lock().unwrap().push('\n');
             }

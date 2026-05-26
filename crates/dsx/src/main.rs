@@ -10,13 +10,16 @@ fn main() {
         "tools" => dsx_tools::run(),
         "tui" => {
             let seed = std::env::args().nth(2).or_else(|| std::env::args().nth(3).filter(|_| std::env::args().nth(2).as_deref() == Some("--session")));
-            if let Err(e) = dsx_tui::run(seed) {
+            if let Err(e) = dsx_agent::tui::run_tui(seed) {
                 eprintln!("dsx tui: {e}");
             }
         }
         "config" | "init" => run_config(),
         _ => {
-            dsx_agent::runner::run();
+            // Default: run TUI (single-process mode)
+            if let Err(e) = dsx_agent::tui::run_tui(None) {
+                eprintln!("dsx: {e}");
+            }
         }
     }
 }
