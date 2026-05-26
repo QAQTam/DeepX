@@ -203,7 +203,13 @@ fn handle_connection(
     service: Arc<Mutex<HealthService>>,
 ) {
     let peer = stream.peer_addr().ok();
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut reader = match stream.try_clone() {
+        Ok(s) => BufReader::new(s),
+        Err(e) => {
+            eprintln!("dsx-hp: try_clone failed for {:?}: {e}", peer);
+            return;
+        }
+    };
 
     let mut buf = String::new();
     loop {
@@ -334,6 +340,11 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
     let effort = v.get("effort").and_then(|v| v.as_str()).map(String::from);
     let max_tokens = v.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(8192) as u32;
     let user_id = v.get("user_id").and_then(|v| v.as_str()).map(String::from);
+    let api_key = v.get("api_key")
+        .and_then(|v| v.as_str())
+        .filter(|k| !k.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| config.api_key.clone());
 
     let messages_val: Vec<dsx_types::Message> = match v.get("messages")
         .and_then(|m| serde_json::from_value::<Vec<dsx_types::Message>>(m.clone()).ok())
@@ -360,7 +371,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
 
     let gateway_cfg = GatewayConfig {
         base_url: config.base_url.clone(),
-        api_key: config.api_key.clone(),
+        api_key: api_key.clone(),
     };
 
     rt.block_on(async {

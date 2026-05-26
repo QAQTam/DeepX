@@ -78,6 +78,7 @@ pub async fn chat_stream(
         max_tokens: Some(if max_tokens > 0 { max_tokens } else { cfg.max_tokens }),
         tools: tools_json,
         user_id: uid.map(String::from),
+        api_key: Some(dsx_proto::Redacted(cfg.api_key.clone())),
     };
 
     // Send frame

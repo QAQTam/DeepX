@@ -8,6 +8,12 @@ fn main() {
         "hp" => dsx_hp::runner::run(),
         "agent" => dsx_agent::runner::run(),
         "tools" => dsx_tools::run(),
+        "tui" => {
+            let seed = std::env::args().nth(2).or_else(|| std::env::args().nth(3).filter(|_| std::env::args().nth(2).as_deref() == Some("--session")));
+            if let Err(e) = dsx_tui::run(seed) {
+                eprintln!("dsx tui: {e}");
+            }
+        }
         "config" | "init" => run_config(),
         _ => {
             dsx_agent::runner::run();

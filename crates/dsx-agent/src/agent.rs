@@ -41,6 +41,10 @@ pub struct AgentState {
     pub has_explored: bool,
     pub turns_since_last_read: u32,
 
+    /// After a file write/edit, forces a re-read before other tools.
+    /// Contains the path that must be re-read.
+    pub re_read_required: Option<String>,
+
     // ── Pending tool confirmation ──
     pub pending_tools: Vec<(ToolCall, SafetyLevel, String)>,
     pub tool_results: Vec<(String, String)>,
@@ -152,6 +156,7 @@ impl AgentState {
             reasoning_tokens: 0,
             has_explored: false,
             turns_since_last_read: 0,
+            re_read_required: None,
             pending_tools: Vec::new(),
             tool_results: Vec::new(),
             session_seed: String::new(),
@@ -306,6 +311,9 @@ impl<'a> ToolResultAppender<'a> {
             let action = arg_parser::tool_action(args);
             if action == "write" || action == "edit" {
                 tracker::track_file_written(self.state, args);
+                if let Some(path) = arg_parser::parse_file_arg(args) {
+                    self.state.re_read_required = Some(path);
+                }
             }
         }
 

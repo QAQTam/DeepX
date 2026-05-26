@@ -88,15 +88,12 @@ fn apply_phase_config(agent: &mut AgentState, phase: dsx_types::TaskPhase, level
 // ── Helper: write a tool_result JSON-LP frame to TUI ──
 
 fn emit_tool_result(w: &mut impl Write, id: &str, name: &str, content: &str, success: bool) {
-    let frame = serde_json::json!({
-        "type": "tool_result",
-        "id": id,
-        "name": name,
-        "content": content,
-        "success": success,
+    let _ = dsx_proto::write_frame(w, &AgentToTui::ToolResult {
+        id: id.to_string(),
+        name: name.to_string(),
+        content: content.to_string(),
+        success,
     });
-    let _ = writeln!(w, "{}", serde_json::to_string(&frame).unwrap_or_default());
-    let _ = w.flush();
 }
 
 // ── Shared helpers ──
@@ -261,6 +258,11 @@ fn execute_single_tool(
         return ToolOutcome::Continue;
     }
 
+    if gates::re_read_gate(agent, name, id, args) {
+        emit_tool_result(tui_writer, id, name, "[BLOCKED] Re-read gate prevented this tool.", false);
+        return ToolOutcome::Continue;
+    }
+
     if name == "status" {
         let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
         let state = args_val.get("state").and_then(|v| v.as_str()).unwrap_or("coding");
@@ -402,12 +404,13 @@ fn handle_user_input(
                     .unwrap_or_default();
                 let tokens_used = agent.token_estimate;
                 let cache_hit_pct = agent.cache_hit_pct;
-                dsx_proto::write_line(tui_writer, &format!(
-                    r#"{{"type":"session_restored","seed":"{}","message_count":{},"summary":"{}","tokens_used":{},"cache_hit_pct":{}}}"#,
-                    agent.session_seed, msg_count,
-                    summary.replace('"', "\\\"").replace('\n', "\\n"),
-                    tokens_used, cache_hit_pct,
-                ));
+                let _ = dsx_proto::write_frame(tui_writer, &AgentToTui::SessionRestored {
+                    seed: agent.session_seed.clone(),
+                    message_count: msg_count as u64,
+                    summary,
+                    tokens_used,
+                    cache_hit_pct,
+                });
             }
             if agent.auto_mode {
                 let phase = router::detect_initial_phase(text);
@@ -491,13 +494,17 @@ fn handle_user_input(
             max_tokens: Some(agent.config.max_tokens),
             tools: Some(serde_json::to_value(&agent.tool_defs).unwrap_or_default()),
             user_id: Some(agent.session_seed.clone()),
+            api_key: Some(dsx_proto::Redacted(agent.config.api_key.clone())),
         };
         let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
 
         let HpStreamResponse { mut content, reasoning_content, thinking_signature, usage, tool_calls_raw } =
             match read_hp_stream_response(hp, agent, tui_writer, _round) {
                 Ok(r) => r,
-                Err(()) => return,
+                Err(()) => {
+                    agent.stream_cancelled = false;
+                    return;
+                },
             };
 
         agent.health.record_api_success(&agent.config.model);
@@ -663,13 +670,17 @@ fn handle_user_input(
             max_tokens: Some(agent.config.max_tokens),
             tools: None,
             user_id: Some(agent.session_seed.clone()),
+            api_key: Some(dsx_proto::Redacted(agent.config.api_key.clone())),
         };
         let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
 
         let HpStreamResponse { mut content, reasoning_content, thinking_signature, usage, tool_calls_raw } =
             match read_hp_stream_response(hp, agent, tui_writer, _post_round) {
                 Ok(r) => r,
-                Err(()) => return,
+                Err(()) => {
+                    agent.stream_cancelled = false;
+                    return;
+                },
             };
 
         agent.health.record_api_success(&agent.config.model);
@@ -781,7 +792,7 @@ pub fn run() {
     }
 
     // ── 5. Spawn dsx-tools ──
-    let exe = std::env::current_exe().unwrap();
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("dsx"));
     let (tools_child, mut tools_reader, mut tools_writer) = crate::tools_spawn::spawn_process(&exe);
     let mut tools_option: Option<std::process::Child> = Some(tools_child);
 

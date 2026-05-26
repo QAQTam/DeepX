@@ -16,7 +16,39 @@
 //! - `AgentToTools` / `ToolsToAgent` — Agent ↔ Tools JSON-LP over pipes
 //! - `AgentToHp` / `HpToAgent` — Agent ↔ HP JSON-LP over TCP
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use std::fmt;
+
+/// Wrapper that serializes normally but redacts in Debug output.
+/// Prevents API keys from leaking into debug logs.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Redacted(pub String);
+
+impl Serialize for Redacted {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(s)
+    }
+}
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.0.is_empty() { f.write_str("\"\"") } else { f.write_str("\"***\"") }
+    }
+}
+
+impl<'de> Deserialize<'de> for Redacted {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        String::deserialize(d).map(Redacted)
+    }
+}
+
+impl From<&str> for Redacted {
+    fn from(s: &str) -> Self { Redacted(s.to_string()) }
+}
+
+impl From<String> for Redacted {
+    fn from(s: String) -> Self { Redacted(s) }
+}
 
 // ── TUI ↔ Agent ────────────────────────────────────────────────────────
 
@@ -125,6 +157,25 @@ pub enum AgentToTui {
     /// Shutdown acknowledgement.
     #[serde(rename = "shutdown_ack")]
     ShutdownAck,
+
+    /// Tool execution result.
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        id: String,
+        name: String,
+        content: String,
+        success: bool,
+    },
+
+    /// Session restored from disk (resumed conversation).
+    #[serde(rename = "session_restored")]
+    SessionRestored {
+        seed: String,
+        message_count: u64,
+        summary: String,
+        tokens_used: u32,
+        cache_hit_pct: f64,
+    },
 }
 
 // ── Agent ↔ Tools ──────────────────────────────────────────────────────
@@ -266,6 +317,10 @@ pub enum AgentToHp {
         tools: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         user_id: Option<String>,
+        /// API key from agent's runtime config (bypasses HP's OnceLock cache).
+        /// Redacted in Debug output to prevent log leakage.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_key: Option<Redacted>,
     },
 }
 

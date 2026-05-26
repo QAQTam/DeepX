@@ -90,6 +90,28 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
     false
 }
 
+/// Re-read gate: after file write/edit, block ALL other tools until the
+/// written/edited file is re-read to prevent context hallucination.
+pub fn re_read_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: &str) -> bool {
+    let required_path = match &state.re_read_required {
+        Some(p) => p.clone(),
+        None => return false,
+    };
+    let action = tool_action(args);
+    let is_read = tool_name == "file" && action == "read";
+    let is_same_file = parse_file_arg(args)
+        .map_or(false, |p| p == required_path);
+    if is_read && is_same_file {
+        state.re_read_required = None;
+        return false;
+    }
+    let _ = state.ctx.push_tool_result(tc_id, &format!(
+        "[ERROR] '{}' blocked: must re-read '{}' after write/edit to prevent hallucination.\n[HINT] Call file(read, path=\"{}\") first.",
+        tool_name, required_path, required_path
+    ));
+    true
+}
+
 fn last_assistant_mentions(state: &AgentState, path: &str) -> bool {
     if let Some(last) = state.ctx.to_vec().iter().rev().find(|m| m.role == "assistant" && !m.content.is_empty()) {
         last.content.iter().any(|b| matches!(b, dsx_types::ContentBlock::Text { text } if text.contains(path)))

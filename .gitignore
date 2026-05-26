@@ -3,4 +3,3 @@ target/
 *.swp
 *.swo
 .env
-node_modules/

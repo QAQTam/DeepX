@@ -156,7 +156,10 @@ fn save_session(
         task_phase: Some(router::read_phase()),
     };
 
-    let _ = std::fs::write(&sfile_path, serde_json::to_string_pretty(&file).unwrap_or_default());
+    let serialized = serde_json::to_string_pretty(&file).unwrap_or_default();
+    let tmp_path = sfile_path.with_extension("json.tmp");
+    let _ = std::fs::write(&tmp_path, &serialized);
+    let _ = std::fs::rename(&tmp_path, &sfile_path);
     super::index::update_index_entry(&file);
 }
 

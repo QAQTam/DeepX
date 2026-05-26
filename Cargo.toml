@@ -8,7 +8,7 @@ members = [
     "crates/dsx-agent",
     "crates/dsx-tools",
     "crates/dsx-sudo",
-    "crates/dsx-tauri/src-tauri",
+    "crates/dsx-tui",
 ]
 
 [workspace.package]
