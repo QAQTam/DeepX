@@ -21,4 +21,3 @@ pub mod session;
 pub mod tool_parser;
 pub mod cache_analyzer;
 pub mod hp;
-pub mod tui;

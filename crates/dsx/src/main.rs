@@ -8,19 +8,10 @@ fn main() {
         "hp" => dsx_hp::runner::run(),
         "agent" => dsx_agent::runner::run(),
         "tools" => dsx_tools::run(),
-        "tui" => {
-            let args: Vec<String> = std::env::args().collect();
-            let seed = args.windows(2).find(|w| w[0] == "--session").map(|w| w[1].clone());
-            if let Err(e) = dsx_agent::tui::run_tui(seed) {
-                eprintln!("dsx tui: {e}");
-            }
-        }
         "config" | "init" => run_config(),
         _ => {
-            // Default: run TUI (single-process mode)
-            if let Err(e) = dsx_agent::tui::run_tui(None) {
-                eprintln!("dsx: {e}");
-            }
+            // Default: headless agent (stdin/stdout JSON-LP)
+            dsx_agent::runner::run();
         }
     }
 }

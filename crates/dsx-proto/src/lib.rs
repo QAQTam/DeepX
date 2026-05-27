@@ -6,13 +6,13 @@
 //!
 //! | Channel | Transport | Direction |
 //! |---------|-----------|-----------|
-//! | TUI ↔ Agent | mpsc channels (primary) / stdin-stdout (headless) | Bidirectional |
+//! | UI ↔ Agent | mpsc channels (primary) / stdin-stdout (headless) | Bidirectional |
 //! | Agent ↔ Tools | direct call (in-process) | Bidirectional |
 //! | Agent → HP | TCP localhost | Bidirectional |
 //!
 //! ## Submodules
 //!
-//! - `tui` — `TuiToAgent` / `AgentToTui`
+//! - `agent_protocol` — `Ui2Agent` / `Agent2Ui`
 //! - `tools` — `AgentToTools` / `ToolsToAgent`
 //! - `hp` — `AgentToHp` / `HpToAgent`
 
@@ -21,13 +21,13 @@ use std::fmt;
 
 // ── Submodule declarations ──────────────────────────────────────────────
 
-mod tui;
+mod agent_protocol;
 mod tools;
 mod hp;
 
 // ── Re-exports (backward-compatible paths) ──────────────────────────────
 
-pub use tui::{AgentToTui, TuiToAgent};
+pub use agent_protocol::{Agent2Ui, Ui2Agent};
 pub use tools::{AgentToTools, ToolsToAgent};
 pub use hp::{AgentToHp, HpToAgent};
 

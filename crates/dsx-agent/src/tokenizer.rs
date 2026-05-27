@@ -1,14 +1,13 @@
-//! Token counting and estimation.
+//! Token counting with DeepSeek tokenizer and heuristic fallback.
 //!
-//! Provides DeepSeek-tokenizer-backed counting with heuristic fallback.
-//! The [`TokenCount`] trait from `dsx-types` is implemented here so that
-//! the DeepSeek tokenizer binary embedded in this crate is used for
-//! accurate counting, rather than the heuristic-only base implementation.
+//! Loads the DeepSeek V3 tokenizer from `{data_dir}/tokenizer.json` at
+//! runtime. Falls back to a CJK-aware heuristic if the file is not found.
 //!
 //! `TokenBreakdown` is re-exported from `dsx-types` for caller convenience.
 
 use dsx_types::Message;
 pub use dsx_types::token::TokenBreakdown;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use tokenizers::Tokenizer;
 
@@ -16,12 +15,26 @@ use tokenizers::Tokenizer;
 
 static DEEPSEEK_TOKENIZER: OnceLock<Option<Tokenizer>> = OnceLock::new();
 
+fn tokenizer_path() -> PathBuf {
+    // Prefer DSX_TOKENIZER_PATH env var, then data_dir/tokenizer.json
+    if let Ok(p) = std::env::var("DSX_TOKENIZER_PATH") {
+        return PathBuf::from(p);
+    }
+    dsx_types::platform::data_dir().join("tokenizer.json")
+}
+
 fn get_tokenizer() -> Option<&'static Tokenizer> {
     DEEPSEEK_TOKENIZER.get_or_init(|| {
-        let bytes = include_bytes!("tokenizer.json");
-        match Tokenizer::from_bytes(bytes) {
-            Ok(tok) => Some(tok),
-            Err(e) => { log::warn!("[dsx] tokenizer load failed: {} — using heuristic", e); None }
+        let path = tokenizer_path();
+        match Tokenizer::from_file(&path) {
+            Ok(tok) => {
+                log::info!("dsx: DeepSeek tokenizer loaded from {}", path.display());
+                Some(tok)
+            }
+            Err(e) => {
+                log::warn!("dsx: tokenizer not found at {} ({}) — using heuristic", path.display(), e);
+                None
+            }
         }
     }).as_ref()
 }
@@ -78,3 +91,4 @@ pub fn estimate_messages_tokens(messages: &[Message]) -> u32 {
 // Message in a newtype. However, dsx-types already provides blanket
 // impls via `count_tokens` methods on Message. We just use those.
 // See dsx-types::token::TokenCount for the trait definition.
+

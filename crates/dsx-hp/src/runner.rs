@@ -35,10 +35,10 @@ use std::time::Duration;
 use crate::liveness::LivenessResult;
 use crate::registry::ProcessRegistry;
 use crate::types::{HpError, ProcessKind, Verdict};
-use crate::anthropic_api::{GatewayConfig, StreamEvent};
+use crate::anthropic_api::{Provider, StreamEvent};
 use dsx_proto::AgentToHp;
 
-static HP_CONFIG: OnceLock<GatewayConfig> = OnceLock::new();
+static HP_CONFIG: OnceLock<Provider> = OnceLock::new();
 static HP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 // ── Health service implementation ──
@@ -105,18 +105,18 @@ impl HealthService {
 // ── Main ──
 
 /// Load API config: config.json (priority) then env vars, then defaults.
-fn load_hp_config() -> GatewayConfig {
+fn load_hp_config() -> Provider {
     let cfg_path = dsx_types::platform::config_path();
 
     if let Ok(data) = std::fs::read_to_string(&cfg_path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
             let api_key = v.get("api_key").and_then(|k| k.as_str()).unwrap_or("").to_string();
             let base_url = v.get("base_url").and_then(|b| b.as_str()).unwrap_or("https://api.deepseek.com/anthropic").to_string();
-            return GatewayConfig { base_url, api_key };
+            return Provider::new(&base_url, &api_key);
         }
     }
 
-    GatewayConfig { base_url: "https://api.deepseek.com/anthropic".into(), api_key: String::new() }
+    Provider::new("https://api.deepseek.com/anthropic", "")
 }
 
 pub fn run() {
@@ -372,10 +372,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
     let tools: Option<Vec<dsx_types::ToolDef>> = tools_val
         .and_then(|t| serde_json::from_value(t).ok());
 
-    let gateway_cfg = GatewayConfig {
-        base_url: config.base_url.clone(),
-        api_key: api_key.clone(),
-    };
+    let provider_cfg = Provider::new(&config.base_url, &api_key);
 
     rt.block_on(async {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
@@ -383,7 +380,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         let msgs = messages_val.clone();
         let model_o = model.to_string();
         let sys = system;
-        let gw = gateway_cfg;
+        let gw = provider_cfg;
         let effort_o = effort.clone();
         let tx_err = tx.clone();
         tokio::spawn(async move {

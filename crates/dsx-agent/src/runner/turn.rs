@@ -8,7 +8,7 @@ use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, AgentToTui};
+use dsx_proto::{self, AgentToHp, Agent2Ui};
 use dsx_types::{ContentBlock, Message, ToolCall};
 
 use crate::agent::{AgentState, ToolResultAppender};
@@ -76,7 +76,7 @@ pub fn build_and_push_assistant(
 /// Handle the `status` tool: validate the requested phase and apply it.
 fn handle_status_tool(
     agent: &mut AgentState,
-    agent_tx: &mpsc::Sender<AgentToTui>,
+    agent_tx: &mpsc::Sender<Agent2Ui>,
     id: &str,
     name: &str,
     args: &str,
@@ -106,7 +106,7 @@ fn handle_status_tool(
         apply_phase_config(agent, tp, level);
     }
     let phase_name = format!("{:?}", tp).to_lowercase();
-    let _ = agent_tx.send(AgentToTui::PhaseChanged {
+    let _ = agent_tx.send(Agent2Ui::PhaseChanged {
         phase: phase_name,
     });
     let result = format!("[OK] Switched to {} mode", state);
@@ -119,7 +119,7 @@ fn handle_status_tool(
 /// Handle the `ask_user` / `ask` tool: send an AskUser frame and await the reply.
 fn handle_ask_user_tool(
     agent: &mut AgentState,
-    agent_tx: &mpsc::Sender<AgentToTui>,
+    agent_tx: &mpsc::Sender<Agent2Ui>,
     id: &str,
     name: &str,
     args: &str,
@@ -139,7 +139,7 @@ fn handle_ask_user_tool(
                 .collect::<Vec<_>>()
         })
         .filter(|v| !v.is_empty());
-    let frame = AgentToTui::AskUser {
+    let frame = Agent2Ui::AskUser {
         id: id.to_string(),
         question,
         options,
@@ -164,7 +164,7 @@ fn handle_ask_user_tool(
 pub fn execute_single_tool(
     agent: &mut AgentState,
     tc: &ToolCall,
-    agent_tx: &mpsc::Sender<AgentToTui>,
+    agent_tx: &mpsc::Sender<Agent2Ui>,
 ) -> ToolOutcome {
     let name = &tc.function.name;
     let id = &tc.id;
@@ -294,7 +294,7 @@ fn push_user_message_with_repair(agent: &mut AgentState, text: &str) -> bool {
 fn init_session_on_first_message(
     agent: &mut AgentState,
     text: &str,
-    agent_tx: &mpsc::Sender<AgentToTui>,
+    agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
     if agent.session_seed.is_empty() {
         let seed = agent.resume_seed.clone();
@@ -318,7 +318,7 @@ fn init_session_on_first_message(
                 .unwrap_or_default();
             let tokens_used = agent.token_estimate;
             let cache_hit_pct = agent.predicted_cache_hit_pct;
-            let _ = agent_tx.send(AgentToTui::SessionRestored {
+            let _ = agent_tx.send(Agent2Ui::SessionRestored {
                 seed: agent.session_seed.clone(),
                 message_count: msg_count as u64,
                 summary,
@@ -333,7 +333,7 @@ fn init_session_on_first_message(
             agent.current_task_phase = phase;
             apply_phase_config(agent, phase, level);
             let phase_name = format!("{:?}", phase).to_lowercase();
-            let _ = agent_tx.send(AgentToTui::PhaseChanged {
+            let _ = agent_tx.send(Agent2Ui::PhaseChanged {
                 phase: phase_name,
             });
             log::info!(
@@ -357,7 +357,7 @@ fn init_session_on_first_message(
 fn run_api_turn(
     agent: &mut AgentState,
     hp: &mut BufReader<TcpStream>,
-    agent_tx: &mpsc::Sender<AgentToTui>,
+    agent_tx: &mpsc::Sender<Agent2Ui>,
     round: u32,
     allow_tools: bool,
 ) -> Result<
@@ -373,7 +373,7 @@ fn run_api_turn(
 > {
     let (system, messages, breakdown) = crate::assembly::build_context(agent);
 
-    let _ = agent_tx.send(AgentToTui::CachePrediction {
+    let _ = agent_tx.send(Agent2Ui::CachePrediction {
         hit_rate: agent.predicted_cache_hit_pct,
     });
 
@@ -405,6 +405,16 @@ fn run_api_turn(
         user_id: Some(agent.session_seed.clone()),
         api_key: Some(dsx_proto::Redacted(agent.config.api_key.clone())),
     };
+
+    // Count tokens on the serialized payload (api_key excluded — HP sends it separately)
+    if let Ok(mut payload) = serde_json::to_value(&chat) {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.remove("api_key");
+        }
+        let json = serde_json::to_string(&payload).unwrap_or_default();
+        agent.token_estimate = tokenizer::count_tokens(&json);
+    }
+
     let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
 
     let HpStreamResponse {
@@ -432,12 +442,12 @@ fn run_api_turn(
 }
 
 /// Handle a user input message with full module integration.
-/// Sends AgentToTui events via the provided channel sender.
+/// Sends Agent2Ui events via the provided channel sender.
 pub fn handle_user_input(
     agent: &mut AgentState,
     text: &str,
     hp: &mut BufReader<TcpStream>,
-    agent_tx: &mpsc::Sender<AgentToTui>,
+    agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
     // ── Handle ask_user response ──
     if !process_ask_user_response(agent, text) {
@@ -527,7 +537,7 @@ pub fn handle_user_input(
                     let level = dsx_types::DebugLevel::Medium;
                     apply_phase_config(agent, tp, level);
                     let phase_name = format!("{:?}", tp).to_lowercase();
-                    let _ = agent_tx.send(AgentToTui::PhaseChanged {
+                    let _ = agent_tx.send(Agent2Ui::PhaseChanged {
                         phase: phase_name,
                     });
                 }
@@ -562,7 +572,7 @@ pub fn handle_user_input(
             );
             crate::orchestrator::maybe_save_session(agent);
 
-            let _ = agent_tx.send(AgentToTui::ApiResponse {
+            let _ = agent_tx.send(Agent2Ui::ApiResponse {
                 content,
                 tool_calls: None,
                 stop_reason: None,
@@ -622,7 +632,7 @@ pub fn handle_user_input(
                     }
                 })
                 .collect();
-            let _ = agent_tx.send(AgentToTui::ToolState {
+            let _ = agent_tx.send(Agent2Ui::ToolState {
                 explored: agent.has_explored,
                 declared_files: all_tool_calls
                     .iter()
@@ -717,7 +727,7 @@ pub fn handle_user_input(
 
             agent.health.record_turn();
 
-            let _ = agent_tx.send(AgentToTui::ApiResponse {
+            let _ = agent_tx.send(Agent2Ui::ApiResponse {
                 content,
                 reasoning_content: final_reasoning,
                 tool_calls: None,
@@ -756,7 +766,7 @@ pub fn handle_user_input(
     }
 
     if !sent_final_response {
-        let _ = agent_tx.send(AgentToTui::ApiResponse {
+        let _ = agent_tx.send(Agent2Ui::ApiResponse {
             content: format!(
                 "[System] Max post-tool rounds ({}) reached.",
                 max_post_rounds

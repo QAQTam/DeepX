@@ -444,32 +444,12 @@ impl ContextAssembler {
         false
     }
 
-    // ── Build: conversation messages with truncation ──
+    // ── Build: conversation messages ──
 
     /// Return conversation messages (user/assistant/tool), system messages stripped.
-    /// Drops oldest non-system messages when token estimate exceeds `context_limit`.
-    pub fn build(&self, context_limit: u32) -> Vec<Message> {
+    pub fn build(&self, _context_limit: u32) -> Vec<Message> {
         let mut msgs = self.to_vec();
         msgs.retain(|m| m.role != "system");
-        // Truncate oldest messages when token estimate exceeds limit
-        if context_limit > 0 {
-            let mut total: u32 = 0;
-            for m in &msgs {
-                let text = m.content.iter().filter_map(|b| {
-                    if let dsx_types::ContentBlock::Text { ref text } = b { Some(text.as_str()) }
-                    else { None }
-                }).collect::<Vec<_>>().join("\n");
-                total += tokenizer::count_tokens(&text);
-            }
-            while total > context_limit && msgs.len() > 1 {
-                let removed_text = msgs[0].content.iter().filter_map(|b| {
-                    if let dsx_types::ContentBlock::Text { ref text } = b { Some(text.as_str()) }
-                    else { None }
-                }).collect::<Vec<_>>().join("\n");
-                total -= tokenizer::count_tokens(&removed_text);
-                msgs.remove(0);
-            }
-        }
         msgs
     }
 }

@@ -11,11 +11,64 @@ use futures_util::StreamExt;
 use reqwest::Client as HttpClient;
 use tokio::sync::mpsc;
 
-/// Minimal config needed by the Anthropic API client.
+/// Anthropic-compatible provider with endpoint, auth, and feature flags.
+///
+/// Detected automatically from the base URL. All supported providers
+/// speak the same Anthropic Messages API protocol; only endpoint URL,
+/// auth header, and optional features differ.
 #[derive(Debug, Clone)]
-pub struct GatewayConfig {
+pub struct Provider {
     pub base_url: String,
     pub api_key: String,
+    kind: ProviderKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderKind {
+    /// `api.deepseek.com/anthropic` — ignores cache_control, no budget_tokens
+    DeepSeek,
+    /// `api.xiaomimimo.com/anthropic` — api-key auth, no anthropic-version
+    MiMo,
+    /// `api.anthropic.com` — full Anthropic feature set (future)
+    Claude,
+}
+
+impl Provider {
+    pub fn new(base_url: &str, api_key: &str) -> Self {
+        let kind = if base_url.contains("xiaomimimo.com") {
+            ProviderKind::MiMo
+        } else if base_url.contains("anthropic.com") {
+            ProviderKind::Claude
+        } else {
+            ProviderKind::DeepSeek
+        };
+        Self { base_url: base_url.to_string(), api_key: api_key.to_string(), kind }
+    }
+
+    /// HTTP header name for the API key (e.g. `x-api-key` vs `api-key`).
+    pub fn auth_header_name(&self) -> &'static str {
+        match self.kind {
+            ProviderKind::DeepSeek | ProviderKind::Claude => "x-api-key",
+            ProviderKind::MiMo => "api-key",
+        }
+    }
+
+    /// Value for the `anthropic-version` header, if any.
+    pub fn version_header(&self) -> Option<&'static str> {
+        match self.kind {
+            ProviderKind::DeepSeek | ProviderKind::Claude => Some("2023-06-01"),
+            ProviderKind::MiMo => None, // MiMo ignores this header
+        }
+    }
+
+    /// Whether `thinking.budget_tokens` is honoured.
+    pub fn thinking_budget_supported(&self) -> bool {
+        match self.kind {
+            ProviderKind::DeepSeek => false,
+            ProviderKind::MiMo => false,
+            ProviderKind::Claude => true,
+        }
+    }
 }
 
 /// Events emitted during API streaming.
@@ -37,7 +90,7 @@ pub enum StreamEvent {
 
 /// Stream a chat completion via the native Anthropic Messages API.
 pub async fn chat_stream(
-    config: &GatewayConfig,
+    provider: &Provider,
     model: &str,
     system: Option<String>,
     messages: Vec<Message>,
@@ -60,6 +113,7 @@ pub async fn chat_stream(
     // ── 2. Normalize messages (tool role → user+ToolResult) ──
     let mut api_msgs = normalize_messages(messages);
 
+    // ── 3. Cache_control on penultimate message ──
     // ── 3. Cache_control on penultimate message ──
     if api_msgs.len() >= 2 {
         let idx = api_msgs.len() - 2;
@@ -117,21 +171,21 @@ pub async fn chat_stream(
     }
 
     // ── 6. HTTP POST ──
-    let url = build_anthropic_url(&config.base_url);
+    let url = build_anthropic_url(&provider.base_url);
     let client = HttpClient::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
         .pool_max_idle_per_host(0)
         .build()?;
 
-    let resp = client
+    let mut req = client
         .post(&url)
-        .header("x-api-key", &config.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
+        .header(provider.auth_header_name(), &provider.api_key)
+        .header("Content-Type", "application/json");
+    if let Some(ver) = provider.version_header() {
+        req = req.header("anthropic-version", ver);
+    }
+    let resp = req.json(&body).send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();

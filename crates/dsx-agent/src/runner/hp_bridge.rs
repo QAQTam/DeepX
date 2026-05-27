@@ -4,7 +4,7 @@ use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToTui, HpToAgent};
+use dsx_proto::{self, Agent2Ui, HpToAgent};
 use dsx_types::UsageInfo;
 
 use crate::agent::AgentState;
@@ -20,13 +20,13 @@ pub struct HpStreamResponse {
 
 /// Send a ToolResult frame via the agent-to-TUI channel (`agent_tx`).
 pub fn emit_tool_result(
-    tx: &mpsc::Sender<AgentToTui>,
+    tx: &mpsc::Sender<Agent2Ui>,
     id: &str,
     name: &str,
     content: &str,
     success: bool,
 ) {
-    let _ = tx.send(AgentToTui::ToolResult {
+    let _ = tx.send(Agent2Ui::ToolResult {
         id: id.to_string(),
         name: name.to_string(),
         content: content.to_string(),
@@ -39,7 +39,7 @@ pub fn emit_tool_result(
 pub fn read_hp_stream_response(
     hp: &mut BufReader<TcpStream>,
     agent: &mut AgentState,
-    agent_tx: &mpsc::Sender<AgentToTui>,
+    agent_tx: &mpsc::Sender<Agent2Ui>,
     _round: u32,
 ) -> Result<HpStreamResponse, ()> {
     loop {
@@ -64,7 +64,7 @@ pub fn read_hp_stream_response(
                     return Err(());
                 }
 
-                let _ = agent_tx.send(AgentToTui::ContentDelta {
+                let _ = agent_tx.send(Agent2Ui::ContentDelta {
                     delta: delta.clone(),
                     reasoning: reasoning.clone(),
                 });
@@ -78,7 +78,7 @@ pub fn read_hp_stream_response(
                 content: prog_content,
                 stream_type,
             } => {
-                let _ = agent_tx.send(AgentToTui::ToolProgress {
+                let _ = agent_tx.send(Agent2Ui::ToolProgress {
                     id: id.clone(),
                     content: prog_content.clone(),
                     stream_type: stream_type.clone(),
@@ -101,7 +101,7 @@ pub fn read_hp_stream_response(
                 });
             }
             HpToAgent::Error { message } => {
-                let _ = agent_tx.send(AgentToTui::Error {
+                let _ = agent_tx.send(Agent2Ui::Error {
                     message: message.clone(),
                 });
                 return Err(());

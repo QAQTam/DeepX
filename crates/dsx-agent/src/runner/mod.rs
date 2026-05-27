@@ -13,7 +13,7 @@ use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, AgentToTui, HpToAgent, TuiToAgent};
+use dsx_proto::{self, AgentToHp, Agent2Ui, HpToAgent, Ui2Agent};
 
 use crate::agent::AgentState;
 use crate::orchestrator::maybe_save_session;
@@ -24,8 +24,8 @@ use crate::router;
 pub fn run_agent_loop(
     mut agent: AgentState,
     mut hp_conn: Option<BufReader<TcpStream>>,
-    tui_rx: mpsc::Receiver<TuiToAgent>,
-    agent_tx: mpsc::Sender<AgentToTui>,
+    tui_rx: mpsc::Receiver<Ui2Agent>,
+    agent_tx: mpsc::Sender<Agent2Ui>,
 ) {
     // Drain HP register response
     if let Some(ref mut hp) = hp_conn {
@@ -33,7 +33,7 @@ pub fn run_agent_loop(
     }
 
     loop {
-        let frame: TuiToAgent = match tui_rx.recv() {
+        let frame: Ui2Agent = match tui_rx.recv() {
             Ok(f) => f,
             Err(_) => break,
         };
@@ -44,7 +44,7 @@ pub fn run_agent_loop(
         );
 
         match frame {
-            TuiToAgent::UserInput { text } => {
+            Ui2Agent::UserInput { text } => {
                 // Tools are now in-process — always available, no respawn needed
                 // Process input — if HP not connected or fails, try reconnect once
                 let hp_failed = if let Some(ref mut hp) = hp_conn {
@@ -69,15 +69,15 @@ pub fn run_agent_loop(
                         }
                     } else {
                         log::error!("dsx-agent: HP reconnect failed");
-                        let _ = agent_tx.send(AgentToTui::Error {
+                        let _ = agent_tx.send(Agent2Ui::Error {
                             message: "HP disconnected. Please try again.".into(),
                         });
                     }
                 }
-                let _ = agent_tx.send(AgentToTui::Done);
+                let _ = agent_tx.send(Agent2Ui::Done);
             }
 
-            TuiToAgent::ToolCall {
+            Ui2Agent::ToolCall {
                 id: _,
                 name,
                 action,
@@ -85,7 +85,7 @@ pub fn run_agent_loop(
             } => {
                 let args_str = args.to_string();
                 let content = crate::tools::execute_tool(&name, &action, &args_str);
-                let _ = agent_tx.send(AgentToTui::ApiResponse {
+                let _ = agent_tx.send(Agent2Ui::ApiResponse {
                     content,
                     reasoning_content: None,
                     tool_calls: None,
@@ -93,10 +93,10 @@ pub fn run_agent_loop(
                     usage: None,
                     context_tokens: agent.token_estimate,
                 });
-                let _ = agent_tx.send(AgentToTui::Done);
+                let _ = agent_tx.send(Agent2Ui::Done);
             }
 
-            TuiToAgent::SetPhase { phase } => {
+            Ui2Agent::SetPhase { phase } => {
                 let task_phase = match phase.as_str() {
                     "plan" => dsx_types::TaskPhase::Plan,
                     "coding" | "code" => dsx_types::TaskPhase::Coding,
@@ -105,20 +105,20 @@ pub fn run_agent_loop(
                 };
                 agent.current_task_phase = task_phase;
                 router::set_phase(task_phase, router::read_debug_level());
-                let _ = agent_tx.send(AgentToTui::PhaseChanged { phase });
+                let _ = agent_tx.send(Agent2Ui::PhaseChanged { phase });
             }
 
-            TuiToAgent::ToolConfirm { .. } => {}
+            Ui2Agent::ToolConfirm { .. } => {}
 
-            TuiToAgent::Cancel => {
+            Ui2Agent::Cancel => {
                 crate::tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
                 agent.stream_cancelled = true;
                 crate::tools::cancel_current_tool();
             }
 
-            TuiToAgent::Shutdown => {
+            Ui2Agent::Shutdown => {
                 maybe_save_session(&mut agent);
-                let _ = agent_tx.send(AgentToTui::ShutdownAck);
+                let _ = agent_tx.send(Agent2Ui::ShutdownAck);
                 break;
             }
 
@@ -195,15 +195,15 @@ pub fn run() {
     }
 
     // ── 8. Create channels + adapter threads ──
-    let (tui_tx, tui_rx) = mpsc::channel::<TuiToAgent>();
-    let (agent_tx, agent_rx) = mpsc::channel::<AgentToTui>();
+    let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
+    let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
 
-    // Thread: read TuiToAgent frames from stdin, forward to channel
+    // Thread: read Ui2Agent frames from stdin, forward to channel
     let stdin_handle = std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut reader = BufReader::new(stdin.lock());
         loop {
-            match dsx_proto::read_frame::<TuiToAgent>(&mut reader) {
+            match dsx_proto::read_frame::<Ui2Agent>(&mut reader) {
                 Ok(Some(frame)) => {
                     if tui_tx.send(frame).is_err() {
                         break;
@@ -218,7 +218,7 @@ pub fn run() {
         }
     });
 
-    // Thread: receive AgentToTui frames from channel, write JSON-LP to stdout
+    // Thread: receive Agent2Ui frames from channel, write JSON-LP to stdout
     let stdout_handle = std::thread::spawn(move || {
         let mut stdout = std::io::stdout();
         while let Ok(frame) = agent_rx.recv() {
