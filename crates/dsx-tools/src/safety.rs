@@ -4,8 +4,8 @@
 //! ToolManager/Agent uses to decide whether to auto-execute
 //! or block outright.
 //!
-//! Centralized classification logic from exec.rs (is_danger_command,
-//! is_safe_command) lives here.
+//! Centralized safety classification logic (is_danger_command, classify_execution)
+//! lives here.
 
 /// The result of a tool safety check.
 #[derive(Debug, Clone)]

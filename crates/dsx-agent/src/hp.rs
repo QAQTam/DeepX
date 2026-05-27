@@ -1,7 +1,14 @@
 use std::net::TcpStream;
+use std::process::Child;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use dsx_proto::{self, AgentToHp};
+
+/// Stores the most recently spawned HP daemon child process so it can be
+/// killed during shutdown. Without this, `try_reconnect()` orphans every
+/// process it spawns.
+static HP_DAEMON: Mutex<Option<Child>> = Mutex::new(None);
 
 /// Read HP port from port file.
 pub(crate) fn hp_port() -> u16 {
@@ -25,6 +32,10 @@ pub fn connect() -> Option<TcpStream> {
         }
     };
 
+    // Set timeouts so stalled HP connections don't hang the agent forever.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+
     let pid = std::process::id();
     let reg = AgentToHp::Register {
         kind: "Agent".into(),
@@ -37,6 +48,17 @@ pub fn connect() -> Option<TcpStream> {
     Some(stream)
 }
 
+/// Kill the HP daemon child process spawned by `try_reconnect()`, if any.
+/// Called during shutdown to prevent orphan processes.
+pub fn kill_hp_daemon() {
+    if let Ok(mut guard) = HP_DAEMON.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 /// Try to (re)connect to HP daemon. If port file is stale, spawn a new HP.
 pub fn try_reconnect() -> Option<TcpStream> {
     let port_path = dsx_types::platform::hp_port_path();
@@ -46,6 +68,8 @@ pub fn try_reconnect() -> Option<TcpStream> {
 
     if let Some(p) = port {
         if let Ok(stream) = TcpStream::connect(format!("127.0.0.1:{p}")) {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
             return Some(stream);
         }
         let _ = std::fs::write(&port_path, "");
@@ -71,12 +95,26 @@ pub fn try_reconnect() -> Option<TcpStream> {
                 if let Ok(s) = std::fs::read_to_string(&port_path) {
                     if let Ok(p) = s.trim().parse::<u16>() {
                         if let Ok(stream) = TcpStream::connect(format!("127.0.0.1:{p}")) {
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+                            let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+                            // Store handle so cleanup can kill it later.
+                            if let Ok(mut guard) = HP_DAEMON.lock() {
+                                // Kill the previous daemon if one exists.
+                                if let Some(mut prev) = guard.take() {
+                                    let _ = prev.kill();
+                                    let _ = prev.wait();
+                                }
+                                *guard = Some(child);
+                            }
                             return Some(stream);
                         }
                     }
                 }
                 if let Ok(Some(_)) = child.try_wait() { break; }
             }
+            // HP failed to start — kill the child before dropping.
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
     None

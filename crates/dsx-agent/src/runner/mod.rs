@@ -128,6 +128,7 @@ pub fn run_agent_loop(
 
     // ── Cleanup ──
     crate::tools::shutdown_tools();
+    crate::hp::kill_hp_daemon();
 
     agent.maybe_save_session();
 
@@ -146,7 +147,7 @@ pub fn run_agent_loop(
     );
 }
 
-// ── Backward-compat headless mode (stdin/stdout pipes) ──
+// ── Headless mode (stdin/stdout pipes) ──
 
 pub fn run() {
     eprintln!("dsx-agent starting (headless mode)");
@@ -232,6 +233,7 @@ pub fn run() {
 
     // ── 10. Cleanup ──
     crate::tools::shutdown_tools();
+    crate::hp::kill_hp_daemon();
     stdin_handle.join().ok();
     stdout_handle.join().ok();
 }

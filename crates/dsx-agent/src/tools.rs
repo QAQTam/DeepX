@@ -1,7 +1,6 @@
 //! Tool execution — in-process via dsx-tools::ToolManager.
 //!
-//! Previously this communicated with a tools subprocess over JSON-LP pipes.
-//! Now ToolManager is linked directly into the agent process, eliminating
+//! ToolManager is linked directly into the agent process, eliminating
 //! IPC failures, respawn complexity, and serialization overhead.
 
 use dsx_proto::ToolsToAgent;

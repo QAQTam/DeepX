@@ -2,7 +2,7 @@
 //
 // All type definitions are split across sub-modules below.
 // This file re-exports every public symbol so consumers can
-// use `crate::types::TypeName` without caring about sub-module layout.
+// use `dsx_types::TypeName` without caring about sub-module layout.
 
 // ── Sub-module declarations (each file = one logical group) ──
 

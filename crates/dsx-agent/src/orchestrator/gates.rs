@@ -68,7 +68,7 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
         }
     }
     if is_explore {
-        // Backward compat for exec(explore) — will be moved to explore tool
+        // exec(explore) marks the project as explored
         state.has_explored = true;
     }
     false
@@ -104,7 +104,7 @@ fn last_assistant_mentions(state: &AgentState, path: &str) -> bool {
     }
 }
 
-// ── Tool-equivalent detection (merged from turn_scorer) ──
+// ── Tool-equivalent detection ──
 
 /// Detect if an exec command duplicates an existing tool. Returns (tool_name, cmd_summary).
 pub fn detect_tool_equivalent(cmd: &str) -> Option<(String, String)> {

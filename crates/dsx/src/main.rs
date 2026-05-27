@@ -9,7 +9,8 @@ fn main() {
         "agent" => dsx_agent::runner::run(),
         "tools" => dsx_tools::run(),
         "tui" => {
-            let seed = std::env::args().nth(2).or_else(|| std::env::args().nth(3).filter(|_| std::env::args().nth(2).as_deref() == Some("--session")));
+            let args: Vec<String> = std::env::args().collect();
+            let seed = args.windows(2).find(|w| w[0] == "--session").map(|w| w[1].clone());
             if let Err(e) = dsx_agent::tui::run_tui(seed) {
                 eprintln!("dsx tui: {e}");
             }

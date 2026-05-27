@@ -1,14 +1,15 @@
 //! DSX TUI — single-process terminal UI for the coding agent.
 //!
-//! Layout (OpenCode-inspired split-footer):
-//!   ┌──────────────────────────────────┐
-//!   │        Scrollback (chat)         │
-//!   │  messages, markdown, tool output │
-//!   ├──────────────────────────────────┤
-//!   │        Footer (fixed)            │
-//!   │  ┃ input area                    │
-//!   │  ┃ model · phase · ctx · tokens  │
-//!   └──────────────────────────────────┘
+//! Layout (split-footer with optional side panel):
+//!   ┌──────────────────────────┬───────────┐
+//!   │      Chat (scrollback)   │   Side    │
+//!   │  messages, markdown,     │  tools,   │
+//!   │  tool output             │  files    │
+//!   ├──────────────────────────┴───────────┤
+//!   │        Footer (fixed)                │
+//!   │  ┃ input area                        │
+//!   │  ┃ model · phase · ctx · tokens      │
+//!   └──────────────────────────────────────┘
 
 use std::io::BufReader;
 use std::net::TcpStream;
@@ -1150,7 +1151,6 @@ fn mask_key(key: &str) -> String {
 
 fn detect_theme() -> Resolved {
     // Use catppuccin mocha by default.
-    // termprofile detection can override in the future.
     theme::DEFAULT
 }
 
@@ -1204,7 +1204,7 @@ pub fn run_tui(seed: Option<String>) -> anyhow::Result<()> {
     let (tui_tx, tui_rx) = mpsc::channel::<TuiToAgent>();
     let (agent_tx, agent_rx) = mpsc::channel::<AgentToTui>();
 
-    let _agent_handle = std::thread::spawn(move || {
+    let agent_handle = std::thread::spawn(move || {
         crate::runner::run_agent_loop(agent, hp_conn, tui_rx, agent_tx);
     });
 
@@ -1265,7 +1265,9 @@ pub fn run_tui(seed: Option<String>) -> anyhow::Result<()> {
     let _ = crossterm::terminal::disable_raw_mode();
     let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
 
+    agent_handle.join().ok();
     crate::tools::shutdown_tools();
+    crate::hp::kill_hp_daemon();
     if let Some(mut c) = hp_child { let _ = c.kill(); let _ = c.wait(); }
     result
 }

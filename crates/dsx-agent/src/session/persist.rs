@@ -168,7 +168,7 @@ pub fn finalize_session(
     cleanup_live(seed);
 }
 
-// ── Session index (merged from index.rs) ──
+// ── Session index ──
 
 fn save_index(metas: &[SessionMeta]) {
     let Some(path) = super::index_path() else { return };
@@ -202,7 +202,7 @@ pub(super) fn update_index_entry(file: &SessionFile) {
     save_index(&metas);
 }
 
-// ── Live snapshot (merged from snapshot.rs) ──
+// ── Live snapshot ──
 
 pub fn save_live_snapshot(
     seed: &str,

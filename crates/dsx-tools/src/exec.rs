@@ -1,7 +1,6 @@
-//! Command execution: sync, async, sudo support.
+//! Command execution via shell.
 //!
-//! 保留旧函数（exec_command, exec_with_sudo, spawn_exec_async 等）供向后兼容。
-//! 安全检测逻辑已移至 safety.rs。
+//! 安全检测逻辑由 safety.rs 集中管理。
 
 use std::process::{Command, Stdio};
 

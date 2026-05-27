@@ -11,7 +11,7 @@ pub mod prompt;
 pub mod router;
 pub mod tokenizer;
 
-// ── Missing top-level modules ──
+// ── Core modules ──
 pub mod agent;
 pub mod health;
 pub mod tools;

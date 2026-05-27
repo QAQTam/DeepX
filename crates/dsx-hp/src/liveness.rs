@@ -1,7 +1,6 @@
 //! Liveness — agent heartbeat and crash detection.
 //!
 //! Watches agent activity, detects hangs and crashes.
-//! Stub for a future healthd daemon.
 
 use std::time::Instant;
 
@@ -39,6 +38,8 @@ pub enum LivenessResult {
     /// Agent is active and responsive.
     Alive,
     /// Agent has missed some heartbeats but may recover.
+    /// Note: consumers currently treat this identically to `Alive`;
+    /// only `Dead` triggers pipeline action.
     Unresponsive {
         /// Seconds since last activity.
         since_secs: u64,

@@ -1,4 +1,4 @@
-//! AgentState: the orchestrator-owned state, independent of TUI.
+//! AgentState: the core agent session state, shared between TUI and agent loop.
 
 use crate::config;
 use crate::assembly::ContextAssembler;

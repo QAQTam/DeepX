@@ -1,4 +1,4 @@
-//! context7-cli — standalone Context7 documentation lookup tool.
+//! context7-cli — standalone developer utility for Context7 documentation lookup.
 //!
 //! Usage:
 //!   context7-cli search <library-name> [query]    → find libraries

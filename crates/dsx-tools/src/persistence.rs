@@ -1,8 +1,8 @@
 //! Session I/O: memory and plan persistence.
 //!
-//! dsx-tools runs as a subprocess. For memory/plan persistence, it accesses
-//! the session filesystem directly (same paths as dsx-agent), avoiding IPC round-trips
-//! for simple read/write operations.
+//! Memory and plan data is persisted directly to the session filesystem
+//! (same paths as dsx-agent), avoiding IPC round-trips for simple
+//! read/write operations.
 
 use dsx_types;
 use std::path::PathBuf;

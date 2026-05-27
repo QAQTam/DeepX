@@ -159,7 +159,13 @@ pub fn run() {
 
     // Register self as the HP process
     {
-        let mut svc = service.lock().unwrap();
+        let mut svc = match service.lock() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("dsx-hp: mutex poisoned at startup: {e}");
+                return;
+            }
+        };
         svc.register(ProcessKind::Tui, "dsx-hp", std::process::id())
             .ok();
     }
@@ -248,7 +254,13 @@ fn dispatch_frame(
         Err(e) => return json_response("error", &format!("invalid frame: {e}")),
     };
 
-    let mut svc = service.lock().unwrap();
+    let mut svc = match service.lock() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("dsx-hp: mutex poisoned in dispatch: {e}");
+            return json_response("error", "internal: lock poisoned");
+        }
+    };
 
     match frame {
         AgentToHp::Register { kind, name, pid } => {
@@ -373,6 +385,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         let sys = system;
         let gw = gateway_cfg;
         let effort_o = effort.clone();
+        let tx_err = tx.clone();
         tokio::spawn(async move {
             let uid = user_id.clone();
             let result = crate::anthropic_api::chat_stream(
@@ -380,6 +393,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
             ).await;
             if let Err(e) = result {
                 eprintln!("dsx-hp: gateway error: {e:?}");
+                let _ = tx_err.send(StreamEvent::Error(format!("{e:?}"))).await;
             }
         });
 

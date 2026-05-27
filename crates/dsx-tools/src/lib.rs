@@ -1,6 +1,6 @@
-//! ToolManager IPC 服务框架。
+//! 进程内 ToolManager 框架。
 //!
-//! 提供：**ToolManager** — 工具注册 + 安全分类 + IPC 请求路由
+//! 提供：**ToolManager** — 工具注册 + 安全分类 + 请求路由
 //!
 //! 子模块通过 `pub fn register(mgr: &mut ToolManager)` 注册各自 handler。
 
@@ -10,7 +10,7 @@ pub mod file;
 mod safety;
 mod web;
 
-// D03 modules — tool handlers for plan, task
+// Tool handlers for plan and task
 pub mod plan;
 pub mod task;
 

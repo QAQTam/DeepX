@@ -50,7 +50,14 @@ pub fn init() {
 
         let _ = LOG_PATH.set(std::sync::Mutex::new(path.clone()));
 
-        match WriteLogger::init(lvl, config, std::fs::File::create(&path).unwrap()) {
+        let file = match std::fs::File::create(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("[dsx] log file create error: {}", e);
+                return true;
+            }
+        };
+        match WriteLogger::init(lvl, config, file) {
             Ok(()) => log::info!("Log started: {}", path.display()),
             Err(e) => eprintln!("[dsx] log: {}", e),
         }

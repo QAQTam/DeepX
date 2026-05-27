@@ -1,4 +1,4 @@
-//! Session persistence: save/load/resume, crash recovery snapshots, plan storage, pitfall guide.
+//! Session persistence: save/load/resume and crash recovery snapshots.
 //!
 //! # Storage format
 //!

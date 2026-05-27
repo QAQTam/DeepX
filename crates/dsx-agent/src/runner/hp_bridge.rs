@@ -9,7 +9,7 @@ use dsx_types::UsageInfo;
 
 use crate::agent::AgentState;
 
-/// Accumulated response from an HP streaming session.
+/// Final response from a single HP API call (ApiResponse frame).
 pub struct HpStreamResponse {
     pub content: String,
     pub reasoning_content: Option<String>,
@@ -18,7 +18,7 @@ pub struct HpStreamResponse {
     pub tool_calls_raw: serde_json::Value,
 }
 
-/// Send a ToolResult frame via the TUI channel.
+/// Send a ToolResult frame via the agent-to-TUI channel (`agent_tx`).
 pub fn emit_tool_result(
     tx: &mpsc::Sender<AgentToTui>,
     id: &str,

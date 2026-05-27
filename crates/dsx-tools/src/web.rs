@@ -40,7 +40,7 @@ fn c7_url_encode(s: &str) -> String {
     out
 }
 
-// ── Handler 函数（新 IPC 框架）──
+// ── Handler 函数 ──
 
 pub(super) fn handle_fetch(ctx: ToolCallCtx) -> ToolResult {
     let args = build_args_json(&ctx);

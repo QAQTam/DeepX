@@ -1,11 +1,11 @@
-//! Agent ↔ Tools frame definitions (stdin/stdout JSON-LP over pipes).
+//! Agent ↔ Tools frame definitions (direct call, in-process).
 //!
-//! The tools process is a security boundary: agent sends tool call requests,
-//! tools execute them in an isolated subprocess and return results.
+//! Tool execution now runs in-process via `dsx_tools::ToolManager`.
+//! These frame types are retained for typed request/response routing.
 
 use serde::{Deserialize, Serialize};
 
-/// Agent → Tools frames (stdin pipe).
+/// Agent → Tools request frames.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[non_exhaustive]
@@ -37,7 +37,7 @@ pub enum AgentToTools {
     Shutdown,
 }
 
-/// Tools → Agent frames (stdout pipe).
+/// Tools → Agent response frames.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[non_exhaustive]
