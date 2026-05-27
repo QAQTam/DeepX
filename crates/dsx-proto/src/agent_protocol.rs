@@ -4,10 +4,12 @@
 //! are retained for JSON-LP headless mode over stdin/stdout.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// UI → Agent frames (mpsc channel / stdin pipe in headless mode).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type")]
+#[ts(export, export_to = "protocol.ts")]
 #[non_exhaustive]
 pub enum Ui2Agent {
     #[serde(rename = "user_input")]
@@ -35,8 +37,9 @@ pub enum Ui2Agent {
 }
 
 /// Agent → UI frames (mpsc channel / stdout pipe in headless mode).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type")]
+#[ts(export, export_to = "protocol.ts")]
 #[non_exhaustive]
 pub enum Agent2Ui {
     /// Streaming content delta (one token or small chunk).

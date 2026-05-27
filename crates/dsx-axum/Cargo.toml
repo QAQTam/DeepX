@@ -1,0 +1,25 @@
+[package]
+name = "dsx-axum"
+version.workspace = true
+edition.workspace = true
+description = "DeepX HTTP API server — Axum + SSE streaming + static file serving"
+
+[[bin]]
+name = "dsx-serve"
+path = "src/main.rs"
+
+[dependencies]
+dsx-agent = { path = "../dsx-agent" }
+dsx-proto = { path = "../dsx-proto" }
+dsx-types = { path = "../dsx-types" }
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-stream = "0.3"
+futures-util = "0.3"

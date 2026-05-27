@@ -1,9 +1,0 @@
-[package]
-name = "context7-cli"
-version.workspace = true
-edition.workspace = true
-description = "Standalone Context7 documentation CLI — query latest library docs and API references"
-
-[dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "blocking"] }
-serde_json = "1"
