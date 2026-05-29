@@ -4,4 +4,3 @@ target/
 *.swo
 .env
 node_modules/
-frontend/

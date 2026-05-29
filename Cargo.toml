@@ -7,8 +7,6 @@ members = [
     "crates/dsx-hp",
     "crates/dsx-agent",
     "crates/dsx-tools",
-    "crates/dsx-axum",
-    "crates/context7-cli",
 ]
 
 [workspace.package]
