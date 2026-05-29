@@ -99,7 +99,6 @@ fn migrate_legacy_session(data: &str, seed: &str) -> Option<SessionFile> {
                 blocks.push(dsx_types::ContentBlock::ToolResult {
                     tool_use_id,
                     content: text.to_string(),
-                    is_error: None,
                 });
             }
             _ => {}

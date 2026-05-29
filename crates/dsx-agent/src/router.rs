@@ -85,42 +85,28 @@ pub fn phase_config(phase: TaskPhase, level: DebugLevel) -> PhaseConfig {
 
 // ── Phase prompt suffixes ──
 
-pub fn phase_prompt_suffix(phase: TaskPhase, lang: &str) -> Option<&'static str> {
-    if lang == "zh" {
-        match phase {
-            TaskPhase::Plan => Some("\n\
-                模式: PLAN · 模型: Pro(超级大脑)\n\
-                分析和设计阶段，输出结构化方案后等待批准。"),
-            TaskPhase::Coding => Some("\n\
-                模式: CODING · 模型: Flash(快速经济)\n\
-                高效实现变更。"),
-            TaskPhase::Debug => Some("\n\
-                模式: DEBUG · 模型: Pro(超级大脑)\n\
-                专注排查和修复错误。"),
-        }
-    } else {
-        match phase {
-            TaskPhase::Plan => Some("\n\
-                Mode: PLAN · Model: Pro (super brain)\n\
-                Analyze and design, output a structured plan, wait for approval."),
-            TaskPhase::Coding => Some("\n\
-                Mode: CODING · Model: Flash (fast & economical)\n\
-                Implement changes efficiently."),
-            TaskPhase::Debug => Some("\n\
-                Mode: DEBUG · Model: Pro (super brain)\n\
-                Focus on diagnosing and fixing errors."),
-        }
+pub fn phase_prompt_suffix(phase: TaskPhase) -> Option<&'static str> {
+    match phase {
+        TaskPhase::Plan => Some("\n\
+            Mode: PLAN · Model: Pro (super brain)\n\
+            Analyze and design, output a structured plan, wait for approval."),
+        TaskPhase::Coding => Some("\n\
+            Mode: CODING · Model: Flash (fast & economical)\n\
+            Implement changes efficiently."),
+        TaskPhase::Debug => Some("\n\
+            Mode: DEBUG · Model: Pro (super brain)\n\
+            Focus on diagnosing and fixing errors."),
     }
 }
 
 // ── Unified keyword lists for phase detection (merged from phase_detector + router) ──
 
 const PLAN_KWS: &[&str] = &["plan", "design", "architect", "approach", "analyze", "outline",
-    "review", "refactor", "方案", "设计", "架构", "分析", "规划", "审查", "重构"];
+    "review", "refactor"];
 const CODE_KWS: &[&str] = &["implement", "write", "create", "build", "add", "modify", "edit",
-    "code", "make", "实现", "编写", "创建", "添加", "修改", "写", "编码"];
+    "code", "make"];
 const DEBUG_KWS: &[&str] = &["error", "bug", "crash", "wrong", "failed", "debug", "issue",
-    "fix", "fail", "broken", "错误", "崩溃", "调试", "修复", "故障"];
+    "fix", "fail", "broken"];
 
 /// Score-based phase detection from a lowercase scan string.
 fn score_phase(scan: &str) -> TaskPhase {

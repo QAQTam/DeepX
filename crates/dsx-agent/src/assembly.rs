@@ -479,7 +479,7 @@ impl ContextAssembler {
 /// ```
 pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBreakdown) {
 
-    let base_prompt = crate::config::system_prompt(&state.config.prompt_lang);
+    let base_prompt = crate::config::system_prompt();
     let base_tokens = tokenizer::count_tokens(&base_prompt);
 
     // === System prompt: STABLE layers only (identical across consecutive requests) ===
@@ -495,15 +495,11 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
 
     // Layer 3: Phase prompt (stable per phase)
     let phase = crate::router::read_phase();
-    let phase_tokens = if let Some(suffix) = crate::router::phase_prompt_suffix(phase, &state.config.prompt_lang) {
+    let phase_tokens = if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
         system.push_str("\n\n");
         system.push_str(suffix);
         tokenizer::count_tokens(suffix)
     } else { 0 };
-
-    // Static reminder (stable — was previously after dynamic content which shifted offsets)
-    system.push_str("\n\n注意：status 工具只支持 plan/coding/debug 三种模式，explore/chat 已移除。");
-    let reminder_tokens = tokenizer::count_tokens("注意：status 工具只支持 plan/coding/debug 三种模式，explore/chat 已移除。");
 
     // === Messages: conversation from ctx, dynamic content appended to LAST user message ===
     let mut messages = state.ctx.build(state.config.context_limit);
@@ -539,7 +535,7 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
 
     // === Token breakdown ===
     let mut bd = TokenBreakdown::default();
-    bd.system = base_tokens + tool_help_tokens + phase_tokens + reminder_tokens;
+    bd.system = base_tokens + tool_help_tokens + phase_tokens;
     bd.episodic = tokenizer::estimate_messages_tokens(&messages);
     bd.total = bd.system + bd.episodic;
 

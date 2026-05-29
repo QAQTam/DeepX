@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 // ── Phase-specific performance config ──
 
@@ -28,7 +29,7 @@ pub fn default_phase_configs() -> HashMap<String, PhasePerfConfig> {
 
 // ── Config persistence ──
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PersistentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -67,11 +68,55 @@ pub struct ProfileConfig {
     pub context_limit: u32,
     #[serde(default = "default_base_url")]
     pub base_url: String,
-    #[serde(default = "default_lang")]
-    pub prompt_lang: String,
 }
 
 fn default_base_url() -> String { "https://api.deepseek.com/anthropic".into() }
-fn default_lang() -> String { "en".into() }
+
+// ── ConfigStore: unified config I/O with atomic writes ──
+
+#[derive(Debug, Clone)]
+pub struct ConfigStore {
+    path: PathBuf,
+}
+
+impl ConfigStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn default_location() -> Self {
+        Self::new(crate::platform::config_path())
+    }
+
+    pub fn exists(&self) -> bool {
+        self.path.exists()
+    }
+
+    pub fn load(&self) -> Option<PersistentConfig> {
+        let data = std::fs::read_to_string(&self.path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
+    pub fn save(&self, config: &PersistentConfig) -> bool {
+        let content = serde_json::to_string_pretty(config).unwrap_or_default();
+        let tmp = self.path.with_extension("json.tmp");
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&tmp, &content).is_ok()
+            && std::fs::rename(&tmp, &self.path).is_ok()
+    }
+
+    pub fn load_api_key(&self) -> Option<String> {
+        let data = std::fs::read_to_string(&self.path).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&data).ok()?;
+        v.get("api_key").and_then(|k| k.as_str()).map(String::from)
+    }
+
+    pub fn load_value(&self) -> Option<serde_json::Value> {
+        let data = std::fs::read_to_string(&self.path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+}
 
 

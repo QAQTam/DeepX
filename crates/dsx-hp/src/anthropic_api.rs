@@ -11,63 +11,24 @@ use futures_util::StreamExt;
 use reqwest::Client as HttpClient;
 use tokio::sync::mpsc;
 
-/// Anthropic-compatible provider with endpoint, auth, and feature flags.
-///
-/// Detected automatically from the base URL. All supported providers
-/// speak the same Anthropic Messages API protocol; only endpoint URL,
-/// auth header, and optional features differ.
+/// DeepSeek Anthropic-compatible endpoint.
 #[derive(Debug, Clone)]
 pub struct Provider {
     pub base_url: String,
     pub api_key: String,
-    kind: ProviderKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProviderKind {
-    /// `api.deepseek.com/anthropic` — ignores cache_control, no budget_tokens
-    DeepSeek,
-    /// `api.xiaomimimo.com/anthropic` — api-key auth, no anthropic-version
-    MiMo,
-    /// `api.anthropic.com` — full Anthropic feature set (future)
-    Claude,
 }
 
 impl Provider {
     pub fn new(base_url: &str, api_key: &str) -> Self {
-        let kind = if base_url.contains("xiaomimimo.com") {
-            ProviderKind::MiMo
-        } else if base_url.contains("anthropic.com") {
-            ProviderKind::Claude
-        } else {
-            ProviderKind::DeepSeek
-        };
-        Self { base_url: base_url.to_string(), api_key: api_key.to_string(), kind }
+        Self { base_url: base_url.to_string(), api_key: api_key.to_string() }
     }
 
-    /// HTTP header name for the API key (e.g. `x-api-key` vs `api-key`).
     pub fn auth_header_name(&self) -> &'static str {
-        match self.kind {
-            ProviderKind::DeepSeek | ProviderKind::Claude => "x-api-key",
-            ProviderKind::MiMo => "api-key",
-        }
+        "x-api-key"
     }
 
-    /// Value for the `anthropic-version` header, if any.
     pub fn version_header(&self) -> Option<&'static str> {
-        match self.kind {
-            ProviderKind::DeepSeek | ProviderKind::Claude => Some("2023-06-01"),
-            ProviderKind::MiMo => None, // MiMo ignores this header
-        }
-    }
-
-    /// Whether `thinking.budget_tokens` is honoured.
-    pub fn thinking_budget_supported(&self) -> bool {
-        match self.kind {
-            ProviderKind::DeepSeek => false,
-            ProviderKind::MiMo => false,
-            ProviderKind::Claude => true,
-        }
+        Some("2023-06-01")
     }
 }
 
@@ -100,56 +61,31 @@ pub async fn chat_stream(
     user_id: Option<String>,
     tx: mpsc::Sender<StreamEvent>,
 ) -> anyhow::Result<()> {
-    // ── 1. System blocks (cache_control on first) ──
+    // ── 1. System prompt ──
     let mut system_blocks: Vec<serde_json::Value> = Vec::new();
     if let Some(ref base) = system {
         if !base.is_empty() {
-            let mut block = serde_json::json!({"type": "text", "text": base});
-            block["cache_control"] = serde_json::json!({"type": "ephemeral"});
-            system_blocks.push(block);
+            system_blocks.push(serde_json::json!({"type": "text", "text": base}));
         }
     }
 
     // ── 2. Normalize messages (tool role → user+ToolResult) ──
-    let mut api_msgs = normalize_messages(messages);
+    let api_msgs = normalize_messages(messages);
 
-    // ── 3. Cache_control on penultimate message ──
-    // ── 3. Cache_control on penultimate message ──
-    if api_msgs.len() >= 2 {
-        let idx = api_msgs.len() - 2;
-        if let Some(content) = api_msgs[idx].get_mut("content") {
-            if let Some(arr) = content.as_array_mut() {
-                if let Some(last) = arr.last_mut() {
-                    if let Some(obj) = last.as_object_mut() {
-                        if obj.get("type").and_then(|v| v.as_str()) != Some("tool_result") {
-                            obj.insert("cache_control".into(), serde_json::json!({"type": "ephemeral"}));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── 4. Tool definitions ──
+    // ── 3. Tool definitions ──
     let anthropic_tools: Option<Vec<serde_json::Value>> = tools.map(|tds| {
-        let count = tds.len();
         tds.into_iter()
-            .enumerate()
-            .map(|(i, td)| {
-                let mut t = serde_json::json!({
+            .map(|td| {
+                serde_json::json!({
                     "name": td.function.name,
                     "description": td.function.description,
                     "input_schema": td.function.parameters,
-                });
-                if i == count - 1 {
-                    t["cache_control"] = serde_json::json!({"type": "ephemeral"});
-                }
-                t
+                })
             })
             .collect()
     });
 
-    // ── 5. Build request ──
+    // ── 4. Build request ──
     let mut body = serde_json::json!({
         "model": model,
         "max_tokens": max_tokens,
@@ -170,7 +106,7 @@ pub async fn chat_stream(
         body["output_config"] = serde_json::json!({"effort": e});
     }
 
-    // ── 6. HTTP POST ──
+    // ── 5. HTTP POST ──
     let url = build_anthropic_url(&provider.base_url);
     let client = HttpClient::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -195,7 +131,7 @@ pub async fn chat_stream(
         return Err(anyhow::anyhow!("{}", msg));
     }
 
-    // ── 7. SSE parsing ──
+    // ── 6. SSE parsing ──
     let mut byte_stream = resp.bytes_stream();
     let mut sse_buf = String::new();
     let mut text_buf = String::new();
@@ -301,7 +237,7 @@ pub async fn chat_stream(
         }
     }
 
-    // ── 8. Build final Message ──
+    // ── 7. Build final Message ──
     let mut blocks: Vec<ContentBlock> = Vec::new();
 
     if !think_buf.is_empty() {
@@ -350,16 +286,12 @@ fn normalize_messages(messages: Vec<Message>) -> Vec<serde_json::Value> {
             }
             "tool" => {
                 for block in msg.content {
-                    if let ContentBlock::ToolResult { tool_use_id, content, is_error } = block {
-                        let mut tr = serde_json::json!({
+                    if let ContentBlock::ToolResult { tool_use_id, content } = block {
+                        pending.push(serde_json::json!({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
                             "content": content,
-                        });
-                        if let Some(err) = is_error {
-                            tr["is_error"] = serde_json::json!(err);
-                        }
-                        pending.push(tr);
+                        }));
                     }
                 }
             }

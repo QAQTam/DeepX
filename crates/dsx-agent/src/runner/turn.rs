@@ -248,10 +248,10 @@ pub fn execute_single_tool(
     }
     emit_tool_result(agent_tx, id, name, &tr_content, tr_success);
 
-    if !failed && name == "file" && dsx_types::arg::tool_action(args) == "write" {
+    if !failed && name == "write_file" {
         tracker::track_file_written(agent, args);
     }
-    if name == "file" && dsx_types::arg::tool_action(args) == "read" {
+    if name == "read_file" {
         agent.turns_since_last_read = 0;
     }
 
@@ -415,7 +415,13 @@ fn run_api_turn(
         agent.token_estimate = tokenizer::count_tokens(&json);
     }
 
-    let _ = dsx_proto::write_frame(hp.get_mut(), &chat);
+    if let Err(e) = dsx_proto::write_frame(hp.get_mut(), &chat) {
+        log::error!("dsx-agent: write_frame to HP failed: {}", e);
+        let _ = agent_tx.send(Agent2Ui::Error {
+            message: "Failed to communicate with HP daemon.".into(),
+        });
+        return Err(());
+    }
 
     let HpStreamResponse {
         content,
@@ -499,6 +505,15 @@ pub fn handle_user_input(
 
 
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
+
+        if parsed.is_empty()
+            && content.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
+        {
+            let (cleaned, dsml_tcs) =
+                tool_parser::parse_dsml_tool_calls(&content, &agent.tool_defs);
+            content = cleaned;
+            parsed = dsml_tcs;
+        }
 
         if parsed.is_empty()
             && (content.contains("<tool_use>")

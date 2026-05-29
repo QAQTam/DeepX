@@ -26,8 +26,6 @@ pub enum ContentBlock {
     ToolResult {
         tool_use_id: String,
         content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
     },
 }
 
@@ -68,17 +66,12 @@ impl Message {
             content: vec![ContentBlock::text(content)],
         }
     }
-    /// Internal tool result (assembler merges into user role).
-    /// `is_error` is derived from the `[ERROR]`/`[FAIL]` prefix in `result`,
-    /// matching Anthropic's tool_result schema.
     pub fn tool(tool_call_id: &str, result: &str) -> Self {
-        let is_error = result.starts_with("[ERROR]") || result.starts_with("[FAIL]");
         Self {
             role: "tool".into(),
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: tool_call_id.into(),
                 content: result.into(),
-                is_error: if is_error { Some(true) } else { None },
             }],
         }
     }

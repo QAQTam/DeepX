@@ -58,6 +58,9 @@ pub fn run_agent_loop(
 
                 if hp_failed {
                     log::warn!("dsx-agent: HP failed, reconnecting...");
+                    let _ = agent_tx.send(Agent2Ui::Error {
+                        message: "HP disconnected. Attempting reconnect...".into(),
+                    });
                     if let Some(stream) = crate::hp::try_reconnect() {
                         let reader = BufReader::new(stream);
                         hp_conn = Some(reader);
@@ -78,20 +81,19 @@ pub fn run_agent_loop(
             }
 
             Ui2Agent::ToolCall {
-                id: _,
+                id,
                 name,
                 action,
                 args,
             } => {
                 let args_str = args.to_string();
-                let content = crate::tools::execute_tool(&name, &action, &args_str);
-                let _ = agent_tx.send(Agent2Ui::ApiResponse {
+                let content = crate::tools::execute_tool_with_id(&name, &action, &args_str, &id);
+                let success = !content.starts_with("[ERROR]") && !content.starts_with("[FAIL]");
+                let _ = agent_tx.send(Agent2Ui::ToolResult {
+                    id,
+                    name,
                     content,
-                    reasoning_content: None,
-                    tool_calls: None,
-                    stop_reason: None,
-                    usage: None,
-                    context_tokens: agent.token_estimate,
+                    success,
                 });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
@@ -108,12 +110,11 @@ pub fn run_agent_loop(
                 let _ = agent_tx.send(Agent2Ui::PhaseChanged { phase });
             }
 
-            Ui2Agent::ToolConfirm { .. } => {}
-
             Ui2Agent::Cancel => {
                 crate::tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
                 agent.stream_cancelled = true;
                 crate::tools::cancel_current_tool();
+                let _ = agent_tx.send(Agent2Ui::Cancelled);
             }
 
             Ui2Agent::Shutdown => {

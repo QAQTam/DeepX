@@ -47,7 +47,6 @@ pub enum ToolsToAgent {
         tools: Vec<dsx_types::ToolDef>,
     },
 
-    /// Structured result with is_error flag.
     #[serde(rename = "tool_result_message")]
     ToolResultMessage {
         id: String,
@@ -55,8 +54,6 @@ pub enum ToolsToAgent {
         action: String,
         success: bool,
         content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
     },
 
     #[serde(rename = "tool_error")]

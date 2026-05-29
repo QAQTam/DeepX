@@ -106,17 +106,13 @@ impl HealthService {
 
 /// Load API config: config.json (priority) then env vars, then defaults.
 fn load_hp_config() -> Provider {
-    let cfg_path = dsx_types::platform::config_path();
-
-    if let Ok(data) = std::fs::read_to_string(&cfg_path) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-            let api_key = v.get("api_key").and_then(|k| k.as_str()).unwrap_or("").to_string();
-            let base_url = v.get("base_url").and_then(|b| b.as_str()).unwrap_or("https://api.deepseek.com/anthropic").to_string();
-            return Provider::new(&base_url, &api_key);
-        }
-    }
-
-    Provider::new("https://api.deepseek.com/anthropic", "")
+    let store = dsx_types::ConfigStore::default_location();
+    let api_key = store.load_api_key().unwrap_or_default();
+    let base_url = store
+        .load_value()
+        .and_then(|v| v.get("base_url").and_then(|b| b.as_str()).map(String::from))
+        .unwrap_or_else(|| "https://api.deepseek.com/anthropic".into());
+    Provider::new(&base_url, &api_key)
 }
 
 pub fn run() {

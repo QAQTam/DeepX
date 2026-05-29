@@ -21,9 +21,9 @@ use super::tracker::last_assistant_content;
 /// Explore gate: enforce explore-before-read, intent, stale-edit blocking.
 pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: &str) -> bool {
     let action = tool_action(args);
-    let is_read = tool_name == "file" && action == "read";
-    let is_write = tool_name == "file" && (action == "write" || action == "edit" || action == "diff");
-    let is_edit = tool_name == "file" && action == "edit";
+    let is_read = tool_name == "read_file";
+    let is_write = tool_name == "write_file" || tool_name == "edit_file";
+    let is_edit = tool_name == "edit_file";
     let is_exec = tool_name == "exec" && (action == "execute" || action == "run");
     let is_explore = tool_name == "exec" && action == "explore";
     if is_read || is_write {

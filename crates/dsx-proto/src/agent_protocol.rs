@@ -26,9 +26,6 @@ pub enum Ui2Agent {
     #[serde(rename = "set_phase")]
     SetPhase { phase: String },
 
-    #[serde(rename = "tool_confirm")]
-    ToolConfirm { id: String, approved: bool },
-
     #[serde(rename = "cancel")]
     Cancel,
 
@@ -97,6 +94,10 @@ pub enum Agent2Ui {
     /// End of a turn (agent ready for next input).
     #[serde(rename = "done")]
     Done,
+
+    /// Current operation has been cancelled.
+    #[serde(rename = "cancelled")]
+    Cancelled,
 
     /// Error during processing.
     #[serde(rename = "error")]

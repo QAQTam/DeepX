@@ -286,13 +286,13 @@ impl ToolManager {
 
         self.inflight_tasks.remove(&id);
 
-        let (content, success, is_error) = match result {
-            Ok(tr) => (tr.content, tr.success, if !tr.success { Some(true) } else { None }),
+        let (content, success) = match result {
+            Ok(tr) => (tr.content, tr.success),
             Err(panic_info) => {
                 let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
                     else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
                     else { "unknown panic".to_string() };
-                (format!("[ERROR] Tool panicked: {}", msg), false, Some(true))
+                (format!("[ERROR] Tool panicked: {}", msg), false)
             }
         };
 
@@ -302,7 +302,6 @@ impl ToolManager {
             action: action.into(),
             success,
             content,
-            is_error,
         }
     }
 

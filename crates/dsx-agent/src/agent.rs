@@ -73,7 +73,7 @@ pub struct AgentState {
 
 impl AgentState {
     pub fn new(config: crate::config::Config) -> Self {
-        let prompt = config::system_prompt(&config.prompt_lang);
+        let prompt = config::system_prompt();
         let auto_mode = config.auto_mode;
         let mut ctx = ContextAssembler::new();
         ctx.push_system(Message::system(&prompt));
@@ -174,20 +174,15 @@ impl<'a> ToolResultAppender<'a> {
 
         self.state.tool_results.push((tool_name.to_string(), result.clone()));
 
-        if !failed && tool_name == "file" {
-            let action = dsx_types::arg::tool_action(args);
-            if action == "write" || action == "edit" {
-                tracker::track_file_written(self.state, args);
-                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                    self.state.re_read_required = Some(path);
-                }
+        if !failed && (tool_name == "write_file" || tool_name == "edit_file") {
+            tracker::track_file_written(self.state, args);
+            if let Some(path) = dsx_types::arg::parse_file_arg(args) {
+                self.state.re_read_required = Some(path);
             }
         }
 
-        // Auto-verify on Rust file edit
-        if raw.starts_with("[OK]") && tool_name == "file" {
-            let action = dsx_types::arg::tool_action(args);
-            if (action == "write" || action == "edit") && !self.state.auto_verify.contains(&"cargo check".to_string()) {
+        if raw.starts_with("[OK]") && (tool_name == "write_file" || tool_name == "edit_file") {
+            if !self.state.auto_verify.contains(&"cargo check".to_string()) {
                 if let Some(path) = dsx_types::arg::parse_file_arg(args) {
                     if path.ends_with(".rs") {
                         self.state.auto_verify.push("cargo check".to_string());

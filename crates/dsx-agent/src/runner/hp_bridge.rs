@@ -47,10 +47,16 @@ pub fn read_hp_stream_response(
             Ok(Some(r)) => r,
             Ok(None) => {
                 log::warn!("dsx-agent: HP connection closed (EOF)");
+                let _ = agent_tx.send(Agent2Ui::Error {
+                    message: "HP connection closed unexpectedly.".into(),
+                });
                 return Err(());
             }
             Err(e) => {
                 log::warn!("dsx-agent: HP parse error: {e}");
+                let _ = agent_tx.send(Agent2Ui::Error {
+                    message: format!("HP protocol error: {}", e),
+                });
                 return Err(());
             }
         };
