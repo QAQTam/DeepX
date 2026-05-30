@@ -32,6 +32,16 @@ pub fn run_agent_loop(
         let _: Option<HpToAgent> = dsx_proto::read_frame(hp).ok().flatten();
     }
 
+    let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+        hp_connected: hp_conn.is_some(),
+        session_seed: agent.session_seed.clone(),
+        context_tokens: agent.token_estimate,
+        tool_calls_total: agent.tool_calls_this_turn,
+        tool_failures: agent.tool_failures as u32,
+        current_phase: format!("{:?}", agent.current_task_phase).to_lowercase(),
+        streaming: false,
+    });
+
     loop {
         let frame: Ui2Agent = match tui_rx.recv() {
             Ok(f) => f,
@@ -77,6 +87,15 @@ pub fn run_agent_loop(
                         });
                     }
                 }
+                let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+                    hp_connected: hp_conn.is_some(),
+                    session_seed: agent.session_seed.clone(),
+                    context_tokens: agent.token_estimate,
+                    tool_calls_total: agent.tool_calls_this_turn,
+                    tool_failures: agent.tool_failures as u32,
+                    current_phase: format!("{:?}", agent.current_task_phase).to_lowercase(),
+                    streaming: false,
+                });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
 
@@ -94,6 +113,7 @@ pub fn run_agent_loop(
                     name,
                     content,
                     success,
+                    args: None,
                 });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
@@ -121,6 +141,25 @@ pub fn run_agent_loop(
                 maybe_save_session(&mut agent);
                 let _ = agent_tx.send(Agent2Ui::ShutdownAck);
                 break;
+            }
+
+            Ui2Agent::DebugCommand { cmd } => {
+                let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+                    hp_connected: hp_conn.is_some(),
+                    session_seed: agent.session_seed.clone(),
+                    context_tokens: agent.token_estimate,
+                    tool_calls_total: agent.tool_calls_this_turn,
+                    tool_failures: agent.tool_failures as u32,
+                    current_phase: format!("{:?}", agent.current_task_phase).to_lowercase(),
+                    streaming: false,
+                });
+                if cmd == "dump_context" {
+                    let json = serde_json::to_string_pretty(&agent.ctx.to_vec())
+                        .unwrap_or_default();
+                    let _ = agent_tx.send(Agent2Ui::Error {
+                        message: format!("[CONTEXT_DUMP]\n{}", json),
+                    });
+                }
             }
 
             _ => {}
@@ -179,7 +218,7 @@ pub fn run() {
     agent.health.context_limit = agent.config.context_limit;
 
     // ── 5. Connect to HP ──
-    let hp_conn = crate::hp::connect().map(BufReader::new);
+    let hp_conn = crate::hp::try_reconnect().map(BufReader::new);
 
     // ── 6. Init in-process tools ──
     crate::tools::init_tools("pipe", agent.auto_mode);

@@ -12,13 +12,6 @@ impl Lang {
         }
     }
 
-    pub fn label(&self) -> &str {
-        match self {
-            Lang::En => "English",
-            Lang::Zh => "中文",
-        }
-    }
-
     pub fn t_setup_welcome(&self) -> &str {
         match self {
             Lang::En => "⚡ DeepX Setup",
@@ -43,7 +36,7 @@ impl Lang {
     pub fn t_enter_key(&self) -> &str {
         match self {
             Lang::En => "Enter your DeepSeek API key from platform.deepseek.com/api_keys",
-            Lang::Zh => "输入你的 DeepSeek API 密钥 (platform.deepseek.com/api_keys)",
+            Lang::Zh => "输入你的 DeepSeek API 密钥",
         }
     }
 

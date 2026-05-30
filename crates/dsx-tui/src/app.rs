@@ -1,11 +1,12 @@
 use dsx_proto::Agent2Ui;
-use dsx_types::{ConfigStore, PersistentConfig};
+use dsx_types::{ConfigStore, PersistentConfig, SessionMeta};
 
 // ── Active screen ──
 
 #[derive(PartialEq)]
 pub enum Screen {
     Setup,
+    Session,
     Chat,
 }
 
@@ -17,6 +18,7 @@ pub struct SetupState {
     pub api_key: String,
     pub model: String,
     pub model_list: Vec<String>,
+    pub model_index: usize,
     pub context_limit: String,
     pub error: String,
     pub status: String,
@@ -34,6 +36,7 @@ impl SetupState {
                 "deepseek-v4-flash".into(),
                 "deepseek-v4-pro".into(),
             ],
+            model_index: 0,
             context_limit: String::from("1000000"),
             error: String::new(),
             status: String::new(),
@@ -50,6 +53,9 @@ impl SetupState {
         if let Some(v) = store.load_value() {
             if let Some(m) = v.get("model").and_then(|m| m.as_str()) {
                 self.model = m.to_string();
+                if let Some(idx) = self.model_list.iter().position(|n| n == m) {
+                    self.model_index = idx;
+                }
             }
             if let Some(c) = v.get("context_limit").and_then(|c| c.as_u64()) {
                 self.context_limit = c.to_string();
@@ -155,6 +161,9 @@ impl SetupState {
                         if !ids.is_empty() {
                             if !ids.contains(&self.model) {
                                 self.model = ids[0].clone();
+                                self.model_index = 0;
+                            } else {
+                                self.model_index = ids.iter().position(|n| n == &self.model).unwrap_or(0);
                             }
                             self.model_list = ids;
                             self.models_loaded = true;
@@ -165,6 +174,24 @@ impl SetupState {
                 false
             }
             Err(_) => false,
+        }
+    }
+
+    pub fn cursor_row_offset(&self) -> u16 {
+        match self.step {
+            0 => 8,
+            1 => 6,
+            2 => {
+                if self.models_loaded {
+                    let n = self.model_list.len().min(6);
+                    let extra = if self.model_list.len() > 6 { 1 } else { 0 };
+                    6 + n as u16 + extra as u16
+                } else {
+                    3
+                }
+            }
+            3 => 5,
+            _ => 8,
         }
     }
 
@@ -198,8 +225,14 @@ pub struct App {
     pub phase: String,
     pub tokens: u32,
     pub should_quit: bool,
-    pub scroll: usize,
     pub streaming: bool,
+    pub scroll_offset: usize,
+    pub frame_count: u64,
+    pub sessions: Vec<SessionMeta>,
+    pub session_index: usize,
+    pub resume_seed: Option<String>,
+    pub show_debug: bool,
+    pub debug: DebugState,
     block: BlockType,
     pub validating: bool,
 }
@@ -215,6 +248,7 @@ enum BlockType {
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
+    pub lines: Vec<ratatui::text::Line<'static>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -227,10 +261,21 @@ pub enum ChatRole {
     Status,
 }
 
+#[derive(Clone)]
+pub struct DebugState {
+    pub hp_connected: bool,
+    pub session_seed: String,
+    pub context_tokens: u32,
+    pub tool_calls_total: u32,
+    pub tool_failures: u32,
+    pub current_phase: String,
+    pub streaming: bool,
+}
+
 impl App {
     pub fn new(need_setup: bool) -> Self {
         Self {
-            screen: if need_setup { Screen::Setup } else { Screen::Chat },
+            screen: if need_setup { Screen::Setup } else { Screen::Session },
             setup: SetupState::new(),
             messages: Vec::new(),
             input: String::new(),
@@ -238,26 +283,52 @@ impl App {
             phase: String::from("Coding"),
             tokens: 0,
             should_quit: false,
-            scroll: 0,
             streaming: false,
+            scroll_offset: 0,
+            frame_count: 0,
+            sessions: Vec::new(),
+            session_index: 0,
+            resume_seed: None,
+            show_debug: false,
+            debug: DebugState {
+                hp_connected: false,
+                session_seed: String::new(),
+                context_tokens: 0,
+                tool_calls_total: 0,
+                tool_failures: 0,
+                current_phase: String::from("Coding"),
+                streaming: false,
+            },
             block: BlockType::None,
             validating: false,
         }
     }
 
+    pub fn tick(&mut self) {
+        self.frame_count = self.frame_count.wrapping_add(1);
+    }
+
+    pub fn spinner(&self) -> &str {
+        const CHARS: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+        CHARS[(self.frame_count as usize / 4) % CHARS.len()]
+    }
+
     fn push_msg(&mut self, role: ChatRole, content: &str) {
-        self.messages.push(ChatMessage { role, content: content.to_string() });
+        let lines = crate::markdown::render_content(content);
+        self.messages.push(ChatMessage { role, content: content.to_string(), lines });
     }
 
     fn append_last(&mut self, content: &str) {
         if let Some(last) = self.messages.last_mut() {
             last.content.push_str(content);
+            last.lines = crate::markdown::render_content(&last.content);
         }
     }
 
     fn switch_block(&mut self, new_block: BlockType) {
         if self.block != new_block {
             self.block = new_block;
+            self.streaming = false;
             self.push_msg(ChatRole::Divider, "");
         }
     }
@@ -265,14 +336,22 @@ impl App {
     pub fn handle_frame(&mut self, frame: Agent2Ui) {
         match frame {
             Agent2Ui::ContentDelta { delta, reasoning } => {
+                self.debug.streaming = true;
                 if let Some(r) = reasoning {
                     if !r.is_empty() {
+                        self.scroll_offset = 0;
                         self.switch_block(BlockType::Thinking);
-                        self.push_msg(ChatRole::Thinking, &r);
+                        if self.block == BlockType::Thinking && self.streaming {
+                            self.append_last(&r);
+                        } else {
+                            self.push_msg(ChatRole::Thinking, &r);
+                            self.streaming = true;
+                        }
                         return;
                     }
                 }
                 if !delta.is_empty() {
+                    self.scroll_offset = 0;
                     self.switch_block(BlockType::Text);
                     if self.block == BlockType::Text && self.streaming {
                         self.append_last(&delta);
@@ -282,20 +361,31 @@ impl App {
                     }
                 }
             }
-            Agent2Ui::ToolResult { name, content, .. } => {
+            Agent2Ui::ToolResult { name, content, args, success, .. } => {
+                self.debug.tool_calls_total += 1;
+                if !success { self.debug.tool_failures += 1; }
                 self.switch_block(BlockType::Tool);
-                self.push_msg(ChatRole::Tool, &format!("{}: {}", name, content));
+                let label = tool_label(&name, &content, args.as_deref());
+                let char_count = content.chars().count();
+                let preview = if char_count > 200 {
+                    let head: String = content.chars().take(200).collect();
+                    format!("{}\n  ... (+{} chars)", head, char_count - 200)
+                } else {
+                    content.clone()
+                };
+                self.push_msg(ChatRole::Tool, &format!("{label}\n{preview}"));
             }
             Agent2Ui::ApiResponse { content, reasoning_content, usage, context_tokens, .. } => {
-                if let Some(ref rc) = reasoning_content {
-                    if !rc.is_empty() {
-                        self.switch_block(BlockType::Thinking);
-                        self.push_msg(ChatRole::Thinking, rc);
+                // Only show from ApiResponse if content wasn't already streamed
+                if !self.streaming {
+                    if let Some(ref rc) = reasoning_content {
+                        if !rc.is_empty() {
+                            self.push_msg(ChatRole::Thinking, rc);
+                        }
                     }
-                }
-                if !content.is_empty() && self.block != BlockType::Text {
-                    self.switch_block(BlockType::Text);
-                    self.push_msg(ChatRole::Assistant, &content);
+                    if !content.is_empty() {
+                        self.push_msg(ChatRole::Assistant, &content);
+                    }
                 }
                 self.tokens = context_tokens;
                 if let Some(u) = usage {
@@ -309,24 +399,106 @@ impl App {
                 self.status = format!("Error: {}", message);
             }
             Agent2Ui::PhaseChanged { phase } => {
-                self.phase = phase;
+                self.phase = phase.clone();
+                self.debug.current_phase = phase;
             }
             Agent2Ui::Done => {
                 self.status = "Ready".into();
                 self.streaming = false;
+                self.debug.streaming = false;
                 self.block = BlockType::None;
-                self.scroll = self.messages.len().saturating_sub(1);
             }
             Agent2Ui::Cancelled => {
                 self.status = "Cancelled".into();
                 self.streaming = false;
+                self.debug.streaming = false;
                 self.block = BlockType::None;
             }
             Agent2Ui::SessionRestored { seed, message_count, tokens_used, .. } => {
                 self.status = format!("Session {} restored ({} msgs, {} tokens)",
                     &seed[..8.min(seed.len())], message_count, tokens_used);
+                self.debug.session_seed = seed;
+                self.debug.context_tokens = tokens_used;
+            }
+            Agent2Ui::DebugSnapshot { hp_connected, session_seed, context_tokens,
+                tool_calls_total, tool_failures, current_phase, streaming } => {
+                self.debug = DebugState {
+                    hp_connected,
+                    session_seed,
+                    context_tokens,
+                    tool_calls_total,
+                    tool_failures,
+                    current_phase,
+                    streaming,
+                };
             }
             _ => {}
+        }
+    }
+}
+
+fn tool_label(name: &str, content: &str, args: Option<&str>) -> String {
+    let path = args.and_then(|a| {
+        serde_json::from_str::<serde_json::Value>(a).ok()
+            .and_then(|v| v.get("path").or_else(|| v.get("file"))
+                .and_then(|p| p.as_str())
+                .map(String::from))
+    });
+
+    let first_line = content.lines().next().unwrap_or("");
+
+    match name {
+        "explore" => {
+            if let Some(ref p) = path {
+                format!("explore: {}", p)
+            } else if let Some(p) = first_line.strip_prefix("[PROJECT_MAP]path: ")
+                .or_else(|| first_line.strip_prefix("[DIR] "))
+            {
+                let short = p.split(" markers:").next().unwrap_or(p);
+                format!("explore: {}", short.trim())
+            } else {
+                "explore".to_string()
+            }
+        }
+        "read_file" => {
+            if let Some(ref p) = path {
+                format!("read_file: {}", p)
+            } else {
+                format!("read_file: {} chars", content.chars().count())
+            }
+        }
+        "write_file" | "edit_file" => {
+            if let Some(ref p) = path {
+                format!("{}: {}", name, p)
+            } else {
+                format!("{}: {} chars written", name, content.chars().count())
+            }
+        }
+        "glob" | "grep" => {
+            if let Some(ref p) = path.or_else(|| {
+                args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()
+                    .and_then(|v| v.get("pattern").and_then(|p| p.as_str()).map(String::from)))
+            }) {
+                format!("{}: {}", name, p)
+            } else {
+                let short: String = first_line.chars().take(60).collect();
+                format!("{}: {}", name, short)
+            }
+        }
+        "bash" | "run" => {
+            if let Some(ref command) = path {
+                format!("{}: {}", name, command)
+            } else {
+                let short: String = first_line.chars().take(80).collect();
+                format!("{}: {}", name, short)
+            }
+        }
+        _ => {
+            if let Some(ref p) = path {
+                format!("{}: {}", name, p)
+            } else {
+                format!("{}: {} chars", name, content.chars().count())
+            }
         }
     }
 }

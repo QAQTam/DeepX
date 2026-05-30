@@ -31,6 +31,9 @@ pub enum Ui2Agent {
 
     #[serde(rename = "shutdown")]
     Shutdown,
+
+    #[serde(rename = "debug_cmd")]
+    DebugCommand { cmd: String },
 }
 
 /// Agent → UI frames (mpsc channel / stdout pipe in headless mode).
@@ -118,6 +121,8 @@ pub enum Agent2Ui {
         name: String,
         content: String,
         success: bool,
+        #[serde(default)]
+        args: Option<String>,
     },
 
     /// Session restored from disk (resumed conversation).
@@ -128,5 +133,17 @@ pub enum Agent2Ui {
         summary: String,
         tokens_used: u32,
         cache_hit_pct: f64,
+    },
+
+    /// Diagnostic snapshot for debug panel.
+    #[serde(rename = "debug_snapshot")]
+    DebugSnapshot {
+        hp_connected: bool,
+        session_seed: String,
+        context_tokens: u32,
+        tool_calls_total: u32,
+        tool_failures: u32,
+        current_phase: String,
+        streaming: bool,
     },
 }

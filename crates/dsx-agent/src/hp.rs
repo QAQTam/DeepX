@@ -67,55 +67,57 @@ pub fn try_reconnect() -> Option<TcpStream> {
         .and_then(|s| s.trim().parse::<u16>().ok());
 
     if let Some(p) = port {
-        if let Ok(stream) = TcpStream::connect(format!("127.0.0.1:{p}")) {
+        if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{p}")) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+            let reg = AgentToHp::Register {
+                kind: "Agent".into(),
+                name: "dsx-agent".into(),
+                pid: std::process::id(),
+            };
+            let _ = dsx_proto::write_frame(&mut stream, &reg);
             return Some(stream);
         }
         let _ = std::fs::write(&port_path, "");
     }
 
-    for dsx_path in &[
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent().and_then(|p| p.parent())
-            .map(|p| p.join("target").join("release").join("dsx"))
-            .unwrap_or_default(),
-        std::env::current_exe().ok()
-            .and_then(|e| e.parent().map(|d| d.join("dsx")))
-            .unwrap_or_default(),
-    ] {
-        if !dsx_path.exists() { continue; }
-        if let Ok(mut child) = std::process::Command::new(dsx_path).arg("hp")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            for _ in 0..10 {
-                std::thread::sleep(Duration::from_millis(500));
-                if let Ok(s) = std::fs::read_to_string(&port_path) {
-                    if let Ok(p) = s.trim().parse::<u16>() {
-                        if let Ok(stream) = TcpStream::connect(format!("127.0.0.1:{p}")) {
-                            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-                            let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
-                            // Store handle so cleanup can kill it later.
-                            if let Ok(mut guard) = HP_DAEMON.lock() {
-                                // Kill the previous daemon if one exists.
-                                if let Some(mut prev) = guard.take() {
-                                    let _ = prev.kill();
-                                    let _ = prev.wait();
-                                }
-                                *guard = Some(child);
+    let current_exe = std::env::current_exe().ok()?;
+
+    // current_exe IS the dsx umbrella binary — just run it with "hp" arg
+    if let Ok(mut child) = std::process::Command::new(&current_exe).arg("hp")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(500));
+            if let Ok(s) = std::fs::read_to_string(&port_path) {
+                if let Ok(p) = s.trim().parse::<u16>() {
+                    if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{p}")) {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+                        let reg = AgentToHp::Register {
+                            kind: "Agent".into(),
+                            name: "dsx-agent".into(),
+                            pid: std::process::id(),
+                        };
+                        let _ = dsx_proto::write_frame(&mut stream, &reg);
+                        if let Ok(mut guard) = HP_DAEMON.lock() {
+                            if let Some(mut prev) = guard.take() {
+                                let _ = prev.kill();
+                                let _ = prev.wait();
                             }
-                            return Some(stream);
+                            *guard = Some(child);
                         }
+                        return Some(stream);
                     }
                 }
-                if let Ok(Some(_)) = child.try_wait() { break; }
             }
-            // HP failed to start — kill the child before dropping.
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Ok(Some(_)) = child.try_wait() { break; }
         }
+        let _ = child.kill();
+        let _ = child.wait();
     }
+
     None
 }

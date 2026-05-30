@@ -99,7 +99,7 @@ pub async fn chat_stream(
     if let Some(t) = anthropic_tools {
         body["tools"] = serde_json::Value::Array(t);
     }
-    if let Some(uid) = user_id {
+    if let Some(ref uid) = user_id {
         body["metadata"] = serde_json::json!({"user_id": uid});
     }
     if let Some(e) = effort {
@@ -108,6 +108,10 @@ pub async fn chat_stream(
 
     // ── 5. HTTP POST ──
     let url = build_anthropic_url(&provider.base_url);
+
+    // Dump API request JSON for debugging (e.g., HTTP 400 root cause)
+    dump_api_request(user_id.as_deref(), &body);
+
     let client = HttpClient::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
@@ -126,6 +130,7 @@ pub async fn chat_stream(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
+        dump_api_error(user_id.as_deref(), status.as_u16(), &text);
         let msg = format!("Anthropic API {}: {}", status, text);
         let _ = tx.send(StreamEvent::Error(msg.clone())).await;
         return Err(anyhow::anyhow!("{}", msg));
@@ -322,4 +327,42 @@ fn build_anthropic_url(base_url: &str) -> String {
     } else {
         format!("{}/v1/messages", base)
     }
+}
+
+fn dump_api_request(user_id: Option<&str>, body: &serde_json::Value) {
+    let dir = log_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let seed = user_id.unwrap_or("unknown");
+    let path = dir.join(format!("{seed}_req_{ts}.json"));
+    if let Ok(json) = serde_json::to_string_pretty(body) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+fn dump_api_error(user_id: Option<&str>, status: u16, text: &str) {
+    let dir = log_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let seed = user_id.unwrap_or("unknown");
+    let path = dir.join(format!("{seed}_err_{ts}_{status}.json"));
+    let body = serde_json::json!({
+        "status": status,
+        "body": text,
+    });
+    if let Ok(json) = serde_json::to_string_pretty(&body) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+fn log_dir() -> std::path::PathBuf {
+    let mut p = dsx_types::platform::data_dir();
+    p.push("logs");
+    p
 }

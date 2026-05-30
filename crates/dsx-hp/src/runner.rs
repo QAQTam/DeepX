@@ -515,6 +515,8 @@ fn build_final_response(
     reasoning: &mut String,
     writer: &mut impl Write,
 ) {
+    full_content.clear();
+    reasoning.clear();
     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
     let mut thinking_sig: Option<String> = None;
     for block in &raw_message.content {

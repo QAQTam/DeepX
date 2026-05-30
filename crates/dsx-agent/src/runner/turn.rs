@@ -90,7 +90,7 @@ fn handle_status_tool(
         let err = format!("[ERROR] Mode '{state}' no longer exists. Use: plan, coding, debug");
         let _ = agent.ctx.push_tool_result(id, &err);
         agent.tool_results.push((id.to_string(), err.clone()));
-        emit_tool_result(agent_tx, id, name, &err, false);
+        emit_tool_result(agent_tx, id, name, &err, false, Some(args.to_string()));
         return ToolOutcome::Continue;
     }
     let tp = match state {
@@ -112,7 +112,7 @@ fn handle_status_tool(
     let result = format!("[OK] Switched to {} mode", state);
     let _ = agent.ctx.push_tool_result(id, &result);
     agent.tool_results.push((id.to_string(), result.clone()));
-    emit_tool_result(agent_tx, id, name, &result, true);
+    emit_tool_result(agent_tx, id, name, &result, true, Some(args.to_string()));
     ToolOutcome::Continue
 }
 
@@ -156,6 +156,7 @@ fn handle_ask_user_tool(
         name,
         "[ASK_USER] Awaiting your response.",
         false,
+        Some(args.to_string()),
     );
     ToolOutcome::Continue
 }
@@ -177,6 +178,7 @@ pub fn execute_single_tool(
             name,
             "[BLOCKED] Phase gate prevented this tool.",
             false,
+            Some(args.to_string()),
         );
         return ToolOutcome::Continue;
     }
@@ -187,6 +189,7 @@ pub fn execute_single_tool(
             name,
             "[BLOCKED] Explore gate prevented this tool.",
             false,
+            Some(args.to_string()),
         );
         return ToolOutcome::Continue;
     }
@@ -197,6 +200,7 @@ pub fn execute_single_tool(
             name,
             "[BLOCKED] Re-read gate prevented this tool.",
             false,
+            Some(args.to_string()),
         );
         return ToolOutcome::Continue;
     }
@@ -221,6 +225,7 @@ pub fn execute_single_tool(
             name,
             "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.",
             false,
+            Some(args.to_string()),
         );
         return ToolOutcome::Continue;
     }
@@ -229,7 +234,7 @@ pub fn execute_single_tool(
     if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
         let mut appender = ToolResultAppender::new(agent);
         appender.append(name, &tc.id, args, &tr_content);
-        emit_tool_result(agent_tx, id, name, &tr_content, false);
+        emit_tool_result(agent_tx, id, name, &tr_content, false, Some(args.to_string()));
         return ToolOutcome::Break;
     }
 
@@ -246,7 +251,7 @@ pub fn execute_single_tool(
         let mut appender = ToolResultAppender::new(agent);
         appender.append(name, &tc.id, args, &tr_content);
     }
-    emit_tool_result(agent_tx, id, name, &tr_content, tr_success);
+    emit_tool_result(agent_tx, id, name, &tr_content, tr_success, Some(args.to_string()));
 
     if !failed && name == "write_file" {
         tracker::track_file_written(agent, args);
@@ -476,14 +481,6 @@ pub fn handle_user_input(
     agent.tool_calls_this_turn = 0;
     agent.files_written_this_turn.clear();
 
-    // Live snapshot after user message
-    session::save_live_snapshot(
-        &agent.session_seed,
-        &agent.ctx.to_vec(),
-        &agent.config.model,
-        agent.config.effort.as_deref(),
-    );
-
     let mut ipc_broken = false;
 
     // ── Tool-calling loop ──
@@ -619,7 +616,7 @@ pub fn handle_user_input(
                         let err = "[ERROR] Tools process disconnected — this tool was not executed.";
                         let mut appender = ToolResultAppender::new(agent);
                         appender.append(&remaining.function.name, &remaining.id, &remaining.function.arguments, err);
-                        emit_tool_result(agent_tx, &remaining.id, &remaining.function.name, err, false);
+                        emit_tool_result(agent_tx, &remaining.id, &remaining.function.name, err, false, Some(remaining.function.arguments.to_string()));
                     }
                     break;
                 }
@@ -771,7 +768,7 @@ pub fn handle_user_input(
                         let err = "[ERROR] Tools process disconnected — this tool was not executed.";
                         let mut appender = ToolResultAppender::new(agent);
                         appender.append(&remaining.function.name, &remaining.id, &remaining.function.arguments, err);
-                        emit_tool_result(agent_tx, &remaining.id, &remaining.function.name, err, false);
+                        emit_tool_result(agent_tx, &remaining.id, &remaining.function.name, err, false, Some(remaining.function.arguments.to_string()));
                     }
                     break;
                 }

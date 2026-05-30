@@ -19,11 +19,28 @@ pub fn exec_command(args: &str) -> String {
         .unwrap_or(30);
 
     let mut cmd = if cfg!(target_os = "windows") {
-        let mut c = Command::new("cmd");
-        c.args(["/C", &command])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        c
+        // Prefer pwsh (PowerShell 7) > powershell (5.1) > cmd
+        if which("pwsh.exe") {
+            let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
+            let mut c = Command::new("pwsh");
+            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            c
+        } else if which("powershell.exe") {
+            let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
+            let mut c = Command::new("powershell");
+            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            c
+        } else {
+            let mut c = Command::new("cmd");
+            c.args(["/C", &command])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            c
+        }
     } else {
         let mut c = Command::new("sh");
         c.args(["-c", &command])
@@ -258,6 +275,26 @@ use dsx_types::arg::{parse_opt, parse_opt_u64};
 
 use crate::{ToolHandler, ToolKey};
 use std::time::Duration;
+
+fn which(name: &str) -> bool {
+    if cfg!(target_os = "windows") {
+        Command::new("where")
+            .args([name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    } else {
+        Command::new("which")
+            .args([name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
 
 pub fn register(mgr: &mut crate::ToolManager) {
     // exec/run

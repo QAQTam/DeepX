@@ -19,7 +19,7 @@ fn now_epoch() -> u64 {
 fn chrono_date() -> String {
     let secs = now_epoch();
     let days = secs / 86400;
-    let (y, m, d) = civil_from_days(days as i64 + 719468);
+    let (y, m, d) = civil_from_days(days as i64);
     format!("{y:04}-{m:02}-{d:02}")
 }
 

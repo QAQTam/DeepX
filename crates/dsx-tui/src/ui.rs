@@ -25,6 +25,15 @@ fn cjk_width(s: &str) -> u16 {
     s.width() as u16
 }
 
+fn format_ts(seconds: u64) -> String {
+    use chrono::{TimeZone, Local};
+    if let Some(dt) = Local.timestamp_opt(seconds as i64, 0).single() {
+        dt.format("%Y-%m-%d %H:%M").to_string()
+    } else {
+        String::new()
+    }
+}
+
 // ── Setup wizard ──
 
 pub fn render_setup(frame: &mut Frame, app: &App) {
@@ -260,13 +269,122 @@ pub fn render_setup(frame: &mut Frame, app: &App) {
 
     // Cursor
     let val = app.setup.current_value();
-    let input_line = content_area.y + 8;
+    let input_line = content_area.y + app.setup.cursor_row_offset();
     let cursor_x = if app.setup.step == 0 {
         (content_area.x + 16).min(popup.x + popup.width.saturating_sub(2))
     } else {
         (content_area.x + 2 + cjk_width(val).min(40)).min(popup.x + popup.width.saturating_sub(2))
     };
     frame.set_cursor_position((cursor_x, input_line));
+}
+
+// ── Session selection screen ──
+
+pub fn render_sessions(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let popup = centered_rect(70, (app.sessions.len() + 6).min(24) as u16, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Sessions — Select or start new ")
+        .style(Style::new().bg(Color::Rgb(18, 22, 26)));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let [list_area, help_area] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(2),
+    ]).areas(inner);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    let max_fit = ((list_area.height as usize).saturating_sub(4)) / 2;
+    let total = app.sessions.len();
+
+    let scroll = if app.session_index < max_fit {
+        0
+    } else if app.session_index >= total {
+        total.saturating_sub(max_fit)
+    } else {
+        (app.session_index + 1).saturating_sub(max_fit)
+    };
+
+    let end = (scroll + max_fit).min(total);
+    for idx in scroll..end {
+        let s = &app.sessions[idx];
+        let selected = idx == app.session_index;
+        let mark = if selected { "●" } else { "○" };
+        let style = if selected { Style::new().fg(ACCENT).bold() } else { Style::new().fg(DIM) };
+
+        let ts = format_ts(s.updated_at);
+        let summary: String = s.last_summary.chars().take(40).collect();
+        lines.push(Line::from(vec![
+            Span::raw(format!("  {mark} ")),
+            Span::styled(&s.seed, Style::new().fg(Color::Yellow).bold()),
+            Span::raw("  "),
+            Span::styled(ts, Style::new().fg(Color::Gray)),
+            Span::raw("  "),
+            Span::styled(format!("msgs:{:<5}", s.message_count), Style::new().fg(DIM)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("     "),
+            Span::styled(summary, style),
+        ]));
+    }
+
+    // "New Session" row
+    let new_selected = app.session_index == app.sessions.len();
+    let new_mark = if new_selected { "●" } else { "○" };
+    let new_style = if new_selected { Style::new().fg(ACCENT).bold() } else { Style::new().fg(Color::Gray) };
+    if !app.sessions.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  ──────────────────────────────────────────", Style::new().fg(DIM))));
+    }
+    lines.push(Line::from(vec![
+        Span::raw(format!("  {new_mark} ")),
+        Span::styled("+ New Session", new_style),
+    ]));
+
+    frame.render_widget(Paragraph::new(lines), list_area);
+
+    // Scrollbar
+    let render_scrollbar = total > 0 && max_fit < total;
+    if render_scrollbar {
+        let sb_h = list_area.height.saturating_sub(1) as usize;
+        let thumb_h = (sb_h * max_fit / total).max(1);
+        let thumb_y = if total > max_fit {
+            (scroll * (sb_h - thumb_h) / (total - max_fit)).min(sb_h - thumb_h)
+        } else {
+            0
+        };
+        let mut sb_lines: Vec<Line> = Vec::new();
+        let track = Span::styled("│", Style::new().fg(DIM));
+        let thumb = Span::styled("█", Style::new().fg(ACCENT));
+        for r in 0..sb_h {
+            if r >= thumb_y && r < thumb_y + thumb_h {
+                sb_lines.push(Line::from(thumb.clone()));
+            } else {
+                sb_lines.push(Line::from(track.clone()));
+            }
+        }
+        let sb_x = list_area.x + list_area.width.saturating_sub(1);
+        let sb_area = Rect::new(sb_x, list_area.y, 1, sb_h as u16);
+        frame.render_widget(Paragraph::new(sb_lines), sb_area);
+    }
+
+    let help = Line::from(vec![
+        Span::styled(" ↑↓ ", Style::new().fg(Color::Black).bg(ACCENT)),
+        Span::raw(" select  "),
+        Span::styled(" Enter ", Style::new().fg(Color::Black).bg(Color::Green)),
+        Span::raw(" resume/new  "),
+        Span::styled(" ^C ", Style::new().fg(Color::Black).bg(Color::Red)),
+        Span::raw(" quit"),
+    ]);
+    frame.render_widget(help, help_area);
 }
 
 // ── Chat interface ──
@@ -279,13 +397,18 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         Constraint::Length(3),
     ]).areas(area);
 
+    let status_text = if app.streaming {
+        format!("{} {}", app.spinner(), &app.status)
+    } else {
+        app.status.clone()
+    };
     let header_text = Line::from(vec![
         Span::raw("DeepX | "),
         Span::styled(format!("Phase: {}", app.phase), Style::new().fg(Color::Cyan)),
         Span::raw(" | "),
         Span::styled(format!("Tokens: {}", app.tokens), Style::new().fg(Color::Yellow)),
         Span::raw(" | "),
-        Span::styled(&app.status, Style::new().fg(Color::Green)),
+        Span::styled(&status_text, Style::new().fg(if app.streaming { Color::Yellow } else { Color::Green })),
     ]);
     frame.render_widget(header_text, header);
 
@@ -306,32 +429,66 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                 ]));
             }
             ChatRole::Thinking => {
-                text_lines.push(Line::from(vec![
-                    Span::styled("Think> ", Style::new().fg(Color::Rgb(200, 180, 100)).bold()),
-                    Span::styled(&msg.content, Style::new().fg(Color::Rgb(200, 180, 100)).italic()),
-                ]));
+                let prefix = Span::styled("Think> ", Style::new().fg(Color::Rgb(200, 180, 100)).bold());
+                if msg.lines.is_empty() {
+                    text_lines.push(Line::from(vec![prefix, Span::styled(
+                        &msg.content, Style::new().fg(Color::Rgb(200, 180, 100)).italic(),
+                    )]));
+                } else {
+                    for (i, line) in msg.lines.iter().enumerate() {
+                        let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
+                        if i == 0 {
+                            spans.insert(0, prefix.clone());
+                        }
+                        text_lines.push(Line::from(spans));
+                    }
+                }
             }
             ChatRole::Assistant => {
-                text_lines.push(Line::from(vec![
-                    Span::styled("Assistant> ", Style::new().fg(Color::White).bold()),
-                    Span::raw(&msg.content),
-                ]));
+                let prefix = Span::styled("DeepX> ", Style::new().fg(Color::White).bold());
+                if msg.lines.is_empty() {
+                    text_lines.push(Line::from(vec![prefix, Span::raw(&msg.content)]));
+                } else {
+                    for (i, line) in msg.lines.iter().enumerate() {
+                        let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
+                        if i == 0 {
+                            spans.insert(0, prefix.clone());
+                        }
+                        text_lines.push(Line::from(spans));
+                    }
+                }
             }
             ChatRole::Tool => {
-                text_lines.push(Line::from(vec![
-                    Span::styled("  Tool> ", Style::new().fg(Color::Cyan).bold()),
-                    Span::styled(&msg.content, Style::new().fg(Color::Gray)),
-                ]));
+                let prefix = Span::styled("  Tool> ", Style::new().fg(Color::Cyan).bold());
+                if msg.lines.is_empty() {
+                    text_lines.push(Line::from(vec![prefix, Span::styled(&msg.content, Style::new().fg(Color::Gray))]));
+                } else {
+                    for (i, line) in msg.lines.iter().enumerate() {
+                        let mut spans: Vec<Span> = line.spans.iter().map(|s| {
+                            Span::styled(s.content.clone(), Style::new().fg(Color::Gray))
+                        }).collect();
+                        if i == 0 {
+                            spans.insert(0, prefix.clone());
+                        }
+                        text_lines.push(Line::from(spans));
+                    }
+                }
             }
         }
     }
 
     let content_height = body.height.saturating_sub(2) as usize;
-    let scroll = if app.streaming && text_lines.len() > content_height {
-        text_lines.len().saturating_sub(content_height) as u16
-    } else {
-        app.scroll as u16
-    };
+    let body_width = body.width.saturating_sub(2) as usize;
+    let total_visual: usize = text_lines.iter().map(|line| {
+        let w: usize = line.spans.iter()
+            .map(|s| s.content.width())
+            .sum();
+        let rows = w.max(1usize).saturating_add(body_width.max(1usize) - 1) / body_width.max(1usize);
+        rows.max(1)
+    }).sum();
+    let max_scroll = total_visual.saturating_sub(content_height);
+    let offset = if app.streaming { 0 } else { app.scroll_offset.min(max_scroll) };
+    let scroll = max_scroll.saturating_sub(offset) as u16;
 
     let paragraph = Paragraph::new(text_lines)
         .block(chat_block)
@@ -350,6 +507,59 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(input_text).block(input_block), input_area);
 
     let cursor_x = input_area.x + 1
-        + (app.input.len().min(input_area.width.saturating_sub(3) as usize) as u16);
+        + (cjk_width(&app.input).min(input_area.width.saturating_sub(3)) as u16);
     frame.set_cursor_position((cursor_x.min(area.width.saturating_sub(1)), input_area.y + 1));
+
+    // Debug overlay
+    if app.show_debug {
+        let d = &app.debug;
+        let dbg_w = 40u16;
+        let dbg_h = 10u16;
+        let dbg_rect = Rect::new(
+            area.width.saturating_sub(dbg_w + 2),
+            area.y + 1,
+            dbg_w,
+            dbg_h,
+        );
+        frame.render_widget(Clear, dbg_rect);
+        let dbg_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(Color::Rgb(180, 150, 255)))
+            .title(" Debug (F12) ")
+            .style(Style::new().bg(Color::Rgb(18, 22, 30)));
+        frame.render_widget(&dbg_block, dbg_rect);
+
+        let inner = dbg_block.inner(dbg_rect);
+        let hp_dot = if d.hp_connected { ("●", Color::Green) } else { ("○", Color::Red) };
+        let stream_dot = if d.streaming { ("●", Color::Yellow) } else { ("○", Color::Gray) };
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(format!(" HP: {} ", hp_dot.0), Style::new().fg(hp_dot.1)),
+                Span::styled(format!("Stream: {} ", stream_dot.0), Style::new().fg(stream_dot.1)),
+            ]),
+            Line::from(vec![
+                Span::styled("Session: ", Style::new().fg(Color::Gray)),
+                Span::styled(&d.session_seed, Style::new().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::styled("Phase:  ", Style::new().fg(Color::Gray)),
+                Span::styled(&d.current_phase, Style::new().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Context:", Style::new().fg(Color::Gray)),
+                Span::styled(format!(" {} / 1M", d.context_tokens), Style::new().fg(Color::Yellow)),
+            ]),
+            Line::from(vec![
+                Span::styled("Tools:  ", Style::new().fg(Color::Gray)),
+                Span::styled(format!("{} calls", d.tool_calls_total), Style::new().fg(Color::Cyan)),
+                if d.tool_failures > 0 {
+                    Span::styled(format!(" / {} fail", d.tool_failures), Style::new().fg(Color::Red))
+                } else {
+                    Span::raw("")
+                },
+            ]),
+        ];
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
 }

@@ -25,12 +25,14 @@ pub fn emit_tool_result(
     name: &str,
     content: &str,
     success: bool,
+    args: Option<String>,
 ) {
     let _ = tx.send(Agent2Ui::ToolResult {
         id: id.to_string(),
         name: name.to_string(),
         content: content.to_string(),
         success,
+        args,
     });
 }
 

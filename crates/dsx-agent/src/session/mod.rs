@@ -16,10 +16,10 @@ mod restore;
 // ── Re-exports ──
 pub use persist::{
     finalize_session,
-    load_index,
     load_session,
     load_session_or_live,
     save_live_snapshot,
+    save_session,
 };
 pub use restore::{find_live_sessions};
 
@@ -54,9 +54,8 @@ pub(crate) fn chrono_date() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    // Simple UTC date calculation (good enough for session filenames)
     let days = secs / 86400;
-    let (y, m, d) = civil_from_days(days as i64 + 719468); // 719468 = days from 0000-01-01 to 1970-01-01
+    let (y, m, d) = civil_from_days(days as i64);
     format!("{y:04}-{m:02}-{d:02}")
 }
 
@@ -90,7 +89,6 @@ pub fn session_dir(seed: &str) -> Option<PathBuf> {
 }
 
 pub fn session_path(seed: &str) -> Option<PathBuf> {
-    // Prefer new directory format
     if let Some(dir) = session_dir(seed) {
         let new_path = dir.join("session.json");
         if new_path.exists() || dir.parent().map_or(false, |p| p.exists()) {
@@ -98,13 +96,9 @@ pub fn session_path(seed: &str) -> Option<PathBuf> {
         }
         // Auto-migrate: move old flat file into new directory
         let old_path = sessions_dir()?.join(format!("{}.json", seed));
-        let old_live = sessions_dir()?.join(format!("{}.live.json", seed));
         if old_path.exists() {
             let _ = std::fs::create_dir_all(&dir);
             let _ = std::fs::rename(&old_path, &new_path);
-            if old_live.exists() {
-                let _ = std::fs::rename(&old_live, dir.join("session.live.json"));
-            }
             return Some(new_path);
         }
     }
@@ -113,12 +107,7 @@ pub fn session_path(seed: &str) -> Option<PathBuf> {
 }
 
 pub fn live_path(seed: &str) -> Option<PathBuf> {
-    if let Some(dir) = session_dir(seed) {
-        let new_path = dir.join("session.live.json");
-        if dir.exists() { return Some(new_path); }
-    }
-    // Fallback
-    sessions_dir().map(|d| d.join(format!("{}.live.json", seed)))
+    session_path(seed)
 }
 
 pub fn index_path() -> Option<PathBuf> {
