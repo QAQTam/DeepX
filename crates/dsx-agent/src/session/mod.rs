@@ -50,28 +50,7 @@ pub fn now_epoch() -> u64 {
 // ── Date helper (crate-internal) ──
 
 pub(crate) fn chrono_date() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let days = secs / 86400;
-    let (y, m, d) = civil_from_days(days as i64);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    // Algorithm from Howard Hinnant
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = y + if m <= 2 { 1 } else { 0 };
-    (y, m, d)
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 // ── Paths ──
@@ -81,11 +60,22 @@ pub fn sessions_dir() -> Option<PathBuf> {
 }
 
 /// Directory for a single session's data.
+/// For new sessions: creates path with today's date.
+/// For existing sessions: finds the existing directory matching seed prefix.
 pub fn session_dir(seed: &str) -> Option<PathBuf> {
-    sessions_dir().map(|d| {
-        let date = chrono_date();
-        d.join(format!("{}-{}", seed, date))
-    })
+    let base = sessions_dir()?;
+    // 1. Look for existing directory matching {seed}-*
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(seed) && entry.path().is_dir() {
+                return Some(entry.path());
+            }
+        }
+    }
+    // 2. New session: create with today's date
+    let date = chrono_date();
+    Some(base.join(format!("{}-{}", seed, date)))
 }
 
 pub fn session_path(seed: &str) -> Option<PathBuf> {

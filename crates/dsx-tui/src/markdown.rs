@@ -48,6 +48,7 @@ pub struct MarkdownRenderer {
     state: MdState,
     code_lines: Vec<String>,
     code_lang: String,
+    table_rows: Vec<Vec<String>>,
 }
 
 impl MarkdownRenderer {
@@ -56,6 +57,7 @@ impl MarkdownRenderer {
             state: MdState::Normal,
             code_lines: Vec::new(),
             code_lang: String::new(),
+            table_rows: Vec::new(),
         }
     }
 
@@ -76,14 +78,14 @@ impl MarkdownRenderer {
 
     /// Flush any pending state (e.g. an open code block at end of stream).
     pub fn flush(&mut self) -> Vec<Line<'static>> {
+        let mut lines = self.flush_table();
         if self.state == MdState::CodeBlock {
             self.state = MdState::Normal;
             let lns = std::mem::take(&mut self.code_lines);
             self.code_lang.clear();
-            render_code_block(&lns)
-        } else {
-            Vec::new()
+            lines.append(&mut render_code_block(&lns));
         }
+        lines
     }
 
     // ── Normal mode ──
@@ -154,16 +156,43 @@ impl MarkdownRenderer {
             let cells = parse_table_row(trimmed);
             let is_sep = cells.iter().all(|c| c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' '));
             if is_sep {
-                return vec![render_table_separator(cells.len())];
+                // Skipping separator — widths will be calculated from data rows
+                return Vec::new();
             }
-            return vec![render_table_row(&cells)];
+            self.table_rows.push(cells);
+            return Vec::new();
         }
 
+        // Non-table line: flush buffered table first
+        let mut out = self.flush_table();
         // Plain paragraph
-        vec![format_inline(trimmed)]
+        out.push(format_inline(trimmed));
+        out
     }
 
     // ── Code block mode ──
+
+    fn flush_table(&mut self) -> Vec<Line<'static>> {
+        if self.table_rows.is_empty() { return Vec::new(); }
+        let rows = std::mem::take(&mut self.table_rows);
+        let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+        let mut widths = vec![0usize; cols];
+        for row in &rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < cols {
+                    widths[i] = widths[i].max(cell.width());
+                }
+            }
+        }
+        let mut out = Vec::new();
+        // Separator line
+        out.push(render_table_separator(&widths));
+        for row in &rows {
+            out.push(render_table_row(row, &widths));
+        }
+        out.push(render_table_separator(&widths));
+        out
+    }
 
     fn push_code_line(&mut self, line: &str) -> Vec<Line<'static>> {
         self.code_lines.push(line.to_string());
@@ -213,28 +242,21 @@ fn parse_table_row(line: &str) -> Vec<String> {
         .collect()
 }
 
-fn render_table_separator(num_cols: usize) -> Line<'static> {
-    let mut spans = vec![Span::styled("├".to_string(), Style::new().fg(TABLE_BORDER))];
-    for i in 0..num_cols {
-        spans.push(Span::styled("────────".to_string(), Style::new().fg(TABLE_BORDER)));
-        if i < num_cols - 1 {
-            spans.push(Span::styled("┼".to_string(), Style::new().fg(TABLE_BORDER)));
-        }
-    }
-    spans.push(Span::styled("┤".to_string(), Style::new().fg(TABLE_BORDER)));
-    Line::from(spans)
+fn render_table_separator(col_widths: &[usize]) -> Line<'static> {
+    let total: usize = col_widths.iter().map(|w| w + 3).sum::<usize>() + 1;
+    let line: String = "─".repeat(total);
+    Line::from(Span::styled(line, Style::new().fg(Color::Rgb(80, 85, 95))))
 }
 
-fn render_table_row(cells: &[String]) -> Line<'static> {
-    let mut spans = vec![Span::styled("│".to_string(), Style::new().fg(TABLE_BORDER))];
+fn render_table_row(cells: &[String], col_widths: &[usize]) -> Line<'static> {
+    let mut spans = vec![Span::styled("│ ".to_string(), Style::new().fg(Color::Rgb(140, 145, 155)))];
     for (i, cell) in cells.iter().enumerate() {
-        let w = cell.width();
-        let padded = format!(" {cell}{}", " ".repeat(7usize.saturating_sub(w)));
-        spans.push(Span::raw(padded));
-        spans.push(Span::styled("│".to_string(), Style::new().fg(TABLE_BORDER)));
-        if i < cells.len() - 1 {
-            spans.push(Span::raw(" "));
-        }
+        let w = col_widths.get(i).copied().unwrap_or(8);
+        let cw = cell.width();
+        let pad = " ".repeat(w.saturating_sub(cw));
+        let padded = format!("{cell}{pad} ");
+        spans.push(Span::styled(padded, Style::new().fg(Color::Rgb(200, 200, 210))));
+        spans.push(Span::styled("│ ".to_string(), Style::new().fg(Color::Rgb(140, 145, 155))));
     }
     Line::from(spans)
 }

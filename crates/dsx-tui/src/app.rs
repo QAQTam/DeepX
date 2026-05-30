@@ -1,5 +1,7 @@
 use dsx_proto::Agent2Ui;
 use dsx_types::{ConfigStore, PersistentConfig, SessionMeta, SessionFile, ContentBlock};
+use ratatui::text::{Line, Span};
+use ratatui::style::{Color, Style};
 
 // ── Active screen ──
 
@@ -465,14 +467,25 @@ impl App {
                 if !success { self.debug.tool_failures += 1; }
                 self.switch_block(BlockType::Tool);
                 let label = tool_label(&name, &content, args.as_deref());
+                let styled_lines = build_tool_lines(&name, &content, args.as_deref());
                 let char_count = content.chars().count();
-                let preview = if char_count > 200 {
-                    let head: String = content.chars().take(200).collect();
-                    format!("{}\n  ... (+{} chars)", head, char_count - 200)
+                let trunc_note = if char_count > 200 {
+                    format!("  ... (+{} chars)", char_count - 200)
                 } else {
-                    content.clone()
+                    String::new()
                 };
-                self.push_msg(ChatRole::Tool, &format!("{label}\n{preview}"));
+                let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+                    Span::styled(label.clone(), Style::new().fg(Color::Cyan).bold())
+                ])];
+                lines.extend(styled_lines);
+                if !trunc_note.is_empty() {
+                    lines.push(Line::from(Span::styled(trunc_note.clone(), Style::new().fg(Color::Gray))));
+                }
+                self.messages.push(ChatMessage {
+                    role: ChatRole::Tool,
+                    content: label,
+                    lines,
+                });
             }
             Agent2Ui::ApiResponse { content, reasoning_content, usage, context_limit, session_tokens, .. } => {
                 if !self.streaming {
@@ -522,6 +535,7 @@ impl App {
                 self.debug.session_seed = seed.clone();
                 self.debug.context_tokens = tokens_used;
                 self.session_tokens = tokens_used as u64;
+                self.scroll_offset = 0;
                 self.load_messages_from_session(&seed);
             }
             Agent2Ui::DebugSnapshot { hp_connected, session_seed, context_tokens,
@@ -551,6 +565,78 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+fn build_tool_lines(name: &str, content: &str, args: Option<&str>) -> Vec<Line<'static>> {
+    match name {
+        "read_file" => {
+            let json = args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()).unwrap_or_default();
+            let start = json.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+            let end = json.get("end_line").and_then(|v| v.as_u64());
+            let max_lines = 40usize;
+            let total_lines = content.lines().count();
+
+            let mut out = Vec::new();
+            for (i, line) in content.lines().take(max_lines).enumerate() {
+                let ln = start + i;
+                out.push(Line::from(vec![
+                    Span::styled(format!(" {:>4} │ ", ln), Style::new().fg(Color::Rgb(80, 90, 100))),
+                    Span::styled(line.to_string(), Style::new().fg(Color::Rgb(180, 190, 200))),
+                ]));
+            }
+            if let Some(e) = end {
+                if (e as usize).saturating_sub(start) >= max_lines {
+                    out.push(Line::from(Span::styled(
+                        format!("  ... {} lines total (showing first {max_lines})", total_lines),
+                        Style::new().fg(Color::Gray),
+                    )));
+                }
+            }
+            out
+        }
+        "edit_file" | "edit_file_diff" => {
+            let json = args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()).unwrap_or_default();
+            let old_str = json.get("old_string").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let new_str = json.get("new_string").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let old_arr = json.get("old_lines").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|l| l.as_str().map(String::from)).collect::<Vec<_>>());
+            let new_arr = json.get("new_lines").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|l| l.as_str().map(String::from)).collect::<Vec<_>>());
+
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+
+            if let (Some(ol), Some(nl)) = (old_arr, new_arr) {
+                for line in &ol {
+                    out.push(Line::from(vec![
+                        Span::styled(" - ".to_string(), Style::new().fg(Color::Rgb(220, 80, 80)).bold()),
+                        Span::styled(line.clone(), Style::new().fg(Color::Rgb(200, 150, 150))),
+                    ]));
+                }
+                for line in &nl {
+                    out.push(Line::from(vec![
+                        Span::styled(" + ".to_string(), Style::new().fg(Color::Rgb(80, 200, 80)).bold()),
+                        Span::styled(line.clone(), Style::new().fg(Color::Rgb(150, 200, 150))),
+                    ]));
+                }
+            } else if !old_str.is_empty() || !new_str.is_empty() {
+                for line in old_str.lines() {
+                    out.push(Line::from(vec![
+                        Span::styled(" - ".to_string(), Style::new().fg(Color::Rgb(220, 80, 80)).bold()),
+                        Span::styled(line.to_string(), Style::new().fg(Color::Rgb(200, 150, 150))),
+                    ]));
+                }
+                for line in new_str.lines() {
+                    out.push(Line::from(vec![
+                        Span::styled(" + ".to_string(), Style::new().fg(Color::Rgb(80, 200, 80)).bold()),
+                        Span::styled(line.to_string(), Style::new().fg(Color::Rgb(150, 200, 150))),
+                    ]));
+                }
+            }
+            out
+        }
+        _ => vec![]
     }
 }
 

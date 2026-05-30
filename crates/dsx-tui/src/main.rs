@@ -91,6 +91,7 @@ fn main() -> anyhow::Result<()> {
             run_session_screen(terminal, &mut app)?;
         }
         if app.should_quit { return Ok(()); }
+        app.scroll_offset = 0;
         match spawn_agent(app.resume_seed.as_deref()) {
             Ok((mut child, mut stdin, agent_rx, stdout_handle)) => {
                 let result = run_chat(terminal, &mut app, &mut stdin, &agent_rx,
@@ -247,6 +248,7 @@ fn run_session_screen(
         }
     }
     app.screen = Screen::Chat;
+    app.scroll_offset = 0;
     Ok(())
 }
 
@@ -260,89 +262,91 @@ fn run_chat(
     send: impl Fn(&mut ChildStdin, &dsx_proto::Ui2Agent),
 ) -> std::io::Result<()> {
     loop {
-        terminal.draw(|frame| ui::render_chat(frame, app))?;
-        app.tick();
-
-        if event::poll(std::time::Duration::ZERO)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
-                match (key.modifiers, key.code) {
-                    (KeyModifiers::NONE, KeyCode::F(12)) => {
-                        app.show_debug = !app.show_debug;
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('c'))
-                    | (KeyModifiers::NONE, KeyCode::Char('q'))
-                    | (_, KeyCode::F(3)) => return Ok(()),
-                    (_, KeyCode::Esc) => {
-                        send(stdin, &dsx_proto::Ui2Agent::Cancel);
-                        app.status = "Cancelled".into();
-                    }
-                    (_, KeyCode::Enter) => {
-                        let text = app.input.drain(..).collect::<String>();
-                        if !text.trim().is_empty() {
-                            app.messages.push(app::ChatMessage {
-                                role: app::ChatRole::User,
-                                content: text.clone(),
-                                lines: vec![ratatui::text::Line::from(text.clone())],
-                            });
-                            app.input.clear();
-                            app.status = "Thinking...".into();
-                            send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
-                        }
-                    }
-                    (_, KeyCode::Backspace) => { app.input.pop(); }
-                    (_, KeyCode::Char(c)) => { app.input.push(c); }
-                    (_, KeyCode::Up) | (_, KeyCode::PageUp) => {
-                        let n = if key.code == KeyCode::PageUp { 12 } else { 1 };
-                        app.scroll_offset = app.scroll_offset.saturating_add(n);
-                    }
-                    (_, KeyCode::Down) | (_, KeyCode::PageDown) => {
-                        let n = if key.code == KeyCode::PageDown { 12 } else { 1 };
-                        app.scroll_offset = app.scroll_offset.saturating_sub(n);
-                    }
-                    _ => {}
-                }
+        // 1. Drain all pending agent frames — then draw immediately
+        loop {
+            match agent_rx.try_recv() {
+                Ok(frame) => app.handle_frame(frame),
+                Err(_) => break,
             }
         }
 
-        if let Ok(frame) = agent_rx.try_recv() {
-            app.handle_frame(frame);
-        } else if !app.streaming {
-            std::thread::sleep(std::time::Duration::from_millis(16));
-        }
+        // 2. Render (ask overlay included if active)
+        terminal.draw(|frame| {
+            ui::render_chat(frame, app);
+            if app.ask.is_some() { ui::render_ask(frame, app); }
+        })?;
+        app.tick();
 
-        // Handle ask_user popup
-        if let Some(ref _ask) = app.ask {
-            terminal.draw(|frame| {
-                ui::render_chat(frame, app);
-                ui::render_ask(frame, app);
-            })?;
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {}
-                match (key.modifiers, key.code.clone()) {
+        if app.should_quit { return Ok(()); }
+
+        // 3. Handle keyboard (non-blocking)
+        if event::poll(std::time::Duration::ZERO)? {
+            let key = if let Event::Key(k) = event::read()? { k } else { continue };
+            if key.kind != KeyEventKind::Press { continue; }
+
+            // Ask popup: intercept keys
+            if app.ask.is_some() {
+                let ask = app.ask.as_mut().unwrap();
+                match (key.modifiers, key.code) {
                     (_, KeyCode::Esc) => { app.ask = None; }
-                    (_, KeyCode::Up) => { if let Some(ref mut a) = app.ask { if a.selected > 0 { a.selected -= 1; } } }
-                    (_, KeyCode::Down) => { if let Some(ref mut a) = app.ask { if a.selected + 1 < a.options.len() { a.selected += 1; } } }
+                    (_, KeyCode::Up) => { if ask.selected > 0 { ask.selected -= 1; } }
+                    (_, KeyCode::Down) => { if ask.selected + 1 < ask.options.len() { ask.selected += 1; } }
                     (_, KeyCode::Enter) => {
-                        let reply = if let Some(ref mut a) = app.ask {
-                            if a.selected < a.options.len() {
-                                let opt = a.options[a.selected].clone();
-                                if opt.is_empty() && !a.custom_input.is_empty() { a.custom_input.clone() } else { opt }
-                            } else { String::new() }
+                        let reply = if ask.selected < ask.options.len() {
+                            let opt = &ask.options[ask.selected];
+                            if opt.is_empty() && !ask.custom_input.is_empty() { ask.custom_input.clone() } else { opt.clone() }
                         } else { String::new() };
                         if !reply.is_empty() {
                             send(stdin, &dsx_proto::Ui2Agent::UserInput { text: reply });
                         }
                         app.ask = None;
                     }
-                    (_, KeyCode::Backspace) => { if let Some(ref mut a) = app.ask { a.custom_input.pop(); } }
-                    (_, KeyCode::Char(c)) => { if let Some(ref mut a) = app.ask { a.custom_input.push(c); } }
+                    (_, KeyCode::Backspace) => { ask.custom_input.pop(); }
+                    (_, KeyCode::Char(c)) => { ask.custom_input.push(c); }
                     _ => {}
                 }
+                continue;
             }
-            continue;
-        }
 
-        if app.should_quit { return Ok(()); }
+            // Normal chat keys
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::F(12)) => {
+                    app.show_debug = !app.show_debug;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('c'))
+                | (KeyModifiers::NONE, KeyCode::Char('q'))
+                | (_, KeyCode::F(3)) => return Ok(()),
+                (_, KeyCode::Esc) => {
+                    send(stdin, &dsx_proto::Ui2Agent::Cancel);
+                    app.status = "Cancelled".into();
+                }
+                (_, KeyCode::Enter) => {
+                    let text = app.input.drain(..).collect::<String>();
+                    if !text.trim().is_empty() {
+                        app.messages.push(app::ChatMessage {
+                            role: app::ChatRole::User,
+                            content: text.clone(),
+                            lines: vec![ratatui::text::Line::from(text.clone())],
+                        });
+                        app.input.clear();
+                        app.status = "Thinking...".into();
+                        send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
+                    }
+                }
+                (_, KeyCode::Backspace) => { app.input.pop(); }
+                (_, KeyCode::Char(c)) => { app.input.push(c); }
+                (_, KeyCode::Up) | (_, KeyCode::PageUp) => {
+                    let n = if key.code == KeyCode::PageUp { 12 } else { 1 };
+                    app.scroll_offset = app.scroll_offset.saturating_add(n);
+                }
+                (_, KeyCode::Down) | (_, KeyCode::PageDown) => {
+                    let n = if key.code == KeyCode::PageDown { 12 } else { 1 };
+                    app.scroll_offset = app.scroll_offset.saturating_sub(n);
+                }
+                _ => {}
+            }
+        } else if !app.streaming {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
     }
 }

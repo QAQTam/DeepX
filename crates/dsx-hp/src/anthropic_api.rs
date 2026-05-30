@@ -81,35 +81,37 @@ pub async fn chat_stream(
     let anthropic_tools: Option<Vec<serde_json::Value>> = tools.map(|tds| {
         tds.into_iter()
             .map(|td| {
+                let schema = compact_schema(&td.function.parameters);
+                let desc = td.function.description.chars().take(60).collect::<String>();
                 serde_json::json!({
                     "name": td.function.name,
-                    "description": td.function.description,
-                    "input_schema": td.function.parameters,
+                    "description": desc,
+                    "input_schema": schema,
                 })
             })
             .collect()
     });
 
-    // ── 4. Build request ──
-    let mut body = serde_json::json!({
-        "model": model,
-        "max_tokens": max_tokens,
-        "stream": true,
-        "messages": api_msgs,
-        "thinking": {"type": "enabled"},
-    });
+    // ── 4. Build request (ordered: model, system, tools, messages, ...)
+    let mut body = serde_json::Map::new();
+    body.insert("model".into(), serde_json::json!(model));
+    body.insert("max_tokens".into(), serde_json::json!(max_tokens));
+    body.insert("stream".into(), serde_json::json!(true));
+    body.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
     if !system_blocks.is_empty() {
-        body["system"] = serde_json::Value::Array(system_blocks);
+        body.insert("system".into(), serde_json::Value::Array(system_blocks));
     }
     if let Some(t) = anthropic_tools {
-        body["tools"] = serde_json::Value::Array(t);
+        body.insert("tools".into(), serde_json::Value::Array(t));
     }
+    body.insert("messages".into(), serde_json::json!(api_msgs));
     if let Some(ref uid) = user_id {
-        body["metadata"] = serde_json::json!({"user_id": uid});
+        body.insert("metadata".into(), serde_json::json!({"user_id": uid}));
     }
     if let Some(e) = effort {
-        body["output_config"] = serde_json::json!({"effort": e});
+        body.insert("output_config".into(), serde_json::json!({"effort": e}));
     }
+    let body = serde_json::Value::Object(body);
 
     // ── 5. HTTP POST ──
     let url = build_anthropic_url(&provider.base_url);
@@ -380,13 +382,20 @@ fn build_anthropic_url(base_url: &str) -> String {
 fn dump_api_request(user_id: Option<&str>, body: &serde_json::Value) {
     let dir = log_dir();
     let _ = std::fs::create_dir_all(&dir);
+    let seed = user_id.unwrap_or("unknown");
+    let path = dir.join(format!("{seed}_api.json"));
+    // Append to JSON array file
+    let mut entries: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let seed = user_id.unwrap_or("unknown");
-    let path = dir.join(format!("{seed}_req_{ts}.json"));
-    if let Ok(json) = serde_json::to_string_pretty(body) {
+    entries.push(serde_json::json!({"ts": ts, "req": body}));
+    if entries.len() > 20 { entries.remove(0); }
+    if let Ok(json) = serde_json::to_string_pretty(&entries) {
         let _ = std::fs::write(&path, json);
     }
 }
@@ -394,17 +403,19 @@ fn dump_api_request(user_id: Option<&str>, body: &serde_json::Value) {
 fn dump_api_error(user_id: Option<&str>, status: u16, text: &str) {
     let dir = log_dir();
     let _ = std::fs::create_dir_all(&dir);
+    let seed = user_id.unwrap_or("unknown");
+    let path = dir.join(format!("{seed}_api.json"));
+    let mut entries: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let seed = user_id.unwrap_or("unknown");
-    let path = dir.join(format!("{seed}_err_{ts}_{status}.json"));
-    let body = serde_json::json!({
-        "status": status,
-        "body": text,
-    });
-    if let Ok(json) = serde_json::to_string_pretty(&body) {
+    entries.push(serde_json::json!({"ts": ts, "err": {"status": status, "body": text}}));
+    if entries.len() > 20 { entries.remove(0); }
+    if let Ok(json) = serde_json::to_string_pretty(&entries) {
         let _ = std::fs::write(&path, json);
     }
 }
@@ -413,6 +424,21 @@ fn log_dir() -> std::path::PathBuf {
     let mut p = dsx_types::platform::data_dir();
     p.push("logs");
     p
+}
+
+fn compact_schema(schema: &serde_json::Value) -> serde_json::Value {
+    let mut s = schema.clone();
+    if let Some(obj) = s.as_object_mut() {
+        obj.remove("additionalProperties");
+        if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
+            for (_, prop) in props.iter_mut() {
+                if let Some(p) = prop.as_object_mut() {
+                    p.remove("description");
+                }
+            }
+        }
+    }
+    s
 }
 
 fn deepseek_error_description(status: u16) -> &'static str {

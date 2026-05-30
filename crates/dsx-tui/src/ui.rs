@@ -321,7 +321,7 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
         let style = if selected { Style::new().fg(ACCENT).bold() } else { Style::new().fg(DIM) };
 
         let ts = format_ts(s.updated_at);
-        let summary: String = s.last_summary.chars().take(40).collect();
+        let summary: String = s.last_summary.chars().take(30).collect();
         lines.push(Line::from(vec![
             Span::raw(format!("  {mark} ")),
             Span::styled(&s.seed, Style::new().fg(Color::Yellow).bold()),
@@ -350,31 +350,6 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
     ]));
 
     frame.render_widget(Paragraph::new(lines), list_area);
-
-    // Scrollbar
-    let render_scrollbar = total > 0 && max_fit < total;
-    if render_scrollbar {
-        let sb_h = list_area.height.saturating_sub(1) as usize;
-        let thumb_h = (sb_h * max_fit / total).max(1);
-        let thumb_y = if total > max_fit {
-            (scroll * (sb_h - thumb_h) / (total - max_fit)).min(sb_h - thumb_h)
-        } else {
-            0
-        };
-        let mut sb_lines: Vec<Line> = Vec::new();
-        let track = Span::styled("│", Style::new().fg(DIM));
-        let thumb = Span::styled("█", Style::new().fg(ACCENT));
-        for r in 0..sb_h {
-            if r >= thumb_y && r < thumb_y + thumb_h {
-                sb_lines.push(Line::from(thumb.clone()));
-            } else {
-                sb_lines.push(Line::from(track.clone()));
-            }
-        }
-        let sb_x = list_area.x + list_area.width.saturating_sub(1);
-        let sb_area = Rect::new(sb_x, list_area.y, 1, sb_h as u16);
-        frame.render_widget(Paragraph::new(sb_lines), sb_area);
-    }
 
     let help = Line::from(vec![
         Span::styled(" ↑↓ ", Style::new().fg(Color::Black).bg(ACCENT)),
@@ -469,29 +444,31 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                 if msg.lines.is_empty() {
                     text_lines.push(Line::from(vec![prefix, Span::raw(&msg.content)]));
                 } else {
-                    for (i, line) in msg.lines.iter().enumerate() {
-                        let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
-                        if i == 0 {
-                            spans.insert(0, prefix.clone());
+                    let first_char = msg.lines[0].spans.first()
+                        .and_then(|s| s.content.chars().next());
+                    let is_table = first_char.map_or(false, |c| {
+                        c == '│' || c == '├' || c == '└' || c == '┌' || c == '┐' || c == '┘'
+                    });
+
+                    if is_table {
+                        text_lines.push(Line::from(prefix.clone()));
+                        for line in &msg.lines {
+                            text_lines.push(line.clone());
                         }
-                        text_lines.push(Line::from(spans));
+                    } else {
+                        for (i, line) in msg.lines.iter().enumerate() {
+                            let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
+                            if i == 0 {
+                                spans.insert(0, prefix.clone());
+                            }
+                            text_lines.push(Line::from(spans));
+                        }
                     }
                 }
             }
             ChatRole::Tool => {
-                let prefix = Span::styled("  Tool> ", Style::new().fg(Color::Cyan).bold());
-                if msg.lines.is_empty() {
-                    text_lines.push(Line::from(vec![prefix, Span::styled(&msg.content, Style::new().fg(Color::Gray))]));
-                } else {
-                    for (i, line) in msg.lines.iter().enumerate() {
-                        let mut spans: Vec<Span> = line.spans.iter().map(|s| {
-                            Span::styled(s.content.clone(), Style::new().fg(Color::Gray))
-                        }).collect();
-                        if i == 0 {
-                            spans.insert(0, prefix.clone());
-                        }
-                        text_lines.push(Line::from(spans));
-                    }
+                for line in &msg.lines {
+                    text_lines.push(line.clone());
                 }
             }
         }
@@ -499,14 +476,9 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
 
     let content_height = body.height.saturating_sub(2) as usize;
     let body_width = body.width.saturating_sub(2) as usize;
-    let total_visual: usize = text_lines.iter().map(|line| {
-        let w: usize = line.spans.iter()
-            .map(|s| s.content.width())
-            .sum();
-        let rows = w.max(1usize).saturating_add(body_width.max(1usize) - 1) / body_width.max(1usize);
-        rows.max(1)
-    }).sum();
-    let max_scroll = total_visual.saturating_sub(content_height);
+    // Use logical line count for scroll — simpler and more predictable with wrapping
+    let logical_lines = text_lines.len();
+    let max_scroll = logical_lines.saturating_sub(content_height);
     let offset = if app.streaming { 0 } else { app.scroll_offset.min(max_scroll) };
     let scroll = max_scroll.saturating_sub(offset) as u16;
 
