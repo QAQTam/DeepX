@@ -591,6 +591,8 @@ pub fn handle_user_input(
                 usage,
                 reasoning_content: final_reasoning,
                 context_tokens: agent.token_estimate,
+                context_limit: agent.config.context_limit,
+                session_tokens: agent.session_tokens,
             });
             return;
         }
@@ -746,6 +748,8 @@ pub fn handle_user_input(
                 stop_reason: None,
                 usage,
                 context_tokens: agent.token_estimate,
+                context_limit: agent.config.context_limit,
+                session_tokens: agent.session_tokens,
             });
             sent_final_response = true;
             break;
@@ -788,6 +792,8 @@ pub fn handle_user_input(
             usage: None,
             reasoning_content: None,
             context_tokens: agent.token_estimate,
+            context_limit: agent.config.context_limit,
+            session_tokens: agent.session_tokens,
         });
     }
 

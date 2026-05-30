@@ -73,6 +73,10 @@ pub enum Agent2Ui {
         /// Full context token count (system + tools + messages).
         #[serde(default)]
         context_tokens: u32,
+        #[serde(default)]
+        context_limit: u32,
+        #[serde(default)]
+        session_tokens: u64,
     },
 
     #[serde(rename = "ask_user")]

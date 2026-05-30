@@ -485,15 +485,7 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     // === System prompt: STABLE layers only (identical across consecutive requests) ===
     let mut system = base_prompt;
 
-    // Layer 2: Tool definitions (stable per session)
-    let tool_help = tool_help_text(&state.tool_defs);
-    let tool_help_tokens = if tool_help.is_empty() { 0 } else {
-        system.push_str("\n\n## Available Tools\n");
-        system.push_str(&tool_help);
-        tokenizer::count_tokens(&tool_help)
-    };
-
-    // Layer 3: Phase prompt (stable per phase)
+    // Layer 2: Phase prompt (stable per phase)
     let phase = crate::router::read_phase();
     let phase_tokens = if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
         system.push_str("\n\n");
@@ -535,7 +527,7 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
 
     // === Token breakdown ===
     let mut bd = TokenBreakdown::default();
-    bd.system = base_tokens + tool_help_tokens + phase_tokens;
+    bd.system = base_tokens + phase_tokens;
     bd.episodic = tokenizer::estimate_messages_tokens(&messages);
     bd.total = bd.system + bd.episodic;
 
@@ -550,31 +542,9 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     state.predicted_cache_hit_pct = report.hit_rate;
 
     log::info!(
-        "context (tokens): base={} tools={} phase={} messages={} total={}",
-        base_tokens, tool_help_tokens, phase_tokens, bd.episodic, bd.total,
+        "context (tokens): base={} phase={} messages={} total={}",
+        base_tokens, phase_tokens, bd.episodic, bd.total,
     );
 
     (system, messages, bd)
-}
-
-/// Render tool definitions as a stable system-prompt help block for the model.
-/// Stable within a session — only changes when tools are reloaded.
-fn tool_help_text(defs: &[dsx_types::ToolDef]) -> String {
-    if defs.is_empty() { return String::new(); }
-    let mut out = String::new();
-    for td in defs {
-        out.push_str(&format!("- `{}`", td.function.name));
-        if !td.function.description.is_empty() {
-            out.push_str(&format!(": {}", td.function.description));
-        }
-        // Include parameter names from schema
-        if let Some(params) = td.function.parameters.get("properties").and_then(|p| p.as_object()) {
-            if !params.is_empty() {
-                let names: Vec<&str> = params.keys().map(|k| k.as_str()).collect();
-                out.push_str(&format!(" ({})", names.join(", ")));
-            }
-        }
-        out.push('\n');
-    }
-    out
 }

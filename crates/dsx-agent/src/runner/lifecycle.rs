@@ -15,13 +15,17 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
             agent.session_start = file.created_at;
             let (ctx, repairs) = crate::assembly::ContextAssembler::from_legacy(file.messages);
             agent.ctx = ctx;
+            // Estimate session tokens from restored messages
+            let msg_json = serde_json::to_string(&agent.ctx.to_vec()).unwrap_or_default();
+            agent.session_tokens = crate::tokenizer::count_tokens(&msg_json) as u64;
 
             dsx_log::set_session(&agent.session_seed);
             tools::set_current_session(&agent.session_seed);
             log::info!(
-                "dsx-agent: restored session {} ({} msgs)",
+                "dsx-agent: restored session {} ({} msgs, {} tokens)",
                 agent.session_seed,
-                agent.ctx.message_count()
+                agent.ctx.message_count(),
+                agent.session_tokens
             );
             if !repairs.is_empty() {
                 log::warn!("session restore: {:?} repairs", repairs);

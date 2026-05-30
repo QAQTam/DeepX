@@ -198,6 +198,22 @@ pub async fn chat_stream(
 
             let ev_type = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
             match ev_type {
+                "message_start" => {
+                    if let Some(msg) = ev.get("message") {
+                        if let Some(u) = msg.get("usage") {
+                            let it = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let hit = u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            usage_info = Some(UsageInfo {
+                                prompt_tokens: it,
+                                completion_tokens: 0,
+                                total_tokens: it,
+                                prompt_cache_hit_tokens: hit,
+                                prompt_cache_miss_tokens: it.saturating_sub(hit),
+                                reasoning_tokens: 0,
+                            });
+                        }
+                    }
+                }
                 "content_block_start" => {
                     let index = ev.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                     if let Some(cb) = ev.get("content_block") {
@@ -250,14 +266,22 @@ pub async fn chat_stream(
                         stop_reason = delta.get("stop_reason").and_then(|v| v.as_str()).map(String::from);
                     }
                     if let Some(u) = ev.get("usage") {
-                        let it = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let it = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(
+                            usage_info.as_ref().map(|ui| ui.prompt_tokens as u64).unwrap_or(0)
+                        ) as u32;
                         let ot = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let hit = u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let miss = it.saturating_sub(hit);
                         usage_info = Some(UsageInfo {
                             prompt_tokens: it,
                             completion_tokens: ot,
                             total_tokens: it + ot,
-                            prompt_cache_hit_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                            prompt_cache_miss_tokens: u.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                            prompt_cache_hit_tokens: hit,
+                            prompt_cache_miss_tokens: miss,
+                            reasoning_tokens: u.get("completion_tokens_details")
+                                .and_then(|d| d.get("reasoning_tokens"))
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u32,
                         });
                     }
                 }

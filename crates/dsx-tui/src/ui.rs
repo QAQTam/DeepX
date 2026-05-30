@@ -283,7 +283,7 @@ pub fn render_setup(frame: &mut Frame, app: &App) {
 pub fn render_sessions(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    let popup = centered_rect(70, (app.sessions.len() + 6).min(24) as u16, area);
+    let popup = centered_rect(70, (app.sessions.len() + 8).min(24).max(12) as u16, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::new()
@@ -302,7 +302,7 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    let max_fit = ((list_area.height as usize).saturating_sub(4)) / 2;
+    let max_fit = ((list_area.height as usize).saturating_sub(4)).max(1) / 2;
     let total = app.sessions.len();
 
     let scroll = if app.session_index < max_fit {
@@ -406,7 +406,15 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         Span::raw("DeepX | "),
         Span::styled(format!("Phase: {}", app.phase), Style::new().fg(Color::Cyan)),
         Span::raw(" | "),
-        Span::styled(format!("Tokens: {}", app.tokens), Style::new().fg(Color::Yellow)),
+        Span::styled(format!("Tokens: {}", app.session_tokens), Style::new().fg(Color::Yellow)),
+        Span::raw(" "),
+        Span::styled(format!("({:.0}%)", if app.context_limit > 0 { app.session_tokens as f64 / app.context_limit as f64 * 100.0 } else { 0.0 }), Style::new().fg(Color::Gray)),
+        if app.cache_hit > 0 || app.cache_miss > 0 {
+            Span::raw(" ")
+        } else { Span::raw("") },
+        Span::styled(format!("hit:{}", app.cache_hit), Style::new().fg(Color::Rgb(100, 200, 120))),
+        Span::styled("/", Style::new().fg(DIM)),
+        Span::styled(format!("miss:{}", app.cache_miss), Style::new().fg(Color::Rgb(200, 150, 100))),
         if !app.balance.is_empty() {
             Span::raw(" | ")
         } else {
@@ -416,6 +424,12 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         Span::raw(" | "),
         Span::styled(&status_text, Style::new().fg(if app.streaming { Color::Yellow } else { Color::Green })),
     ]);
+    if !app.cache_warning.is_empty() {
+        frame.render_widget(
+            Span::styled(&app.cache_warning, Style::new().fg(Color::Red).bold()),
+            Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+        );
+    }
     frame.render_widget(header_text, header);
 
     let chat_block = Block::new().borders(Borders::ALL).title(" Chat ");

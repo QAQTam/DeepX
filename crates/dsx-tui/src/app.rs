@@ -1,5 +1,5 @@
 use dsx_proto::Agent2Ui;
-use dsx_types::{ConfigStore, PersistentConfig, SessionMeta};
+use dsx_types::{ConfigStore, PersistentConfig, SessionMeta, SessionFile, ContentBlock};
 
 // ── Active screen ──
 
@@ -168,9 +168,63 @@ impl SetupState {
                             self.model_list = ids;
                             self.models_loaded = true;
                             return true;
-                        }
+        }
+    }
+}
+
+impl App {
+    fn load_messages_from_session(&mut self, seed: &str) {
+        use std::fs;
+        let dir = dsx_types::platform::data_dir().join("sessions");
+        // Try directory format first
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.starts_with(seed) { continue; }
+            let session_path = path.join("session.json");
+            if let Ok(data) = fs::read_to_string(&session_path) {
+                if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
+                    self.push_messages_from_file(&file);
+                    return;
+                }
+            }
+        }
+        // Fallback: flat format
+        let flat = dir.join(format!("{}.json", seed));
+        if let Ok(data) = fs::read_to_string(&flat) {
+            if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
+                self.push_messages_from_file(&file);
+            }
+        }
+    }
+
+    fn push_messages_from_file(&mut self, file: &SessionFile) {
+        for msg in &file.messages {
+            if msg.role == "system" { continue; }
+            for block in &msg.content {
+                match block {
+                    ContentBlock::Text { text } => {
+                        let role = if msg.role == "user" { ChatRole::User } else { ChatRole::Assistant };
+                        self.push_msg(role, text);
+                    }
+                    ContentBlock::Thinking { thinking, .. } => {
+                        self.push_msg(ChatRole::Thinking, thinking);
+                    }
+                    ContentBlock::ToolUse { name, input, .. } => {
+                        let args: String = input.as_str().unwrap_or("").into();
+                        let short_args: String = args.chars().take(60).collect();
+                        self.push_msg(ChatRole::Tool, &format!("{}: {}", name, short_args));
+                    }
+                    ContentBlock::ToolResult { content, .. } => {
+                        let short: String = content.chars().take(200).collect();
+                        self.push_msg(ChatRole::Tool, &format!("result: {}", short));
                     }
                 }
+            }
+        }
+    }
+}
                 false
             }
             Err(_) => false,
@@ -224,6 +278,12 @@ pub struct App {
     pub status: String,
     pub phase: String,
     pub tokens: u32,
+    pub session_tokens: u64,
+    pub cache_hit: u32,
+    pub cache_miss: u32,
+    pub cache_rates: Vec<f64>,
+    pub cache_warning: String,
+    pub context_limit: u32,
     pub should_quit: bool,
     pub streaming: bool,
     pub scroll_offset: usize,
@@ -293,6 +353,12 @@ impl App {
             status: String::from("Ready"),
             phase: String::from("Coding"),
             tokens: 0,
+            session_tokens: 0,
+            cache_hit: 0,
+            cache_miss: 0,
+            cache_rates: Vec::new(),
+            cache_warning: String::new(),
+            context_limit: 1_000_000,
             should_quit: false,
             streaming: false,
             scroll_offset: 0,
@@ -319,6 +385,26 @@ impl App {
 
     pub fn tick(&mut self) {
         self.frame_count = self.frame_count.wrapping_add(1);
+    }
+
+    fn update_cache(&mut self, hit: u32, miss: u32) {
+        let total = hit + miss;
+        let rate = if total > 0 { hit as f64 / total as f64 } else { 1.0 };
+        self.cache_rates.push(rate);
+        if self.cache_rates.len() > 5 { self.cache_rates.remove(0); }
+
+        if self.cache_rates.len() >= 3 {
+            let avg: f64 = self.cache_rates.iter().sum::<f64>() / self.cache_rates.len() as f64;
+            // All recent rounds below 30% → warn
+            let all_low = self.cache_rates.iter().all(|&r| r < 0.30);
+            self.cache_warning = if all_low {
+                "⚠ 缓存命中持续过低，建议暂停并排查".into()
+            } else if avg < 0.50 {
+                "缓存命中偏低".into()
+            } else {
+                String::new()
+            };
+        }
     }
 
     pub fn spinner(&self) -> &str {
@@ -388,8 +474,7 @@ impl App {
                 };
                 self.push_msg(ChatRole::Tool, &format!("{label}\n{preview}"));
             }
-            Agent2Ui::ApiResponse { content, reasoning_content, usage, context_tokens, .. } => {
-                // Only show from ApiResponse if content wasn't already streamed
+            Agent2Ui::ApiResponse { content, reasoning_content, usage, context_limit, session_tokens, .. } => {
                 if !self.streaming {
                     if let Some(ref rc) = reasoning_content {
                         if !rc.is_empty() {
@@ -400,10 +485,14 @@ impl App {
                         self.push_msg(ChatRole::Assistant, &content);
                     }
                 }
-                self.tokens = context_tokens;
+                self.session_tokens = session_tokens;
                 if let Some(u) = usage {
                     self.tokens = u.total_tokens;
+                    self.cache_hit += u.prompt_cache_hit_tokens;
+                    self.cache_miss += u.prompt_cache_miss_tokens;
+                    self.update_cache(u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens);
                 }
+                self.context_limit = context_limit;
                 self.status = "Ready".into();
                 self.streaming = false;
             }
@@ -430,8 +519,10 @@ impl App {
             Agent2Ui::SessionRestored { seed, message_count, tokens_used, .. } => {
                 self.status = format!("Session {} restored ({} msgs, {} tokens)",
                     &seed[..8.min(seed.len())], message_count, tokens_used);
-                self.debug.session_seed = seed;
+                self.debug.session_seed = seed.clone();
                 self.debug.context_tokens = tokens_used;
+                self.session_tokens = tokens_used as u64;
+                self.load_messages_from_session(&seed);
             }
             Agent2Ui::DebugSnapshot { hp_connected, session_seed, context_tokens,
                 tool_calls_total, tool_failures, current_phase, streaming } => {
