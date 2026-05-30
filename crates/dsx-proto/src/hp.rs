@@ -97,6 +97,13 @@ pub enum HpToAgent {
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<dsx_types::UsageInfo>,
     },
+
+    #[serde(rename = "balance")]
+    Balance {
+        is_available: bool,
+        total_balance: String,
+        currency: String,
+    },
 }
 
 fn default_stream_type() -> String {

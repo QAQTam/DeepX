@@ -311,6 +311,38 @@ fn run_chat(
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
 
+        // Handle ask_user popup
+        if let Some(ref _ask) = app.ask {
+            terminal.draw(|frame| {
+                ui::render_chat(frame, app);
+                ui::render_ask(frame, app);
+            })?;
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {}
+                match (key.modifiers, key.code.clone()) {
+                    (_, KeyCode::Esc) => { app.ask = None; }
+                    (_, KeyCode::Up) => { if let Some(ref mut a) = app.ask { if a.selected > 0 { a.selected -= 1; } } }
+                    (_, KeyCode::Down) => { if let Some(ref mut a) = app.ask { if a.selected + 1 < a.options.len() { a.selected += 1; } } }
+                    (_, KeyCode::Enter) => {
+                        let reply = if let Some(ref mut a) = app.ask {
+                            if a.selected < a.options.len() {
+                                let opt = a.options[a.selected].clone();
+                                if opt.is_empty() && !a.custom_input.is_empty() { a.custom_input.clone() } else { opt }
+                            } else { String::new() }
+                        } else { String::new() };
+                        if !reply.is_empty() {
+                            send(stdin, &dsx_proto::Ui2Agent::UserInput { text: reply });
+                        }
+                        app.ask = None;
+                    }
+                    (_, KeyCode::Backspace) => { if let Some(ref mut a) = app.ask { a.custom_input.pop(); } }
+                    (_, KeyCode::Char(c)) => { if let Some(ref mut a) = app.ask { a.custom_input.push(c); } }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
         if app.should_quit { return Ok(()); }
     }
 }

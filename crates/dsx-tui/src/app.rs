@@ -233,6 +233,8 @@ pub struct App {
     pub resume_seed: Option<String>,
     pub show_debug: bool,
     pub debug: DebugState,
+    pub ask: Option<AskState>,
+    pub balance: String,
     block: BlockType,
     pub validating: bool,
 }
@@ -259,6 +261,15 @@ pub enum ChatRole {
     Tool,
     Divider,
     Status,
+}
+
+#[derive(Clone)]
+pub struct AskState {
+    pub id: String,
+    pub question: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+    pub custom_input: String,
 }
 
 #[derive(Clone)]
@@ -299,6 +310,8 @@ impl App {
                 current_phase: String::from("Coding"),
                 streaming: false,
             },
+            ask: None,
+            balance: String::new(),
             block: BlockType::None,
             validating: false,
         }
@@ -431,6 +444,19 @@ impl App {
                     current_phase,
                     streaming,
                 };
+            }
+            Agent2Ui::AskUser { id, question, options } => {
+                self.ask = Some(AskState {
+                    id,
+                    question,
+                    options: options.unwrap_or_default(),
+                    selected: 0,
+                    custom_input: String::new(),
+                });
+            }
+            Agent2Ui::Balance { is_available, total_balance, currency } => {
+                let status = if is_available { "✓" } else { "✗" };
+                self.balance = format!("{} {}{} {}", status, if currency == "CNY" { "¥" } else { "$" }, total_balance, currency);
             }
             _ => {}
         }

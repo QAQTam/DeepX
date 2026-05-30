@@ -108,6 +108,9 @@ pub fn read_hp_stream_response(
                     usage: u,
                 });
             }
+            HpToAgent::Balance { is_available, total_balance, currency } => {
+                let _ = agent_tx.send(Agent2Ui::Balance { is_available, total_balance, currency });
+            }
             HpToAgent::Error { message } => {
                 let _ = agent_tx.send(Agent2Ui::Error {
                     message: message.clone(),

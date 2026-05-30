@@ -119,4 +119,13 @@ impl ConfigStore {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BalanceInfo {
+    pub is_available: bool,
+    pub currency: String,
+    pub total_balance: String,
+    pub granted_balance: String,
+    pub topped_up_balance: String,
+}
+
 

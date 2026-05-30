@@ -407,6 +407,12 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         Span::styled(format!("Phase: {}", app.phase), Style::new().fg(Color::Cyan)),
         Span::raw(" | "),
         Span::styled(format!("Tokens: {}", app.tokens), Style::new().fg(Color::Yellow)),
+        if !app.balance.is_empty() {
+            Span::raw(" | ")
+        } else {
+            Span::raw("")
+        },
+        Span::styled(&app.balance, Style::new().fg(Color::Rgb(100, 200, 255))),
         Span::raw(" | "),
         Span::styled(&status_text, Style::new().fg(if app.streaming { Color::Yellow } else { Color::Green })),
     ]);
@@ -562,4 +568,65 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         ];
         frame.render_widget(Paragraph::new(lines), inner);
     }
+}
+
+pub fn render_ask(frame: &mut Frame, app: &App) {
+    let ask = match &app.ask {
+        Some(a) => a,
+        None => return,
+    };
+    let area = frame.area();
+    let h = (ask.options.len() + 5).min(20) as u16;
+    let popup = centered_rect(60, h, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Color::Rgb(255, 180, 100)))
+        .title(" Ask ")
+        .style(Style::new().bg(Color::Rgb(18, 22, 26)));
+    let inner = block.inner(popup);
+    frame.render_widget(&block, popup);
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(&ask.question, Style::new().fg(Color::White).bold())));
+    lines.push(Line::from(""));
+
+    for (i, opt) in ask.options.iter().enumerate() {
+        let selected = i == ask.selected;
+        let mark = if selected { "●" } else { " " };
+        let style = if selected { Style::new().fg(ACCENT).bold() } else { Style::new().fg(Color::Gray) };
+
+        if opt.is_empty() && selected {
+            let display = if ask.custom_input.is_empty() {
+                "  ______".to_string()
+            } else {
+                ask.custom_input.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {mark} ")),
+                Span::styled("Other: ", Style::new().fg(Color::Gray)),
+                Span::styled(display, Style::new().fg(Color::Yellow).bold()),
+            ]));
+        } else if opt.is_empty() {
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {mark} ")),
+                Span::styled("Other (______)", Style::new().fg(Color::Gray)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {mark} ")),
+                Span::styled(opt.clone(), style),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " ↑↓ select  Enter confirm  Esc cancel",
+        Style::new().fg(DIM),
+    )));
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }

@@ -146,4 +146,12 @@ pub enum Agent2Ui {
         current_phase: String,
         streaming: bool,
     },
+
+    /// Account balance from DeepSeek API.
+    #[serde(rename = "balance")]
+    Balance {
+        is_available: bool,
+        total_balance: String,
+        currency: String,
+    },
 }

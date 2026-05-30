@@ -9,6 +9,7 @@ pub mod explore;
 pub mod file;
 mod safety;
 mod web;
+mod ask;
 
 // Tool handlers for plan and task
 pub mod plan;

@@ -443,6 +443,18 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                     build_final_response(raw_message, sr, usage, &mut full_content, &mut reasoning, writer);
                     return;
                 }
+                StreamEvent::Balance { is_available, total_balance, currency } => {
+                    let frame = serde_json::json!({
+                        "type": "balance",
+                        "is_available": is_available,
+                        "total_balance": total_balance,
+                        "currency": currency,
+                    });
+                    if let Ok(s) = serde_json::to_string(&frame) {
+                        let _ = writeln!(writer, "{s}");
+                        let _ = writer.flush();
+                    }
+                }
                 StreamEvent::Error(e) => {
                     log::error!("hp: API error — {}", e);
                     let _ = writeln!(writer, "{}", json_response("error", &e));

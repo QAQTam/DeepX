@@ -46,6 +46,11 @@ pub enum StreamEvent {
         usage: Option<UsageInfo>,
         stop_reason: Option<String>,
     },
+    Balance {
+        is_available: bool,
+        total_balance: String,
+        currency: String,
+    },
     Error(String),
 }
 
@@ -131,12 +136,31 @@ pub async fn chat_stream(
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         dump_api_error(user_id.as_deref(), status.as_u16(), &text);
-        let msg = format!("Anthropic API {}: {}", status, text);
-        let _ = tx.send(StreamEvent::Error(msg.clone())).await;
+        let code_desc = deepseek_error_description(status.as_u16());
+        let msg = format!("Anthropic API HTTP {} ({})", status, code_desc);
+        let _ = tx.send(StreamEvent::Error(format!("{}: {}", msg, text))).await;
         return Err(anyhow::anyhow!("{}", msg));
     }
 
     // ── 6. SSE parsing ──
+    // Query balance in background (non-blocking)
+    let api_key_clone = provider.api_key.clone();
+    let tx_balance = tx.clone();
+    tokio::spawn(async move {
+        match query_balance(&api_key_clone).await {
+            Some(info) => {
+                let _ = tx_balance.send(StreamEvent::Balance {
+                    is_available: info.is_available,
+                    total_balance: info.total_balance,
+                    currency: info.currency,
+                }).await;
+            }
+            None => {
+                let _ = tx_balance.send(StreamEvent::Error("Balance query failed".into())).await;
+            }
+        }
+    });
+
     let mut byte_stream = resp.bytes_stream();
     let mut sse_buf = String::new();
     let mut text_buf = String::new();
@@ -365,4 +389,44 @@ fn log_dir() -> std::path::PathBuf {
     let mut p = dsx_types::platform::data_dir();
     p.push("logs");
     p
+}
+
+fn deepseek_error_description(status: u16) -> &'static str {
+    match status {
+        400 => "Bad Request — 格式错误",
+        401 => "Unauthorized — API key 无效",
+        402 => "Payment Required — 余额不足",
+        422 => "Unprocessable — 参数错误",
+        429 => "Rate Limit — 请求速率超限",
+        500 => "Internal Error — 服务器故障",
+        503 => "Service Unavailable — 服务器繁忙",
+        _ => "Unknown",
+    }
+}
+
+pub async fn query_balance(api_key: &str) -> Option<dsx_types::BalanceInfo> {
+    let client = HttpClient::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build().ok()?;
+
+    let resp = client
+        .get("https://api.deepseek.com/user/balance")
+        .header("Authorization", &format!("Bearer {}", api_key))
+        .send().await.ok()?;
+
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let is_available = body.get("is_available").and_then(|v| v.as_bool()).unwrap_or(false);
+    let infos = body.get("balance_infos").and_then(|v| v.as_array())?;
+    let first = infos.first()?;
+    let currency = first.get("currency").and_then(|v| v.as_str()).unwrap_or("CNY").to_string();
+    let total_balance = first.get("total_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
+
+    Some(dsx_types::BalanceInfo {
+        is_available,
+        currency,
+        total_balance,
+        granted_balance: first.get("granted_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+        topped_up_balance: first.get("topped_up_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+    })
 }

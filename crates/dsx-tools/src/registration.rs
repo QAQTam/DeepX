@@ -9,6 +9,7 @@ use super::web;
 use super::file;
 use super::task;
 use super::plan;
+use super::ask;
 
 
 /// 构造并注册全部工具 handler，返回初始化后的 ToolManager。
@@ -26,6 +27,9 @@ pub fn build_tool_manager() -> ToolManager {
     // ── 任务/计划 ──
     task::register(&mut mgr);
     plan::register(&mut mgr);
+
+    // ── 用户交互 ──
+    ask::register(&mut mgr);
 
 
     mgr
