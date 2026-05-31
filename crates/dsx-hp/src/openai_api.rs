@@ -147,8 +147,16 @@ pub async fn chat_stream(
     let mut usage_info: Option<UsageInfo> = None;
     let mut stop_reason: Option<String> = None;
 
-    while let Some(chunk) = byte_stream.next().await {
-        let chunk = chunk?;
+    loop {
+        let chunk = match byte_stream.next().await {
+            Some(Ok(c)) => c,
+            Some(Err(e)) => {
+                log::warn!("SSE stream I/O error: {e}; emitting partial done with accumulated content");
+                stop_reason = Some("connection_lost".to_string());
+                break;
+            }
+            None => break,
+        };
         sse_buf.push_str(&String::from_utf8_lossy(&chunk));
 
         while let Some(pos) = sse_buf.find("\n\n") {

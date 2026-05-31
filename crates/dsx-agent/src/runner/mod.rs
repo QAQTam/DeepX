@@ -304,6 +304,7 @@ pub fn run() {
     // ── 10. Cleanup ──
     crate::tools::shutdown_tools();
     crate::hp::kill_hp_daemon();
-    stdin_handle.join().ok();
-    stdout_handle.join().ok();
+    // stdin/stdout threads die with process; joining risks deadlock if TUI pipe breaks
+    drop(stdin_handle);
+    drop(stdout_handle);
 }

@@ -295,7 +295,7 @@ fn run_api_turn(
     ),
     (),
 > {
-    let (system, messages) = crate::assembly::build_context(agent);
+    let messages = crate::assembly::build_context(agent);
 
     let messages_json = {
         log::debug!(
@@ -308,7 +308,7 @@ fn run_api_turn(
 
     let chat = AgentToHp::ApiChat {
         model: agent.config.model.clone(),
-        system: Some(system.clone()),
+        system: None,
         messages: messages_json,
         effort: agent.config.effort.clone(),
         max_tokens: Some(agent.config.max_tokens),
@@ -418,6 +418,7 @@ pub fn handle_user_input(
     agent.files_written_this_turn.clear();
 
     let mut ipc_broken = false;
+    let mut max_rounds_exhausted = false;
 
     // ── Tool-calling loop ──
     for _round in 0..agent.max_tool_rounds {
@@ -495,7 +496,6 @@ pub fn handle_user_input(
                 &agent.config.model,
                 agent.config.effort.as_deref(),
             );
-            crate::orchestrator::maybe_save_session(agent);
 
             let _ = agent_tx.send(Agent2Ui::ApiResponse {
                 content,
@@ -606,7 +606,7 @@ pub fn handle_user_input(
     }
 
     // ── Post-tool-loop: one more API call to let the model wrap up ──
-    if agent.max_tool_rounds > 0 {
+    if max_rounds_exhausted {
         agent.turn_annotations.push(format!(
             "[System] Max tool rounds ({}) reached. Respond with what you have.",
             agent.max_tool_rounds
@@ -739,5 +739,4 @@ pub fn handle_user_input(
         &agent.config.model,
         agent.config.effort.as_deref(),
     );
-    super::maybe_save_session(agent);
 }

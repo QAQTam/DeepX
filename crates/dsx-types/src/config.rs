@@ -98,7 +98,13 @@ impl ConfigStore {
     }
 
     pub fn save(&self, config: &PersistentConfig) -> bool {
-        let content = serde_json::to_string_pretty(config).unwrap_or_default();
+        let content = match serde_json::to_string_pretty(config) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("ConfigStore: serialization failed: {e}");
+                return false;
+            }
+        };
         let tmp = self.path.with_extension("json.tmp");
         if let Some(parent) = self.path.parent() {
             let _ = std::fs::create_dir_all(parent);

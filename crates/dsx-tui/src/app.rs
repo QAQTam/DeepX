@@ -170,96 +170,10 @@ impl SetupState {
                             }
                             self.model_list = ids;
                             self.models_loaded = true;
-                            return true;
-        }
-    }
-}
-
-impl App {
-    fn load_messages_from_session(&mut self, seed: &str) {
-        use std::fs;
-        let dir = dsx_types::platform::data_dir().join("sessions");
-        // Try directory format first
-        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if !path.is_dir() { continue; }
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with(seed) { continue; }
-            let session_path = path.join("session.json");
-            if let Ok(data) = fs::read_to_string(&session_path) {
-                if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
-                    self.push_messages_from_file(&file);
-                    return;
-                }
-            }
-        }
-        // Fallback: flat format
-        let flat = dir.join(format!("{}.json", seed));
-        if let Ok(data) = fs::read_to_string(&flat) {
-            if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
-                self.push_messages_from_file(&file);
-            }
-        }
-    }
-
-    fn push_messages_from_file(&mut self, file: &SessionFile) {
-        let mut pending_tool_use: Option<(String, String)> = None;
-        for msg in &file.messages {
-            if msg.role == "system" { continue; }
-            for block in &msg.content {
-                match block {
-                    ContentBlock::Text { text } => {
-                        let role = if msg.role == "user" { ChatRole::User } else { ChatRole::Assistant };
-                        self.push_msg(role, text);
-                    }
-                    ContentBlock::Reasoning { reasoning, .. } => {
-                        self.push_msg(ChatRole::Thinking, reasoning);
-                    }
-                    ContentBlock::ToolUse { name, input, .. } => {
-                        let args: String = input.as_str().unwrap_or("").into();
-                        pending_tool_use = Some((name.clone(), args));
-                    }
-                    ContentBlock::ToolResult { content, .. } => {
-                        let lang = self.setup.lang;
-                        if let Some((name, args)) = pending_tool_use.take() {
-                            let label = tool_status(lang, &name, Some(&args));
-                            let styled_lines = build_tool_lines(lang, &name, content, Some(&args));
-                            let is_exec = matches!(name.as_str(), "bash" | "run" | "exec");
-                            let trunc_note = if is_exec {
-                                String::new()
-                            } else {
-                                let char_count = content.chars().count();
-                                if char_count > 200 {
-                                    lang.t_tool_truncated(char_count - 200)
-                                } else { String::new() }
-                            };
-                            let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
-                                Span::styled(label.clone(), Style::new().fg(Color::Cyan).bold())
-                            ])];
-                            lines.extend(styled_lines);
-                            if !trunc_note.is_empty() {
-                                lines.push(Line::from(Span::styled(trunc_note, Style::new().fg(Color::Gray))));
-                            }
-                            self.messages.push(ChatMessage {
-                                role: ChatRole::Tool,
-                                content: label,
-                                lines,
-                            });
-                        } else {
-                            let short: String = content.chars().take(200).collect();
-                            self.push_msg(ChatRole::Tool, &short);
+                             return true;
                         }
                     }
                 }
-            }
-        }
-        // Flush any orphaned ToolUse
-        if let Some((name, args)) = pending_tool_use.take() {
-            let label = tool_status(self.setup.lang, &name, Some(&args));
-            self.push_msg(ChatRole::Tool, &label);
-        }
-    }
-}
                 false
             }
             Err(_) => false,
@@ -361,7 +275,6 @@ pub enum ChatRole {
 
 #[derive(Clone)]
 pub struct AskState {
-    pub id: String,
     pub question: String,
     pub options: Vec<String>,
     pub selected: usize,
@@ -863,9 +776,8 @@ impl App {
                     streaming,
                 };
             }
-            Agent2Ui::AskUser { id, question, options } => {
+            Agent2Ui::AskUser { question, options, .. } => {
                 self.ask = Some(AskState {
-                    id,
                     question,
                     options: options.unwrap_or_default(),
                     selected: 0,
@@ -877,6 +789,87 @@ impl App {
                 self.balance = format!("{} {}{} {}", status, if currency == "CNY" { "¥" } else { "$" }, total_balance, currency);
             }
             _ => {}
+        }
+    }
+
+    fn load_messages_from_session(&mut self, seed: &str) {
+        use std::fs;
+        let dir = dsx_types::platform::data_dir().join("sessions");
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.starts_with(seed) { continue; }
+            let session_path = path.join("session.json");
+            if let Ok(data) = fs::read_to_string(&session_path) {
+                if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
+                    self.push_messages_from_file(&file);
+                    return;
+                }
+            }
+        }
+        let flat = dir.join(format!("{}.json", seed));
+        if let Ok(data) = fs::read_to_string(&flat) {
+            if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
+                self.push_messages_from_file(&file);
+            }
+        }
+    }
+
+    fn push_messages_from_file(&mut self, file: &SessionFile) {
+        let mut pending_tool_use: Option<(String, String)> = None;
+        for msg in &file.messages {
+            if msg.role == "system" { continue; }
+            for block in &msg.content {
+                match block {
+                    ContentBlock::Text { text } => {
+                        let role = if msg.role == "user" { ChatRole::User } else { ChatRole::Assistant };
+                        self.push_msg(role, text);
+                    }
+                    ContentBlock::Reasoning { reasoning, .. } => {
+                        self.push_msg(ChatRole::Thinking, reasoning);
+                    }
+                    ContentBlock::ToolUse { name, input, .. } => {
+                        let args: String = input.as_str().unwrap_or("").into();
+                        pending_tool_use = Some((name.clone(), args));
+                    }
+                    ContentBlock::ToolResult { content, .. } => {
+                        let lang = self.setup.lang;
+                        if let Some((name, args)) = pending_tool_use.take() {
+                            let label = tool_status(lang, &name, Some(&args));
+                            let styled_lines = build_tool_lines(lang, &name, content, Some(&args));
+                            let is_exec = matches!(name.as_str(), "bash" | "run" | "exec");
+                            let trunc_note = if is_exec {
+                                String::new()
+                            } else {
+                                let char_count = content.chars().count();
+                                if char_count > 200 {
+                                    lang.t_tool_truncated(char_count - 200)
+                                } else { String::new() }
+                            };
+                            let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+                                Span::styled(label.clone(), Style::new().fg(Color::Cyan).bold())
+                            ])];
+                            lines.extend(styled_lines);
+                            if !trunc_note.is_empty() {
+                                lines.push(Line::from(Span::styled(trunc_note, Style::new().fg(Color::Gray))));
+                            }
+                            self.messages.push(ChatMessage {
+                                role: ChatRole::Tool,
+                                content: label,
+                                lines,
+                            });
+                        } else {
+                            let short: String = content.chars().take(200).collect();
+                            self.push_msg(ChatRole::Tool, &short);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((name, args)) = pending_tool_use.take() {
+            let label = tool_status(self.setup.lang, &name, Some(&args));
+            self.push_msg(ChatRole::Tool, &label);
         }
     }
 }

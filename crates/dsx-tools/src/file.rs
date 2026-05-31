@@ -508,12 +508,15 @@ fn walk_dir(
 }
 
 fn simple_glob_match(glob: &str, filename: &str) -> bool {
-    if glob == "*" {
+    if glob == "*" || glob == "**" {
         return true;
     }
     let starts = glob.starts_with('*');
     let ends = glob.ends_with('*');
     let inner = glob.trim_matches('*');
+    if inner.is_empty() {
+        return true;
+    }
     match (starts, ends) {
         (true, true) => filename.contains(inner),
         (true, false) => filename.ends_with(inner),
@@ -525,8 +528,14 @@ fn simple_glob_match(glob: &str, filename: &str) -> bool {
 fn is_binary_file(path: &std::path::Path) -> bool {
     match std::fs::read(path) {
         Ok(data) => {
-            let check = &data[..data.len().min(8192)];
-            check.contains(&0u8)
+            let check = &data[..data.len().min(16384)];
+            if check.contains(&0u8) {
+                return true;
+            }
+            let non_printable = check.iter()
+                .filter(|&&b| b != 0x09 && b != 0x0A && b != 0x0D && (b < 0x20 || b > 0x7E))
+                .count();
+            non_printable as f64 / check.len().max(1) as f64 > 0.30
         }
         Err(_) => false,
     }

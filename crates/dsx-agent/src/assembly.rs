@@ -130,7 +130,7 @@ impl ContextAssembler {
     // ── System messages ──
 
     pub fn push_system(&mut self, msg: Message) {
-        assert_eq!(msg.role, "system", "push_system requires role=system");
+        debug_assert_eq!(msg.role, "system", "push_system requires role=system");
         self.system_messages.push(msg);
         
     }
@@ -186,7 +186,7 @@ impl ContextAssembler {
     /// Push an assistant response. Creates a new Step in the current turn.
     /// Actively rejects if current turn has unfulfilled tool calls.
     pub fn push_assistant(&mut self, msg: Message) -> Result<(), AssemblerError> {
-        assert_eq!(msg.role, "assistant");
+        debug_assert_eq!(msg.role, "assistant", "push_assistant requires role=assistant");
         // Check before mutable borrow
         let has_unfulfilled = self.has_unfulfilled_tool_calls();
         let turn = self.turns.last_mut().ok_or(AssemblerError::NoUserPending)?;
@@ -306,7 +306,8 @@ impl ContextAssembler {
     }
 
     pub fn message_count(&self) -> usize {
-        self.to_vec().len()
+        self.system_messages.len()
+            + self.turns.iter().map(|t| 1 + t.steps.iter().map(|s| 1 + s.tool_results.len()).sum::<usize>()).sum::<usize>()
     }
 
     pub fn turn_count(&self) -> usize {
@@ -474,30 +475,30 @@ impl ContextAssembler {
 ///   Conversation history    ← stable prefix (cached)
 ///   Last user message       ← appended with dynamic annotations (uncached suffix)
 /// ```
-pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>) {
+pub fn build_context(state: &mut AgentState) -> Vec<Message> {
 
     // Phase config from dsx_tools (may have been changed by commit tool)
     let task_phase = crate::router::read_phase();
     crate::runner::lifecycle::apply_phase_config(state, task_phase, dsx_types::DebugLevel::Medium);
 
-    // === System prompt: COMPLETELY static (identical across ALL requests) ===
-    let system = crate::config::system_prompt();
+    // === System prompt as first message ===
+    let mut messages = vec![Message::system(&crate::config::system_prompt())];
 
-    // === Messages: conversation from ctx ===
-    let mut messages = state.ctx.build(state.config.context_limit);
+    // === Conversation history from ctx ===
+    let conv = state.ctx.build(state.config.context_limit);
+    messages.extend(conv);
 
-    // Layer 2: Phase prompt injected as system message (after static system, before history)
-    // This varies per phase but sits after the stable system prefix, so system stays cached.
+    // Layer 2: Phase message (after system, before history)
     let phase = crate::router::read_phase();
-    let phase_tokens = if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
-        messages.insert(0, Message::system(suffix));
+    let has_phase = if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
+        messages.insert(1, Message::system(suffix));
         true
     } else { false };
 
     // Layer 3: Named context messages (document cache, code snippets, etc.)
     // Injected after phase message, before conversation history.
     // Stable content per label → KV cache prefix reuse across turns.
-    let mut ctx_insert_pos = if phase_tokens { 1 } else { 0 };
+    let mut ctx_insert_pos = if has_phase { 2 } else { 1 };
     for (label, content) in &state.context_messages {
         messages.insert(ctx_insert_pos, Message {
             role: "user".into(),
@@ -536,5 +537,5 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>) {
     // Clear per-turn annotations for next round
     state.turn_annotations.clear();
 
-    (system, messages)
+    messages
 }

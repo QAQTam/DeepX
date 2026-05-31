@@ -33,11 +33,9 @@ pub(super) fn walk_dir(dir: &str, output: &mut String, depth: usize, max_depth: 
         let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
         // Skip files larger than 500KB
         if size > 500_000 { continue; }
-        let lines = std::fs::read_to_string(f.path()).map(|c| c.lines().count()).unwrap_or(0);
-        // Extract first line / package decl
-        let first_line = std::fs::read_to_string(f.path()).ok()
-            .and_then(|c| c.lines().next().map(|l| l.to_string()))
-            .unwrap_or_default();
+        let content = std::fs::read_to_string(f.path()).unwrap_or_default();
+        let lines = content.lines().count();
+        let first_line = content.lines().next().map(|l| l.to_string()).unwrap_or_default();
         output.push_str(&format!(
             "{}  {} ({} lines, {})\n",
             indent, name, lines, format_bytes_simple(size)
@@ -286,11 +284,11 @@ fn exec_explore_inner(path: &str) -> String {
     let max_depth = 3usize;
 
     let abs = std::path::Path::new(&path);
-    let abs_path = if abs.is_absolute() {
-        abs.to_path_buf()
-    } else {
-        std::env::current_dir().unwrap_or_default().join(abs)
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => return format!("[ERROR] Cannot determine current directory: {}\n[HINT] The working directory may have been deleted.", e),
     };
+    let abs_path = if abs.is_absolute() { abs.to_path_buf() } else { cwd.join(abs) };
     let abs_str = abs_path.to_string_lossy().to_string();
 
     let mut markers = Vec::new();

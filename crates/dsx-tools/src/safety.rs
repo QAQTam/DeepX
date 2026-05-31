@@ -38,7 +38,13 @@ pub fn is_danger_command(cmd: &str) -> bool {
         "format ", "diskpart", "del /f /s", "rmdir /s /q",
         "rd /s /q", "reg delete", "takeown /f",
     ];
-    dangerous.iter().any(|d| cmd.contains(d))
+    dangerous.iter().any(|d| {
+        if let Some(pos) = cmd.find(d) {
+            pos == 0 || matches!(cmd.as_bytes().get(pos - 1), Some(b' ') | Some(b';') | Some(b'|') | Some(b'&') | Some(b'(') | Some(b'{'))
+        } else {
+            false
+        }
+    })
 }
 
 /// Classify an exec/run action based on the command string.

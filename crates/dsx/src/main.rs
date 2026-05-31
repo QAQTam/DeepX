@@ -71,8 +71,9 @@ fn run_config() {
     std::io::stdin().read_line(&mut input).ok();
     let trimmed = input.trim().to_string();
     if !trimmed.is_empty() {
-        if let Ok(v) = trimmed.parse::<u32>() {
-            context_limit = v;
+        match trimmed.parse::<u32>() {
+            Ok(v) => context_limit = v,
+            Err(_) => println!("  [ERROR] Invalid number '{}', using default {}", trimmed, context_limit),
         }
     }
 
