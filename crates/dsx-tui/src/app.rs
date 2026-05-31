@@ -886,14 +886,15 @@ impl App {
 fn extract_tool_target(_name: &str, args: Option<&str>) -> Option<String> {
     args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok())
         .and_then(|v| {
-            // Prefer "path" or "file" for file operations
             v.get("path").or_else(|| v.get("file"))
-                .and_then(|p| p.as_str())
-                .map(String::from)
-                // For search tools, use "pattern"
+                .and_then(|p| p.as_str()).map(String::from)
                 .or_else(|| v.get("pattern").and_then(|p| p.as_str()).map(String::from))
-                // For bash, use "command"
                 .or_else(|| v.get("command").and_then(|c| c.as_str()).map(String::from))
+                .or_else(|| v.get("library").and_then(|l| l.as_str()).map(String::from))
+                .or_else(|| v.get("title").and_then(|t| t.as_str()).map(String::from))
+                .or_else(|| v.get("query").and_then(|q| q.as_str()).map(|q| if q.len() > 40 { format!("{}...", &q[..40]) } else { q.to_string() }))
+                .or_else(|| v.get("from").and_then(|f| f.as_str())
+                    .and_then(|f| v.get("to").and_then(|t| t.as_str()).map(|t| format!("{} → {}", f, t))))
         })
 }
 
@@ -903,14 +904,24 @@ fn tool_status(lang: crate::i18n::Lang, name: &str, args: Option<&str>) -> Strin
         "explore" => lang.t_tool_exploring(),
         "read_file" => lang.t_tool_reading(),
         "write_file" | "edit_file" | "edit_file_diff" => lang.t_tool_writing(),
-        "glob" | "grep" => lang.t_tool_searching(),
+        "glob" | "search" | "web_fetch" | "web_search" => lang.t_tool_searching(),
         "bash" | "run" | "exec" => lang.t_tool_executing(),
-        "web_fetch" | "web_search" => lang.t_tool_searching(),
+        "delete_file" => lang.t_tool_deleting(),
+        "move_file" => lang.t_tool_moving(),
+        "copy_file" => lang.t_tool_copying(),
+        "list_dir" => lang.t_tool_listing(),
+        "diff" => lang.t_tool_diffing(),
+        "commit" => lang.t_tool_committing(),
+        "task_create" | "plan_create" => lang.t_tool_creating(),
+        "task_update" | "plan_update" => lang.t_tool_updating(),
+        "context7_resolve" => lang.t_tool_resolving(),
+        "context7_query" => lang.t_tool_querying(),
+        "ask_user" => lang.t_tool_asking(),
         _ => name,
     };
     match target {
         Some(t) => format!("{}: {}", label, t),
-        None => format!("{}: {}", label, name),
+        None => label.to_string(),
     }
 }
 
@@ -1005,6 +1016,149 @@ fn build_tool_lines(lang: crate::i18n::Lang, name: &str, content: &str, args: Op
                     lang.t_tool_lines_total(total_lines, max_lines),
                     Style::new().fg(Color::Gray),
                 )));
+            }
+            out
+        }
+        "explore" => {
+            let max_lines = 30usize;
+            let total_lines = content.lines().count();
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+            for line in content.lines().take(max_lines) {
+                let style = if line.starts_with("[PROJECT_MAP]") || line.starts_with("path:") {
+                    Style::new().fg(Color::Rgb(120, 200, 255)).bold()
+                } else if line.starts_with("project markers:") {
+                    Style::new().fg(Color::Rgb(180, 180, 100))
+                } else if line.starts_with("[DIR]") {
+                    Style::new().fg(Color::Rgb(200, 180, 100))
+                } else if !line.is_empty() && !line.starts_with(" ") {
+                    Style::new().fg(Color::Rgb(180, 200, 180)).bold()
+                } else {
+                    Style::new().fg(Color::Rgb(140, 150, 160))
+                };
+                out.push(Line::from(Span::styled(format!("  {}", line), style)));
+            }
+            if total_lines > max_lines {
+                out.push(Line::from(Span::styled(
+                    lang.t_tool_lines_total(total_lines, max_lines),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            out
+        }
+        "glob" | "search" | "grep" => {
+            let max_lines = 20usize;
+            let total_lines = content.lines().count();
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+            for line in content.lines().take(max_lines) {
+                out.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::new().fg(Color::Rgb(180, 200, 180)),
+                )));
+            }
+            if total_lines > max_lines {
+                out.push(Line::from(Span::styled(
+                    format!("  ... {} matches total", total_lines),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            out
+        }
+        "list_dir" => {
+            let max_lines = 30usize;
+            let total_lines = content.lines().count();
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+            for line in content.lines().take(max_lines) {
+                let style = if line.ends_with('/') || line.contains("(dir)") {
+                    Style::new().fg(Color::Rgb(120, 180, 255)).bold()
+                } else {
+                    Style::new().fg(Color::Rgb(180, 190, 200))
+                };
+                out.push(Line::from(Span::styled(format!("  {}", line), style)));
+            }
+            if total_lines > max_lines {
+                out.push(Line::from(Span::styled(
+                    lang.t_tool_lines_total(total_lines, max_lines),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            out
+        }
+        "diff" => {
+            let max_lines = 40usize;
+            let total_lines = content.lines().count();
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+            for line in content.lines().take(max_lines) {
+                let style = if line.starts_with('+') {
+                    Style::new().fg(Color::Rgb(100, 200, 120))
+                } else if line.starts_with('-') {
+                    Style::new().fg(Color::Rgb(220, 100, 100))
+                } else if line.starts_with('@') {
+                    Style::new().fg(Color::Rgb(120, 180, 255))
+                } else {
+                    Style::new().fg(Color::Rgb(160, 170, 180))
+                };
+                out.push(Line::from(Span::styled(format!("  {}", line), style)));
+            }
+            if total_lines > max_lines {
+                out.push(Line::from(Span::styled(
+                    lang.t_tool_lines_total(total_lines, max_lines),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            out
+        }
+        "commit" => {
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+            for line in content.lines() {
+                let style = if line.starts_with("[OK]") {
+                    Style::new().fg(Color::Rgb(100, 220, 100)).bold()
+                } else if line.starts_with("[HINT]") {
+                    Style::new().fg(Color::Rgb(180, 180, 100))
+                } else if line.starts_with("[ERROR]") {
+                    Style::new().fg(Color::Red).bold()
+                } else {
+                    Style::new().fg(Color::Rgb(180, 190, 200))
+                };
+                out.push(Line::from(Span::styled(format!("  {}", line), style)));
+            }
+            out
+        }
+        "web_fetch" | "web_search" | "context7_resolve" | "context7_query" => {
+            let max_lines = 20usize;
+            let total_lines = content.lines().count();
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+            for line in content.lines().take(max_lines) {
+                out.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::new().fg(Color::Rgb(180, 190, 200)),
+                )));
+            }
+            if total_lines > max_lines {
+                out.push(Line::from(Span::styled(
+                    lang.t_tool_lines_total(total_lines, max_lines),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            out
+        }
+        "task_create" | "task_update" | "plan_create" | "plan_update" | "ask_user" => {
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+            for line in content.lines() {
+                let style = if line.starts_with("[OK]") || line.starts_with("[CREATED]") {
+                    Style::new().fg(Color::Rgb(100, 220, 100)).bold()
+                } else if line.starts_with("[ERROR]") {
+                    Style::new().fg(Color::Red).bold()
+                } else {
+                    Style::new().fg(Color::Rgb(180, 190, 200))
+                };
+                out.push(Line::from(Span::styled(format!("  {}", line), style)));
             }
             out
         }
