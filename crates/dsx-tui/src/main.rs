@@ -103,7 +103,9 @@ fn main() -> anyhow::Result<()> {
                 result
             }
             Err(e) => {
-                app.status = format!("{}: {}", app.setup.lang.t_failed_agent(), e);
+                let msg = format!("{}: {}", app.setup.lang.t_failed_agent(), e);
+                app.status = app.setup.lang.t_failed_agent().to_string();
+                app.push_msg(app::ChatRole::Status, &msg);
                 Ok(())
             }
         }
@@ -263,14 +265,29 @@ fn run_chat(
     agent_rx: &mpsc::Receiver<Agent2Ui>,
     send: impl Fn(&mut ChildStdin, &dsx_proto::Ui2Agent),
 ) -> std::io::Result<()> {
+    let mut agent_dead = false;
     loop {
         // 1. Drain all pending agent frames — then draw immediately
         loop {
             match agent_rx.try_recv() {
                 Ok(frame) => app.handle_frame(frame),
-                Err(_) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    if !agent_dead {
+                        agent_dead = true;
+                        let l = app.setup.lang;
+                        app.push_msg(app::ChatRole::Status,
+                            if l.as_str() == "zh" { "Agent 进程已断开，请按 F3 退出" }
+                            else { "Agent disconnected — press F3 to quit" });
+                        app.status = if l.as_str() == "zh" { "Agent 已断开" } else { "Agent disconnected" }.into();
+                        app.streaming = false;
+                    }
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
             }
         }
+
+        if agent_dead && app.should_quit { return Ok(()); }
 
         // 2. Render (ask overlay included if active)
         terminal.draw(|frame| {
@@ -313,6 +330,7 @@ fn run_chat(
             // Normal chat keys
             match (key.modifiers, key.code) {
                 (_, KeyCode::F(10)) => {
+                    if agent_dead { continue; }
                     let menu = crate::app::MenuState::new(app);
                     run_menu(terminal, app, menu)?;
                     if let Some(auto_mode) = app.menu_auto_mode.take() {
@@ -326,10 +344,13 @@ fn run_chat(
                 | (KeyModifiers::NONE, KeyCode::Char('q'))
                 | (_, KeyCode::F(3)) => return Ok(()),
                 (_, KeyCode::Esc) => {
-                    send(stdin, &dsx_proto::Ui2Agent::Cancel);
+                    if !agent_dead {
+                        send(stdin, &dsx_proto::Ui2Agent::Cancel);
+                    }
                     app.status = app.setup.lang.t_chat_cancelled().to_string();
                 }
                 (_, KeyCode::Enter) => {
+                    if agent_dead { continue; }
                     let text = app.input.drain(..).collect::<String>();
                     if !text.trim().is_empty() {
                         app.messages.push(app::ChatMessage {
@@ -342,20 +363,28 @@ fn run_chat(
                         send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
                     }
                 }
-                (_, KeyCode::Backspace) => { app.input.pop(); }
+                (_, KeyCode::Backspace) => {
+                    // Remove last grapheme cluster (supports emoji, CJK)
+                    if let Some((idx, _)) = app.input.char_indices().rev().next() {
+                        app.input.truncate(idx);
+                    }
+                }
                 (_, KeyCode::Char(c)) => { app.input.push(c); }
                 (_, KeyCode::Up) | (_, KeyCode::PageUp) => {
-                    let n = if key.code == KeyCode::PageUp { 12 } else { 1 };
+                    let n = if key.code == KeyCode::PageUp { 10 } else { 1 };
                     app.scroll_offset = app.scroll_offset.saturating_add(n);
                 }
                 (_, KeyCode::Down) | (_, KeyCode::PageDown) => {
-                    let n = if key.code == KeyCode::PageDown { 12 } else { 1 };
+                    let n = if key.code == KeyCode::PageDown { 10 } else { 1 };
                     app.scroll_offset = app.scroll_offset.saturating_sub(n);
                 }
                 _ => {}
             }
-        } else if !app.streaming {
+        } else if !app.streaming && !agent_dead {
             std::thread::sleep(std::time::Duration::from_millis(16));
+        } else {
+            // Micro-sleep during streaming to avoid 100% CPU
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
 }

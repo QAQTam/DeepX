@@ -35,17 +35,17 @@ pub fn build_and_push_assistant(
     parsed: &[ToolCall],
 ) -> Message {
     let mut blocks: Vec<ContentBlock> = Vec::new();
-    if !content.is_empty() || parsed.is_empty() {
-        blocks.push(ContentBlock::Text {
-            text: content.to_string(),
-        });
-    }
     if let Some(ref rc) = reasoning_content {
         if !rc.is_empty() {
             blocks.push(ContentBlock::Reasoning {
                 reasoning: rc.clone(),
             });
         }
+    }
+    if !content.is_empty() || parsed.is_empty() {
+        blocks.push(ContentBlock::Text {
+            text: content.to_string(),
+        });
     }
     for tc in parsed {
         let input: serde_json::Value =
@@ -391,7 +391,7 @@ fn run_api_turn(
                 }
                 agent.stream_content.push_str(&delta);
             }
-            dsx_proto::HpToAgent::ToolProgress { id, content: prog_content, stream_type } => {
+            dsx_proto::HpToAgent::ToolProgress { id, content: prog_content, stream_type, .. } => {
                 let _ = agent_tx.send(Agent2Ui::ToolProgress {
                     id,
                     content: prog_content,
@@ -552,6 +552,17 @@ pub fn handle_user_input(
             agent.config.effort.as_deref(),
         );
 
+        // Pre-scan: mark explored if any tool call is exec(explore),
+        // so read_file doesn't get blocked by explore_gate in the same batch.
+        if !agent.has_explored {
+            if parsed.iter().any(|tc| {
+                tc.function.name == "exec"
+                    && dsx_types::arg::tool_action(&tc.function.arguments) == "explore"
+            }) {
+                agent.has_explored = true;
+            }
+        }
+
         for (tc_idx, tc) in parsed.iter().enumerate() {
             match execute_single_tool(agent, tc, agent_tx) {
                 ToolOutcome::Break => {
@@ -706,6 +717,17 @@ pub fn handle_user_input(
             &reasoning_content,
             &parsed,
         );
+
+        // Pre-scan: mark explored if any tool call is exec(explore),
+        // so read_file doesn't get blocked by explore_gate in the same batch.
+        if !agent.has_explored {
+            if parsed.iter().any(|tc| {
+                tc.function.name == "exec"
+                    && dsx_types::arg::tool_action(&tc.function.arguments) == "explore"
+            }) {
+                agent.has_explored = true;
+            }
+        }
 
         for (tc_idx, tc) in parsed.iter().enumerate() {
             match execute_single_tool(agent, tc, agent_tx) {

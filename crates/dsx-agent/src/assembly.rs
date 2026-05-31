@@ -477,11 +477,7 @@ impl ContextAssembler {
 pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>) {
 
     // Phase config from dsx_tools (may have been changed by commit tool)
-    let task_phase = match dsx_tools::current_phase() {
-        dsx_tools::ToolPhase::Plan => dsx_types::TaskPhase::Plan,
-        dsx_tools::ToolPhase::Coding => dsx_types::TaskPhase::Coding,
-        dsx_tools::ToolPhase::Debug => dsx_types::TaskPhase::Debug,
-    };
+    let task_phase = crate::router::read_phase();
     crate::runner::lifecycle::apply_phase_config(state, task_phase, dsx_types::DebugLevel::Medium);
 
     // === System prompt: COMPLETELY static (identical across ALL requests) ===

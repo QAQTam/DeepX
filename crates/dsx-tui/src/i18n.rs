@@ -223,6 +223,21 @@ impl Lang {
             Lang::Zh => "语言",
         }
     }
+    pub fn t_menu_nav(&self) -> &str {
+        match self { Lang::En => "↑↓ navigate", Lang::Zh => "↑↓ 导航" }
+    }
+    pub fn t_menu_toggle_edit(&self) -> &str {
+        match self { Lang::En => "Enter toggle/edit", Lang::Zh => "Enter 切换/编辑" }
+    }
+    pub fn t_menu_back(&self) -> &str {
+        match self { Lang::En => "Esc back", Lang::Zh => "Esc 返回" }
+    }
+    pub fn t_menu_close(&self) -> &str {
+        match self { Lang::En => " close  ", Lang::Zh => " 关闭  " }
+    }
+    pub fn t_menu_back_label(&self) -> &str {
+        match self { Lang::En => " back", Lang::Zh => " 返回" }
+    }
     pub fn t_menu_saved(&self) -> &str {
         match self {
             Lang::En => "Config saved.",

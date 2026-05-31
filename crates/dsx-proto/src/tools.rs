@@ -60,7 +60,7 @@ pub enum ToolsToAgent {
     ToolError {
         id: String,
         error: String,
-        /// "UNKNOWN_TOOL" | "BLOCKED" | "TIMEOUT" | "PANIC" | "FORBIDDEN"
+        /// "UNKNOWN_TOOL" | "BLOCKED" | "PHASE_LOCKED" | "FORBIDDEN" | "IPC_ERROR"
         code: String,
     },
 }

@@ -11,10 +11,10 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
     let is_write = tool_name == "write_file" || tool_name == "edit_file";
     let is_edit = tool_name == "edit_file";
     let is_exec = tool_name == "exec" && (action == "execute" || action == "run");
-    let is_explore = tool_name == "exec" && action == "explore";
+    let is_explore = tool_name == "explore" || (tool_name == "exec" && action == "explore");
     if is_read || is_write {
         if !state.has_explored {
-            let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] '{}' blocked: you haven't explored the project yet.\n[HINT] Call exec(explore) first.", tool_name));
+            let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] '{}' blocked: you haven't explored the project yet.\n[HINT] Call explore() first.", tool_name));
             return true;
         }
         if is_write {
@@ -26,13 +26,13 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
             }
         }
         if is_edit && state.turns_since_last_read >= 4 {
-            let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'file edit' blocked: {} turns since last read. Context may be stale.\n[HINT] Call file(read) first.", state.turns_since_last_read));
+            let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'file edit' blocked: {} turns since last read. Context may be stale.\n[HINT] Call read_file() first.", state.turns_since_last_read));
             return true;
         }
     }
     if is_exec {
         if !state.has_explored {
-            let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'exec execute' blocked: you haven't explored yet.\n[HINT] Call exec(explore) first."));
+            let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'exec execute' blocked: you haven't explored yet.\n[HINT] Call explore() first."));
             return true;
         }
         let cmd = parse_cmd_arg(args).unwrap_or_else(|| "?".into());
@@ -54,7 +54,7 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
         }
     }
     if is_explore {
-        // exec(explore) marks the project as explored
+        // explore() marks the project as explored
         state.has_explored = true;
     }
     false
@@ -76,7 +76,7 @@ pub fn re_read_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
         return false;
     }
     let _ = state.ctx.push_tool_result(tc_id, &format!(
-        "[ERROR] '{}' blocked: must re-read '{}' after write/edit to prevent hallucination.\n[HINT] Call file(read, path=\"{}\") first.",
+        "[ERROR] '{}' blocked: must re-read '{}' after write/edit to prevent hallucination.\n[HINT] Call read_file(path=\"{}\") first.",
         tool_name, required_path, required_path
     ));
     true

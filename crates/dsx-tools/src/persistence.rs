@@ -97,13 +97,17 @@ pub fn read_memory(seed: &str, tier: &str) -> String {
 
 pub fn write_memory(seed: &str, tier: &str, content: &str) {
     let Some(path) = memory_path(seed, tier) else { return };
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let _ = std::fs::write(&path, content);
 }
 
 pub fn append_memory(seed: &str, tier: &str, line: &str) {
     let Some(path) = memory_path(seed, tier) else { return };
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
 
     let mut existing = if path.exists() {
         std::fs::read_to_string(&path).unwrap_or_default()
@@ -129,7 +133,9 @@ pub fn append_memory(seed: &str, tier: &str, line: &str) {
 
 pub fn write_plan(seed: &str, name: &str, goal: &str) -> Option<PathBuf> {
     let path = plan_path(seed, name)?;
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let now = now_epoch();
     let content = format!(
         "---\nstatus: draft\ncreated_at: {}\nupdated_at: {}\nsession: {}\n---\n\n# Plan: {}\n\n## Goal\n{}\n\n## Steps\n\n",

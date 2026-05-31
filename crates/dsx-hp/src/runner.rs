@@ -569,6 +569,7 @@ fn build_final_response(
             "total_tokens": u.total_tokens,
             "prompt_cache_hit_tokens": u.prompt_cache_hit_tokens,
             "prompt_cache_miss_tokens": u.prompt_cache_miss_tokens,
+            "reasoning_tokens": u.reasoning_tokens,
         });
     }
     if let Ok(s) = serde_json::to_string(&resp) {

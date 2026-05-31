@@ -725,7 +725,7 @@ impl App {
         CHARS[(self.frame_count as usize / 4) % CHARS.len()]
     }
 
-    fn push_msg(&mut self, role: ChatRole, content: &str) {
+    pub fn push_msg(&mut self, role: ChatRole, content: &str) {
         let lines = crate::markdown::render_content(content);
         self.messages.push(ChatMessage { role, content: content.to_string(), lines });
     }
@@ -749,9 +749,9 @@ impl App {
         match frame {
             Agent2Ui::ContentDelta { delta, reasoning } => {
                 self.debug.streaming = true;
+                self.scroll_offset = 0;
                 if let Some(r) = reasoning {
                     if !r.is_empty() {
-                        self.scroll_offset = 0;
                         self.switch_block(BlockType::Thinking);
                         if self.block == BlockType::Thinking && self.streaming {
                             self.append_last(&r);
@@ -759,11 +759,9 @@ impl App {
                             self.push_msg(ChatRole::Thinking, &r);
                             self.streaming = true;
                         }
-                        return;
                     }
                 }
                 if !delta.is_empty() {
-                    self.scroll_offset = 0;
                     self.switch_block(BlockType::Text);
                     if self.block == BlockType::Text && self.streaming {
                         self.append_last(&delta);

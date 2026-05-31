@@ -3,7 +3,7 @@ use ts_rs::TS;
 
 // ── OpenAI-native content blocks ──
 
-/// Content block within a message, matching Anthropic Messages API spec.
+/// Content block within a message, matching OpenAI / DeepSeek Chat Completions API.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ContentBlock {

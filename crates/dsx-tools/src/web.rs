@@ -72,7 +72,7 @@ fn exec_context7_resolve(args: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
     let name = v.get("name").and_then(|v| v.as_str()).unwrap_or("");
     if name.is_empty() {
-        return "[ERROR] context7_resolve: missing 'name' parameter".into();
+        return "[ERROR] context7_resolve: missing 'name'\n[HINT] Provide the 'libraryName' parameter.".into();
     }
     let q = v.get("query").and_then(|v| v.as_str()).unwrap_or("");
     let mut path = format!("/libs/search?libraryName={}", c7_url_encode(name));
@@ -167,6 +167,25 @@ fn exec_context7_query(args: &str) -> String {
 
 fn exec_web_fetch(args: &str) -> String {
     let url = dsx_types::arg::parse_arg(args, "url").unwrap_or_default();
+    let url_lower = url.to_lowercase();
+    if url_lower.starts_with("http://localhost")
+        || url_lower.starts_with("https://localhost")
+        || url_lower.starts_with("http://127.")
+        || url_lower.starts_with("https://127.")
+        || url_lower.starts_with("http://[::1]")
+        || url_lower.starts_with("https://[::1]")
+        || url_lower.starts_with("http://169.254.")
+        || url_lower.starts_with("https://169.254.")
+        || url_lower.starts_with("http://10.")
+        || url_lower.starts_with("https://10.")
+        || url_lower.starts_with("http://172.16.")
+        || url_lower.starts_with("https://172.16.")
+        || url_lower.starts_with("http://192.168.")
+        || url_lower.starts_with("https://192.168.")
+        || url.starts_with("file://")
+    {
+        return format!("[ERROR] Cannot fetch internal/local URL: {}\n[HINT] web_fetch only supports public URLs.", url);
+    }
     let resp = match ureq::get(&url)
         .header("User-Agent", "dsx/4.0")
         .call()
@@ -179,7 +198,7 @@ fn exec_web_fetch(args: &str) -> String {
         Ok(body) => {
                     let readable = match html2text::from_read(body.as_bytes(), body.len().min(120_000)) {
                         Ok(t) => t,
-                        Err(e) => return format!("[ERROR] html2text: {}", e),
+                        Err(e) => return format!("[ERROR] html2text: {}\n[HINT] The URL may not return HTML. Check with web_fetch first.", e),
                     };
                     let truncated = readable.len() > 100_000;
                     let display = if truncated {

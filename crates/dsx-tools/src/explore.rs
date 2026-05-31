@@ -309,7 +309,7 @@ fn exec_explore_inner(path: &str) -> String {
     result.push('\n');
 
     if let Err(e) = walk_dir(&path, &mut result, 0, max_depth, "") {
-        return format!("[ERROR] Cannot explore {}: {}", path, e);
+        return format!("[ERROR] Cannot explore {}: {}\n[HINT] Check the path exists and is a directory.", path, e);
     }
 
     if markers.iter().any(|m| *m == "Cargo.toml") {

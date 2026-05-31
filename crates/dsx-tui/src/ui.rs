@@ -653,9 +653,9 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
         .style(Style::new().bg(Color::Rgb(18, 22, 26)));
     frame.render_widget(title_block, Rect::new(area.x, area.y, area.width, 3));
 
-    let nav = if menu.lang.as_str() == "zh" { "↑↓ 导航" } else { "↑↓ navigate" };
-    let toggle_hint = if menu.lang.as_str() == "zh" { "Enter 切换/编辑" } else { "Enter toggle/edit" };
-    let back_hint = if menu.lang.as_str() == "zh" { "Esc 返回" } else { "Esc back" };
+    let nav = menu.lang.t_menu_nav();
+    let toggle_hint = menu.lang.t_menu_toggle_edit();
+    let back_hint = menu.lang.t_menu_back();
     let title_lines = vec![
         Line::from(vec![
             Span::raw("  "),
@@ -775,11 +775,11 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
 
     let footer = Line::from(vec![
         Span::styled(" F10 ", Style::new().fg(Color::Black).bg(ACCENT)),
-        Span::raw(" close  "),
+        Span::raw(menu.lang.t_menu_close()),
         Span::styled(" Enter ", Style::new().fg(Color::Black).bg(Color::Green)),
-        Span::raw(" toggle/edit  "),
+        Span::raw(menu.lang.t_menu_toggle_edit()),
         Span::styled(" Esc ", Style::new().fg(Color::Black).bg(Color::Gray)),
-        Span::raw(" back"),
+        Span::raw(menu.lang.t_menu_back_label()),
     ]);
     frame.render_widget(footer, footer_area);
 

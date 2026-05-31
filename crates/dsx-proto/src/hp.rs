@@ -78,6 +78,8 @@ pub enum HpToAgent {
     ToolProgress {
         #[serde(default)]
         id: String,
+        #[serde(default)]
+        name: String,
         content: String,
         #[serde(default = "default_stream_type")]
         stream_type: String,

@@ -87,7 +87,7 @@ pub fn exec_command(args: &str) -> String {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let full_output = format!("{}\n{}", stdout.trim_end(), stderr.trim_end());
+    let full_output = format!("[stdout]\n{}\n[stderr]\n{}", stdout.trim_end(), stderr.trim_end());
     let full_output = full_output.trim();
     let exit_code = output.status.code().unwrap_or(-1);
     let status = if exit_code == 0 { "OK" } else { "FAIL" };

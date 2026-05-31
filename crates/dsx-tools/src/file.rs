@@ -60,7 +60,7 @@ pub(super) fn exec_read_file(args: &str) -> String {
             if err_msg.contains("valid UTF-8") || err_msg.contains("utf8") || err_msg.contains("utf-8") {
                 let meta = std::fs::metadata(&path);
                 let size = meta.as_ref().map(|m| format!(", {}B", m.len())).unwrap_or_default();
-                format!("[OK] {} — binary file{} (cannot display as text)\n[HINT] Use exec(\"file '{}'\") to identify format, or exec(\"xxd '{}'\") for hex dump.", path, size, path, path)
+                format!("[PARTIAL] {} — binary file{} (cannot display as text)\n[HINT] Use exec(\"file '{}'\") to identify format, or exec(\"xxd '{}'\") for hex dump.", path, size, path, path)
             } else {
                 let url_hint = if path.contains("://") || path.contains(".com") || path.contains("www.") {
                     "\n[HINT] This looks like a URL — did you mean to call web_fetch() instead of read_file()?"
@@ -109,7 +109,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
         Err(e) => {
             let err_msg = e.to_string();
             if err_msg.contains("valid UTF-8") || err_msg.contains("utf8") || err_msg.contains("utf-8") {
-                return format!("[OK] {} — binary file, edit_file works on text only\n[HINT] Use exec with appropriate tool for binary files.", path);
+                return format!("[PARTIAL] {} — binary file, edit_file works on text only\n[HINT] Use exec with appropriate tool for binary files.", path);
             }
             return format!("[ERROR] Cannot read {}: {}\n[HINT] Use list_dir() on the parent directory to verify the file exists.", path, e);
         },
@@ -322,7 +322,7 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
         Err(e) => {
             let err = e.to_string();
             if err.contains("UTF-8") || err.contains("utf-8") {
-                return format!("[OK] {} — binary file\n[HINT] Use exec with hex dump tool.", path);
+                return format!("[PARTIAL] {} — binary file\n[HINT] Use exec with hex dump tool.", path);
             }
             return format!("[ERROR] Cannot read {}: {}\n[HINT] Use list_dir() first.", path, e);
         }
@@ -389,7 +389,7 @@ pub(super) fn exec_list_dir(args: &str) -> String {
             }
             result
         }
-        Err(e) => format!("Error listing {}: {}", path, e),
+        Err(e) => format!("[ERROR] Cannot list {}: {}\n[HINT] Check if the directory exists and is readable.", path, e),
     }
 }
 
@@ -439,7 +439,7 @@ pub(super) fn exec_search(args: &str) -> String {
                 result.join("\n") + &truncated
             }
         }
-        Err(e) => format!("search error: {}", e),
+        Err(e) => format!("[ERROR] search failed: {}\n[HINT] Check the pattern or path.", e),
     }
 }
 
@@ -552,7 +552,7 @@ pub(super) fn exec_move_file(args: &str) -> String {
     }
     match std::fs::rename(&source, &dest) {
         Ok(_) => format!("[OK] Moved {} → {}", source, dest),
-        Err(e) => format!("[ERROR] Cannot move {}: {}", source, e),
+        Err(e) => format!("[ERROR] Cannot move {}: {}\n[HINT] Check source exists and target directory is writable.", source, e),
     }
 }
 
@@ -564,7 +564,7 @@ pub(super) fn exec_copy_file(args: &str) -> String {
     }
     match std::fs::copy(&source, &dest) {
         Ok(size) => format!("[OK] Copied {} → {} ({} bytes)", source, dest, size),
-        Err(e) => format!("[ERROR] Cannot copy {}: {}", source, e),
+        Err(e) => format!("[ERROR] Cannot copy {}: {}\n[HINT] Check source exists and target directory is writable.", source, e),
     }
 }
 
@@ -572,17 +572,17 @@ pub(super) fn exec_glob(args: &str) -> String {
     let pattern = parse_arg(args, "pattern");
     let path = parse_arg_or(args, "path", ".");
     // Strip **/ for filename matching (walk is already recursive)
-    let file_pattern = if pattern.contains("**/") {
-        &pattern[pattern.rfind("**/").unwrap() + 3..]
-    } else if pattern.contains("**\\") {
-        &pattern[pattern.rfind("**\\").unwrap() + 3..]
+    let file_pattern = if let Some(pos) = pattern.rfind("**/") {
+        &pattern[pos + 3..]
+    } else if let Some(pos) = pattern.rfind("**\\") {
+        &pattern[pos + 3..]
     } else {
         pattern.as_str()
     };
     let mut results = Vec::new();
     let root = std::path::Path::new(&path);
     if let Err(e) = glob_walk(root, file_pattern, &mut results) {
-        return format!("glob error: {}", e);
+        return format!("[ERROR] glob failed: {}\n[HINT] Check the pattern syntax.", e);
     }
     if results.is_empty() {
         return format!("No files matching '{}'", pattern);
@@ -636,11 +636,11 @@ pub(super) fn exec_diff(args: &str) -> String {
 
     let content_a = match std::fs::read_to_string(&path_a) {
         Ok(c) => c,
-        Err(e) => return format!("[ERROR] Cannot read {}: {}", path_a, e),
+        Err(e) => return format!("[ERROR] Cannot read {}: {}\n[HINT] Verify the file exists. Use list_dir() to check.", path_a, e),
     };
     let content_b = match std::fs::read_to_string(&path_b) {
         Ok(c) => c,
-        Err(e) => return format!("[ERROR] Cannot read {}: {}", path_b, e),
+        Err(e) => return format!("[ERROR] Cannot read {}: {}\n[HINT] Verify the file exists. Use list_dir() to check.", path_b, e),
     };
 
     if content_a == content_b {
