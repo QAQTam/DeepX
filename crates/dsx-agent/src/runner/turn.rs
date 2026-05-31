@@ -151,8 +151,12 @@ pub fn execute_single_tool(
         return handle_ask_user_tool(agent, agent_tx, id, name, args);
     }
 
-    if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-        dsx_tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+    if dsx_tools::CANCEL.compare_exchange(
+        true, false,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    ).is_ok()
+    {
         let _ = agent.ctx.push_tool_result(
             &tc.id,
             "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.",
@@ -598,6 +602,7 @@ pub fn handle_user_input(
             );
             agent.tool_failures = 0;
         }
+        max_rounds_exhausted = true;
     }
 
     // ── Check for pending ask_user before entering post-tool-loop ──
