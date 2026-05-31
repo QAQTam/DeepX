@@ -224,11 +224,14 @@ impl App {
                         if let Some((name, args)) = pending_tool_use.take() {
                             let label = tool_status(lang, &name, Some(&args));
                             let styled_lines = build_tool_lines(lang, &name, content, Some(&args));
-                            let char_count = content.chars().count();
-                            let trunc_note = if char_count > 200 {
-                                lang.t_tool_truncated(char_count - 200)
-                            } else {
+                            let is_exec = matches!(name.as_str(), "bash" | "run" | "exec");
+                            let trunc_note = if is_exec {
                                 String::new()
+                            } else {
+                                let char_count = content.chars().count();
+                                if char_count > 200 {
+                                    lang.t_tool_truncated(char_count - 200)
+                                } else { String::new() }
                             };
                             let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
                                 Span::styled(label.clone(), Style::new().fg(Color::Cyan).bold())
@@ -777,11 +780,14 @@ impl App {
                 let lang = self.setup.lang;
                 let label = tool_status(lang, &name, args.as_deref());
                 let styled_lines = build_tool_lines(lang, &name, &content, args.as_deref());
-                let char_count = content.chars().count();
-                let trunc_note = if char_count > 200 {
-                    lang.t_tool_truncated(char_count - 200)
-                } else {
+                // Skip char truncation for exec tools (handled by line limit in build_tool_lines)
+                let trunc_note = if matches!(name.as_str(), "bash" | "run" | "exec") {
                     String::new()
+                } else {
+                    let char_count = content.chars().count();
+                    if char_count > 200 {
+                        lang.t_tool_truncated(char_count - 200)
+                    } else { String::new() }
                 };
                 let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
                     Span::styled(label.clone(), Style::new().fg(Color::Cyan).bold())
@@ -898,12 +904,13 @@ fn tool_status(lang: crate::i18n::Lang, name: &str, args: Option<&str>) -> Strin
         "read_file" => lang.t_tool_reading(),
         "write_file" | "edit_file" | "edit_file_diff" => lang.t_tool_writing(),
         "glob" | "grep" => lang.t_tool_searching(),
-        "bash" | "run" => lang.t_tool_executing(),
-        _ => lang.t_tool_running(),
+        "bash" | "run" | "exec" => lang.t_tool_executing(),
+        "web_fetch" | "web_search" => lang.t_tool_searching(),
+        _ => name,
     };
     match target {
         Some(t) => format!("{}: {}", label, t),
-        None => label.to_string(),
+        None => format!("{}: {}", label, name),
     }
 }
 
@@ -974,6 +981,50 @@ fn build_tool_lines(lang: crate::i18n::Lang, name: &str, content: &str, args: Op
             }
             out
         }
-        _ => vec![]
+        "bash" | "run" | "exec" => {
+            let max_lines = 60usize;
+            let total_lines = content.lines().count();
+            let mut out = Vec::new();
+            out.push(Line::from(""));
+            let cmd = json.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            if !cmd.is_empty() {
+                out.push(Line::from(vec![
+                    Span::styled(" $ ", Style::new().fg(Color::Rgb(80, 200, 80)).bold()),
+                    Span::styled(cmd.to_string(), Style::new().fg(Color::Rgb(180, 200, 180))),
+                ]));
+                out.push(Line::from(""));
+            }
+            for line in content.lines().take(max_lines) {
+                out.push(Line::from(vec![
+                    Span::styled(" │ ", Style::new().fg(Color::Rgb(60, 70, 80))),
+                    Span::styled(line.to_string(), Style::new().fg(Color::Rgb(200, 210, 220))),
+                ]));
+            }
+            if total_lines > max_lines {
+                out.push(Line::from(Span::styled(
+                    lang.t_tool_lines_total(total_lines, max_lines),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            out
+        }
+        _ => {
+            if !content.is_empty() {
+                let short: Vec<Line> = content.lines().take(10).map(|l|
+                    Line::from(Span::styled(l.to_string(), Style::new().fg(Color::Rgb(180, 190, 200))))
+                ).collect();
+                let mut out = vec![Line::from("")];
+                out.extend(short);
+                if content.lines().count() > 10 {
+                    out.push(Line::from(Span::styled(
+                        lang.t_tool_lines_total(content.lines().count(), 10),
+                        Style::new().fg(Color::Gray),
+                    )));
+                }
+                out
+            } else {
+                vec![]
+            }
+        }
     }
 }

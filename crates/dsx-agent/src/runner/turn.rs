@@ -18,7 +18,7 @@ use crate::session;
 use crate::tokenizer;
 use crate::tool_parser;
 
-use super::hp_bridge::{emit_tool_result, read_hp_stream_response, HpStreamResponse};
+use super::hp_bridge::emit_tool_result;
 
 /// Outcome of `execute_single_tool` for the caller's loop control.
 pub enum ToolOutcome {
@@ -152,8 +152,8 @@ pub fn execute_single_tool(
         return handle_ask_user_tool(agent, agent_tx, id, name, args);
     }
 
-    if crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-        crate::tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+    if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+        dsx_tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
         let _ = agent.ctx.push_tool_result(
             &tc.id,
             "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.",
@@ -293,11 +293,10 @@ fn run_api_turn(
         Option<String>,
         serde_json::Value,
         Option<dsx_types::UsageInfo>,
-        tokenizer::TokenBreakdown,
     ),
     (),
 > {
-    let (system, messages, breakdown) = crate::assembly::build_context(agent);
+    let (system, messages) = crate::assembly::build_context(agent);
 
     let _ = agent_tx.send(Agent2Ui::CachePrediction {
         hit_rate: agent.predicted_cache_hit_pct,
@@ -315,7 +314,7 @@ fn run_api_turn(
 
     let chat = AgentToHp::ApiChat {
         model: agent.config.model.clone(),
-        system: Some(system),
+        system: Some(system.clone()),
         messages: messages_json,
         effort: agent.config.effort.clone(),
         max_tokens: Some(agent.config.max_tokens),
@@ -337,6 +336,23 @@ fn run_api_turn(
         agent.token_estimate = tokenizer::count_tokens(&json);
     }
 
+    // Token breakdown + health
+    let system_tokens = tokenizer::count_tokens(&system);
+    let episodic_tokens = tokenizer::estimate_messages_tokens(&messages);
+    agent.health.context_tokens = agent.tokens_used();
+    agent.health.context_tier = crate::health::ContextTier::from_tokens(
+        agent.health.context_tokens, agent.config.context_limit,
+    );
+
+    // KV cache prediction
+    let report = agent.cache_analyzer.record(&system, &messages);
+    agent.predicted_cache_hit_pct = report.hit_rate;
+
+    log::info!(
+        "context (tokens): system={} episodic={} total={}",
+        system_tokens, episodic_tokens, agent.token_estimate,
+    );
+
     if let Err(e) = dsx_proto::write_frame(hp.get_mut(), &chat) {
         log::error!("dsx-agent: write_frame to HP failed: {}", e);
         let _ = agent_tx.send(Agent2Ui::Error {
@@ -345,26 +361,63 @@ fn run_api_turn(
         return Err(());
     }
 
-    let HpStreamResponse {
-        content,
-        reasoning_content,
-        usage,
-        tool_calls_raw,
-    } = match read_hp_stream_response(hp, agent, agent_tx, round) {
-        Ok(r) => r,
-        Err(()) => {
-            agent.stream_cancelled = false;
-            return Err(());
-        }
-    };
+    // Read HP frames one by one, push UI events and accumulate state in turn.rs
+    loop {
+        let frame = match super::hp_bridge::read_hp_frame(hp) {
+            Ok(Some(f)) => f,
+            Ok(None) | Err(..) => {
+                let _ = agent_tx.send(Agent2Ui::Error {
+                    message: "HP connection closed unexpectedly.".into(),
+                });
+                return Err(());
+            }
+        };
 
-    Ok((
-        content,
-        reasoning_content,
-        tool_calls_raw,
-        usage,
-        breakdown,
-    ))
+        match frame {
+            dsx_proto::HpToAgent::ContentDelta { delta, reasoning } => {
+                if agent.stream_cancelled
+                    || dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    log::info!("dsx-agent: streaming cancelled");
+                    agent.stream_cancelled = false;
+                    return Err(());
+                }
+                let _ = agent_tx.send(Agent2Ui::ContentDelta {
+                    delta: delta.clone(),
+                    reasoning: reasoning.clone(),
+                });
+                if let Some(ref r) = reasoning {
+                    agent.stream_reasoning.push_str(r);
+                }
+                agent.stream_content.push_str(&delta);
+            }
+            dsx_proto::HpToAgent::ToolProgress { id, content: prog_content, stream_type } => {
+                let _ = agent_tx.send(Agent2Ui::ToolProgress {
+                    id,
+                    content: prog_content,
+                    stream_type,
+                });
+            }
+            dsx_proto::HpToAgent::ApiResponse {
+                content, tool_calls, stop_reason: _, reasoning_content, usage,
+            } => {
+                return Ok((
+                    content,
+                    reasoning_content,
+                    tool_calls.unwrap_or(serde_json::Value::Null),
+                    usage,
+                ));
+            }
+            dsx_proto::HpToAgent::Balance { is_available, total_balance, currency } => {
+                let _ = agent_tx.send(Agent2Ui::Balance { is_available, total_balance, currency });
+            }
+            dsx_proto::HpToAgent::Error { message } => {
+                let _ = agent_tx.send(Agent2Ui::Error { message: message.clone() });
+                return Err(());
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Handle a user input message with full module integration.
@@ -409,7 +462,7 @@ pub fn handle_user_input(
             break;
         }
 
-        let (mut content, reasoning_content, tool_calls_raw, usage, breakdown) =
+        let (mut content, reasoning_content, tool_calls_raw, usage) =
             match run_api_turn(agent, hp, agent_tx, _round, true) {
                 Ok(v) => v,
                 Err(()) => return,
@@ -448,12 +501,6 @@ pub fn handle_user_input(
             agent.api_usage = Some(u.clone());
             agent.session_tokens += u.total_tokens as u64;
         }
-        agent.token_estimate = breakdown.total;
-        agent.health.context_tokens = agent.tokens_used();
-        agent.health.context_tier = crate::health::ContextTier::from_tokens(
-            agent.health.context_tokens,
-            agent.config.context_limit,
-        );
 
         let assistant_msg = build_and_push_assistant(
             agent,
@@ -590,7 +637,7 @@ pub fn handle_user_input(
     let max_post_rounds = 3u32;
     let mut sent_final_response = false;
     for _post_round in 0..max_post_rounds {
-        let (mut content, reasoning_content, tool_calls_raw, usage, _breakdown) =
+        let (mut content, reasoning_content, tool_calls_raw, usage) =
             match run_api_turn(agent, hp, agent_tx, _post_round, false) {
                 Ok(v) => v,
                 Err(()) => return,

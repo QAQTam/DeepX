@@ -436,9 +436,6 @@ impl Lang {
     pub fn t_tool_executing(&self) -> &str {
         match self { Lang::En => "Executing", Lang::Zh => "正在执行" }
     }
-    pub fn t_tool_running(&self) -> &str {
-        match self { Lang::En => "Running", Lang::Zh => "正在运行" }
-    }
     pub fn t_tool_truncated(&self, extra: usize) -> String {
         match self {
             Lang::En => format!("  ... (+{} chars)", extra),

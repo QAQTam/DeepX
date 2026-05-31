@@ -4,7 +4,7 @@ use crate::config;
 use crate::assembly::ContextAssembler;
 use crate::health::DsAgentsHealthPlatform;
 use crate::session;
-use dsx_types::{Message, TaskPhase, UsageInfo};
+use dsx_types::{Message, UsageInfo};
 
 // ── AgentState ──
 
@@ -49,7 +49,6 @@ pub struct AgentState {
 
     // ── Mode flags ──
     pub auto_mode: bool,
-    pub current_task_phase: TaskPhase,
 
     // ── Health / monitoring ──
     pub health: DsAgentsHealthPlatform,
@@ -106,7 +105,6 @@ impl AgentState {
             tool_defs: Vec::new(),
             pending_ask_user: None,
             auto_mode,
-            current_task_phase: TaskPhase::Plan,
             health: DsAgentsHealthPlatform::new(),
             files_written_this_turn: Vec::new(),
             turn_annotations: Vec::new(),
@@ -118,7 +116,7 @@ impl AgentState {
             context_messages: Vec::new(),
         };
 
-        crate::tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
+        dsx_tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
         state
     }
 

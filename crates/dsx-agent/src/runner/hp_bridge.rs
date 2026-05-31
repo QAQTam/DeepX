@@ -4,18 +4,7 @@ use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, Agent2Ui, HpToAgent};
-use dsx_types::UsageInfo;
-
-use crate::agent::AgentState;
-
-/// Final response from a single HP API call (ApiResponse frame).
-pub struct HpStreamResponse {
-    pub content: String,
-    pub reasoning_content: Option<String>,
-    pub usage: Option<UsageInfo>,
-    pub tool_calls_raw: serde_json::Value,
-}
+use dsx_proto::{self, Agent2Ui};
 
 /// Send a ToolResult frame via the agent-to-TUI channel (`agent_tx`).
 pub fn emit_tool_result(
@@ -35,86 +24,21 @@ pub fn emit_tool_result(
     });
 }
 
-/// Read HP streaming response until `ApiResponse` (or `Error`) is received.
-/// Sends `ContentDelta` / `ToolProgress` frames via channel as they arrive.
-pub fn read_hp_stream_response(
+/// Read one frame from the HP TCP stream.
+/// Returns `Ok(Some(frame))` on success, `Ok(None)` on EOF,
+/// `Err(message)` on parse error.
+pub fn read_hp_frame(
     hp: &mut BufReader<TcpStream>,
-    agent: &mut AgentState,
-    agent_tx: &mpsc::Sender<Agent2Ui>,
-    _round: u32,
-) -> Result<HpStreamResponse, ()> {
-    loop {
-        let hp_resp: HpToAgent = match dsx_proto::read_frame(hp) {
-            Ok(Some(r)) => r,
-            Ok(None) => {
-                log::warn!("dsx-agent: HP connection closed (EOF)");
-                let _ = agent_tx.send(Agent2Ui::Error {
-                    message: "HP connection closed unexpectedly.".into(),
-                });
-                return Err(());
-            }
-            Err(e) => {
-                log::warn!("dsx-agent: HP parse error: {e}");
-                let _ = agent_tx.send(Agent2Ui::Error {
-                    message: format!("HP protocol error: {}", e),
-                });
-                return Err(());
-            }
-        };
-
-        match hp_resp {
-            HpToAgent::ContentDelta { delta, reasoning } => {
-                if agent.stream_cancelled
-                    || crate::tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
-                {
-                    log::info!("dsx-agent: streaming cancelled");
-                    return Err(());
-                }
-
-                let _ = agent_tx.send(Agent2Ui::ContentDelta {
-                    delta: delta.clone(),
-                    reasoning: reasoning.clone(),
-                });
-                if let Some(ref r) = reasoning {
-                    agent.stream_reasoning.push_str(r);
-                }
-                agent.stream_content.push_str(&delta);
-            }
-            HpToAgent::ToolProgress {
-                id,
-                content: prog_content,
-                stream_type,
-            } => {
-                let _ = agent_tx.send(Agent2Ui::ToolProgress {
-                    id: id.clone(),
-                    content: prog_content.clone(),
-                    stream_type: stream_type.clone(),
-                });
-            }
-            HpToAgent::ApiResponse {
-                content: c,
-                tool_calls,
-                stop_reason: _,
-                reasoning_content: rc,
-                usage: u,
-            } => {
-                return Ok(HpStreamResponse {
-                    content: c,
-                    tool_calls_raw: tool_calls.unwrap_or(serde_json::Value::Null),
-                    reasoning_content: rc,
-                    usage: u,
-                });
-            }
-            HpToAgent::Balance { is_available, total_balance, currency } => {
-                let _ = agent_tx.send(Agent2Ui::Balance { is_available, total_balance, currency });
-            }
-            HpToAgent::Error { message } => {
-                let _ = agent_tx.send(Agent2Ui::Error {
-                    message: message.clone(),
-                });
-                return Err(());
-            }
-            _ => { /* ignore non-stream frames */ }
+) -> Result<Option<dsx_proto::HpToAgent>, String> {
+    match dsx_proto::read_frame(hp) {
+        Ok(Some(r)) => Ok(Some(r)),
+        Ok(None) => {
+            log::warn!("dsx-agent: HP connection closed (EOF)");
+            Err("HP connection closed unexpectedly.".into())
+        }
+        Err(e) => {
+            log::warn!("dsx-agent: HP parse error: {e}");
+            Err(format!("HP protocol error: {}", e))
         }
     }
 }

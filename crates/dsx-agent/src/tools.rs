@@ -5,13 +5,9 @@
 
 use dsx_proto::ToolsToAgent;
 use dsx_types::ToolDef;
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 // ── Global state ──
-
-pub static AUTO_MODE: AtomicBool = AtomicBool::new(false);
-pub static CANCEL: AtomicBool = AtomicBool::new(false);
 
 static TOOL_MANAGER: Mutex<Option<dsx_tools::ToolManager>> = Mutex::new(None);
 
@@ -23,7 +19,6 @@ pub fn init_tools(session_seed: &str, auto_mode: bool) {
     if let Ok(mut guard) = TOOL_MANAGER.lock() {
         *guard = Some(mgr);
     }
-    AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
     dsx_tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
     log::info!("dsx: tool manager inited ({} tools)", all_tools().len());
 }
@@ -61,7 +56,7 @@ pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: 
     let effective_action = if action.is_empty() { name } else { action };
 
     // Check cancel before proceeding
-    if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+    if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
         return "[CANCELLED]".to_string();
     }
 

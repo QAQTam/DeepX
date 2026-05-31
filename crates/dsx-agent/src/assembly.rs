@@ -1,6 +1,4 @@
 use crate::agent::AgentState;
-use crate::tokenizer;
-use crate::tokenizer::TokenBreakdown;
 use dsx_types::Message;
 
 /// Errors the assembler can surface when invariants would be violated.
@@ -476,26 +474,18 @@ impl ContextAssembler {
 ///   Conversation history    ← stable prefix (cached)
 ///   Last user message       ← appended with dynamic annotations (uncached suffix)
 /// ```
-pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBreakdown) {
+pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>) {
 
-    // ── Phase sync: pick up phase changes from dsx_tools (set by commit tool) ──
-    let tool_phase = dsx_tools::current_phase();
-    let task_phase = match tool_phase {
+    // Phase config from dsx_tools (may have been changed by commit tool)
+    let task_phase = match dsx_tools::current_phase() {
         dsx_tools::ToolPhase::Plan => dsx_types::TaskPhase::Plan,
         dsx_tools::ToolPhase::Coding => dsx_types::TaskPhase::Coding,
         dsx_tools::ToolPhase::Debug => dsx_types::TaskPhase::Debug,
     };
-    if task_phase != state.current_task_phase {
-        state.current_task_phase = task_phase;
-        let level = dsx_types::DebugLevel::Medium;
-        crate::runner::lifecycle::apply_phase_config(state, task_phase, level);
-    }
-
-    let base_prompt = crate::config::system_prompt();
-    let base_tokens = tokenizer::count_tokens(&base_prompt);
+    crate::runner::lifecycle::apply_phase_config(state, task_phase, dsx_types::DebugLevel::Medium);
 
     // === System prompt: COMPLETELY static (identical across ALL requests) ===
-    let system = base_prompt;
+    let system = crate::config::system_prompt();
 
     // === Messages: conversation from ctx ===
     let mut messages = state.ctx.build(state.config.context_limit);
@@ -505,13 +495,13 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     let phase = crate::router::read_phase();
     let phase_tokens = if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
         messages.insert(0, Message::system(suffix));
-        tokenizer::count_tokens(suffix)
-    } else { 0 };
+        true
+    } else { false };
 
     // Layer 3: Named context messages (document cache, code snippets, etc.)
     // Injected after phase message, before conversation history.
     // Stable content per label → KV cache prefix reuse across turns.
-    let mut ctx_insert_pos = if phase_tokens > 0 { 1 } else { 0 };
+    let mut ctx_insert_pos = if phase_tokens { 1 } else { 0 };
     for (label, content) in &state.context_messages {
         messages.insert(ctx_insert_pos, Message {
             role: "user".into(),
@@ -550,26 +540,5 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
     // Clear per-turn annotations for next round
     state.turn_annotations.clear();
 
-    // === Token breakdown ===
-    let mut bd = TokenBreakdown::default();
-    bd.system = base_tokens;
-    bd.episodic = tokenizer::estimate_messages_tokens(&messages);
-    bd.total = bd.system + bd.episodic;
-
-    state.token_estimate = bd.total;
-    state.health.context_tokens = state.tokens_used();
-    state.health.context_tier = crate::health::ContextTier::from_tokens(
-        state.health.context_tokens, state.config.context_limit,
-    );
-
-    // Predict KV cache hit rate
-    let report = state.cache_analyzer.record(&system, &messages);
-    state.predicted_cache_hit_pct = report.hit_rate;
-
-    log::info!(
-        "context (tokens): base={} phase={} messages={} total={}",
-        base_tokens, phase_tokens, bd.episodic, bd.total,
-    );
-
-    (system, messages, bd)
+    (system, messages)
 }

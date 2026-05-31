@@ -37,7 +37,7 @@ pub fn run_agent_loop(
         context_tokens: agent.token_estimate,
         tool_calls_total: agent.tool_calls_this_turn,
         tool_failures: agent.tool_failures as u32,
-        current_phase: format!("{:?}", agent.current_task_phase).to_lowercase(),
+        current_phase: dsx_tools::current_phase().as_str().to_string(),
         streaming: false,
     });
 
@@ -118,7 +118,7 @@ pub fn run_agent_loop(
                     context_tokens: agent.token_estimate,
                     tool_calls_total: agent.tool_calls_this_turn,
                     tool_failures: agent.tool_failures as u32,
-                    current_phase: format!("{:?}", agent.current_task_phase).to_lowercase(),
+                    current_phase: dsx_tools::current_phase().as_str().to_string(),
                     streaming: false,
                 });
                 let _ = agent_tx.send(Agent2Ui::Done);
@@ -150,17 +150,12 @@ pub fn run_agent_loop(
                     "debug" => dsx_tools::ToolPhase::Debug,
                     _ => dsx_tools::ToolPhase::Coding,
                 };
-                agent.current_task_phase = match tp {
-                    dsx_tools::ToolPhase::Plan => dsx_types::TaskPhase::Plan,
-                    dsx_tools::ToolPhase::Coding => dsx_types::TaskPhase::Coding,
-                    dsx_tools::ToolPhase::Debug => dsx_types::TaskPhase::Debug,
-                };
                 dsx_tools::set_phase(tp);
                 let _ = agent_tx.send(Agent2Ui::PhaseChanged { phase });
             }
 
             Ui2Agent::Cancel => {
-                crate::tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+                dsx_tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
                 agent.stream_cancelled = true;
                 crate::tools::cancel_current_tool();
                 let _ = agent_tx.send(Agent2Ui::Cancelled);
@@ -174,7 +169,6 @@ pub fn run_agent_loop(
 
             Ui2Agent::SetAutoMode { auto_mode } => {
                 agent.auto_mode = auto_mode;
-                crate::tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
                 dsx_tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
                 log::info!("dsx-agent: auto_mode set to {}", auto_mode);
             }
@@ -186,7 +180,7 @@ pub fn run_agent_loop(
                     context_tokens: agent.token_estimate,
                     tool_calls_total: agent.tool_calls_this_turn,
                     tool_failures: agent.tool_failures as u32,
-                    current_phase: format!("{:?}", agent.current_task_phase).to_lowercase(),
+                    current_phase: dsx_tools::current_phase().as_str().to_string(),
                     streaming: false,
                 });
                 if cmd == "dump_context" {
