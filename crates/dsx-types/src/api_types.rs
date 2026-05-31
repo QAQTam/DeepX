@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 // ── Usage ──
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageInfo {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,

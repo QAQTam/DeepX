@@ -82,7 +82,6 @@ fn run_config() {
         base_url: Some(base_url),
         model: Some(model),
         context_limit: Some(context_limit),
-        auto_mode: Some(true),
         ..Default::default()
     };
 

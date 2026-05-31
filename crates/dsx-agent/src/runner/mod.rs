@@ -37,8 +37,9 @@ pub fn run_agent_loop(
         context_tokens: agent.token_estimate,
         tool_calls_total: agent.tool_calls_this_turn,
         tool_failures: agent.tool_failures as u32,
-        current_phase: dsx_tools::current_phase().as_str().to_string(),
+        current_phase: "single".to_string(),
         streaming: false,
+        dsml_compat_count: agent.dsml_compat_count,
     });
 
     // Init session immediately (before first user input) so TUI can load history
@@ -118,8 +119,9 @@ pub fn run_agent_loop(
                     context_tokens: agent.token_estimate,
                     tool_calls_total: agent.tool_calls_this_turn,
                     tool_failures: agent.tool_failures as u32,
-                    current_phase: dsx_tools::current_phase().as_str().to_string(),
+                    current_phase: "single".to_string(),
                     streaming: false,
+                    dsml_compat_count: agent.dsml_compat_count,
                 });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
@@ -143,17 +145,6 @@ pub fn run_agent_loop(
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
 
-            Ui2Agent::SetPhase { phase } => {
-                let tp = match phase.as_str() {
-                    "plan" => dsx_tools::ToolPhase::Plan,
-                    "coding" | "code" => dsx_tools::ToolPhase::Coding,
-                    "debug" => dsx_tools::ToolPhase::Debug,
-                    _ => dsx_tools::ToolPhase::Coding,
-                };
-                dsx_tools::set_phase(tp);
-                let _ = agent_tx.send(Agent2Ui::PhaseChanged { phase });
-            }
-
             Ui2Agent::Cancel => {
                 dsx_tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
                 agent.stream_cancelled = true;
@@ -167,12 +158,6 @@ pub fn run_agent_loop(
                 break;
             }
 
-            Ui2Agent::SetAutoMode { auto_mode } => {
-                agent.auto_mode = auto_mode;
-                dsx_tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
-                log::info!("dsx-agent: auto_mode set to {}", auto_mode);
-            }
-
             Ui2Agent::DebugCommand { cmd } => {
                 let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
                     hp_connected: hp_conn.is_some(),
@@ -180,8 +165,9 @@ pub fn run_agent_loop(
                     context_tokens: agent.token_estimate,
                     tool_calls_total: agent.tool_calls_this_turn,
                     tool_failures: agent.tool_failures as u32,
-                    current_phase: dsx_tools::current_phase().as_str().to_string(),
+                    current_phase: "single".to_string(),
                     streaming: false,
+                    dsml_compat_count: agent.dsml_compat_count,
                 });
                 if cmd == "dump_context" {
                     let json = serde_json::to_string_pretty(&agent.ctx.to_vec())
@@ -251,7 +237,7 @@ pub fn run() {
     let hp_conn = crate::hp::try_reconnect().map(BufReader::new);
 
     // ── 6. Init in-process tools ──
-    crate::tools::init_tools("pipe", agent.auto_mode);
+    crate::tools::init_tools("pipe");
     agent.tool_defs = crate::tools::all_tools();
     eprintln!("dsx-agent: tools → {}", agent.tool_defs.len());
 

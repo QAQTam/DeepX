@@ -194,6 +194,11 @@ fn exec_web_fetch(args: &str) -> String {
         Err(e) => return format!("[ERROR] Cannot fetch {}: {}\n[HINT] Check the URL or network.", url, e),
     };
     let status = resp.status();
+    if let Some(len) = resp.headers().get("content-length").and_then(|h| h.to_str().ok()).and_then(|s| s.parse::<u64>().ok()) {
+        if len > 5_000_000 {
+            return format!("[ERROR] Response too large: {} bytes > 5MB limit", len);
+        }
+    }
     match resp.into_body().read_to_string() {
         Ok(body) => {
                     let readable = match html2text::from_read(body.as_bytes(), body.len().min(120_000)) {

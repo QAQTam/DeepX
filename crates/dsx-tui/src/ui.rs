@@ -368,10 +368,12 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
 pub fn render_chat(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let l = app.setup.lang;
+    let input_lines = app.input.chars().filter(|&c| c == '\n').count() + 1;
+    let input_height = (input_lines as u16 + 2).min(8).max(3);
     let [header, body, input_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Fill(1),
-        Constraint::Length(3),
+        Constraint::Length(input_height),
     ]).areas(area);
 
     let status_text = if app.streaming {
@@ -381,8 +383,6 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     };
     let header_text = Line::from(vec![
         Span::raw("DeepX | "),
-        Span::styled(format!("{}: {}", l.t_chat_phase(), app.phase), Style::new().fg(Color::Cyan)),
-        Span::raw(" | "),
         Span::styled(format!("Context: {}", app.context_tokens), Style::new().fg(Color::Yellow)),
         Span::raw(" "),
         Span::styled(format!("({:.0}%)", if app.context_limit > 0 {
@@ -412,22 +412,25 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         },
         Span::styled(&app.balance, Style::new().fg(Color::Rgb(100, 200, 255))),
         Span::raw(" | "),
+        Span::styled(format!("DSML compat: {}", app.debug.dsml_compat_count), Style::new().fg(Color::Rgb(100, 220, 140))),
+        Span::raw(" | "),
         Span::styled(&status_text, Style::new().fg(if app.streaming { Color::Yellow } else { Color::Green })),
+        if !app.cache_warning.is_empty() {
+            Span::raw(" | ")
+        } else { Span::raw("") },
+        Span::styled(&app.cache_warning, Style::new().fg(Color::Red).bold()),
     ]);
-    if !app.cache_warning.is_empty() {
-        frame.render_widget(
-            Span::styled(&app.cache_warning, Style::new().fg(Color::Red).bold()),
-            Rect { x: area.x, y: area.y, width: area.width, height: 1 },
-        );
-    }
     frame.render_widget(header_text, header);
 
-    let chat_block = Block::new().borders(Borders::ALL).title(l.t_chat_title());
-    let mut text_lines: Vec<Line> = Vec::new();
+    let mut text_lines: Vec<Line> = Vec::with_capacity(app.messages.len() * 4);
     for msg in &app.messages {
         match msg.role {
             ChatRole::Divider => {
-                text_lines.push(Line::from(Span::styled("  ──", Style::new().fg(DIM))));
+                let div_len = body.width.saturating_sub(2).min(60) as usize;
+                text_lines.push(Line::from(Span::styled(
+                    format!(" {}", "─".repeat(div_len)),
+                    Style::new().fg(DIM),
+                )));
             }
             ChatRole::Status => {
                 text_lines.push(Line::from(Span::styled(&msg.content, Style::new().fg(Color::Red))));
@@ -446,14 +449,16 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                         &msg.content, Style::new().fg(dim).italic(),
                     )]));
                 } else {
-                    for (i, line) in msg.lines.iter().enumerate() {
+                    let mut first_rendered = false;
+                    for line in msg.lines.iter() {
                         // Skip empty lines for compact thinking display
                         if line.spans.is_empty() || line.spans.iter().all(|s| s.content.trim().is_empty()) {
                             continue;
                         }
                         let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
-                        if i == 0 {
+                        if !first_rendered {
                             spans.insert(0, prefix.clone());
+                            first_rendered = true;
                         } else {
                             // Indent continuation lines with same width as prefix
                             let indent = Span::styled(" ".repeat(prefix.width()), Style::new());
@@ -498,22 +503,24 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         }
     }
 
-    let content_height = body.height.saturating_sub(2) as usize;
-    let body_width = body.width.saturating_sub(2) as usize;
+    let content_height = body.height as usize;
+    let body_width = body.width as usize;
 
-    // Account for wrapping: count actual visual rows after line wrapping
-    // Use word-boundary wrap counting (matching ratatui's WordWrapper), not character-level division
+    // Count visual rows after word-boundary wrapping (matches ratatui's WordWrapper)
     let mut wrapped_lines = 0usize;
     for line in &text_lines {
-        let line_text: String = line.spans.iter().flat_map(|s| s.content.chars()).collect();
-        wrapped_lines += count_wrap_rows(&line_text, body_width);
+        if line.width() <= body_width {
+            wrapped_lines += 1;
+        } else {
+            let line_text: String = line.spans.iter().flat_map(|s| s.content.chars()).collect();
+            wrapped_lines += count_wrap_rows(&line_text, body_width);
+        }
     }
     let max_scroll = wrapped_lines.saturating_sub(content_height);
     let offset = if app.streaming { 0 } else { app.scroll_offset.min(max_scroll) };
     let scroll = max_scroll.saturating_sub(offset) as u16;
 
     let paragraph = Paragraph::new(text_lines)
-        .block(chat_block)
         .wrap(ratatui::widgets::Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(paragraph, body);
@@ -521,16 +528,21 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     let input_block = Block::new()
         .borders(Borders::ALL)
         .title(l.t_chat_input_title());
-    let input_text = if app.input.is_empty() {
-        Line::from(Span::styled(l.t_chat_input_placeholder(), Style::new().fg(Color::DarkGray)))
+    let input_text: Vec<Line> = if app.input.is_empty() {
+        vec![Line::from(Span::styled(l.t_chat_input_placeholder(), Style::new().fg(Color::DarkGray)))]
     } else {
-        Line::from(Span::raw(&app.input))
+        app.input.lines().map(|l| Line::from(Span::raw(l.to_string()))).collect()
     };
     frame.render_widget(Paragraph::new(input_text).block(input_block), input_area);
 
-    let cursor_x = input_area.x + 1
-        + (cjk_width(&app.input).min(input_area.width.saturating_sub(3)) as u16);
-    frame.set_cursor_position((cursor_x.min(area.width.saturating_sub(1)), input_area.y + 1));
+    // Cursor: position on the last line
+    let cursor_line = input_lines.saturating_sub(1);
+    let last_line = app.input.lines().last().unwrap_or("");
+    let cursor_col = cjk_width(last_line).min(input_area.width.saturating_sub(3)) as u16;
+    frame.set_cursor_position((
+        (input_area.x + 1 + cursor_col).min(area.width.saturating_sub(1)),
+        input_area.y + 1 + cursor_line as u16,
+    ));
 
     // Debug overlay
     if app.show_debug {
@@ -565,10 +577,6 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                 Span::styled(&d.session_seed, Style::new().fg(Color::Cyan)),
             ]),
             Line::from(vec![
-                Span::styled(format!("{}:  ", l.t_debug_phase()), Style::new().fg(Color::Gray)),
-                Span::styled(&d.current_phase, Style::new().fg(Color::White)),
-            ]),
-            Line::from(vec![
                 Span::styled(format!("{}:", l.t_debug_context()), Style::new().fg(Color::Gray)),
                 Span::styled(format!(" {} / 1M", d.context_tokens), Style::new().fg(Color::Yellow)),
             ]),
@@ -580,6 +588,8 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                 } else {
                     Span::raw("")
                 },
+                Span::raw(" "),
+                Span::styled(format!("(DSML compat: {})", d.dsml_compat_count), Style::new().fg(Color::Rgb(100, 220, 140))),
             ]),
         ];
         frame.render_widget(Paragraph::new(lines), inner);
@@ -834,8 +844,10 @@ fn count_wrap_rows(text: &str, width: usize) -> usize {
         let word_w = unicode_width::UnicodeWidthStr::width(trimmed);
         let sep = if line_used == 0 { 0 } else { 1 };
         if line_used + sep + word_w > width {
-            rows += 1;
-            line_used = word_w;
+            if line_used > 0 || word_w <= width {
+                rows += 1;
+            }
+            line_used = if word_w > width { 0 } else { word_w };
         } else {
             line_used += sep + word_w;
         }

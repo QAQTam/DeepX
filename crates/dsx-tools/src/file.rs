@@ -21,6 +21,12 @@ pub(super) fn exec_read_file(args: &str) -> String {
     let end: Option<usize> = serde_json::from_str(args).ok()
         .and_then(|v: serde_json::Value| v.get("end_line")?.as_u64().map(|n| n as usize));
 
+    const MAX_READ_LINES: usize = 500;
+    if let (Some(s), Some(e)) = (start, end) {
+        if e > s && e - s > MAX_READ_LINES {
+            return format!("[ERROR] Requested range too large ({} lines > {} max). Use smaller range.", e - s, MAX_READ_LINES);
+        }
+    }
     match std::fs::read_to_string(&path) {
         Ok(content) => {
             let all_lines: Vec<&str> = content.lines().collect();
@@ -369,15 +375,20 @@ pub(super) fn exec_list_dir(args: &str) -> String {
     let path = parse_arg_or(args, "path", ".");
     match std::fs::read_dir(&path) {
         Ok(entries) => {
+            const MAX_LIST_DIR_ENTRIES: usize = 200;
             let mut result = String::from("Directory listing: ");
             result.push_str(&path);
             result.push('\n');
-            for entry in entries.flatten() {
+            let mut count = 0usize;
+            let all: Vec<_> = entries.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with('.')).collect();
+            let total = all.len();
+            for entry in &all {
+                if count >= MAX_LIST_DIR_ENTRIES { break; }
+                count += 1;
                 let ft = entry.file_type().map(|t| if t.is_dir() { "/" } else { "" }).unwrap_or("?");
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 let name = entry.file_name();
                 let name_s = name.to_string_lossy();
-                if name_s.starts_with('.') { continue; }
                 if ft == "/" {
                     result.push_str(&format!("  {:<40} <DIR>\n", name_s + "/"));
                 } else {
@@ -386,6 +397,9 @@ pub(super) fn exec_list_dir(args: &str) -> String {
                         else { format!("{}B", size) };
                     result.push_str(&format!("  {:<40} {:>6}\n", name_s, sz));
                 }
+            }
+            if total > MAX_LIST_DIR_ENTRIES {
+                result.push_str(&format!("... [truncated: {} more entries]\n", total - MAX_LIST_DIR_ENTRIES));
             }
             result
         }

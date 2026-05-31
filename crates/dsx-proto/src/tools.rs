@@ -14,7 +14,6 @@ pub enum AgentToTools {
     Init {
         allowed_tools: Vec<String>,
         session_seed: String,
-        auto_mode: bool,
     },
 
     #[serde(rename = "tool_call_req")]
@@ -60,7 +59,7 @@ pub enum ToolsToAgent {
     ToolError {
         id: String,
         error: String,
-        /// "UNKNOWN_TOOL" | "BLOCKED" | "PHASE_LOCKED" | "FORBIDDEN" | "IPC_ERROR"
+        /// "UNKNOWN_TOOL" | "BLOCKED" | "FORBIDDEN" | "IPC_ERROR"
         code: String,
     },
 }

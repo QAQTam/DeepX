@@ -1,6 +1,27 @@
 use dsx_types::{ToolCall, FunctionCall, ToolDef};
 
+/// Strip markdown code fences from content so tool call examples
+/// inside ``` blocks are not accidentally parsed as real tool calls.
+pub fn strip_fenced_code(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut in_fence = false;
+    for line in content.lines() {
+        if line.starts_with("```") {
+            in_fence = !in_fence;
+            out.push_str(line);
+            out.push('\n');
+        } else if in_fence {
+            out.push('\n'); // preserve line count, discard content
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Parse DeepSeek v4 XML-style tool calls from text content.
+/// Caller MUST strip markdown code fences before passing content.
 pub fn parse_xml_tool_calls(content: &str, tool_names: &[String]) -> (String, Vec<ToolCall>) {
     let mut cleaned = String::with_capacity(content.len());
     let mut tool_calls = Vec::new();
@@ -179,7 +200,18 @@ fn normalize_args(args_text: &str) -> String {
 /// Parse DeepSeek DSML tool calls from content.
 /// Schema-aware: uses tool_defs for type-safe parameter conversion.
 /// Format: <\u{ff5c}DSML\u{ff5c}tool_calls>...<｜DSML｜invoke name="fn">...</｜DSML｜invoke>...
+/// Format: <\u{ff5c}DSML\u{ff5c}tool_calls>...<｜DSML｜invoke name="fn">...</｜DSML｜invoke>...
+/// Caller MUST strip markdown code fences before passing content.
 pub fn parse_dsml_tool_calls(content: &str, tool_defs: &[ToolDef]) -> (String, Vec<ToolCall>) {
+    // Normalize double-bar variant ￌￌDSMLￌￌ → ￌDSMLￌ
+    let normalized;
+    let content = if content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}") {
+        normalized = content.replace("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}", "\u{ff5c}DSML\u{ff5c}");
+        normalized.as_str()
+    } else {
+        content
+    };
+
     let dsml = "\u{ff5c}DSML\u{ff5c}";
     let tc_start = format!("<{dsml}tool_calls>");
     let tc_end = format!("</{dsml}tool_calls>");
@@ -317,9 +349,11 @@ fn extract_dsml_params_typed(
         let name = extract_attr_value(after, "name").unwrap_or_default();
         let str_attr = extract_attr_value(after, "string").unwrap_or_default();
 
-        let Some(end) = after.find(param_close) else { break };
-        let value_text = after[..end].trim();
-        rem = &after[end + param_close.len()..];
+        let Some(gte) = after.find('>') else { break };
+        let after_gt = &after[gte + 1..];
+        let Some(end) = after_gt.find(param_close) else { break };
+        let value_text = after_gt[..end].trim();
+        rem = &after_gt[end + param_close.len()..];
 
         let value = if str_attr == "true" {
             serde_json::json!(value_text)
@@ -359,4 +393,72 @@ pub fn parse_tool_calls(tcs: &serde_json::Value) -> Vec<ToolCall> {
         })
     }).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dsx_types::{ToolFunction, ToolDef};
+
+    #[test]
+    fn test_parse_invoke_inside_tool_calls() {
+        let content = "<tool_calls>\n<invoke name=\"read_file\">\n<parameter name=\"end_line\" string=\"false\">450</parameter>\n<parameter name=\"path\" string=\"true\">D:\\project\\DeepX\\foo.rs</parameter>\n<parameter name=\"start_line\" string=\"false\">300</parameter>\n</invoke>\n</tool_calls>";
+
+        let tool_names: Vec<String> = vec!["read_file".into(), "explore".into()];
+        let (_cleaned, tcs) = parse_xml_tool_calls(content, &tool_names);
+
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].function.name, "read_file");
+        let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
+        assert_eq!(args["end_line"], 450);
+        assert_eq!(args["path"], "D:\\project\\DeepX\\foo.rs");
+        assert_eq!(args["start_line"], 300);
+    }
+
+    #[test]
+    fn test_parse_invoke_detection() {
+        let content = "<tool_calls>\n<invoke name=\"read_file\">\n<parameter name=\"path\" string=\"true\">test.rs</parameter>\n</invoke>\n</tool_calls>";
+        assert!(content.contains("<invoke "));
+        assert!(content.contains("<tool_calls>"));
+    }
+
+    #[test]
+    fn test_fenced_code_blocks_ignored() {
+        let raw = "Here is an example:\n```xml\n<tool_calls>\n<invoke name=\"read_file\">\n<parameter name=\"path\" string=\"true\">test.rs</parameter>\n</invoke>\n</tool_calls>\n```\n\nBut this one is real:\n<invoke name=\"read_file\">\n<parameter name=\"path\" string=\"true\">real.rs</parameter>\n</invoke>";
+        let content = strip_fenced_code(raw);
+
+        let tool_names: Vec<String> = vec!["read_file".into()];
+        let (_cleaned, tcs) = parse_xml_tool_calls(&content, &tool_names);
+
+        // Should only extract the REAL one (outside fence), not the example
+        assert_eq!(tcs.len(), 1, "Expected 1 real tool call, got {}: {:?}", tcs.len(), tcs);
+        let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
+        assert_eq!(args["path"], "real.rs");
+    }
+
+    #[test]
+    fn test_dsml_fenced_code_blocks_ignored() {
+        let raw = "Example:\n```\n<\u{ff5c}DSML\u{ff5c}tool_calls>\n<\u{ff5c}DSML\u{ff5c}invoke name=\"read_file\">\n<\u{ff5c}DSML\u{ff5c}parameter name=\"path\" string=\"true\">test.rs</\u{ff5c}DSML\u{ff5c}parameter>\n</\u{ff5c}DSML\u{ff5c}invoke>\n</\u{ff5c}DSML\u{ff5c}tool_calls>\n```\n\nReal call:\n<\u{ff5c}DSML\u{ff5c}tool_calls>\n<\u{ff5c}DSML\u{ff5c}invoke name=\"read_file\">\n<\u{ff5c}DSML\u{ff5c}parameter name=\"path\" string=\"true\">real.rs</\u{ff5c}DSML\u{ff5c}parameter>\n</\u{ff5c}DSML\u{ff5c}invoke>\n</\u{ff5c}DSML\u{ff5c}tool_calls>";
+        let content = strip_fenced_code(raw);
+
+        let tool_defs: Vec<ToolDef> = vec![ToolDef {
+            call_type: "function".into(),
+            function: ToolFunction {
+                name: "read_file".into(),
+                description: "Read file".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    }
+                }),
+            },
+        }];
+
+        let (_cleaned, tcs) = parse_dsml_tool_calls(&content, &tool_defs);
+        assert_eq!(tcs.len(), 1, "Expected 1 real tool call, got {}: {:?}", tcs.len(), tcs);
+        let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
+        assert_eq!(args["path"], "real.rs");
+    }
+}
+
 

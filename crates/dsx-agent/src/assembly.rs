@@ -468,28 +468,17 @@ impl ContextAssembler {
 /// ```
 /// Layer  System prompt (static — always fully cached):
 ///   1.   Base prompt              ← static
-///   2.   Phase message            ← varies per phase (cache miss on phase change)
-///   3.   Preset exchanges         ← static (always cached)
-///   4.   Context messages         ← stable per label (cached)
-///   5.   Conversation history     ← stable prefix (cached)
-///   6.   Last user message        ← dynamic annotations (uncached suffix)
+///   2.   Preset exchanges         ← static (always cached)
+///   3.   Context messages         ← stable per label (cached)
+///   4.   Conversation history     ← stable prefix (cached)
+///   5.   Last user message        ← dynamic annotations (uncached suffix)
 /// ```
 pub fn build_context(state: &mut AgentState) -> Vec<Message> {
-
-    // Phase config from dsx_tools (may have been changed by commit tool)
-    let task_phase = crate::router::read_phase();
-    crate::runner::lifecycle::apply_phase_config(state, task_phase, dsx_types::DebugLevel::Medium);
 
     // ── Layer 1: System prompt ──
     let mut messages = vec![Message::system(&crate::config::system_prompt())];
 
-    // ── Layer 2: Phase message ──
-    let phase = crate::router::read_phase();
-    if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
-        messages.push(Message::system(suffix));
-    }
-
-    // ── Layer 3: Preset exchanges (stable prefix for KV cache priming) ──
+    // ── Layer 2: Preset exchanges (stable prefix for KV cache priming) ──
     // Always injected; never persisted to session files; never rendered to UI.
     const PRESET_EXCHANGES: &[(&str, &str)] = &[
         (
@@ -518,7 +507,7 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
         });
     }
 
-    // ── Layer 4: Named context messages (document cache, code snippets, etc.) ──
+    // ── Layer 3: Named context messages (document cache, code snippets, etc.) ──
     // Stable content per label → KV cache prefix reuse across turns.
     for (label, content) in &state.context_messages {
         messages.push(Message {
@@ -528,7 +517,7 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
         });
     }
 
-    // ── Layer 5: Conversation history ──
+    // ── Layer 4: Conversation history ──
     let conv = state.ctx.build(state.config.context_limit);
     messages.extend(conv);
 

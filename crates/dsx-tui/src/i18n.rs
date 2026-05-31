@@ -132,12 +132,6 @@ impl Lang {
             Lang::Zh => "── Agent 行为 ──",
         }
     }
-    pub fn t_menu_auto_mode(&self) -> &str {
-        match self {
-            Lang::En => "Auto Mode",
-            Lang::Zh => "自动模式",
-        }
-    }
     pub fn t_menu_reasoning_effort(&self) -> &str {
         match self {
             Lang::En => "Reasoning Effort",
@@ -178,19 +172,6 @@ impl Lang {
         match self {
             Lang::En => "── Profiles ──",
             Lang::Zh => "── 配置方案 ──",
-        }
-    }
-    pub fn t_menu_phase_configs(&self) -> &str {
-        match self {
-            Lang::En => "── Phase Configs ──",
-            Lang::Zh => "── 阶段配置 ──",
-        }
-    }
-    pub fn t_menu_phase(&self, phase: &str) -> String {
-        match self {
-            Lang::En => format!("Phase: {}", phase),
-            Lang::Zh => format!("阶段: {}",
-                match phase { "plan" => "规划", "coding" => "编码", "debug" => "调试", _ => phase }),
         }
     }
     pub fn t_menu_api(&self) -> &str {
@@ -259,9 +240,6 @@ impl Lang {
 
     // ── Chat header ──
 
-    pub fn t_chat_phase(&self) -> &str {
-        match self { Lang::En => "Phase", Lang::Zh => "阶段" }
-    }
     pub fn t_chat_hit(&self) -> &str {
         match self { Lang::En => "hit", Lang::Zh => "命中" }
     }
@@ -295,13 +273,10 @@ impl Lang {
 
     // ── Chat block titles ──
 
-    pub fn t_chat_title(&self) -> &str {
-        match self { Lang::En => " Chat ", Lang::Zh => " 对话 " }
-    }
     pub fn t_chat_input_title(&self) -> &str {
         match self {
-            Lang::En => " Input (Enter: send, Esc: cancel, Ctrl-C: quit) ",
-            Lang::Zh => " 输入 (Enter: 发送, Esc: 取消, Ctrl-C: 退出) ",
+            Lang::En => " Input (Ctrl+Enter: send, Esc: cancel, Ctrl-C: quit) ",
+            Lang::Zh => " 输入 (Ctrl+Enter: 发送, Esc: 取消, Ctrl-C: 退出) ",
         }
     }
     pub fn t_chat_input_placeholder(&self) -> &str {
@@ -321,9 +296,6 @@ impl Lang {
     }
     pub fn t_debug_session(&self) -> &str {
         match self { Lang::En => "Session", Lang::Zh => "会话" }
-    }
-    pub fn t_debug_phase(&self) -> &str {
-        match self { Lang::En => "Phase", Lang::Zh => "阶段" }
     }
     pub fn t_debug_context(&self) -> &str {
         match self { Lang::En => "Context", Lang::Zh => "上下文" }

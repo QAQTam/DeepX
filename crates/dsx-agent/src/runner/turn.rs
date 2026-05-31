@@ -448,16 +448,19 @@ pub fn handle_user_input(
                 Err(()) => return,
             };
 
+        content = tool_parser::strip_fenced_code(&content);
 
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
 
         if parsed.is_empty()
-            && content.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
+            && (content.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
+                || content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls"))
         {
             let (cleaned, dsml_tcs) =
                 tool_parser::parse_dsml_tool_calls(&content, &agent.tool_defs);
             content = cleaned;
             parsed = dsml_tcs;
+            agent.dsml_compat_count += parsed.len() as u32;
         }
 
         if parsed.is_empty()
@@ -475,6 +478,7 @@ pub fn handle_user_input(
                 tool_parser::parse_xml_tool_calls(&content, &tool_names);
             content = cleaned;
             parsed = xml_tcs;
+            agent.dsml_compat_count += parsed.len() as u32;
         }
 
         let has_tools = !parsed.is_empty();
@@ -638,12 +642,15 @@ pub fn handle_user_input(
 
 
         // ── Parse DSML/XML tool calls from content ──
+        content = tool_parser::strip_fenced_code(&content);
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
-        if content.contains("\u{ff5c}DSML\u{ff5c}tool_calls") {
+        if content.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
+            || content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls") {
             let (cleaned, dsml_tcs) =
                 tool_parser::parse_dsml_tool_calls(&content, &agent.tool_defs);
             content = cleaned;
             parsed = dsml_tcs;
+            agent.dsml_compat_count += parsed.len() as u32;
         }
         if parsed.is_empty()
             && (content.contains("<tool_use>")
@@ -660,6 +667,7 @@ pub fn handle_user_input(
                 tool_parser::parse_xml_tool_calls(&content, &tool_names);
             content = cleaned;
             parsed = xml_tcs;
+            agent.dsml_compat_count += parsed.len() as u32;
         }
 
         if parsed.is_empty() {

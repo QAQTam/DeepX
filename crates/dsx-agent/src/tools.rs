@@ -13,13 +13,12 @@ static TOOL_MANAGER: Mutex<Option<dsx_tools::ToolManager>> = Mutex::new(None);
 
 /// Initialize the in-process tool manager.
 /// Must be called once at startup, before any tool execution.
-pub fn init_tools(session_seed: &str, auto_mode: bool) {
+pub fn init_tools(session_seed: &str) {
     let mut mgr = dsx_tools::registration::build_tool_manager();
-    mgr.apply_init(vec![], session_seed, auto_mode);
+    mgr.apply_init(vec![], session_seed);
     if let Ok(mut guard) = TOOL_MANAGER.lock() {
         *guard = Some(mgr);
     }
-    dsx_tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
     log::info!("dsx: tool manager inited ({} tools)", all_tools().len());
 }
 

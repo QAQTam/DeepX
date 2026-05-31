@@ -85,8 +85,17 @@ pub fn exec_command(args: &str) -> String {
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    const MAX_EXEC_OUTPUT: usize = 256 * 1024;
+    let stdout = if output.stdout.len() > MAX_EXEC_OUTPUT {
+        format!("{}...[TRUNCATED: {} bytes total]", String::from_utf8_lossy(&output.stdout[..MAX_EXEC_OUTPUT]), output.stdout.len())
+    } else {
+        String::from_utf8_lossy(&output.stdout).to_string()
+    };
+    let stderr = if output.stderr.len() > MAX_EXEC_OUTPUT {
+        format!("{}...[TRUNCATED: {} bytes total]", String::from_utf8_lossy(&output.stderr[..MAX_EXEC_OUTPUT]), output.stderr.len())
+    } else {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    };
     let full_output = format!("[stdout]\n{}\n[stderr]\n{}", stdout.trim_end(), stderr.trim_end());
     let full_output = full_output.trim();
     let exit_code = output.status.code().unwrap_or(-1);

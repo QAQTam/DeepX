@@ -333,9 +333,6 @@ fn run_chat(
                     if agent_dead { continue; }
                     let menu = crate::app::MenuState::new(app);
                     run_menu(terminal, app, menu)?;
-                    if let Some(auto_mode) = app.menu_auto_mode.take() {
-                        send(stdin, &dsx_proto::Ui2Agent::SetAutoMode { auto_mode });
-                    }
                 }
                 (KeyModifiers::NONE, KeyCode::F(12)) => {
                     app.show_debug = !app.show_debug;
@@ -349,19 +346,21 @@ fn run_chat(
                     }
                     app.status = app.setup.lang.t_chat_cancelled().to_string();
                 }
-                (_, KeyCode::Enter) => {
+                (KeyModifiers::CONTROL, KeyCode::Enter) => {
                     if agent_dead { continue; }
                     let text = app.input.drain(..).collect::<String>();
                     if !text.trim().is_empty() {
                         app.messages.push(app::ChatMessage {
                             role: app::ChatRole::User,
                             content: text.clone(),
-                            lines: vec![ratatui::text::Line::from(text.clone())],
+                            lines: text.lines().map(|l| ratatui::text::Line::from(l.to_string())).collect(),
                         });
-                        app.input.clear();
                         app.status = app.setup.lang.t_chat_thinking().to_string();
                         send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
                     }
+                }
+                (_, KeyCode::Enter) => {
+                    app.input.push('\n');
                 }
                 (_, KeyCode::Backspace) => {
                     // Remove last grapheme cluster (supports emoji, CJK)

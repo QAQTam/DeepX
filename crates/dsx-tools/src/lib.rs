@@ -25,48 +25,13 @@ pub fn run() {
 }
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use dsx_types::ToolDef;
 
 pub use safety::SafetyVerdict;
-
-// ── Phase state machine ──
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum ToolPhase {
-    Plan = 0,
-    Coding = 1,
-    Debug = 2,
-}
-
-impl ToolPhase {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ToolPhase::Plan => "plan",
-            ToolPhase::Coding => "coding",
-            ToolPhase::Debug => "debug",
-        }
-    }
-}
-
-static PHASE: AtomicU8 = AtomicU8::new(ToolPhase::Plan as u8);
-
-pub fn current_phase() -> ToolPhase {
-    match PHASE.load(Ordering::Relaxed) {
-        0 => ToolPhase::Plan,
-        1 => ToolPhase::Coding,
-        2 => ToolPhase::Debug,
-        _ => ToolPhase::Plan,
-    }
-}
-
-pub fn set_phase(phase: ToolPhase) {
-    PHASE.store(phase as u8, Ordering::Relaxed);
-}
 
 // ── 全局状态 ──
 
@@ -75,7 +40,6 @@ pub static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// 当前会话 seed — 由 TUI 启动时设置，memory 工具使用。
 pub static CURRENT_SESSION: OnceLock<String> = OnceLock::new();
-pub static AUTO_MODE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_current_session(seed: &str) {
     let _ = CURRENT_SESSION.set(seed.to_string());
@@ -229,11 +193,10 @@ impl ToolManager {
 
     // ── Init（IPC 中由 ToolsInit 帧触发）──
 
-    pub fn apply_init(&mut self, allowed_tools: Vec<String>, session_seed: &str, auto_mode: bool) {
+    pub fn apply_init(&mut self, allowed_tools: Vec<String>, session_seed: &str) {
         // Empty list = allow all (no restriction)
         self.allowed = if allowed_tools.is_empty() { None } else { Some(allowed_tools) };
         let _ = CURRENT_SESSION.set(session_seed.to_string());
-        AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
     }
 
     // ── 定义查询 ──
@@ -262,16 +225,6 @@ impl ToolManager {
 
     /// 处理一个入站 CallReq 帧，返回对应的出站帧。
     pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>) -> dsx_proto::ToolsToAgent {
-        // Phase gate — in Plan mode only commit/compose is allowed
-        let phase = current_phase();
-        if phase == ToolPhase::Plan && name != "commit" {
-            return dsx_proto::ToolsToAgent::ToolError {
-                id,
-                error: "Phase is Plan — no tools available yet. Call commit(state=\"coding\") or commit(state=\"debug\") to begin.".into(),
-                code: "PHASE_LOCKED".into(),
-            };
-        }
-
         // 授权检查
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {

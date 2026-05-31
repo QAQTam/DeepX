@@ -67,8 +67,8 @@ impl MarkdownRenderer {
         if self.state == MdState::CodeBlock && line.trim().starts_with("```") {
             self.state = MdState::Normal;
             let lns = std::mem::take(&mut self.code_lines);
-            self.code_lang.clear();
-            return render_code_block(&lns);
+            let lang = std::mem::take(&mut self.code_lang);
+            return render_code_block(&lns, &lang);
         }
         match self.state {
             MdState::CodeBlock => self.push_code_line(line),
@@ -82,8 +82,8 @@ impl MarkdownRenderer {
         if self.state == MdState::CodeBlock {
             self.state = MdState::Normal;
             let lns = std::mem::take(&mut self.code_lines);
-            self.code_lang.clear();
-            lines.append(&mut render_code_block(&lns));
+            let lang = std::mem::take(&mut self.code_lang);
+            lines.append(&mut render_code_block(&lns, &lang));
         }
         lines
     }
@@ -99,15 +99,17 @@ impl MarkdownRenderer {
 
         // ``` fence → start / end code block
         if trimmed.starts_with("```") {
+            let mut out = self.flush_table();
             if self.state == MdState::CodeBlock {
                 self.state = MdState::Normal;
                 let lns = std::mem::take(&mut self.code_lines);
-                self.code_lang.clear();
-                return render_code_block(&lns);
+                let lang = std::mem::take(&mut self.code_lang);
+                out.extend(render_code_block(&lns, &lang));
+                return out;
             } else {
                 self.state = MdState::CodeBlock;
                 self.code_lang = trimmed[3..].trim().to_string();
-                return Vec::new();
+                return out;
             }
         }
 
@@ -263,11 +265,19 @@ fn render_table_row(cells: &[String], col_widths: &[usize]) -> Line<'static> {
 
 // ── Code block rendering ──
 
-fn render_code_block(lines: &[String]) -> Vec<Line<'static>> {
+fn render_code_block(lines: &[String], lang: &str) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     out.push(Line::from(""));
+    if !lang.is_empty() {
+        out.push(Line::from(Span::styled(
+            format!("  {} {} ", "─".repeat(2), lang),
+            Style::new().fg(CODE_FG),
+        )));
+    }
     for line in lines {
-        let l = line.replace('\t', "    ");
+        let l = line.replace('\t', "    ").chars()
+            .filter(|&c| c.is_ascii_graphic() || c == ' ' || !c.is_ascii())
+            .collect::<String>();
         out.push(Line::from(Span::styled(
             format!("  {l}"),
             Style::new().fg(CODE_FG).bg(CODE_BG),
@@ -327,6 +337,7 @@ fn try_extract(text: &str, marker: &str, spans: &mut Vec<Span<'static>>, bold: b
     let after_start = &text[start + marker.len()..];
     let end = after_start.find(marker)?;
     let inner = &after_start[..end];
+    if inner.contains('\n') { return None; }
     let rest = after_start[end + marker.len()..].to_string();
     if !prefix.is_empty() {
         spans.push(Span::raw(prefix.to_string()));
@@ -342,6 +353,7 @@ fn try_extract_strikethrough(text: &str, spans: &mut Vec<Span<'static>>) -> Opti
     let after = &text[start + 2..];
     let end = after.find("~~")?;
     let inner = &after[..end];
+    if inner.contains('\n') { return None; }
     let rest = after[end + 2..].to_string();
     if !prefix.is_empty() {
         spans.push(Span::raw(prefix.to_string()));
@@ -356,6 +368,7 @@ fn try_extract_code(text: &str, spans: &mut Vec<Span<'static>>) -> Option<String
     let after = &text[start + 1..];
     let end = after.find('`')?;
     let inner = &after[..end];
+    if inner.contains('\n') { return None; }
     let rest = after[end + 1..].to_string();
     if !prefix.is_empty() {
         spans.push(Span::raw(prefix.to_string()));
@@ -370,6 +383,7 @@ fn try_extract_link(text: &str, spans: &mut Vec<Span<'static>>) -> Option<String
     let rest = &text[start + 1..];
     let label_end = rest.find(']')?;
     let label = &rest[..label_end];
+    if label.contains('\n') { return None; }
     let after_label = &rest[label_end + 1..];
     if !after_label.starts_with('(') {
         return None;

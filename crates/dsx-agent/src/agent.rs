@@ -38,6 +38,8 @@ pub struct AgentState {
     // ── Tool chain safety ──
     pub tool_failures: u32,
     pub tool_calls_this_turn: u32,
+    /// Cumulative count of tool calls successfully parsed via DSML/XML (DeepSeek compat).
+    pub dsml_compat_count: u32,
     pub auto_verify: Vec<String>,
 
     // ── Registered tool definitions (from dsx-tools) ──
@@ -47,7 +49,6 @@ pub struct AgentState {
     pub pending_ask_user: Option<String>,
 
     // ── Mode flags ──
-    pub auto_mode: bool,
 
     // ── Health / monitoring ──
     pub health: DsAgentsHealthPlatform,
@@ -75,7 +76,6 @@ pub struct AgentState {
 impl AgentState {
     pub fn new(config: crate::config::Config) -> Self {
         let prompt = config::system_prompt();
-        let auto_mode = config.auto_mode;
         let mut ctx = ContextAssembler::new();
         ctx.push_system(Message::system(&prompt));
 
@@ -96,10 +96,10 @@ impl AgentState {
             resume_seed: None,
             tool_failures: 0,
             tool_calls_this_turn: 0,
+            dsml_compat_count: 0,
             auto_verify: Vec::new(),
             tool_defs: Vec::new(),
             pending_ask_user: None,
-            auto_mode,
             health: DsAgentsHealthPlatform::new(),
             files_written_this_turn: Vec::new(),
             turn_annotations: Vec::new(),
@@ -110,7 +110,6 @@ impl AgentState {
             context_messages: Vec::new(),
         };
 
-        dsx_tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
         state
     }
 
@@ -182,8 +181,19 @@ impl<'a> ToolResultAppender<'a> {
 
     /// Append a tool result to the context and record all side effects.
     pub fn append(&mut self, tool_name: &str, tc_id: &str, args: &str, raw: &str) -> bool {
+        // Global size gate: any tool result > 50K chars gets truncated
+        // to prevent LLM context bloat regardless of per-tool limits.
+        const MAX_TOOL_RESULT_CHARS: usize = 50_000;
+        let truncated = if raw.len() > MAX_TOOL_RESULT_CHARS {
+            let mut t = raw[..MAX_TOOL_RESULT_CHARS].to_string();
+            t.push_str(&format!("\n...[TRUNCATED: {} total chars, showing first {MAX_TOOL_RESULT_CHARS}]", raw.len()));
+            t
+        } else {
+            raw.to_string()
+        };
+
         let failed = raw.starts_with("[ERROR]") || raw.starts_with("[FAIL]");
-        let result = wrap_tool_result(tool_name, raw);
+        let result = wrap_tool_result(tool_name, &truncated);
 
         if let Err(e) = self.state.ctx.push_tool_result(tc_id, &result) {
             log::warn!("ToolResultAppender: push_tool_result failed for {}: {:?}", tc_id, e);

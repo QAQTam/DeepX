@@ -1,7 +1,7 @@
 pub use crate::prompt::system_prompt;
 
 use dsx_types::{ConfigStore, PersistentConfig};
-use std::collections::HashMap;
+use std::collections::HashMap; // still used by profiles
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -13,9 +13,7 @@ pub struct Config {
     pub effort: Option<String>,
     pub profiles: HashMap<String, dsx_types::ProfileConfig>,
     pub active_profile: String,
-    pub auto_mode: bool,
     pub max_tool_rounds: Option<u32>,
-    pub phase_configs: HashMap<String, dsx_types::PhasePerfConfig>,
 }
 
 impl Default for Config {
@@ -31,9 +29,7 @@ impl Default for Config {
             model: "deepseek-v4-flash".into(), max_tokens: 16000, context_limit: 1_000_000,
             effort: None,
             profiles, active_profile: "default".into(),
-            auto_mode: true,
             max_tool_rounds: None,
-            phase_configs: dsx_types::default_phase_configs(),
         }
     }
 }
@@ -63,8 +59,6 @@ impl Config {
             if let Some(mt) = pc.max_tokens { cfg.max_tokens = mt; }
             if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
             if let Some(ref e) = pc.effort { if !e.is_empty() { cfg.effort = Some(e.clone()); } }
-            if let Some(am) = pc.auto_mode { cfg.auto_mode = am; }
-            if let Some(pc2) = pc.phase_configs { cfg.phase_configs = pc2; }
         }
 
         if let Ok(k) = std::env::var("DEEPSEEK_API_KEY") { let k = k.trim().to_string(); if !k.is_empty() { cfg.api_key = k; } }
@@ -104,8 +98,6 @@ impl Config {
             prompt_lang: None,
             profiles: Some(profiles),
             active_profile: Some(self.active_profile.clone()),
-            auto_mode: Some(self.auto_mode),
-            phase_configs: Some(self.phase_configs.clone()),
         };
         if !store.save(&pc) {
             log::error!("Failed to save config");

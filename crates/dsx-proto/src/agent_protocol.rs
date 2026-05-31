@@ -4,12 +4,10 @@
 //! are retained for JSON-LP headless mode over stdin/stdout.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// UI → Agent frames (mpsc channel / stdin pipe in headless mode).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-#[ts(export, export_to = "protocol.ts")]
 #[non_exhaustive]
 pub enum Ui2Agent {
     #[serde(rename = "user_input")]
@@ -23,9 +21,6 @@ pub enum Ui2Agent {
         args: serde_json::Value,
     },
 
-    #[serde(rename = "set_phase")]
-    SetPhase { phase: String },
-
     #[serde(rename = "cancel")]
     Cancel,
 
@@ -35,14 +30,11 @@ pub enum Ui2Agent {
     #[serde(rename = "debug_cmd")]
     DebugCommand { cmd: String },
 
-    #[serde(rename = "set_auto_mode")]
-    SetAutoMode { auto_mode: bool },
 }
 
 /// Agent → UI frames (mpsc channel / stdout pipe in headless mode).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-#[ts(export, export_to = "protocol.ts")]
 #[non_exhaustive]
 pub enum Agent2Ui {
     /// Streaming content delta (one token or small chunk).
@@ -89,9 +81,6 @@ pub enum Agent2Ui {
         #[serde(skip_serializing_if = "Option::is_none")]
         options: Option<Vec<String>>,
     },
-
-    #[serde(rename = "phase_changed")]
-    PhaseChanged { phase: String },
 
     #[serde(rename = "tool_state")]
     ToolState {
@@ -152,6 +141,8 @@ pub enum Agent2Ui {
         tool_failures: u32,
         current_phase: String,
         streaming: bool,
+        #[serde(default)]
+        dsml_compat_count: u32,
     },
 
     /// Account balance from DeepSeek API.

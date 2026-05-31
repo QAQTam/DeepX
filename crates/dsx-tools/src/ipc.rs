@@ -35,8 +35,8 @@ pub fn ipc_main_loop(manager: &mut ToolManager) {
         };
 
         match frame {
-            AgentToTools::Init { allowed_tools, session_seed, auto_mode } => {
-                manager.apply_init(allowed_tools, &session_seed, auto_mode);
+            AgentToTools::Init { allowed_tools, session_seed } => {
+                manager.apply_init(allowed_tools, &session_seed);
                 let tools = manager.filtered_defs();
                 if dsx_proto::write_frame(&mut writer, &ToolsToAgent::Ready { tools }).is_err() {
                     break;

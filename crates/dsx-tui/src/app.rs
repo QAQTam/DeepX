@@ -211,7 +211,6 @@ impl SetupState {
             model: Some(self.model.trim().to_string()),
             base_url: Some("https://api.deepseek.com".into()),
             context_limit: Some(self.context_limit.parse().unwrap_or(1_000_000)),
-            auto_mode: Some(true),
             ..Default::default()
         }
     }
@@ -225,7 +224,6 @@ pub struct App {
     pub messages: Vec<ChatMessage>,
     pub input: String,
     pub status: String,
-    pub phase: String,
     pub context_tokens: u32,
     pub session_tokens: u64,
     pub cache_hit: u32,
@@ -244,9 +242,9 @@ pub struct App {
     pub debug: DebugState,
     pub ask: Option<AskState>,
     pub balance: String,
-    pub menu_auto_mode: Option<bool>,
     block: BlockType,
     pub validating: bool,
+    streaming_rendered_len: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -290,6 +288,12 @@ pub struct DebugState {
     pub tool_failures: u32,
     pub current_phase: String,
     pub streaming: bool,
+    pub dsml_compat_count: u32,
+    pub explored: bool,
+    pub declared_files: Vec<String>,
+    pub read_files: Vec<String>,
+    pub written_this_turn: Vec<String>,
+    pub tool_progress: String,
 }
 
 #[derive(Clone)]
@@ -299,7 +303,6 @@ pub struct MenuState {
     pub editing: bool,
     pub edit_buf: String,
     pub status: String,
-    pub phase_configs: std::collections::HashMap<String, dsx_types::PhasePerfConfig>,
     pub profiles: std::collections::HashMap<String, dsx_types::ProfileConfig>,
     pub lang: crate::i18n::Lang,
 }
@@ -341,13 +344,9 @@ impl MenuState {
         let context_limit = config.as_ref().and_then(|c| c.context_limit).unwrap_or(1_000_000);
         let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16000);
         let effort = config.as_ref().and_then(|c| c.effort.clone()).unwrap_or_else(|| "high".into());
-        let auto_mode = config.as_ref().and_then(|c| c.auto_mode).unwrap_or(true);
         let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| "https://api.deepseek.com".into());
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
         let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
-        let phase_configs = config.as_ref()
-            .and_then(|c| c.phase_configs.clone())
-            .unwrap_or_else(dsx_types::default_phase_configs);
 
         let mut items: Vec<MenuItem> = Vec::new();
         let mk = |kind, key: &str, label: String, value: &str, editable: bool| MenuItem {
@@ -356,8 +355,6 @@ impl MenuState {
 
         // ── Agent Behavior ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_agent_behavior().into(), "", false));
-        items.push(mk(MenuItemKind::Toggle, "auto_mode", l.t_menu_auto_mode().into(),
-            if auto_mode { "ON" } else { "OFF" }, true));
         items.push(mk(MenuItemKind::Value, "effort", l.t_menu_reasoning_effort().into(),
             &effort, true));
         items.push(mk(MenuItemKind::Value, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
@@ -389,37 +386,6 @@ impl MenuState {
                 &desc, true));
         }
 
-        // ── Phase Configs (editable individual fields) ──
-        items.push(mk(MenuItemKind::Section, "", l.t_menu_phase_configs().into(), "", false));
-        let phase_order = ["plan", "coding", "debug"];
-        for phase_name in &phase_order {
-            let pc = phase_configs.get(*phase_name)
-                .cloned()
-                .unwrap_or_else(|| dsx_types::PhasePerfConfig {
-                    model: "deepseek-v4-flash".into(),
-                    context_limit: 1_000_000,
-                    max_tokens: 8192,
-                    effort: Some("high".into()),
-                });
-            let phase_label = l.t_menu_phase(phase_name);
-            items.push(mk(MenuItemKind::Value,
-                &format!("phase:{}:model", phase_name),
-                format!("  {} / {}", phase_label, l.t_menu_model()),
-                &pc.model, true));
-            items.push(mk(MenuItemKind::Value,
-                &format!("phase:{}:max_tokens", phase_name),
-                format!("  {} / {}", phase_label, l.t_menu_max_tokens()),
-                &pc.max_tokens.to_string(), true));
-            items.push(mk(MenuItemKind::Toggle,
-                &format!("phase:{}:effort", phase_name),
-                format!("  {} / {}", phase_label, l.t_menu_reasoning_effort()),
-                pc.effort.as_deref().unwrap_or("high"), true));
-            items.push(mk(MenuItemKind::Value,
-                &format!("phase:{}:context_limit", phase_name),
-                format!("  {} / {}", phase_label, l.t_menu_context_limit()),
-                &pc.context_limit.to_string(), true));
-        }
-
         // ── API ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_api().into(), "", false));
         items.push(mk(MenuItemKind::Info, "api_key", l.t_menu_api_key().into(),
@@ -438,7 +404,6 @@ impl MenuState {
             edit_buf: String::new(),
             status: String::new(),
             items,
-            phase_configs,
             profiles,
             lang: l,
         }
@@ -452,11 +417,7 @@ impl MenuState {
         if !item.editable { return; }
 
         match item.key.as_str() {
-            "auto_mode" => {
-                let new = item.value == "OFF";
-                item.value = if new { "ON".into() } else { "OFF".into() };
-            }
-            "effort" | _ if item.key.starts_with("phase:") && item.key.ends_with(":effort") => {
+            "effort" => {
                 item.value = if item.value == "high" { "max".into() } else { "high".into() };
             }
             "language" => {
@@ -481,28 +442,6 @@ impl MenuState {
         }
     }
 
-    /// Sync a phase config field from items back to self.phase_configs
-    fn sync_phase_field(&mut self, key: &str, value: &str) {
-        // key format: "phase:plan:model", "phase:coding:effort", etc.
-        let parts: Vec<&str> = key.splitn(3, ':').collect();
-        if parts.len() != 3 || parts[0] != "phase" { return; }
-        let phase_name = parts[1];
-        let field = parts[2];
-        let pc = self.phase_configs.entry(phase_name.to_string())
-            .or_insert_with(|| dsx_types::PhasePerfConfig {
-                model: "deepseek-v4-flash".into(),
-                context_limit: 1_000_000,
-                max_tokens: 8192,
-                effort: Some("high".into()),
-            });
-        match field {
-            "model" => pc.model = value.to_string(),
-            "max_tokens" => { if let Ok(v) = value.parse() { pc.max_tokens = v; } }
-            "effort" => pc.effort = Some(value.to_string()),
-            "context_limit" => { if let Ok(v) = value.parse() { pc.context_limit = v; } }
-            _ => {}
-        }
-    }
 
     fn activate_profile(&mut self, name: &str) {
         let store = ConfigStore::default_location();
@@ -524,15 +463,8 @@ impl MenuState {
         let store = ConfigStore::default_location();
         let mut config = store.load().unwrap_or_default();
 
-        // Collect phase items first to avoid borrow conflicts
-        let phase_updates: Vec<(String, String)> = self.items.iter()
-            .filter(|i| i.key.starts_with("phase:"))
-            .map(|i| (i.key.clone(), i.value.clone()))
-            .collect();
-
         for item in &self.items {
             match item.key.as_str() {
-                "auto_mode" => { config.auto_mode = Some(item.value == "ON"); }
                 "effort" => { config.effort = Some(item.value.clone()); }
                 "model" => { config.model = Some(item.value.clone()); }
                 "context_limit" => {
@@ -545,11 +477,6 @@ impl MenuState {
             }
         }
 
-        for (key, value) in &phase_updates {
-            self.sync_phase_field(key, value);
-        }
-
-        config.phase_configs = Some(self.phase_configs.clone());
         config.profiles = Some(self.profiles.clone());
 
         if store.save(&config) {
@@ -561,10 +488,6 @@ impl MenuState {
 
     pub fn go_back(mut self, app: &mut App) {
         self.save_all();
-        let auto_mode = self.items.iter()
-            .find(|i| i.key == "auto_mode")
-            .map_or(true, |i| i.value == "ON");
-        app.menu_auto_mode = Some(auto_mode);
         app.screen = Screen::Chat;
     }
 }
@@ -577,7 +500,6 @@ impl App {
             messages: Vec::new(),
             input: String::new(),
             status: String::new(), // will be set after setup knows lang
-            phase: String::from("plan"),
             context_tokens: 0,
             session_tokens: 0,
             cache_hit: 0,
@@ -588,6 +510,7 @@ impl App {
             should_quit: false,
             streaming: false,
             scroll_offset: 0,
+            streaming_rendered_len: 0,
             frame_count: 0,
             sessions: Vec::new(),
             session_index: 0,
@@ -601,10 +524,15 @@ impl App {
                 tool_failures: 0,
                 current_phase: String::from("plan"),
                 streaming: false,
+                dsml_compat_count: 0,
+                explored: false,
+                declared_files: Vec::new(),
+                read_files: Vec::new(),
+                written_this_turn: Vec::new(),
+                tool_progress: String::new(),
             },
             ask: None,
             balance: String::new(),
-            menu_auto_mode: None,
             block: BlockType::None,
             validating: false,
         }
@@ -639,19 +567,38 @@ impl App {
     }
 
     pub fn push_msg(&mut self, role: ChatRole, content: &str) {
-        let lines = crate::markdown::render_content(content);
-        self.messages.push(ChatMessage { role, content: content.to_string(), lines });
+        const MAX_STORED: usize = 50_000;
+        let content = if content.chars().count() > MAX_STORED {
+            let truncated: String = content.chars().take(MAX_STORED).collect();
+            format!("{}...[TRUNCATED]", truncated)
+        } else {
+            content.to_string()
+        };
+        let lines = crate::markdown::render_content(&content);
+        self.streaming_rendered_len = content.len();
+        self.messages.push(ChatMessage { role, content, lines });
     }
 
     fn append_last(&mut self, content: &str) {
         if let Some(last) = self.messages.last_mut() {
             last.content.push_str(content);
-            last.lines = crate::markdown::render_content(&last.content);
+            // Re-render when content has grown by 30+ chars (smooth updates, minimal overhead)
+            if last.content.len() >= self.streaming_rendered_len + 30 {
+                last.lines = crate::markdown::render_content(&last.content);
+                self.streaming_rendered_len = last.content.len();
+            }
         }
     }
 
     fn switch_block(&mut self, new_block: BlockType) {
         if self.block != new_block {
+            // Finalize streaming message before switching
+            if let Some(last) = self.messages.last_mut() {
+                if !last.content.is_empty() {
+                    last.lines = crate::markdown::render_content(&last.content);
+                }
+            }
+            self.streaming_rendered_len = 0;
             self.block = new_block;
             self.streaming = false;
             self.push_msg(ChatRole::Divider, "");
@@ -662,7 +609,6 @@ impl App {
         match frame {
             Agent2Ui::ContentDelta { delta, reasoning } => {
                 self.debug.streaming = true;
-                self.scroll_offset = 0;
                 if let Some(r) = reasoning {
                     if !r.is_empty() {
                         self.switch_block(BlockType::Thinking);
@@ -740,21 +686,23 @@ impl App {
                 self.push_msg(ChatRole::Status, &status_text);
                 self.status = status_text;
             }
-            Agent2Ui::PhaseChanged { phase } => {
-                self.phase = phase.clone();
-                self.debug.current_phase = phase;
-            }
             Agent2Ui::Done => {
                 self.status = self.setup.lang.t_chat_ready().to_string();
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.block = BlockType::None;
+                if let Some(last) = self.messages.last_mut() {
+                    last.lines = crate::markdown::render_content(&last.content);
+                }
             }
             Agent2Ui::Cancelled => {
                 self.status = self.setup.lang.t_chat_cancelled().to_string();
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.block = BlockType::None;
+                if let Some(last) = self.messages.last_mut() {
+                    last.lines = crate::markdown::render_content(&last.content);
+                }
             }
             Agent2Ui::SessionRestored { seed, message_count, tokens_used, .. } => {
                 self.status = self.setup.lang.t_session_restored(&seed, message_count, tokens_used);
@@ -765,16 +713,15 @@ impl App {
                 self.load_messages_from_session(&seed);
             }
             Agent2Ui::DebugSnapshot { hp_connected, session_seed, context_tokens,
-                tool_calls_total, tool_failures, current_phase, streaming } => {
-                self.debug = DebugState {
-                    hp_connected,
-                    session_seed,
-                    context_tokens,
-                    tool_calls_total,
-                    tool_failures,
-                    current_phase,
-                    streaming,
-                };
+                tool_calls_total, tool_failures, current_phase, streaming, dsml_compat_count, .. } => {
+                self.debug.hp_connected = hp_connected;
+                self.debug.session_seed = session_seed;
+                self.debug.context_tokens = context_tokens;
+                self.debug.tool_calls_total = tool_calls_total;
+                self.debug.tool_failures = tool_failures;
+                self.debug.current_phase = current_phase;
+                self.debug.streaming = streaming;
+                self.debug.dsml_compat_count = dsml_compat_count;
             }
             Agent2Ui::AskUser { question, options, .. } => {
                 self.ask = Some(AskState {
@@ -787,6 +734,30 @@ impl App {
             Agent2Ui::Balance { is_available, total_balance, currency } => {
                 let status = if is_available { "✓" } else { "✗" };
                 self.balance = format!("{} {}{} {}", status, if currency == "CNY" { "¥" } else { "$" }, total_balance, currency);
+            }
+            Agent2Ui::ToolProgress { content, .. } => {
+                self.debug.tool_progress = content;
+            }
+            Agent2Ui::ToolState { explored, declared_files, read_files, written_this_turn, .. } => {
+                self.debug.explored = explored;
+                self.debug.declared_files = declared_files;
+                self.debug.read_files = read_files;
+                self.debug.written_this_turn = written_this_turn;
+            }
+            Agent2Ui::CachePrediction { hit_rate } => {
+                self.cache_rates.push(hit_rate);
+                if hit_rate < 0.3 {
+                    self.cache_warning = format!("cache miss: {:.1}%", (1.0 - hit_rate) * 100.0);
+                }
+            }
+            Agent2Ui::ShutdownAck => {
+                self.streaming = false;
+                self.debug.streaming = false;
+                if self.setup.lang.as_str() == "zh" {
+                    self.status = "Agent 已关闭".into();
+                } else {
+                    self.status = "Agent shut down".into();
+                }
             }
             _ => {}
         }
@@ -830,7 +801,7 @@ impl App {
                         self.push_msg(ChatRole::Thinking, reasoning);
                     }
                     ContentBlock::ToolUse { name, input, .. } => {
-                        let args: String = input.as_str().unwrap_or("").into();
+                        let args: String = serde_json::to_string(&input).unwrap_or_default();
                         pending_tool_use = Some((name.clone(), args));
                     }
                     ContentBlock::ToolResult { content, .. } => {

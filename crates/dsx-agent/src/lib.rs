@@ -8,8 +8,6 @@ pub mod config;
 pub mod assembly;
 pub mod dsx_log;
 pub mod prompt;
-pub mod router;
-
 // ── Core modules ──
 pub mod agent;
 pub mod health;

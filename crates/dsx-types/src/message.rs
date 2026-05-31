@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 // ── OpenAI-native content blocks ──
 
@@ -85,16 +84,15 @@ impl Message {
 
 // ── Tool Call (kept for IPC, XML/DSML parsing, and backward compat) ──
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
-    #[ts(rename = "type")]
     pub call_type: String,
     pub function: FunctionCall,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionCall {
     pub name: String,
     pub arguments: String,
