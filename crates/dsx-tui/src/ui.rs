@@ -439,10 +439,11 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                 ]));
             }
             ChatRole::Thinking => {
-                let prefix = Span::styled(format!("{}> ", l.t_chat_think()), Style::new().fg(Color::Rgb(200, 180, 100)).bold());
+                let dim = Color::Rgb(140, 140, 150);
+                let prefix = Span::styled(format!("{}> ", l.t_chat_think()), Style::new().fg(dim).bold());
                 if msg.lines.is_empty() {
                     text_lines.push(Line::from(vec![prefix, Span::styled(
-                        &msg.content, Style::new().fg(Color::Rgb(200, 180, 100)).italic(),
+                        &msg.content, Style::new().fg(dim).italic(),
                     )]));
                 } else {
                     for (i, line) in msg.lines.iter().enumerate() {
