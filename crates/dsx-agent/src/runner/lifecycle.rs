@@ -15,9 +15,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
             agent.session_start = file.created_at;
             let (ctx, repairs) = crate::assembly::ContextAssembler::from_legacy(file.messages);
             agent.ctx = ctx;
-            // Estimate session tokens from restored messages
-            let msg_json = serde_json::to_string(&agent.ctx.to_vec()).unwrap_or_default();
-            agent.session_tokens = crate::tokenizer::count_tokens(&msg_json) as u64;
+            agent.session_tokens = 0;
 
             dsx_log::set_session(&agent.session_seed);
             tools::set_current_session(&agent.session_seed);

@@ -62,7 +62,7 @@ pub fn run_agent_loop(
                 message_count: msg_count as u64,
                 summary,
                 tokens_used: agent.token_estimate,
-                cache_hit_pct: agent.predicted_cache_hit_pct,
+                cache_hit_pct: 0.0,
             });
         }
     }

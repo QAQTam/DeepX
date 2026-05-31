@@ -15,7 +15,6 @@ use crate::agent::{AgentState, ToolResultAppender};
 use crate::assembly::AssemblerError;
 use crate::orchestrator::{gates, learning, tracker};
 use crate::session;
-use crate::tokenizer;
 use crate::tool_parser;
 
 use super::hp_bridge::emit_tool_result;
@@ -261,7 +260,7 @@ fn init_session_on_first_message(
                 })
                 .unwrap_or_default();
             let tokens_used = agent.token_estimate;
-            let cache_hit_pct = agent.predicted_cache_hit_pct;
+            let cache_hit_pct = 0.0;
             let _ = agent_tx.send(Agent2Ui::SessionRestored {
                 seed: agent.session_seed.clone(),
                 message_count: msg_count as u64,
@@ -298,16 +297,11 @@ fn run_api_turn(
 > {
     let (system, messages) = crate::assembly::build_context(agent);
 
-    let _ = agent_tx.send(Agent2Ui::CachePrediction {
-        hit_rate: agent.predicted_cache_hit_pct,
-    });
-
     let messages_json = {
         log::debug!(
-            "turn round={} messages={} tokens={}",
+            "turn round={} messages={}",
             round,
             messages.len(),
-            tokenizer::estimate_messages_tokens(&messages)
         );
         serde_json::to_value(&messages).unwrap_or_default()
     };
@@ -326,32 +320,6 @@ fn run_api_turn(
         user_id: Some(agent.session_seed.clone()),
         api_key: Some(dsx_proto::Redacted(agent.config.api_key.clone())),
     };
-
-    // Count tokens on the serialized payload (api_key excluded — HP sends it separately)
-    if let Ok(mut payload) = serde_json::to_value(&chat) {
-        if let Some(obj) = payload.as_object_mut() {
-            obj.remove("api_key");
-        }
-        let json = serde_json::to_string(&payload).unwrap_or_default();
-        agent.token_estimate = tokenizer::count_tokens(&json);
-    }
-
-    // Token breakdown + health
-    let system_tokens = tokenizer::count_tokens(&system);
-    let episodic_tokens = tokenizer::estimate_messages_tokens(&messages);
-    agent.health.context_tokens = agent.tokens_used();
-    agent.health.context_tier = crate::health::ContextTier::from_tokens(
-        agent.health.context_tokens, agent.config.context_limit,
-    );
-
-    // KV cache prediction
-    let report = agent.cache_analyzer.record(&system, &messages);
-    agent.predicted_cache_hit_pct = report.hit_rate;
-
-    log::info!(
-        "context (tokens): system={} episodic={} total={}",
-        system_tokens, episodic_tokens, agent.token_estimate,
-    );
 
     if let Err(e) = dsx_proto::write_frame(hp.get_mut(), &chat) {
         log::error!("dsx-agent: write_frame to HP failed: {}", e);

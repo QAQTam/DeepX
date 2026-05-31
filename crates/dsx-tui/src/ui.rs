@@ -396,6 +396,15 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         Span::styled(format!("{}:{}", l.t_chat_hit(), app.cache_hit), Style::new().fg(Color::Rgb(100, 200, 120))),
         Span::styled("/", Style::new().fg(DIM)),
         Span::styled(format!("{}:{}", l.t_chat_miss(), app.cache_miss), Style::new().fg(Color::Rgb(200, 150, 100))),
+        Span::raw(" "),
+        Span::styled(format!("({:.0}%)", {
+            let total = app.cache_hit + app.cache_miss;
+            if total > 0 { app.cache_hit as f64 / total as f64 * 100.0 } else { 0.0 }
+        }), Style::new().fg(if app.cache_hit as f64 / (app.cache_hit + app.cache_miss).max(1) as f64 > 0.5 {
+            Color::Rgb(100, 200, 120)
+        } else {
+            Color::Rgb(200, 150, 100)
+        })),
         if !app.balance.is_empty() {
             Span::raw(" | ")
         } else {

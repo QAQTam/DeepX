@@ -9,7 +9,6 @@ pub mod assembly;
 pub mod dsx_log;
 pub mod prompt;
 pub mod router;
-pub mod tokenizer;
 
 // ── Core modules ──
 pub mod agent;
@@ -19,5 +18,4 @@ pub mod tools;
 pub mod orchestrator;
 pub mod session;
 pub mod tool_parser;
-pub mod cache_analyzer;
 pub mod hp;

@@ -19,7 +19,6 @@ pub struct AgentState {
     pub token_estimate: u32,
     pub api_usage: Option<UsageInfo>,
     pub session_tokens: u64,
-    pub predicted_cache_hit_pct: f64,
 
     // ── Explore-before-read state machine ──
     pub has_explored: bool,
@@ -66,9 +65,6 @@ pub struct AgentState {
     pub stream_reasoning: String,
     pub stream_cancelled: bool,
 
-    // ── KV cache prediction ──
-    pub cache_analyzer: crate::cache_analyzer::CacheAnalyzer,
-
     // ── Document context cache ──
     /// Named context messages injected before conversation history in
     /// `build_context()`. Key = label (used as `name` field), Value = content.
@@ -91,7 +87,6 @@ impl AgentState {
             token_estimate: 0,
             api_usage: None,
             session_tokens: 0,
-            predicted_cache_hit_pct: 0.0,
             has_explored: false,
             turns_since_last_read: 0,
             re_read_required: None,
@@ -112,7 +107,6 @@ impl AgentState {
             stream_reasoning: String::new(),
             max_tool_rounds,
             stream_cancelled: false,
-            cache_analyzer: crate::cache_analyzer::CacheAnalyzer::new(),
             context_messages: Vec::new(),
         };
 
