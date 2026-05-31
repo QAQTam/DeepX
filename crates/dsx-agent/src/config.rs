@@ -24,10 +24,10 @@ impl Default for Config {
         profiles.insert("default".into(), dsx_types::ProfileConfig {
             model: "deepseek-v4-flash".into(), max_tokens: 16000,
             effort: Some("high".into()), context_limit: 1_000_000,
-            base_url: "https://api.deepseek.com/anthropic".into(),
+            base_url: "https://api.deepseek.com".into(),
         });
         Self {
-            api_key: String::new(), base_url: "https://api.deepseek.com/anthropic".into(),
+            api_key: String::new(), base_url: "https://api.deepseek.com".into(),
             model: "deepseek-v4-flash".into(), max_tokens: 16000, context_limit: 1_000_000,
             effort: None,
             profiles, active_profile: "default".into(),

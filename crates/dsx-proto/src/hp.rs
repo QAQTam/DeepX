@@ -41,6 +41,7 @@ pub enum AgentToHp {
         #[serde(skip_serializing_if = "Option::is_none")]
         system: Option<String>,
         messages: serde_json::Value,
+        /// Maps to OpenAI's `reasoning_effort` parameter.
         #[serde(skip_serializing_if = "Option::is_none")]
         effort: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,8 +93,6 @@ pub enum HpToAgent {
         stop_reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reasoning_content: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        thinking_signature: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<dsx_types::UsageInfo>,
     },

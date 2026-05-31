@@ -69,6 +69,12 @@ pub struct AgentState {
 
     // ── KV cache prediction ──
     pub cache_analyzer: crate::cache_analyzer::CacheAnalyzer,
+
+    // ── Document context cache ──
+    /// Named context messages injected before conversation history in
+    /// `build_context()`. Key = label (used as `name` field), Value = content.
+    /// Insertion order is preserved for deterministic KV cache prefix.
+    pub context_messages: Vec<(String, String)>,
 }
 
 impl AgentState {
@@ -100,7 +106,7 @@ impl AgentState {
             tool_defs: Vec::new(),
             pending_ask_user: None,
             auto_mode,
-            current_task_phase: TaskPhase::Coding,
+            current_task_phase: TaskPhase::Plan,
             health: DsAgentsHealthPlatform::new(),
             files_written_this_turn: Vec::new(),
             turn_annotations: Vec::new(),
@@ -109,6 +115,7 @@ impl AgentState {
             max_tool_rounds,
             stream_cancelled: false,
             cache_analyzer: crate::cache_analyzer::CacheAnalyzer::new(),
+            context_messages: Vec::new(),
         };
 
         crate::tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
@@ -127,6 +134,25 @@ impl AgentState {
     /// in the system prompt tail by build_context().
     pub fn system_note(&mut self, tag: &str, msg: String) {
         self.turn_annotations.push(format!("[{}] {}", tag, msg));
+    }
+
+    // ── Document context cache ──
+
+    /// Insert or update a named context message. These are injected before
+    /// the conversation history in `build_context()` as `role: "user"` messages
+    /// with the `name` field set. Same label replaces previous content.
+    /// The content should be stable across turns for KV cache reuse.
+    pub fn push_context(&mut self, label: &str, content: &str) {
+        if let Some(entry) = self.context_messages.iter_mut().find(|(k, _)| k == label) {
+            entry.1 = content.to_string();
+        } else {
+            self.context_messages.push((label.to_string(), content.to_string()));
+        }
+    }
+
+    /// Remove a named context message by label.
+    pub fn remove_context(&mut self, label: &str) {
+        self.context_messages.retain(|(k, _)| k != label);
     }
 
     // ── Persist ──

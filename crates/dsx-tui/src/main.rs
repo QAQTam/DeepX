@@ -92,6 +92,7 @@ fn main() -> anyhow::Result<()> {
         }
         if app.should_quit { return Ok(()); }
         app.scroll_offset = 0;
+        app.status = app.setup.lang.t_chat_ready().to_string();
         match spawn_agent(app.resume_seed.as_deref()) {
             Ok((mut child, mut stdin, agent_rx, stdout_handle)) => {
                 let result = run_chat(terminal, &mut app, &mut stdin, &agent_rx,
@@ -102,7 +103,7 @@ fn main() -> anyhow::Result<()> {
                 result
             }
             Err(e) => {
-                app.status = format!("Failed to start agent: {e}");
+                app.status = format!("{}: {}", app.setup.lang.t_failed_agent(), e);
                 Ok(())
             }
         }
@@ -187,7 +188,8 @@ fn run_setup(
                         store.save(&pc);
                         app.screen = Screen::Chat;
                         app.status = format!(
-                            "Config saved to {}",
+                            "{} {}",
+                            app.setup.lang.t_config_saved(),
                             dsx_types::platform::config_path().display()
                         );
                         return Ok(());
@@ -310,7 +312,7 @@ fn run_chat(
 
             // Normal chat keys
             match (key.modifiers, key.code) {
-                (KeyModifiers::ALT, KeyCode::Char('m')) | (KeyModifiers::ALT, KeyCode::Char('M')) => {
+                (_, KeyCode::F(10)) => {
                     let menu = crate::app::MenuState::new(app);
                     run_menu(terminal, app, menu)?;
                     if let Some(auto_mode) = app.menu_auto_mode.take() {
@@ -325,7 +327,7 @@ fn run_chat(
                 | (_, KeyCode::F(3)) => return Ok(()),
                 (_, KeyCode::Esc) => {
                     send(stdin, &dsx_proto::Ui2Agent::Cancel);
-                    app.status = "Cancelled".into();
+                    app.status = app.setup.lang.t_chat_cancelled().to_string();
                 }
                 (_, KeyCode::Enter) => {
                     let text = app.input.drain(..).collect::<String>();
@@ -336,7 +338,7 @@ fn run_chat(
                             lines: vec![ratatui::text::Line::from(text.clone())],
                         });
                         app.input.clear();
-                        app.status = "Thinking...".into();
+                        app.status = app.setup.lang.t_chat_thinking().to_string();
                         send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
                     }
                 }
@@ -373,7 +375,7 @@ fn run_menu(
             if key.kind != KeyEventKind::Press { continue; }
 
             match (key.modifiers, key.code) {
-                (KeyModifiers::ALT, KeyCode::Char('m')) | (KeyModifiers::ALT, KeyCode::Char('M'))
+                (_, KeyCode::F(10))
                 | (_, KeyCode::Esc) => {
                     menu.go_back(app);
                     return Ok(());
@@ -411,10 +413,14 @@ fn run_menu(
                         menu.editing = false;
                         menu.edit_buf.clear();
                         menu.save_all();
-                    } else if item.editable && item.kind != crate::app::MenuItemKind::Action {
+                    } else if item.editable && item.kind == crate::app::MenuItemKind::Toggle {
                         menu.toggle(app);
                         menu.save_all();
+                    } else if item.editable && item.kind == crate::app::MenuItemKind::Value {
+                        menu.editing = true;
+                        menu.edit_buf.clear();
                     } else if item.kind == crate::app::MenuItemKind::Action {
+                        menu.toggle(app);
                         menu.save_all();
                     }
                 }

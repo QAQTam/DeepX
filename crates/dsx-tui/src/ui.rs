@@ -125,8 +125,8 @@ pub fn render_setup(frame: &mut Frame, app: &App) {
             ]));
             lines.push(Line::from(""));
             lines.push(Line::from(""));
-            let langs = [(Lang::En, "English", "Use English throughout the interface"),
-                         (Lang::Zh, "中文",   "界面和对话使用中文")];
+            let langs = [(Lang::En, l.t_setup_lang_en_name(), l.t_setup_lang_en_desc()),
+                         (Lang::Zh, l.t_setup_lang_zh_name(), l.t_setup_lang_zh_desc())];
             for &(lang, name, desc) in &langs {
                 let selected = app.setup.lang == lang;
                 let mark = if selected { "●" } else { "○" };
@@ -141,7 +141,7 @@ pub fn render_setup(frame: &mut Frame, app: &App) {
             }
             lines.push(Line::from(""));
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("  ↑↓ to change, Enter to confirm", Style::new().fg(DIM))));
+            lines.push(Line::from(Span::styled(l.t_setup_nav_hint(), Style::new().fg(DIM))));
         }
         1 => {
             let tag = l.t_api_key();
@@ -211,7 +211,7 @@ pub fn render_setup(frame: &mut Frame, app: &App) {
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(format!("{:>10}", app.setup.context_limit), Style::new().fg(Color::Yellow).bold()),
-                Span::raw("  tokens"),
+                Span::styled(l.t_setup_tokens_unit(), Style::new().fg(Color::Gray)),
             ]));
         }
         _ => {}
@@ -282,6 +282,7 @@ pub fn render_setup(frame: &mut Frame, app: &App) {
 
 pub fn render_sessions(frame: &mut Frame, app: &App) {
     let area = frame.area();
+    let l = app.setup.lang;
 
     let popup = centered_rect(70, (app.sessions.len() + 8).min(24).max(12) as u16, area);
     frame.render_widget(Clear, popup);
@@ -290,7 +291,7 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(ACCENT))
-        .title(" Sessions — Select or start new ")
+        .title(l.t_session_title())
         .style(Style::new().bg(Color::Rgb(18, 22, 26)));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -328,7 +329,7 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
             Span::raw("  "),
             Span::styled(ts, Style::new().fg(Color::Gray)),
             Span::raw("  "),
-            Span::styled(format!("msgs:{:<5}", s.message_count), Style::new().fg(DIM)),
+            Span::styled(format!("{}:{:<5}", l.t_session_msgs(), s.message_count), Style::new().fg(DIM)),
         ]));
         lines.push(Line::from(vec![
             Span::raw("     "),
@@ -346,18 +347,18 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
     }
     lines.push(Line::from(vec![
         Span::raw(format!("  {new_mark} ")),
-        Span::styled("+ New Session", new_style),
+        Span::styled(l.t_session_new(), new_style),
     ]));
 
     frame.render_widget(Paragraph::new(lines), list_area);
 
     let help = Line::from(vec![
         Span::styled(" ↑↓ ", Style::new().fg(Color::Black).bg(ACCENT)),
-        Span::raw(" select  "),
+        Span::raw(l.t_session_select_hint()),
         Span::styled(" Enter ", Style::new().fg(Color::Black).bg(Color::Green)),
-        Span::raw(" resume/new  "),
+        Span::raw(l.t_session_resume_hint()),
         Span::styled(" ^C ", Style::new().fg(Color::Black).bg(Color::Red)),
-        Span::raw(" quit"),
+        Span::raw(l.t_session_quit_hint()),
     ]);
     frame.render_widget(help, help_area);
 }
@@ -366,6 +367,7 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
 
 pub fn render_chat(frame: &mut Frame, app: &App) {
     let area = frame.area();
+    let l = app.setup.lang;
     let [header, body, input_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Fill(1),
@@ -379,17 +381,17 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     };
     let header_text = Line::from(vec![
         Span::raw("DeepX | "),
-        Span::styled(format!("Phase: {}", app.phase), Style::new().fg(Color::Cyan)),
+        Span::styled(format!("{}: {}", l.t_chat_phase(), app.phase), Style::new().fg(Color::Cyan)),
         Span::raw(" | "),
-        Span::styled(format!("Tokens: {}", app.session_tokens), Style::new().fg(Color::Yellow)),
+        Span::styled(format!("{}: {}", l.t_chat_tokens(), app.session_tokens), Style::new().fg(Color::Yellow)),
         Span::raw(" "),
         Span::styled(format!("({:.0}%)", if app.context_limit > 0 { app.session_tokens as f64 / app.context_limit as f64 * 100.0 } else { 0.0 }), Style::new().fg(Color::Gray)),
         if app.cache_hit > 0 || app.cache_miss > 0 {
             Span::raw(" ")
         } else { Span::raw("") },
-        Span::styled(format!("hit:{}", app.cache_hit), Style::new().fg(Color::Rgb(100, 200, 120))),
+        Span::styled(format!("{}:{}", l.t_chat_hit(), app.cache_hit), Style::new().fg(Color::Rgb(100, 200, 120))),
         Span::styled("/", Style::new().fg(DIM)),
-        Span::styled(format!("miss:{}", app.cache_miss), Style::new().fg(Color::Rgb(200, 150, 100))),
+        Span::styled(format!("{}:{}", l.t_chat_miss(), app.cache_miss), Style::new().fg(Color::Rgb(200, 150, 100))),
         if !app.balance.is_empty() {
             Span::raw(" | ")
         } else {
@@ -407,7 +409,7 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     }
     frame.render_widget(header_text, header);
 
-    let chat_block = Block::new().borders(Borders::ALL).title(" Chat ");
+    let chat_block = Block::new().borders(Borders::ALL).title(l.t_chat_title());
     let mut text_lines: Vec<Line> = Vec::new();
     for msg in &app.messages {
         match msg.role {
@@ -419,12 +421,12 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
             }
             ChatRole::User => {
                 text_lines.push(Line::from(vec![
-                    Span::styled("You> ", Style::new().fg(Color::Green).bold()),
+                    Span::styled(format!("{}> ", l.t_chat_you()), Style::new().fg(Color::Green).bold()),
                     Span::raw(&msg.content),
                 ]));
             }
             ChatRole::Thinking => {
-                let prefix = Span::styled("Think> ", Style::new().fg(Color::Rgb(200, 180, 100)).bold());
+                let prefix = Span::styled(format!("{}> ", l.t_chat_think()), Style::new().fg(Color::Rgb(200, 180, 100)).bold());
                 if msg.lines.is_empty() {
                     text_lines.push(Line::from(vec![prefix, Span::styled(
                         &msg.content, Style::new().fg(Color::Rgb(200, 180, 100)).italic(),
@@ -475,10 +477,20 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     }
 
     let content_height = body.height.saturating_sub(2) as usize;
-    let _body_width = body.width.saturating_sub(2) as usize;
-    // Use logical line count for scroll — simpler and more predictable with wrapping
-    let logical_lines = text_lines.len();
-    let max_scroll = logical_lines.saturating_sub(content_height);
+    let body_width = body.width.saturating_sub(2) as usize;
+
+    // Account for wrapping: count actual visual rows after line wrapping
+    let mut wrapped_lines = 0usize;
+    for line in &text_lines {
+        let line_w: usize = line.spans.iter()
+            .map(|s| s.content.width())
+            .sum();
+        let rows = if body_width > 0 {
+            (line_w.max(1) + body_width - 1) / body_width
+        } else { 1 };
+        wrapped_lines += rows.max(1);
+    }
+    let max_scroll = wrapped_lines.saturating_sub(content_height);
     let offset = if app.streaming { 0 } else { app.scroll_offset.min(max_scroll) };
     let scroll = max_scroll.saturating_sub(offset) as u16;
 
@@ -490,9 +502,9 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
 
     let input_block = Block::new()
         .borders(Borders::ALL)
-        .title(" Input (Enter: send, Esc: cancel, Ctrl-C: quit) ");
+        .title(l.t_chat_input_title());
     let input_text = if app.input.is_empty() {
-        Line::from(Span::styled("Type a message...", Style::new().fg(Color::DarkGray)))
+        Line::from(Span::styled(l.t_chat_input_placeholder(), Style::new().fg(Color::DarkGray)))
     } else {
         Line::from(Span::raw(&app.input))
     };
@@ -518,7 +530,7 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::new().fg(Color::Rgb(180, 150, 255)))
-            .title(" Debug (F12) ")
+            .title(l.t_debug_title())
             .style(Style::new().bg(Color::Rgb(18, 22, 30)));
         frame.render_widget(&dbg_block, dbg_rect);
 
@@ -527,26 +539,26 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         let stream_dot = if d.streaming { ("●", Color::Yellow) } else { ("○", Color::Gray) };
         let lines = vec![
             Line::from(vec![
-                Span::styled(format!(" HP: {} ", hp_dot.0), Style::new().fg(hp_dot.1)),
-                Span::styled(format!("Stream: {} ", stream_dot.0), Style::new().fg(stream_dot.1)),
+                Span::styled(format!(" {}: {} ", l.t_debug_hp(), hp_dot.0), Style::new().fg(hp_dot.1)),
+                Span::styled(format!("{}: {} ", l.t_debug_stream(), stream_dot.0), Style::new().fg(stream_dot.1)),
             ]),
             Line::from(vec![
-                Span::styled("Session: ", Style::new().fg(Color::Gray)),
+                Span::styled(format!("{}: ", l.t_debug_session()), Style::new().fg(Color::Gray)),
                 Span::styled(&d.session_seed, Style::new().fg(Color::Cyan)),
             ]),
             Line::from(vec![
-                Span::styled("Phase:  ", Style::new().fg(Color::Gray)),
+                Span::styled(format!("{}:  ", l.t_debug_phase()), Style::new().fg(Color::Gray)),
                 Span::styled(&d.current_phase, Style::new().fg(Color::White)),
             ]),
             Line::from(vec![
-                Span::styled("Context:", Style::new().fg(Color::Gray)),
+                Span::styled(format!("{}:", l.t_debug_context()), Style::new().fg(Color::Gray)),
                 Span::styled(format!(" {} / 1M", d.context_tokens), Style::new().fg(Color::Yellow)),
             ]),
             Line::from(vec![
-                Span::styled("Tools:  ", Style::new().fg(Color::Gray)),
-                Span::styled(format!("{} calls", d.tool_calls_total), Style::new().fg(Color::Cyan)),
+                Span::styled(format!("{}:  ", l.t_debug_tools()), Style::new().fg(Color::Gray)),
+                Span::styled(format!("{} {}", d.tool_calls_total, l.t_debug_calls()), Style::new().fg(Color::Cyan)),
                 if d.tool_failures > 0 {
-                    Span::styled(format!(" / {} fail", d.tool_failures), Style::new().fg(Color::Red))
+                    Span::styled(format!(" / {} {}", d.tool_failures, l.t_debug_fail()), Style::new().fg(Color::Red))
                 } else {
                     Span::raw("")
                 },
@@ -561,6 +573,7 @@ pub fn render_ask(frame: &mut Frame, app: &App) {
         Some(a) => a,
         None => return,
     };
+    let l = app.setup.lang;
     let area = frame.area();
     let h = (ask.options.len() + 5).min(20) as u16;
     let popup = centered_rect(60, h, area);
@@ -570,7 +583,7 @@ pub fn render_ask(frame: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(Color::Rgb(255, 180, 100)))
-        .title(" Ask ")
+        .title(l.t_ask_title())
         .style(Style::new().bg(Color::Rgb(18, 22, 26)));
     let inner = block.inner(popup);
     frame.render_widget(&block, popup);
@@ -592,13 +605,13 @@ pub fn render_ask(frame: &mut Frame, app: &App) {
             };
             lines.push(Line::from(vec![
                 Span::raw(format!("  {mark} ")),
-                Span::styled("Other: ", Style::new().fg(Color::Gray)),
+                Span::styled(format!("{}: ", l.t_ask_other()), Style::new().fg(Color::Gray)),
                 Span::styled(display, Style::new().fg(Color::Yellow).bold()),
             ]));
         } else if opt.is_empty() {
             lines.push(Line::from(vec![
                 Span::raw(format!("  {mark} ")),
-                Span::styled("Other (______)", Style::new().fg(Color::Gray)),
+                Span::styled(l.t_ask_other_placeholder(), Style::new().fg(Color::Gray)),
             ]));
         } else {
             lines.push(Line::from(vec![
@@ -610,7 +623,7 @@ pub fn render_ask(frame: &mut Frame, app: &App) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " ↑↓ select  Enter confirm  Esc cancel",
+        l.t_ask_help(),
         Style::new().fg(DIM),
     )));
 
@@ -636,20 +649,23 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(ACCENT))
-        .title(" Settings Menu (Alt+M) ")
+        .title(menu.lang.t_menu_title())
         .style(Style::new().bg(Color::Rgb(18, 22, 26)));
     frame.render_widget(title_block, Rect::new(area.x, area.y, area.width, 3));
 
+    let nav = if menu.lang.as_str() == "zh" { "↑↓ 导航" } else { "↑↓ navigate" };
+    let toggle_hint = if menu.lang.as_str() == "zh" { "Enter 切换/编辑" } else { "Enter toggle/edit" };
+    let back_hint = if menu.lang.as_str() == "zh" { "Esc 返回" } else { "Esc back" };
     let title_lines = vec![
         Line::from(vec![
             Span::raw("  "),
             Span::styled("Menu", Style::new().fg(ACCENT).bold()),
             Span::raw("  |  "),
-            Span::styled("↑↓ navigate", Style::new().fg(DIM)),
+            Span::styled(nav, Style::new().fg(DIM)),
             Span::raw("  "),
-            Span::styled("Enter toggle", Style::new().fg(DIM)),
+            Span::styled(toggle_hint, Style::new().fg(DIM)),
             Span::raw("  "),
-            Span::styled("Esc back", Style::new().fg(DIM)),
+            Span::styled(back_hint, Style::new().fg(DIM)),
         ]),
     ];
     frame.render_widget(Paragraph::new(title_lines), Rect::new(area.x + 2, area.y + 1, area.width - 4, 1));
@@ -758,7 +774,7 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
     }
 
     let footer = Line::from(vec![
-        Span::styled(" Alt+M ", Style::new().fg(Color::Black).bg(ACCENT)),
+        Span::styled(" F10 ", Style::new().fg(Color::Black).bg(ACCENT)),
         Span::raw(" close  "),
         Span::styled(" Enter ", Style::new().fg(Color::Black).bg(Color::Green)),
         Span::raw(" toggle/edit  "),

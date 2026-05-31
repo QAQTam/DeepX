@@ -125,16 +125,16 @@ impl SetupState {
             2 => {
                 self.model = self.model.trim().to_string();
                 if self.model.is_empty() {
-                    self.error = "Model name is required".into();
+                    self.error = self.lang.t_setup_model_required().to_string();
                 }
             }
             3 => {
                 if let Ok(v) = self.context_limit.parse::<u32>() {
                     if v < 1024 {
-                        self.error = "Context limit must be at least 1024".into();
+                        self.error = self.lang.t_setup_context_min().to_string();
                     }
                 } else {
-                    self.error = "Invalid number".into();
+                    self.error = self.lang.t_setup_invalid_number().to_string();
                 }
             }
             _ => {}
@@ -203,6 +203,7 @@ impl App {
     }
 
     fn push_messages_from_file(&mut self, file: &SessionFile) {
+        let mut pending_tool_use: Option<(String, String)> = None;
         for msg in &file.messages {
             if msg.role == "system" { continue; }
             for block in &msg.content {
@@ -211,20 +212,48 @@ impl App {
                         let role = if msg.role == "user" { ChatRole::User } else { ChatRole::Assistant };
                         self.push_msg(role, text);
                     }
-                    ContentBlock::Thinking { thinking, .. } => {
-                        self.push_msg(ChatRole::Thinking, thinking);
+                    ContentBlock::Reasoning { reasoning, .. } => {
+                        self.push_msg(ChatRole::Thinking, reasoning);
                     }
                     ContentBlock::ToolUse { name, input, .. } => {
                         let args: String = input.as_str().unwrap_or("").into();
-                        let short_args: String = args.chars().take(60).collect();
-                        self.push_msg(ChatRole::Tool, &format!("{}: {}", name, short_args));
+                        pending_tool_use = Some((name.clone(), args));
                     }
                     ContentBlock::ToolResult { content, .. } => {
-                        let short: String = content.chars().take(200).collect();
-                        self.push_msg(ChatRole::Tool, &format!("result: {}", short));
+                        let lang = self.setup.lang;
+                        if let Some((name, args)) = pending_tool_use.take() {
+                            let label = tool_status(lang, &name, Some(&args));
+                            let styled_lines = build_tool_lines(lang, &name, content, Some(&args));
+                            let char_count = content.chars().count();
+                            let trunc_note = if char_count > 200 {
+                                lang.t_tool_truncated(char_count - 200)
+                            } else {
+                                String::new()
+                            };
+                            let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+                                Span::styled(label.clone(), Style::new().fg(Color::Cyan).bold())
+                            ])];
+                            lines.extend(styled_lines);
+                            if !trunc_note.is_empty() {
+                                lines.push(Line::from(Span::styled(trunc_note, Style::new().fg(Color::Gray))));
+                            }
+                            self.messages.push(ChatMessage {
+                                role: ChatRole::Tool,
+                                content: label,
+                                lines,
+                            });
+                        } else {
+                            let short: String = content.chars().take(200).collect();
+                            self.push_msg(ChatRole::Tool, &short);
+                        }
                     }
                 }
             }
+        }
+        // Flush any orphaned ToolUse
+        if let Some((name, args)) = pending_tool_use.take() {
+            let label = tool_status(self.setup.lang, &name, Some(&args));
+            self.push_msg(ChatRole::Tool, &label);
         }
     }
 }
@@ -263,7 +292,7 @@ impl App {
         PersistentConfig {
             api_key: Some(self.api_key.trim().to_string()),
             model: Some(self.model.trim().to_string()),
-            base_url: Some("https://api.deepseek.com/anthropic".into()),
+            base_url: Some("https://api.deepseek.com".into()),
             context_limit: Some(self.context_limit.parse().unwrap_or(1_000_000)),
             auto_mode: Some(true),
             ..Default::default()
@@ -354,6 +383,9 @@ pub struct MenuState {
     pub editing: bool,
     pub edit_buf: String,
     pub status: String,
+    pub phase_configs: std::collections::HashMap<String, dsx_types::PhasePerfConfig>,
+    pub profiles: std::collections::HashMap<String, dsx_types::ProfileConfig>,
+    pub lang: crate::i18n::Lang,
 }
 
 #[derive(Clone)]
@@ -362,6 +394,7 @@ pub struct MenuItem {
     pub label: String,
     pub value: String,
     pub editable: bool,
+    pub key: String,
 }
 
 #[derive(Clone, PartialEq)]
@@ -377,11 +410,13 @@ impl MenuState {
     pub fn new(app: &App) -> Self {
         let store = ConfigStore::default_location();
         let config = store.load();
+        let l = app.setup.lang;
+
         let api_key = store.load_api_key().unwrap_or_default();
         let api_key_masked = if api_key.len() > 3 {
             format!("sk-{}", "●".repeat(api_key.len().saturating_sub(3).min(20)))
         } else if api_key.is_empty() {
-            "(not set)".into()
+            if l.as_str() == "zh" { "(未设置)" } else { "(not set)" }.into()
         } else {
             api_key.clone()
         };
@@ -391,7 +426,7 @@ impl MenuState {
         let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16000);
         let effort = config.as_ref().and_then(|c| c.effort.clone()).unwrap_or_else(|| "high".into());
         let auto_mode = config.as_ref().and_then(|c| c.auto_mode).unwrap_or(true);
-        let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| "https://api.deepseek.com/anthropic".into());
+        let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| "https://api.deepseek.com".into());
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
         let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
         let phase_configs = config.as_ref()
@@ -399,102 +434,87 @@ impl MenuState {
             .unwrap_or_else(dsx_types::default_phase_configs);
 
         let mut items: Vec<MenuItem> = Vec::new();
+        let mk = |kind, key: &str, label: String, value: &str, editable: bool| MenuItem {
+            kind, key: key.into(), label, value: value.into(), editable,
+        };
 
-        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Agent Behavior ──".into(), value: String::new(), editable: false });
-        items.push(MenuItem {
-            kind: MenuItemKind::Toggle,
-            label: "Auto Mode".into(),
-            value: if auto_mode { "ON".into() } else { "OFF".into() },
-            editable: true,
-        });
-        items.push(MenuItem {
-            kind: MenuItemKind::Value,
-            label: "Effort".into(),
-            value: effort,
-            editable: true,
-        });
-        items.push(MenuItem {
-            kind: MenuItemKind::Value,
-            label: "Max Tool Rounds".into(),
-            value: "10".into(),
-            editable: false,
-        });
+        // ── Agent Behavior ──
+        items.push(mk(MenuItemKind::Section, "", l.t_menu_agent_behavior().into(), "", false));
+        items.push(mk(MenuItemKind::Toggle, "auto_mode", l.t_menu_auto_mode().into(),
+            if auto_mode { "ON" } else { "OFF" }, true));
+        items.push(mk(MenuItemKind::Value, "effort", l.t_menu_reasoning_effort().into(),
+            &effort, true));
+        items.push(mk(MenuItemKind::Value, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
+            "10", false));
 
-        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Model ──".into(), value: String::new(), editable: false });
-        items.push(MenuItem {
-            kind: MenuItemKind::Value,
-            label: "Model".into(),
-            value: model,
-            editable: false,
-        });
-        items.push(MenuItem {
-            kind: MenuItemKind::Value,
-            label: "Max Tokens".into(),
-            value: max_tokens.to_string(),
-            editable: false,
-        });
-        items.push(MenuItem {
-            kind: MenuItemKind::Value,
-            label: "Context Limit".into(),
-            value: context_limit.to_string(),
-            editable: false,
-        });
+        // ── Model ──
+        items.push(mk(MenuItemKind::Section, "", l.t_menu_model_section().into(), "", false));
+        items.push(mk(MenuItemKind::Value, "model", l.t_menu_model().into(), &model, false));
+        items.push(mk(MenuItemKind::Value, "max_tokens", l.t_menu_max_tokens().into(),
+            &max_tokens.to_string(), false));
+        items.push(mk(MenuItemKind::Value, "context_limit", l.t_menu_context_limit().into(),
+            &context_limit.to_string(), false));
 
-        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Profiles ──".into(), value: String::new(), editable: false });
+        // ── Profiles ──
+        items.push(mk(MenuItemKind::Section, "", l.t_menu_profiles().into(), "", false));
         let mut profile_names: Vec<String> = profiles.keys().cloned().collect();
         profile_names.sort();
         for name in &profile_names {
             let is_active = name == &active_profile;
             let profile = &profiles[name];
+            let active_tag = if is_active {
+                if l.as_str() == "zh" { "● 激活" } else { "● active" }
+            } else { "" };
             let desc = format!("{} / {}t / {} / {}",
                 profile.model, profile.max_tokens,
-                profile.effort.as_deref().unwrap_or("high"),
-                if is_active { "● active" } else { "" });
-            items.push(MenuItem {
-                kind: MenuItemKind::Action,
-                label: if is_active { format!("▶ {}", name) } else { format!("  {}", name) },
-                value: desc,
-                editable: true,
-            });
+                profile.effort.as_deref().unwrap_or("high"), active_tag);
+            items.push(mk(MenuItemKind::Action, "profile",
+                if is_active { format!("▶ {}", name) } else { format!("  {}", name) },
+                &desc, true));
         }
 
-        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Phase Configs ──".into(), value: String::new(), editable: false });
+        // ── Phase Configs (editable individual fields) ──
+        items.push(mk(MenuItemKind::Section, "", l.t_menu_phase_configs().into(), "", false));
         let phase_order = ["plan", "coding", "debug"];
         for phase_name in &phase_order {
-            if let Some(pc) = phase_configs.get(*phase_name) {
-                items.push(MenuItem {
-                    kind: MenuItemKind::Info,
-                    label: format!("  {:<8}", phase_name),
-                    value: format!("{} / {}t / {} / {}",
-                        pc.model, pc.max_tokens,
-                        pc.effort.as_deref().unwrap_or("high"),
-                        if pc.context_limit >= 1_000_000 { format!("{}M", pc.context_limit / 1_000_000) } else { pc.context_limit.to_string() }),
-                    editable: false,
+            let pc = phase_configs.get(*phase_name)
+                .cloned()
+                .unwrap_or_else(|| dsx_types::PhasePerfConfig {
+                    model: "deepseek-v4-flash".into(),
+                    context_limit: 1_000_000,
+                    max_tokens: 8192,
+                    effort: Some("high".into()),
                 });
-            }
+            let phase_label = l.t_menu_phase(phase_name);
+            items.push(mk(MenuItemKind::Value,
+                &format!("phase:{}:model", phase_name),
+                format!("  {} / {}", phase_label, l.t_menu_model()),
+                &pc.model, true));
+            items.push(mk(MenuItemKind::Value,
+                &format!("phase:{}:max_tokens", phase_name),
+                format!("  {} / {}", phase_label, l.t_menu_max_tokens()),
+                &pc.max_tokens.to_string(), true));
+            items.push(mk(MenuItemKind::Toggle,
+                &format!("phase:{}:effort", phase_name),
+                format!("  {} / {}", phase_label, l.t_menu_reasoning_effort()),
+                pc.effort.as_deref().unwrap_or("high"), true));
+            items.push(mk(MenuItemKind::Value,
+                &format!("phase:{}:context_limit", phase_name),
+                format!("  {} / {}", phase_label, l.t_menu_context_limit()),
+                &pc.context_limit.to_string(), true));
         }
 
-        items.push(MenuItem { kind: MenuItemKind::Section, label: "── API ──".into(), value: String::new(), editable: false });
-        items.push(MenuItem {
-            kind: MenuItemKind::Info,
-            label: "API Key".into(),
-            value: api_key_masked,
-            editable: false,
-        });
-        items.push(MenuItem {
-            kind: MenuItemKind::Info,
-            label: "Base URL".into(),
-            value: base_url,
-            editable: false,
-        });
+        // ── API ──
+        items.push(mk(MenuItemKind::Section, "", l.t_menu_api().into(), "", false));
+        items.push(mk(MenuItemKind::Info, "api_key", l.t_menu_api_key().into(),
+            &api_key_masked, false));
+        items.push(mk(MenuItemKind::Info, "base_url", l.t_menu_base_url().into(),
+            &base_url, false));
 
-        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Interface ──".into(), value: String::new(), editable: false });
-        items.push(MenuItem {
-            kind: MenuItemKind::Toggle,
-            label: "Language".into(),
-            value: app.setup.lang.as_str().to_string(),
-            editable: true,
-        });
+        // ── Interface ──
+        items.push(mk(MenuItemKind::Section, "", l.t_menu_interface().into(), "", false));
+        items.push(mk(MenuItemKind::Toggle, "language", l.t_menu_language().into(),
+            l.as_str(), true));
 
         Self {
             selected: 1,
@@ -502,6 +522,9 @@ impl MenuState {
             edit_buf: String::new(),
             status: String::new(),
             items,
+            phase_configs,
+            profiles,
+            lang: l,
         }
     }
 
@@ -512,26 +535,56 @@ impl MenuState {
         };
         if !item.editable { return; }
 
-        match item.label.as_str() {
-            "Auto Mode" => {
+        match item.key.as_str() {
+            "auto_mode" => {
                 let new = item.value == "OFF";
                 item.value = if new { "ON".into() } else { "OFF".into() };
-                // Will be sent to agent when returning to chat
             }
-            "Effort" => {
+            "effort" | _ if item.key.starts_with("phase:") && item.key.ends_with(":effort") => {
                 item.value = if item.value == "high" { "max".into() } else { "high".into() };
             }
-            "Language" => {
+            "language" => {
                 app.setup.toggle_lang();
                 item.value = app.setup.lang.as_str().to_string();
+                // Rebuild items with new lang
+                *self = Self::new(app);
+                self.status = if app.setup.lang.as_str() == "zh" {
+                    "语言已切换为中文".into()
+                } else {
+                    "Language switched to English".into()
+                };
             }
             _ => {
-                // Profile item: switch to that profile
-                let name = item.label.trim_start_matches("▶ ").trim_start_matches("  ").to_string();
-                if item.kind == MenuItemKind::Action && !name.is_empty() {
-                    self.activate_profile(&name);
+                if item.key == "profile" {
+                    let name = item.label.trim_start_matches("▶ ").trim_start_matches("  ").to_string();
+                    if item.kind == MenuItemKind::Action && !name.is_empty() {
+                        self.activate_profile(&name);
+                    }
                 }
             }
+        }
+    }
+
+    /// Sync a phase config field from items back to self.phase_configs
+    fn sync_phase_field(&mut self, key: &str, value: &str) {
+        // key format: "phase:plan:model", "phase:coding:effort", etc.
+        let parts: Vec<&str> = key.splitn(3, ':').collect();
+        if parts.len() != 3 || parts[0] != "phase" { return; }
+        let phase_name = parts[1];
+        let field = parts[2];
+        let pc = self.phase_configs.entry(phase_name.to_string())
+            .or_insert_with(|| dsx_types::PhasePerfConfig {
+                model: "deepseek-v4-flash".into(),
+                context_limit: 1_000_000,
+                max_tokens: 8192,
+                effort: Some("high".into()),
+            });
+        match field {
+            "model" => pc.model = value.to_string(),
+            "max_tokens" => { if let Ok(v) = value.parse() { pc.max_tokens = v; } }
+            "effort" => pc.effort = Some(value.to_string()),
+            "context_limit" => { if let Ok(v) = value.parse() { pc.context_limit = v; } }
+            _ => {}
         }
     }
 
@@ -540,10 +593,10 @@ impl MenuState {
         let mut config = store.load().unwrap_or_default();
         config.active_profile = Some(name.to_string());
         store.save(&config);
-        self.status = format!("Switched to profile '{}' (saved, restart to apply)", name);
+        self.status = self.lang.t_menu_profile_switched(name);
 
         for item in &mut self.items {
-            if item.kind == MenuItemKind::Action {
+            if item.key == "profile" {
                 let n = item.label.trim_start_matches("▶ ").trim_start_matches("  ").to_string();
                 let is_active = n == name;
                 item.label = if is_active { format!("▶ {}", n) } else { format!("  {}", n) };
@@ -555,32 +608,45 @@ impl MenuState {
         let store = ConfigStore::default_location();
         let mut config = store.load().unwrap_or_default();
 
+        // Collect phase items first to avoid borrow conflicts
+        let phase_updates: Vec<(String, String)> = self.items.iter()
+            .filter(|i| i.key.starts_with("phase:"))
+            .map(|i| (i.key.clone(), i.value.clone()))
+            .collect();
+
         for item in &self.items {
-            match item.label.as_str() {
-                "Auto Mode" => { config.auto_mode = Some(item.value == "ON"); }
-                "Effort" => { config.effort = Some(item.value.clone()); }
-                "Model" => { config.model = Some(item.value.clone()); }
-                "Context Limit" => {
+            match item.key.as_str() {
+                "auto_mode" => { config.auto_mode = Some(item.value == "ON"); }
+                "effort" => { config.effort = Some(item.value.clone()); }
+                "model" => { config.model = Some(item.value.clone()); }
+                "context_limit" => {
                     if let Ok(v) = item.value.parse::<u32>() { config.context_limit = Some(v); }
                 }
-                "Max Tokens" => {
+                "max_tokens" => {
                     if let Ok(v) = item.value.parse::<u32>() { config.max_tokens = Some(v); }
                 }
                 _ => {}
             }
         }
 
+        for (key, value) in &phase_updates {
+            self.sync_phase_field(key, value);
+        }
+
+        config.phase_configs = Some(self.phase_configs.clone());
+        config.profiles = Some(self.profiles.clone());
+
         if store.save(&config) {
-            self.status = "Config saved.".into();
+            self.status = self.lang.t_menu_saved().into();
         } else {
-            self.status = "Failed to save config.".into();
+            self.status = self.lang.t_menu_save_failed().into();
         }
     }
 
     pub fn go_back(mut self, app: &mut App) {
         self.save_all();
         let auto_mode = self.items.iter()
-            .find(|i| i.label == "Auto Mode")
+            .find(|i| i.key == "auto_mode")
             .map_or(true, |i| i.value == "ON");
         app.menu_auto_mode = Some(auto_mode);
         app.screen = Screen::Chat;
@@ -594,7 +660,7 @@ impl App {
             setup: SetupState::new(),
             messages: Vec::new(),
             input: String::new(),
-            status: String::from("Ready"),
+            status: String::new(), // will be set after setup knows lang
             phase: String::from("Coding"),
             tokens: 0,
             session_tokens: 0,
@@ -640,12 +706,11 @@ impl App {
 
         if self.cache_rates.len() >= 3 {
             let avg: f64 = self.cache_rates.iter().sum::<f64>() / self.cache_rates.len() as f64;
-            // All recent rounds below 30% → warn
             let all_low = self.cache_rates.iter().all(|&r| r < 0.30);
             self.cache_warning = if all_low {
-                "⚠ 缓存命中持续过低，建议暂停并排查".into()
+                self.setup.lang.t_cache_warn_low().into()
             } else if avg < 0.50 {
-                "缓存命中偏低".into()
+                self.setup.lang.t_cache_warn_moderate().into()
             } else {
                 String::new()
             };
@@ -709,11 +774,12 @@ impl App {
                 self.debug.tool_calls_total += 1;
                 if !success { self.debug.tool_failures += 1; }
                 self.switch_block(BlockType::Tool);
-                let label = tool_label(&name, &content, args.as_deref());
-                let styled_lines = build_tool_lines(&name, &content, args.as_deref());
+                let lang = self.setup.lang;
+                let label = tool_status(lang, &name, args.as_deref());
+                let styled_lines = build_tool_lines(lang, &name, &content, args.as_deref());
                 let char_count = content.chars().count();
                 let trunc_note = if char_count > 200 {
-                    format!("  ... (+{} chars)", char_count - 200)
+                    lang.t_tool_truncated(char_count - 200)
                 } else {
                     String::new()
                 };
@@ -722,7 +788,7 @@ impl App {
                 ])];
                 lines.extend(styled_lines);
                 if !trunc_note.is_empty() {
-                    lines.push(Line::from(Span::styled(trunc_note.clone(), Style::new().fg(Color::Gray))));
+                    lines.push(Line::from(Span::styled(trunc_note, Style::new().fg(Color::Gray))));
                 }
                 self.messages.push(ChatMessage {
                     role: ChatRole::Tool,
@@ -749,32 +815,32 @@ impl App {
                     self.update_cache(u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens);
                 }
                 self.context_limit = context_limit;
-                self.status = "Ready".into();
+                self.status = self.setup.lang.t_chat_ready().to_string();
                 self.streaming = false;
             }
             Agent2Ui::Error { message } => {
-                self.push_msg(ChatRole::Status, &format!("Error: {}", message));
-                self.status = format!("Error: {}", message);
+                let status_text = format!("{}: {}", self.setup.lang.t_chat_error(), message);
+                self.push_msg(ChatRole::Status, &status_text);
+                self.status = status_text;
             }
             Agent2Ui::PhaseChanged { phase } => {
                 self.phase = phase.clone();
                 self.debug.current_phase = phase;
             }
             Agent2Ui::Done => {
-                self.status = "Ready".into();
+                self.status = self.setup.lang.t_chat_ready().to_string();
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.block = BlockType::None;
             }
             Agent2Ui::Cancelled => {
-                self.status = "Cancelled".into();
+                self.status = self.setup.lang.t_chat_cancelled().to_string();
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.block = BlockType::None;
             }
             Agent2Ui::SessionRestored { seed, message_count, tokens_used, .. } => {
-                self.status = format!("Session {} restored ({} msgs, {} tokens)",
-                    &seed[..8.min(seed.len())], message_count, tokens_used);
+                self.status = self.setup.lang.t_session_restored(&seed, message_count, tokens_used);
                 self.debug.session_seed = seed.clone();
                 self.debug.context_tokens = tokens_used;
                 self.session_tokens = tokens_used as u64;
@@ -811,10 +877,40 @@ impl App {
     }
 }
 
-fn build_tool_lines(name: &str, content: &str, args: Option<&str>) -> Vec<Line<'static>> {
+fn extract_tool_target(_name: &str, args: Option<&str>) -> Option<String> {
+    args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok())
+        .and_then(|v| {
+            // Prefer "path" or "file" for file operations
+            v.get("path").or_else(|| v.get("file"))
+                .and_then(|p| p.as_str())
+                .map(String::from)
+                // For search tools, use "pattern"
+                .or_else(|| v.get("pattern").and_then(|p| p.as_str()).map(String::from))
+                // For bash, use "command"
+                .or_else(|| v.get("command").and_then(|c| c.as_str()).map(String::from))
+        })
+}
+
+fn tool_status(lang: crate::i18n::Lang, name: &str, args: Option<&str>) -> String {
+    let target = extract_tool_target(name, args);
+    let label = match name {
+        "explore" => lang.t_tool_exploring(),
+        "read_file" => lang.t_tool_reading(),
+        "write_file" | "edit_file" | "edit_file_diff" => lang.t_tool_writing(),
+        "glob" | "grep" => lang.t_tool_searching(),
+        "bash" | "run" => lang.t_tool_executing(),
+        _ => lang.t_tool_running(),
+    };
+    match target {
+        Some(t) => format!("{}: {}", label, t),
+        None => label.to_string(),
+    }
+}
+
+fn build_tool_lines(lang: crate::i18n::Lang, name: &str, content: &str, args: Option<&str>) -> Vec<Line<'static>> {
+    let json = args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()).unwrap_or_default();
     match name {
         "read_file" => {
-            let json = args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()).unwrap_or_default();
             let start = json.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
             let end = json.get("end_line").and_then(|v| v.as_u64());
             let max_lines = 40usize;
@@ -831,7 +927,7 @@ fn build_tool_lines(name: &str, content: &str, args: Option<&str>) -> Vec<Line<'
             if let Some(e) = end {
                 if (e as usize).saturating_sub(start) >= max_lines {
                     out.push(Line::from(Span::styled(
-                        format!("  ... {} lines total (showing first {max_lines})", total_lines),
+                        lang.t_tool_lines_total(total_lines, max_lines),
                         Style::new().fg(Color::Gray),
                     )));
                 }
@@ -839,7 +935,6 @@ fn build_tool_lines(name: &str, content: &str, args: Option<&str>) -> Vec<Line<'
             out
         }
         "edit_file" | "edit_file_diff" => {
-            let json = args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()).unwrap_or_default();
             let old_str = json.get("old_string").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let new_str = json.get("new_string").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let old_arr = json.get("old_lines").and_then(|v| v.as_array())
@@ -880,71 +975,5 @@ fn build_tool_lines(name: &str, content: &str, args: Option<&str>) -> Vec<Line<'
             out
         }
         _ => vec![]
-    }
-}
-
-fn tool_label(name: &str, content: &str, args: Option<&str>) -> String {
-    let path = args.and_then(|a| {
-        serde_json::from_str::<serde_json::Value>(a).ok()
-            .and_then(|v| v.get("path").or_else(|| v.get("file"))
-                .and_then(|p| p.as_str())
-                .map(String::from))
-    });
-
-    let first_line = content.lines().next().unwrap_or("");
-
-    match name {
-        "explore" => {
-            if let Some(ref p) = path {
-                format!("explore: {}", p)
-            } else if let Some(p) = first_line.strip_prefix("[PROJECT_MAP]path: ")
-                .or_else(|| first_line.strip_prefix("[DIR] "))
-            {
-                let short = p.split(" markers:").next().unwrap_or(p);
-                format!("explore: {}", short.trim())
-            } else {
-                "explore".to_string()
-            }
-        }
-        "read_file" => {
-            if let Some(ref p) = path {
-                format!("read_file: {}", p)
-            } else {
-                format!("read_file: {} chars", content.chars().count())
-            }
-        }
-        "write_file" | "edit_file" => {
-            if let Some(ref p) = path {
-                format!("{}: {}", name, p)
-            } else {
-                format!("{}: {} chars written", name, content.chars().count())
-            }
-        }
-        "glob" | "grep" => {
-            if let Some(ref p) = path.or_else(|| {
-                args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()
-                    .and_then(|v| v.get("pattern").and_then(|p| p.as_str()).map(String::from)))
-            }) {
-                format!("{}: {}", name, p)
-            } else {
-                let short: String = first_line.chars().take(60).collect();
-                format!("{}: {}", name, short)
-            }
-        }
-        "bash" | "run" => {
-            if let Some(ref command) = path {
-                format!("{}: {}", name, command)
-            } else {
-                let short: String = first_line.chars().take(80).collect();
-                format!("{}: {}", name, short)
-            }
-        }
-        _ => {
-            if let Some(ref p) = path {
-                format!("{}: {}", name, p)
-            } else {
-                format!("{}: {} chars", name, content.chars().count())
-            }
-        }
     }
 }

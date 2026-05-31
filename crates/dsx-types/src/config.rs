@@ -70,7 +70,7 @@ pub struct ProfileConfig {
     pub base_url: String,
 }
 
-fn default_base_url() -> String { "https://api.deepseek.com/anthropic".into() }
+fn default_base_url() -> String { "https://api.deepseek.com".into() }
 
 // ── ConfigStore: unified config I/O with atomic writes ──
 

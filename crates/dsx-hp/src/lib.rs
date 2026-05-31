@@ -13,6 +13,6 @@ pub mod registry;
 
 pub mod liveness;
 
-// ── Anthropic native API client ──
+// ── OpenAI native API client ──
 
-pub mod anthropic_api;
+pub mod openai_api;

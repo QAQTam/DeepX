@@ -112,7 +112,7 @@ impl Turn {
 /// The canonical message container.
 ///
 /// All message mutations go through this assembler. It is the single source of
-/// truth for message state and the only path to produce Anthropic-format output.
+/// truth for message state and the only path to produce context for the API.
 #[derive(Debug, Clone)]
 pub struct ContextAssembler {
     system_messages: Vec<Message>,
@@ -461,40 +461,65 @@ impl ContextAssembler {
 /// # Cache-friendly design for DeepSeek KV cache
 ///
 /// DeepSeek caches via exact-match prefix detection. To maximise reuse,
-/// the system prompt contains ONLY stable content. Dynamic per-round
-/// content (annotations) is appended to the LAST user message
-/// so it sits at the very end of the combined prefix and never shifts
-/// the offset of history messages.
+/// the system prompt is kept completely static (no dynamic content).
+/// Phase-specific content is injected as a separate `role: "system"` message
+/// at the front of the messages array — it changes per phase but sits
+/// after the stable system prompt, so the system prefix is always cached.
 ///
 /// ```
-/// System prompt (stable — fully cached):
+/// System prompt (static — always fully cached):
 ///   1. Base prompt          ← static
 ///   2. Tool definitions     ← stable per session
-///   3. Phase prompt         ← stable per phase
-///   Static reminder         ← stable
 ///
 /// Messages (history cached, only tail misses):
+///   Phase message           ← varies per phase (cache miss on phase change)
 ///   Conversation history    ← stable prefix (cached)
-///   Last user message      ← appended with dynamic annotations (uncached suffix)
+///   Last user message       ← appended with dynamic annotations (uncached suffix)
 /// ```
 pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBreakdown) {
+
+    // ── Phase sync: pick up phase changes from dsx_tools (set by commit tool) ──
+    let tool_phase = dsx_tools::current_phase();
+    let task_phase = match tool_phase {
+        dsx_tools::ToolPhase::Plan => dsx_types::TaskPhase::Plan,
+        dsx_tools::ToolPhase::Coding => dsx_types::TaskPhase::Coding,
+        dsx_tools::ToolPhase::Debug => dsx_types::TaskPhase::Debug,
+    };
+    if task_phase != state.current_task_phase {
+        state.current_task_phase = task_phase;
+        let level = dsx_types::DebugLevel::Medium;
+        crate::runner::lifecycle::apply_phase_config(state, task_phase, level);
+    }
 
     let base_prompt = crate::config::system_prompt();
     let base_tokens = tokenizer::count_tokens(&base_prompt);
 
-    // === System prompt: STABLE layers only (identical across consecutive requests) ===
-    let mut system = base_prompt;
+    // === System prompt: COMPLETELY static (identical across ALL requests) ===
+    let system = base_prompt;
 
-    // Layer 2: Phase prompt (stable per phase)
+    // === Messages: conversation from ctx ===
+    let mut messages = state.ctx.build(state.config.context_limit);
+
+    // Layer 2: Phase prompt injected as system message (after static system, before history)
+    // This varies per phase but sits after the stable system prefix, so system stays cached.
     let phase = crate::router::read_phase();
     let phase_tokens = if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
-        system.push_str("\n\n");
-        system.push_str(suffix);
+        messages.insert(0, Message::system(suffix));
         tokenizer::count_tokens(suffix)
     } else { 0 };
 
-    // === Messages: conversation from ctx, dynamic content appended to LAST user message ===
-    let mut messages = state.ctx.build(state.config.context_limit);
+    // Layer 3: Named context messages (document cache, code snippets, etc.)
+    // Injected after phase message, before conversation history.
+    // Stable content per label → KV cache prefix reuse across turns.
+    let mut ctx_insert_pos = if phase_tokens > 0 { 1 } else { 0 };
+    for (label, content) in &state.context_messages {
+        messages.insert(ctx_insert_pos, Message {
+            role: "user".into(),
+            name: Some(label.clone()),
+            content: vec![dsx_types::ContentBlock::text(content)],
+        });
+        ctx_insert_pos += 1;
+    }
 
     // Turn annotations → appended to last user message (dynamic, per round)
     let mut dyn_suffix = String::new();
@@ -527,7 +552,7 @@ pub fn build_context(state: &mut AgentState) -> (String, Vec<Message>, TokenBrea
 
     // === Token breakdown ===
     let mut bd = TokenBreakdown::default();
-    bd.system = base_tokens + phase_tokens;
+    bd.system = base_tokens;
     bd.episodic = tokenizer::estimate_messages_tokens(&messages);
     bd.total = bd.system + bd.episodic;
 

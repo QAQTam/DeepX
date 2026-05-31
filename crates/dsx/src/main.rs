@@ -26,7 +26,7 @@ fn run_config() {
     );
 
     let mut api_key = String::new();
-    let mut base_url = "https://api.deepseek.com/anthropic".to_string();
+    let mut base_url = "https://api.deepseek.com".to_string();
     let mut model = "deepseek-v4-flash".to_string();
     let mut context_limit = 1_000_000u32;
 

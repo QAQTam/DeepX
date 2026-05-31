@@ -13,7 +13,6 @@ use crate::agent::AgentState;
 pub struct HpStreamResponse {
     pub content: String,
     pub reasoning_content: Option<String>,
-    pub thinking_signature: Option<String>,
     pub usage: Option<UsageInfo>,
     pub tool_calls_raw: serde_json::Value,
 }
@@ -97,14 +96,12 @@ pub fn read_hp_stream_response(
                 tool_calls,
                 stop_reason: _,
                 reasoning_content: rc,
-                thinking_signature: ts,
                 usage: u,
             } => {
                 return Ok(HpStreamResponse {
                     content: c,
                     tool_calls_raw: tool_calls.unwrap_or(serde_json::Value::Null),
                     reasoning_content: rc,
-                    thinking_signature: ts,
                     usage: u,
                 });
             }

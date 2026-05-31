@@ -35,7 +35,7 @@ use std::time::Duration;
 use crate::liveness::LivenessResult;
 use crate::registry::ProcessRegistry;
 use crate::types::{HpError, ProcessKind, Verdict};
-use crate::anthropic_api::{Provider, StreamEvent};
+use crate::openai_api::{Provider, StreamEvent};
 use dsx_proto::AgentToHp;
 
 static HP_CONFIG: OnceLock<Provider> = OnceLock::new();
@@ -111,7 +111,7 @@ fn load_hp_config() -> Provider {
     let base_url = store
         .load_value()
         .and_then(|v| v.get("base_url").and_then(|b| b.as_str()).map(String::from))
-        .unwrap_or_else(|| "https://api.deepseek.com/anthropic".into());
+        .unwrap_or_else(|| "https://api.deepseek.com".into());
     Provider::new(&base_url, &api_key)
 }
 
@@ -381,7 +381,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         let tx_err = tx.clone();
         tokio::spawn(async move {
             let uid = user_id.clone();
-            let result = crate::anthropic_api::chat_stream(
+            let result = crate::openai_api::chat_stream(
                 &gw, &model_o, sys, msgs, tools, max_tokens, effort_o, uid, tx,
             ).await;
             if let Err(e) = result {
@@ -427,10 +427,11 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                         let _ = writer.flush();
                     }
                 }
-                StreamEvent::ToolCallProgress { ref name, ref args_so_far } => {
+                StreamEvent::ToolCallProgress { ref id, ref name, ref args_so_far, .. } => {
                     let frame = serde_json::json!({
                         "type": "tool_progress",
-                        "id": name,
+                        "id": id,
+                        "name": name,
                         "content": args_so_far,
                         "stream_type": "progress",
                     });
@@ -530,15 +531,13 @@ fn build_final_response(
     full_content.clear();
     reasoning.clear();
     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-    let mut thinking_sig: Option<String> = None;
     for block in &raw_message.content {
         match block {
             dsx_types::ContentBlock::Text { text } => {
                 full_content.push_str(text);
             }
-            dsx_types::ContentBlock::Thinking { thinking, signature } => {
-                reasoning.push_str(thinking);
-                thinking_sig = Some(signature.clone());
+            dsx_types::ContentBlock::Reasoning { reasoning: r } => {
+                reasoning.push_str(r);
             }
             dsx_types::ContentBlock::ToolUse { id, name, input } => {
                 tool_calls.push(serde_json::json!({
@@ -556,9 +555,6 @@ fn build_final_response(
     });
     if !reasoning.is_empty() {
         resp["reasoning_content"] = serde_json::json!(reasoning);
-    }
-    if let Some(ref sig) = thinking_sig {
-        resp["thinking_signature"] = serde_json::json!(sig);
     }
     if !tool_calls.is_empty() {
         resp["tool_calls"] = serde_json::Value::Array(tool_calls);

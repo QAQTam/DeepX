@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-// ── Anthropic-native content blocks ──
+// ── OpenAI-native content blocks ──
 
 /// Content block within a message, matching Anthropic Messages API spec.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -11,10 +11,9 @@ pub enum ContentBlock {
     Text {
         text: String,
     },
-    #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-        signature: String,
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        reasoning: String,
     },
     #[serde(rename = "tool_use")]
     ToolUse {
@@ -37,38 +36,45 @@ impl ContentBlock {
 
 // ── Messages ──
 
-/// A conversation message using Anthropic-native content-block format.
+/// A conversation message using OpenAI-native content-block format.
 ///
 /// Roles:
 /// - `"user"` — contains `Text` and/or `ToolResult` blocks
-/// - `"assistant"` — contains `Text`, `Thinking`, and/or `ToolUse` blocks
-/// - `"system"` — internal only, never sent to API (handled by `build_context`)
-/// - `"tool"` — internal only, converted to `role:"user"`+`ToolResult` by assembler
+/// - `"assistant"` — contains `Text`, `Reasoning`, and/or `ToolUse` blocks
+/// - `"system"` — system-level context and instructions
+/// - `"tool"` — tool execution results
+///
+/// The optional `name` field distinguishes same-role participants
+/// (e.g. `name="docs"` for injected document context, `name="code"` for
+/// code snippets). It maps to OpenAI's `name` parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default)]
     pub content: Vec<ContentBlock>,
 }
 
 impl Message {
-    /// Internal system message (extracted by `build_context`, never sent to API).
     pub fn system(content: &str) -> Self {
         Self {
             role: "system".into(),
+            name: None,
             content: vec![ContentBlock::text(content)],
         }
     }
-    /// Anthropic user message with a single text block.
     pub fn user(content: &str) -> Self {
         Self {
             role: "user".into(),
+            name: None,
             content: vec![ContentBlock::text(content)],
         }
     }
     pub fn tool(tool_call_id: &str, result: &str) -> Self {
         Self {
             role: "tool".into(),
+            name: None,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: tool_call_id.into(),
                 content: result.into(),

@@ -5,8 +5,8 @@
 //! - `hp_bridge` — HP TCP stream reading, result emission
 //! - `turn` — user input handling, tool execution, context building
 
-mod lifecycle;
-mod hp_bridge;
+pub mod lifecycle;
+pub mod hp_bridge;
 pub mod turn;
 
 use std::io::BufReader;
@@ -17,7 +17,6 @@ use dsx_proto::{self, AgentToHp, Agent2Ui, HpToAgent, Ui2Agent};
 
 use crate::agent::AgentState;
 use crate::orchestrator::maybe_save_session;
-use crate::router;
 
 // ── Channel-based main loop (primary entry point, called by tui.rs) ──
 
@@ -41,6 +40,32 @@ pub fn run_agent_loop(
         current_phase: format!("{:?}", agent.current_task_phase).to_lowercase(),
         streaming: false,
     });
+
+    // Init session immediately (before first user input) so TUI can load history
+    if agent.session_seed.is_empty() {
+        let seed = agent.resume_seed.clone();
+        lifecycle::init_session(&mut agent, seed.as_deref());
+        if agent.resume_seed.is_some() {
+            let msg_count = agent.ctx.message_count();
+            let summary = agent.ctx.turns().last()
+                .and_then(|t| t.steps.last())
+                .and_then(|s| {
+                    s.assistant.content.iter().find_map(|b| {
+                        if let dsx_types::ContentBlock::Text { text } = b {
+                            Some(text.chars().take(100).collect::<String>())
+                        } else { None }
+                    })
+                })
+                .unwrap_or_default();
+            let _ = agent_tx.send(Agent2Ui::SessionRestored {
+                seed: agent.session_seed.clone(),
+                message_count: msg_count as u64,
+                summary,
+                tokens_used: agent.token_estimate,
+                cache_hit_pct: agent.predicted_cache_hit_pct,
+            });
+        }
+    }
 
     loop {
         let frame: Ui2Agent = match tui_rx.recv() {
@@ -119,14 +144,18 @@ pub fn run_agent_loop(
             }
 
             Ui2Agent::SetPhase { phase } => {
-                let task_phase = match phase.as_str() {
-                    "plan" => dsx_types::TaskPhase::Plan,
-                    "coding" | "code" => dsx_types::TaskPhase::Coding,
-                    "debug" => dsx_types::TaskPhase::Debug,
-                    _ => dsx_types::TaskPhase::Coding,
+                let tp = match phase.as_str() {
+                    "plan" => dsx_tools::ToolPhase::Plan,
+                    "coding" | "code" => dsx_tools::ToolPhase::Coding,
+                    "debug" => dsx_tools::ToolPhase::Debug,
+                    _ => dsx_tools::ToolPhase::Coding,
                 };
-                agent.current_task_phase = task_phase;
-                router::set_phase(task_phase, router::read_debug_level());
+                agent.current_task_phase = match tp {
+                    dsx_tools::ToolPhase::Plan => dsx_types::TaskPhase::Plan,
+                    dsx_tools::ToolPhase::Coding => dsx_types::TaskPhase::Coding,
+                    dsx_tools::ToolPhase::Debug => dsx_types::TaskPhase::Debug,
+                };
+                dsx_tools::set_phase(tp);
                 let _ = agent_tx.send(Agent2Ui::PhaseChanged { phase });
             }
 

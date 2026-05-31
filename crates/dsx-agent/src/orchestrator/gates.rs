@@ -1,19 +1,5 @@
-//! Gate functions: explore-before-read, phase checks, health checks.
+//! Gate functions: explore-before-read, re-read, health checks.
 use crate::agent::AgentState;
-
-/// Phase gate: block destructive tools in Explore/Plan mode.
-pub fn phase_check_tool(state: &mut AgentState, tool_name: &str, tc_id: &str) -> bool {
-    let is_readonly = state.current_task_phase == dsx_types::TaskPhase::Plan;
-    if !is_readonly { return false; }
-    let blocked = ["file", "exec"];
-    if !blocked.contains(&tool_name) { return false; }
-    let target = "coding";
-    let msg = format!(
-        "[ERROR] '{}' blocked in {:?} mode — not allowed.\n[HINT] Call status(state=\"{}\") to switch, then retry.",
-        tool_name, state.current_task_phase, target);
-    let _ = state.ctx.push_tool_result(tc_id, &msg);
-    true
-}
 
 use dsx_types::arg::{tool_action, parse_file_arg, parse_cmd_arg};
 use super::tracker::last_assistant_content;

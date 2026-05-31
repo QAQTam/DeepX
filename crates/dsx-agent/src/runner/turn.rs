@@ -14,13 +14,11 @@ use dsx_types::{ContentBlock, Message, ToolCall};
 use crate::agent::{AgentState, ToolResultAppender};
 use crate::assembly::AssemblerError;
 use crate::orchestrator::{gates, learning, tracker};
-use crate::router;
 use crate::session;
 use crate::tokenizer;
 use crate::tool_parser;
 
 use super::hp_bridge::{emit_tool_result, read_hp_stream_response, HpStreamResponse};
-use super::lifecycle::apply_phase_config;
 
 /// Outcome of `execute_single_tool` for the caller's loop control.
 pub enum ToolOutcome {
@@ -34,7 +32,6 @@ pub fn build_and_push_assistant(
     agent: &mut AgentState,
     content: &str,
     reasoning_content: &Option<String>,
-    thinking_signature: &Option<String>,
     parsed: &[ToolCall],
 ) -> Message {
     let mut blocks: Vec<ContentBlock> = Vec::new();
@@ -45,9 +42,8 @@ pub fn build_and_push_assistant(
     }
     if let Some(ref rc) = reasoning_content {
         if !rc.is_empty() {
-            blocks.push(ContentBlock::Thinking {
-                thinking: rc.clone(),
-                signature: thinking_signature.clone().unwrap_or_default(),
+            blocks.push(ContentBlock::Reasoning {
+                reasoning: rc.clone(),
             });
         }
     }
@@ -62,6 +58,7 @@ pub fn build_and_push_assistant(
     }
     let assistant_msg = Message {
         role: "assistant".into(),
+        name: None,
         content: blocks,
     };
 
@@ -71,49 +68,6 @@ pub fn build_and_push_assistant(
     }
 
     assistant_msg
-}
-
-/// Handle the `status` tool: validate the requested phase and apply it.
-fn handle_status_tool(
-    agent: &mut AgentState,
-    agent_tx: &mpsc::Sender<Agent2Ui>,
-    id: &str,
-    name: &str,
-    args: &str,
-) -> ToolOutcome {
-    let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-    let state = args_val
-        .get("state")
-        .and_then(|v| v.as_str())
-        .unwrap_or("coding");
-    if state == "explore" || state == "chat" {
-        let err = format!("[ERROR] Mode '{state}' no longer exists. Use: plan, coding, debug");
-        let _ = agent.ctx.push_tool_result(id, &err);
-        agent.tool_results.push((id.to_string(), err.clone()));
-        emit_tool_result(agent_tx, id, name, &err, false, Some(args.to_string()));
-        return ToolOutcome::Continue;
-    }
-    let tp = match state {
-        "plan" => dsx_types::TaskPhase::Plan,
-        "coding" => dsx_types::TaskPhase::Coding,
-        "debug" => dsx_types::TaskPhase::Debug,
-        _ => dsx_types::TaskPhase::Coding,
-    };
-    let level = dsx_types::DebugLevel::Medium;
-    agent.current_task_phase = tp;
-    router::set_phase(tp, level);
-    if agent.auto_mode {
-        apply_phase_config(agent, tp, level);
-    }
-    let phase_name = format!("{:?}", tp).to_lowercase();
-    let _ = agent_tx.send(Agent2Ui::PhaseChanged {
-        phase: phase_name,
-    });
-    let result = format!("[OK] Switched to {} mode", state);
-    let _ = agent.ctx.push_tool_result(id, &result);
-    agent.tool_results.push((id.to_string(), result.clone()));
-    emit_tool_result(agent_tx, id, name, &result, true, Some(args.to_string()));
-    ToolOutcome::Continue
 }
 
 /// Handle the `ask_user` / `ask` tool: send an AskUser frame and await the reply.
@@ -171,17 +125,6 @@ pub fn execute_single_tool(
     let id = &tc.id;
     let args = &tc.function.arguments;
 
-    if gates::phase_check_tool(agent, name, id) {
-        emit_tool_result(
-            agent_tx,
-            id,
-            name,
-            "[BLOCKED] Phase gate prevented this tool.",
-            false,
-            Some(args.to_string()),
-        );
-        return ToolOutcome::Continue;
-    }
     if gates::explore_gate(agent, name, id, args) {
         emit_tool_result(
             agent_tx,
@@ -203,10 +146,6 @@ pub fn execute_single_tool(
             Some(args.to_string()),
         );
         return ToolOutcome::Continue;
-    }
-
-    if name == "status" {
-        return handle_status_tool(agent, agent_tx, id, name, args);
     }
 
     if name == "ask_user" || name == "ask" {
@@ -298,7 +237,7 @@ fn push_user_message_with_repair(agent: &mut AgentState, text: &str) -> bool {
 /// initial phase, and apply phase config.
 fn init_session_on_first_message(
     agent: &mut AgentState,
-    text: &str,
+    _text: &str,
     agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
     if agent.session_seed.is_empty() {
@@ -331,23 +270,6 @@ fn init_session_on_first_message(
                 cache_hit_pct,
             });
         }
-        if agent.auto_mode {
-            let phase = router::detect_initial_phase(text);
-            let level = dsx_types::DebugLevel::Medium;
-            router::set_phase(phase, level);
-            agent.current_task_phase = phase;
-            apply_phase_config(agent, phase, level);
-            let phase_name = format!("{:?}", phase).to_lowercase();
-            let _ = agent_tx.send(Agent2Ui::PhaseChanged {
-                phase: phase_name,
-            });
-            log::info!(
-                "auto initial phase: {:?} model={} effort={:?}",
-                phase,
-                agent.config.model,
-                agent.config.effort
-            );
-        }
     }
 }
 
@@ -369,7 +291,6 @@ fn run_api_turn(
     (
         String,
         Option<String>,
-        Option<String>,
         serde_json::Value,
         Option<dsx_types::UsageInfo>,
         tokenizer::TokenBreakdown,
@@ -382,17 +303,13 @@ fn run_api_turn(
         hit_rate: agent.predicted_cache_hit_pct,
     });
 
-    let messages_json = if allow_tools {
-        let msgs_no_system: Vec<&Message> =
-            messages.iter().filter(|m| m.role != "system").collect();
+    let messages_json = {
         log::debug!(
             "turn round={} messages={} tokens={}",
             round,
             messages.len(),
             tokenizer::estimate_messages_tokens(&messages)
         );
-        serde_json::to_value(&msgs_no_system).unwrap_or_default()
-    } else {
         serde_json::to_value(&messages).unwrap_or_default()
     };
 
@@ -431,7 +348,6 @@ fn run_api_turn(
     let HpStreamResponse {
         content,
         reasoning_content,
-        thinking_signature,
         usage,
         tool_calls_raw,
     } = match read_hp_stream_response(hp, agent, agent_tx, round) {
@@ -445,7 +361,6 @@ fn run_api_turn(
     Ok((
         content,
         reasoning_content,
-        thinking_signature,
         tool_calls_raw,
         usage,
         breakdown,
@@ -494,7 +409,7 @@ pub fn handle_user_input(
             break;
         }
 
-        let (mut content, reasoning_content, thinking_signature, tool_calls_raw, usage, breakdown) =
+        let (mut content, reasoning_content, tool_calls_raw, usage, breakdown) =
             match run_api_turn(agent, hp, agent_tx, _round, true) {
                 Ok(v) => v,
                 Err(()) => return,
@@ -540,27 +455,10 @@ pub fn handle_user_input(
             agent.config.context_limit,
         );
 
-        if let Some(ref r) = reasoning_content {
-            if agent.auto_mode {
-                let tp = router::detect_task_phase_from_reasoning(r);
-                if tp != agent.current_task_phase {
-                    agent.current_task_phase = tp;
-                    router::set_phase(tp, router::read_debug_level());
-                    let level = dsx_types::DebugLevel::Medium;
-                    apply_phase_config(agent, tp, level);
-                    let phase_name = format!("{:?}", tp).to_lowercase();
-                    let _ = agent_tx.send(Agent2Ui::PhaseChanged {
-                        phase: phase_name,
-                    });
-                }
-            }
-        }
-
         let assistant_msg = build_and_push_assistant(
             agent,
             &content,
             &reasoning_content,
-            &thinking_signature,
             &parsed,
         );
 
@@ -692,7 +590,7 @@ pub fn handle_user_input(
     let max_post_rounds = 3u32;
     let mut sent_final_response = false;
     for _post_round in 0..max_post_rounds {
-        let (mut content, reasoning_content, thinking_signature, tool_calls_raw, usage, _breakdown) =
+        let (mut content, reasoning_content, tool_calls_raw, usage, _breakdown) =
             match run_api_turn(agent, hp, agent_tx, _post_round, false) {
                 Ok(v) => v,
                 Err(()) => return,
@@ -727,7 +625,6 @@ pub fn handle_user_input(
                 agent,
                 &content,
                 &reasoning_content,
-                &thinking_signature,
                 &parsed,
             );
 
@@ -760,7 +657,6 @@ pub fn handle_user_input(
             agent,
             &content,
             &reasoning_content,
-            &thinking_signature,
             &parsed,
         );
 

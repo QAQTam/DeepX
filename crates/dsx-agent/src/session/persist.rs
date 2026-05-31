@@ -59,12 +59,10 @@ fn migrate_legacy_session(data: &str, seed: &str) -> Option<SessionFile> {
                 }
             }
             "assistant" => {
-                // reasoning_content → Thinking block
+                // reasoning_content → Reasoning block
                 if let Some(rc) = m.get("reasoning_content").and_then(|v| v.as_str()) {
-                    let sig = m.get("thinking_signature").and_then(|v| v.as_str()).unwrap_or("");
-                    blocks.push(dsx_types::ContentBlock::Thinking {
-                        thinking: rc.to_string(),
-                        signature: sig.to_string(),
+                    blocks.push(dsx_types::ContentBlock::Reasoning {
+                        reasoning: rc.to_string(),
                     });
                 }
                 // content → Text block
@@ -104,7 +102,7 @@ fn migrate_legacy_session(data: &str, seed: &str) -> Option<SessionFile> {
             _ => {}
         }
 
-        dsx_types::Message { role, content: blocks }
+        dsx_types::Message { role, name: None, content: blocks }
     }).collect();
 
     Some(SessionFile {

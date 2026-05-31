@@ -63,8 +63,8 @@ pub fn count_message_tokens(msg: &Message) -> u32 {
             dsx_types::ContentBlock::Text { text } => {
                 t += count_tokens(text);
             }
-            dsx_types::ContentBlock::Thinking { thinking, .. } => {
-                t += count_tokens(thinking);
+            dsx_types::ContentBlock::Reasoning { reasoning, .. } => {
+                t += count_tokens(reasoning);
             }
             dsx_types::ContentBlock::ToolUse { name, input, .. } => {
                 t += count_tokens(name);
