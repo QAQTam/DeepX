@@ -446,9 +446,17 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                     )]));
                 } else {
                     for (i, line) in msg.lines.iter().enumerate() {
+                        // Skip empty lines for compact thinking display
+                        if line.spans.is_empty() || line.spans.iter().all(|s| s.content.trim().is_empty()) {
+                            continue;
+                        }
                         let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
                         if i == 0 {
                             spans.insert(0, prefix.clone());
+                        } else {
+                            // Indent continuation lines with same width as prefix
+                            let indent = Span::styled(" ".repeat(prefix.width()), Style::new());
+                            spans.insert(0, indent);
                         }
                         text_lines.push(Line::from(spans));
                     }
