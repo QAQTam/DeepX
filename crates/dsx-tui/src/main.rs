@@ -310,6 +310,13 @@ fn run_chat(
 
             // Normal chat keys
             match (key.modifiers, key.code) {
+                (KeyModifiers::ALT, KeyCode::Char('m')) | (KeyModifiers::ALT, KeyCode::Char('M')) => {
+                    let menu = crate::app::MenuState::new(app);
+                    run_menu(terminal, app, menu)?;
+                    if let Some(auto_mode) = app.menu_auto_mode.take() {
+                        send(stdin, &dsx_proto::Ui2Agent::SetAutoMode { auto_mode });
+                    }
+                }
                 (KeyModifiers::NONE, KeyCode::F(12)) => {
                     app.show_debug = !app.show_debug;
                 }
@@ -347,6 +354,82 @@ fn run_chat(
             }
         } else if !app.streaming {
             std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+    }
+}
+
+// ── Menu screen ──
+
+fn run_menu(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    mut menu: crate::app::MenuState,
+) -> std::io::Result<()> {
+    app.screen = app::Screen::Menu;
+    loop {
+        terminal.draw(|frame| ui::render_menu(frame, &menu))?;
+
+        if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press { continue; }
+
+            match (key.modifiers, key.code) {
+                (KeyModifiers::ALT, KeyCode::Char('m')) | (KeyModifiers::ALT, KeyCode::Char('M'))
+                | (_, KeyCode::Esc) => {
+                    menu.go_back(app);
+                    return Ok(());
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                    app.should_quit = true;
+                    return Ok(());
+                }
+                (_, KeyCode::Up) => {
+                    if menu.selected > 0 {
+                        menu.selected -= 1;
+                        menu.editing = false;
+                        menu.edit_buf.clear();
+                        menu.status.clear();
+                    }
+                }
+                (_, KeyCode::Down) => {
+                    if menu.selected + 1 < menu.items.len() {
+                        menu.selected += 1;
+                        menu.editing = false;
+                        menu.edit_buf.clear();
+                        menu.status.clear();
+                    }
+                }
+                (_, KeyCode::Enter) => {
+                    let item = match menu.items.get(menu.selected) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+                    if menu.editing {
+                        if !menu.edit_buf.is_empty() {
+                            let item = &mut menu.items[menu.selected];
+                            item.value = menu.edit_buf.clone();
+                        }
+                        menu.editing = false;
+                        menu.edit_buf.clear();
+                        menu.save_all();
+                    } else if item.editable && item.kind != crate::app::MenuItemKind::Action {
+                        menu.toggle(app);
+                        menu.save_all();
+                    } else if item.kind == crate::app::MenuItemKind::Action {
+                        menu.save_all();
+                    }
+                }
+                (_, KeyCode::Backspace) => {
+                    if menu.editing {
+                        menu.edit_buf.pop();
+                    }
+                }
+                (_, KeyCode::Char(c)) => {
+                    if menu.editing {
+                        menu.edit_buf.push(c);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }

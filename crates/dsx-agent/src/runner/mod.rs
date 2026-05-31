@@ -143,6 +143,13 @@ pub fn run_agent_loop(
                 break;
             }
 
+            Ui2Agent::SetAutoMode { auto_mode } => {
+                agent.auto_mode = auto_mode;
+                crate::tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
+                dsx_tools::AUTO_MODE.store(auto_mode, std::sync::atomic::Ordering::Relaxed);
+                log::info!("dsx-agent: auto_mode set to {}", auto_mode);
+            }
+
             Ui2Agent::DebugCommand { cmd } => {
                 let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
                     hp_connected: hp_conn.is_some(),

@@ -475,7 +475,7 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     }
 
     let content_height = body.height.saturating_sub(2) as usize;
-    let body_width = body.width.saturating_sub(2) as usize;
+    let _body_width = body.width.saturating_sub(2) as usize;
     // Use logical line count for scroll — simpler and more predictable with wrapping
     let logical_lines = text_lines.len();
     let max_scroll = logical_lines.saturating_sub(content_height);
@@ -615,4 +615,168 @@ pub fn render_ask(frame: &mut Frame, app: &App) {
     )));
 
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+// ── Menu screen ──
+
+pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
+    use crate::app::MenuItemKind;
+
+    let area = frame.area();
+    frame.render_widget(Paragraph::new("").style(Style::new().bg(BG)), area);
+
+    let [_title_area, list_area, status_area, footer_area] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ]).areas(area);
+
+    let title_block = Block::new()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Settings Menu (Alt+M) ")
+        .style(Style::new().bg(Color::Rgb(18, 22, 26)));
+    frame.render_widget(title_block, Rect::new(area.x, area.y, area.width, 3));
+
+    let title_lines = vec![
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Menu", Style::new().fg(ACCENT).bold()),
+            Span::raw("  |  "),
+            Span::styled("↑↓ navigate", Style::new().fg(DIM)),
+            Span::raw("  "),
+            Span::styled("Enter toggle", Style::new().fg(DIM)),
+            Span::raw("  "),
+            Span::styled("Esc back", Style::new().fg(DIM)),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(title_lines), Rect::new(area.x + 2, area.y + 1, area.width - 4, 1));
+
+    let visible = list_area.height.saturating_sub(2) as usize;
+    let max_scroll = menu.items.len().saturating_sub(visible);
+    let scroll = if menu.selected < max_scroll {
+        menu.selected
+    } else {
+        max_scroll
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    let show_from = scroll;
+    let show_to = (scroll + visible).min(menu.items.len());
+
+    for idx in show_from..show_to {
+        let item = &menu.items[idx];
+        let selected = idx == menu.selected;
+
+        let line = match item.kind {
+            MenuItemKind::Section => {
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(&item.label, Style::new().fg(Color::Rgb(100, 200, 255)).bold()),
+                ])
+            }
+            MenuItemKind::Toggle => {
+                let on = item.value == "ON" || item.value == "en";
+                let val_style = if on {
+                    Style::new().fg(Color::Rgb(100, 220, 100)).bold()
+                } else {
+                    Style::new().fg(Color::Rgb(220, 100, 100)).bold()
+                };
+                let sel_mark = if selected && !menu.editing { "● " } else { "  " };
+                let label_style = if selected && !menu.editing {
+                    Style::new().fg(Color::Yellow).bold()
+                } else {
+                    Style::new().fg(Color::White)
+                };
+                Line::from(vec![
+                    Span::raw(sel_mark),
+                    Span::styled(format!("{:<20}", item.label), label_style),
+                    Span::raw("  "),
+                    Span::styled(&item.value, val_style),
+                ])
+            }
+            MenuItemKind::Value => {
+                let sel_mark = if selected && !menu.editing { "● " } else { "  " };
+                let label_style = if selected && !menu.editing {
+                    Style::new().fg(Color::Yellow).bold()
+                } else {
+                    Style::new().fg(Color::White)
+                };
+                let display = if selected && menu.editing {
+                    if menu.edit_buf.is_empty() { item.value.clone() } else { menu.edit_buf.clone() }
+                } else {
+                    item.value.clone()
+                };
+                Line::from(vec![
+                    Span::raw(sel_mark),
+                    Span::styled(format!("{:<20}", item.label), label_style),
+                    Span::raw("  "),
+                    Span::styled(display, Style::new().fg(Color::Rgb(180, 200, 220))),
+                ])
+            }
+            MenuItemKind::Action => {
+                let is_active = item.label.starts_with("▶");
+                let sel_mark = if selected { "● " } else { "  " };
+                let label_style = if selected {
+                    Style::new().fg(Color::Yellow).bold()
+                } else if is_active {
+                    Style::new().fg(GREEN).bold()
+                } else {
+                    Style::new().fg(Color::White)
+                };
+                Line::from(vec![
+                    Span::raw(sel_mark),
+                    Span::styled(format!("{:<20}", item.label), label_style),
+                    Span::raw("  "),
+                    Span::styled(&item.value, Style::new().fg(Color::Gray)),
+                ])
+            }
+            MenuItemKind::Info => {
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{:<20}", item.label), Style::new().fg(Color::Gray)),
+                    Span::raw("  "),
+                    Span::styled(&item.value, Style::new().fg(Color::Rgb(160, 170, 190))),
+                ])
+            }
+        };
+        lines.push(line);
+    }
+
+    let list_block = Block::new()
+        .borders(Borders::ALL)
+        .style(Style::new().bg(Color::Rgb(18, 22, 26)));
+    frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
+
+    if !menu.status.is_empty() {
+        frame.render_widget(
+            Span::styled(format!("  {}", menu.status), Style::new().fg(GREEN)),
+            status_area,
+        );
+    }
+
+    let footer = Line::from(vec![
+        Span::styled(" Alt+M ", Style::new().fg(Color::Black).bg(ACCENT)),
+        Span::raw(" close  "),
+        Span::styled(" Enter ", Style::new().fg(Color::Black).bg(Color::Green)),
+        Span::raw(" toggle/edit  "),
+        Span::styled(" Esc ", Style::new().fg(Color::Black).bg(Color::Gray)),
+        Span::raw(" back"),
+    ]);
+    frame.render_widget(footer, footer_area);
+
+    // Cursor for editing
+    if menu.editing {
+        let val_len = if menu.edit_buf.is_empty() {
+            menu.items.get(menu.selected).map_or(0, |i| i.value.len())
+        } else {
+            menu.edit_buf.len()
+        };
+        let cursor_x = list_area.x + 25 + val_len.min(30) as u16;
+        let row = (menu.selected.saturating_sub(scroll) + 1) as u16;
+        let cursor_y = list_area.y + row;
+        frame.set_cursor_position((cursor_x.min(area.width.saturating_sub(1)), cursor_y.min(area.height.saturating_sub(1))));
+    }
 }

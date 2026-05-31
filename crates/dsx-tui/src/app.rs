@@ -10,6 +10,7 @@ pub enum Screen {
     Setup,
     Session,
     Chat,
+    Menu,
 }
 
 // ── Setup wizard state ──
@@ -297,6 +298,7 @@ pub struct App {
     pub debug: DebugState,
     pub ask: Option<AskState>,
     pub balance: String,
+    pub menu_auto_mode: Option<bool>,
     block: BlockType,
     pub validating: bool,
 }
@@ -345,6 +347,246 @@ pub struct DebugState {
     pub streaming: bool,
 }
 
+#[derive(Clone)]
+pub struct MenuState {
+    pub items: Vec<MenuItem>,
+    pub selected: usize,
+    pub editing: bool,
+    pub edit_buf: String,
+    pub status: String,
+}
+
+#[derive(Clone)]
+pub struct MenuItem {
+    pub kind: MenuItemKind,
+    pub label: String,
+    pub value: String,
+    pub editable: bool,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum MenuItemKind {
+    Section,
+    Toggle,
+    Value,
+    Action,
+    Info,
+}
+
+impl MenuState {
+    pub fn new(app: &App) -> Self {
+        let store = ConfigStore::default_location();
+        let config = store.load();
+        let api_key = store.load_api_key().unwrap_or_default();
+        let api_key_masked = if api_key.len() > 3 {
+            format!("sk-{}", "●".repeat(api_key.len().saturating_sub(3).min(20)))
+        } else if api_key.is_empty() {
+            "(not set)".into()
+        } else {
+            api_key.clone()
+        };
+
+        let model = config.as_ref().and_then(|c| c.model.clone()).unwrap_or_else(|| "deepseek-v4-flash".into());
+        let context_limit = config.as_ref().and_then(|c| c.context_limit).unwrap_or(1_000_000);
+        let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16000);
+        let effort = config.as_ref().and_then(|c| c.effort.clone()).unwrap_or_else(|| "high".into());
+        let auto_mode = config.as_ref().and_then(|c| c.auto_mode).unwrap_or(true);
+        let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| "https://api.deepseek.com/anthropic".into());
+        let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
+        let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
+        let phase_configs = config.as_ref()
+            .and_then(|c| c.phase_configs.clone())
+            .unwrap_or_else(dsx_types::default_phase_configs);
+
+        let mut items: Vec<MenuItem> = Vec::new();
+
+        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Agent Behavior ──".into(), value: String::new(), editable: false });
+        items.push(MenuItem {
+            kind: MenuItemKind::Toggle,
+            label: "Auto Mode".into(),
+            value: if auto_mode { "ON".into() } else { "OFF".into() },
+            editable: true,
+        });
+        items.push(MenuItem {
+            kind: MenuItemKind::Value,
+            label: "Effort".into(),
+            value: effort,
+            editable: true,
+        });
+        items.push(MenuItem {
+            kind: MenuItemKind::Value,
+            label: "Max Tool Rounds".into(),
+            value: "10".into(),
+            editable: false,
+        });
+
+        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Model ──".into(), value: String::new(), editable: false });
+        items.push(MenuItem {
+            kind: MenuItemKind::Value,
+            label: "Model".into(),
+            value: model,
+            editable: false,
+        });
+        items.push(MenuItem {
+            kind: MenuItemKind::Value,
+            label: "Max Tokens".into(),
+            value: max_tokens.to_string(),
+            editable: false,
+        });
+        items.push(MenuItem {
+            kind: MenuItemKind::Value,
+            label: "Context Limit".into(),
+            value: context_limit.to_string(),
+            editable: false,
+        });
+
+        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Profiles ──".into(), value: String::new(), editable: false });
+        let mut profile_names: Vec<String> = profiles.keys().cloned().collect();
+        profile_names.sort();
+        for name in &profile_names {
+            let is_active = name == &active_profile;
+            let profile = &profiles[name];
+            let desc = format!("{} / {}t / {} / {}",
+                profile.model, profile.max_tokens,
+                profile.effort.as_deref().unwrap_or("high"),
+                if is_active { "● active" } else { "" });
+            items.push(MenuItem {
+                kind: MenuItemKind::Action,
+                label: if is_active { format!("▶ {}", name) } else { format!("  {}", name) },
+                value: desc,
+                editable: true,
+            });
+        }
+
+        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Phase Configs ──".into(), value: String::new(), editable: false });
+        let phase_order = ["plan", "coding", "debug"];
+        for phase_name in &phase_order {
+            if let Some(pc) = phase_configs.get(*phase_name) {
+                items.push(MenuItem {
+                    kind: MenuItemKind::Info,
+                    label: format!("  {:<8}", phase_name),
+                    value: format!("{} / {}t / {} / {}",
+                        pc.model, pc.max_tokens,
+                        pc.effort.as_deref().unwrap_or("high"),
+                        if pc.context_limit >= 1_000_000 { format!("{}M", pc.context_limit / 1_000_000) } else { pc.context_limit.to_string() }),
+                    editable: false,
+                });
+            }
+        }
+
+        items.push(MenuItem { kind: MenuItemKind::Section, label: "── API ──".into(), value: String::new(), editable: false });
+        items.push(MenuItem {
+            kind: MenuItemKind::Info,
+            label: "API Key".into(),
+            value: api_key_masked,
+            editable: false,
+        });
+        items.push(MenuItem {
+            kind: MenuItemKind::Info,
+            label: "Base URL".into(),
+            value: base_url,
+            editable: false,
+        });
+
+        items.push(MenuItem { kind: MenuItemKind::Section, label: "── Interface ──".into(), value: String::new(), editable: false });
+        items.push(MenuItem {
+            kind: MenuItemKind::Toggle,
+            label: "Language".into(),
+            value: app.setup.lang.as_str().to_string(),
+            editable: true,
+        });
+
+        Self {
+            selected: 1,
+            editing: false,
+            edit_buf: String::new(),
+            status: String::new(),
+            items,
+        }
+    }
+
+    pub fn toggle(&mut self, app: &mut App) {
+        let item = match self.items.get_mut(self.selected) {
+            Some(i) => i,
+            None => return,
+        };
+        if !item.editable { return; }
+
+        match item.label.as_str() {
+            "Auto Mode" => {
+                let new = item.value == "OFF";
+                item.value = if new { "ON".into() } else { "OFF".into() };
+                // Will be sent to agent when returning to chat
+            }
+            "Effort" => {
+                item.value = if item.value == "high" { "max".into() } else { "high".into() };
+            }
+            "Language" => {
+                app.setup.toggle_lang();
+                item.value = app.setup.lang.as_str().to_string();
+            }
+            _ => {
+                // Profile item: switch to that profile
+                let name = item.label.trim_start_matches("▶ ").trim_start_matches("  ").to_string();
+                if item.kind == MenuItemKind::Action && !name.is_empty() {
+                    self.activate_profile(&name);
+                }
+            }
+        }
+    }
+
+    fn activate_profile(&mut self, name: &str) {
+        let store = ConfigStore::default_location();
+        let mut config = store.load().unwrap_or_default();
+        config.active_profile = Some(name.to_string());
+        store.save(&config);
+        self.status = format!("Switched to profile '{}' (saved, restart to apply)", name);
+
+        for item in &mut self.items {
+            if item.kind == MenuItemKind::Action {
+                let n = item.label.trim_start_matches("▶ ").trim_start_matches("  ").to_string();
+                let is_active = n == name;
+                item.label = if is_active { format!("▶ {}", n) } else { format!("  {}", n) };
+            }
+        }
+    }
+
+    pub fn save_all(&mut self) {
+        let store = ConfigStore::default_location();
+        let mut config = store.load().unwrap_or_default();
+
+        for item in &self.items {
+            match item.label.as_str() {
+                "Auto Mode" => { config.auto_mode = Some(item.value == "ON"); }
+                "Effort" => { config.effort = Some(item.value.clone()); }
+                "Model" => { config.model = Some(item.value.clone()); }
+                "Context Limit" => {
+                    if let Ok(v) = item.value.parse::<u32>() { config.context_limit = Some(v); }
+                }
+                "Max Tokens" => {
+                    if let Ok(v) = item.value.parse::<u32>() { config.max_tokens = Some(v); }
+                }
+                _ => {}
+            }
+        }
+
+        if store.save(&config) {
+            self.status = "Config saved.".into();
+        } else {
+            self.status = "Failed to save config.".into();
+        }
+    }
+
+    pub fn go_back(mut self, app: &mut App) {
+        self.save_all();
+        let auto_mode = self.items.iter()
+            .find(|i| i.label == "Auto Mode")
+            .map_or(true, |i| i.value == "ON");
+        app.menu_auto_mode = Some(auto_mode);
+        app.screen = Screen::Chat;
+    }
+}
+
 impl App {
     pub fn new(need_setup: bool) -> Self {
         Self {
@@ -380,6 +622,7 @@ impl App {
             },
             ask: None,
             balance: String::new(),
+            menu_auto_mode: None,
             block: BlockType::None,
             validating: false,
         }

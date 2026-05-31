@@ -34,6 +34,9 @@ pub enum Ui2Agent {
 
     #[serde(rename = "debug_cmd")]
     DebugCommand { cmd: String },
+
+    #[serde(rename = "set_auto_mode")]
+    SetAutoMode { auto_mode: bool },
 }
 
 /// Agent → UI frames (mpsc channel / stdout pipe in headless mode).
