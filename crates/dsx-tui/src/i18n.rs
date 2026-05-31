@@ -262,9 +262,6 @@ impl Lang {
     pub fn t_chat_phase(&self) -> &str {
         match self { Lang::En => "Phase", Lang::Zh => "阶段" }
     }
-    pub fn t_chat_tokens(&self) -> &str {
-        match self { Lang::En => "Tokens", Lang::Zh => "Token" }
-    }
     pub fn t_chat_hit(&self) -> &str {
         match self { Lang::En => "hit", Lang::Zh => "命中" }
     }

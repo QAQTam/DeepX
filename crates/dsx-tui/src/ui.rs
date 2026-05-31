@@ -383,9 +383,13 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         Span::raw("DeepX | "),
         Span::styled(format!("{}: {}", l.t_chat_phase(), app.phase), Style::new().fg(Color::Cyan)),
         Span::raw(" | "),
-        Span::styled(format!("{}: {}", l.t_chat_tokens(), app.session_tokens), Style::new().fg(Color::Yellow)),
+        Span::styled(format!("Context: {}", app.context_tokens), Style::new().fg(Color::Yellow)),
         Span::raw(" "),
-        Span::styled(format!("({:.0}%)", if app.context_limit > 0 { app.session_tokens as f64 / app.context_limit as f64 * 100.0 } else { 0.0 }), Style::new().fg(Color::Gray)),
+        Span::styled(format!("({:.0}%)", if app.context_limit > 0 {
+            app.context_tokens as f64 / app.context_limit as f64 * 100.0
+        } else { 0.0 }), Style::new().fg(Color::Gray)),
+        Span::raw(" | "),
+        Span::styled(format!("Session: {}", app.session_tokens), Style::new().fg(Color::Rgb(180, 180, 200))),
         if app.cache_hit > 0 || app.cache_miss > 0 {
             Span::raw(" ")
         } else { Span::raw("") },

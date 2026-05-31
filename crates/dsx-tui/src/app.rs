@@ -312,7 +312,7 @@ pub struct App {
     pub input: String,
     pub status: String,
     pub phase: String,
-    pub tokens: u32,
+    pub context_tokens: u32,
     pub session_tokens: u64,
     pub cache_hit: u32,
     pub cache_miss: u32,
@@ -664,8 +664,8 @@ impl App {
             messages: Vec::new(),
             input: String::new(),
             status: String::new(), // will be set after setup knows lang
-            phase: String::from("Coding"),
-            tokens: 0,
+            phase: String::from("plan"),
+            context_tokens: 0,
             session_tokens: 0,
             cache_hit: 0,
             cache_miss: 0,
@@ -686,7 +686,7 @@ impl App {
                 context_tokens: 0,
                 tool_calls_total: 0,
                 tool_failures: 0,
-                current_phase: String::from("Coding"),
+                current_phase: String::from("plan"),
                 streaming: false,
             },
             ask: None,
@@ -800,7 +800,7 @@ impl App {
                     lines,
                 });
             }
-            Agent2Ui::ApiResponse { content, reasoning_content, usage, context_limit, session_tokens, .. } => {
+            Agent2Ui::ApiResponse { content, reasoning_content, usage, context_limit, session_tokens, context_tokens, .. } => {
                 if !self.streaming {
                     if let Some(ref rc) = reasoning_content {
                         if !rc.is_empty() {
@@ -811,14 +811,14 @@ impl App {
                         self.push_msg(ChatRole::Assistant, &content);
                     }
                 }
+                self.context_tokens = context_tokens;
                 self.session_tokens = session_tokens;
+                self.context_limit = context_limit;
                 if let Some(u) = usage {
-                    self.tokens = u.total_tokens;
                     self.cache_hit += u.prompt_cache_hit_tokens;
                     self.cache_miss += u.prompt_cache_miss_tokens;
                     self.update_cache(u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens);
                 }
-                self.context_limit = context_limit;
                 self.status = self.setup.lang.t_chat_ready().to_string();
                 self.streaming = false;
             }
