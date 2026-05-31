@@ -466,14 +466,13 @@ impl ContextAssembler {
 /// after the stable system prompt, so the system prefix is always cached.
 ///
 /// ```
-/// System prompt (static — always fully cached):
-///   1. Base prompt          ← static
-///   2. Tool definitions     ← stable per session
-///
-/// Messages (history cached, only tail misses):
-///   Phase message           ← varies per phase (cache miss on phase change)
-///   Conversation history    ← stable prefix (cached)
-///   Last user message       ← appended with dynamic annotations (uncached suffix)
+/// Layer  System prompt (static — always fully cached):
+///   1.   Base prompt              ← static
+///   2.   Phase message            ← varies per phase (cache miss on phase change)
+///   3.   Preset exchanges         ← static (always cached)
+///   4.   Context messages         ← stable per label (cached)
+///   5.   Conversation history     ← stable prefix (cached)
+///   6.   Last user message        ← dynamic annotations (uncached suffix)
 /// ```
 pub fn build_context(state: &mut AgentState) -> Vec<Message> {
 
@@ -481,32 +480,57 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
     let task_phase = crate::router::read_phase();
     crate::runner::lifecycle::apply_phase_config(state, task_phase, dsx_types::DebugLevel::Medium);
 
-    // === System prompt as first message ===
+    // ── Layer 1: System prompt ──
     let mut messages = vec![Message::system(&crate::config::system_prompt())];
 
-    // === Conversation history from ctx ===
-    let conv = state.ctx.build(state.config.context_limit);
-    messages.extend(conv);
-
-    // Layer 2: Phase message (after system, before history)
+    // ── Layer 2: Phase message ──
     let phase = crate::router::read_phase();
-    let has_phase = if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
-        messages.insert(1, Message::system(suffix));
-        true
-    } else { false };
+    if let Some(suffix) = crate::router::phase_prompt_suffix(phase) {
+        messages.push(Message::system(suffix));
+    }
 
-    // Layer 3: Named context messages (document cache, code snippets, etc.)
-    // Injected after phase message, before conversation history.
+    // ── Layer 3: Preset exchanges (stable prefix for KV cache priming) ──
+    // Always injected; never persisted to session files; never rendered to UI.
+    const PRESET_EXCHANGES: &[(&str, &str)] = &[
+        (
+            "你好",
+            "你好，我是 DeepX，运行在 HP Agents 平台上。\
+             我可以帮你阅读和编辑代码、执行命令、搜索项目、\
+             探索目录结构、查询文档。请问有什么可以帮助你？",
+        ),
+        (
+            "Hello",
+            "I'm DeepX, running on the HP Agents platform. \
+             I can help with code, commands, search, \
+             file operations, and more. What would you like to do?",
+        ),
+    ];
+    for (user_text, assistant_text) in PRESET_EXCHANGES {
+        messages.push(Message {
+            role: "user".into(),
+            name: None,
+            content: vec![dsx_types::ContentBlock::text(user_text)],
+        });
+        messages.push(Message {
+            role: "assistant".into(),
+            name: None,
+            content: vec![dsx_types::ContentBlock::text(assistant_text)],
+        });
+    }
+
+    // ── Layer 4: Named context messages (document cache, code snippets, etc.) ──
     // Stable content per label → KV cache prefix reuse across turns.
-    let mut ctx_insert_pos = if has_phase { 2 } else { 1 };
     for (label, content) in &state.context_messages {
-        messages.insert(ctx_insert_pos, Message {
+        messages.push(Message {
             role: "user".into(),
             name: Some(label.clone()),
             content: vec![dsx_types::ContentBlock::text(content)],
         });
-        ctx_insert_pos += 1;
     }
+
+    // ── Layer 5: Conversation history ──
+    let conv = state.ctx.build(state.config.context_limit);
+    messages.extend(conv);
 
     // Turn annotations → appended to last user message (dynamic, per round)
     let mut dyn_suffix = String::new();

@@ -33,6 +33,21 @@ pub fn parse_xml_tool_calls(content: &str, tool_names: &[String]) -> (String, Ve
             }
         }
 
+        if remaining[tc_start..].starts_with("<invoke ") {
+            if let Some((name, args_text, rest)) = parse_invoke_block(&remaining[tc_start..]) {
+                cleaned.push_str(&remaining[..tc_start]);
+                let arguments = normalize_args(&args_text);
+                tool_calls.push(ToolCall {
+                    id: format!("xml_tc_{tc_index}"),
+                    call_type: "function".to_string(),
+                    function: FunctionCall { name, arguments },
+                });
+                tc_index += 1;
+                remaining = rest;
+                continue 'outer;
+            }
+        }
+
         let after_lt = &remaining[tc_start..];
         if let Some(end) = after_lt.find('>') {
             let tag_name = &after_lt[1..end];
@@ -87,6 +102,43 @@ fn parse_tool_use_block(s: &str) -> Option<(String, String, &str)> {
     let name = after_ns[..ne].trim().to_string();
     let args_text = after_ns[ne + n_close.len()..].trim().to_string();
     Some((name, args_text, rest))
+}
+
+fn parse_invoke_block(s: &str) -> Option<(String, String, &str)> {
+    let s = s.strip_prefix("<invoke ")?;
+    let name = extract_attr_value(s, "name")?;
+    let close_tag = s.find('>')?;
+    let after_open = &s[close_tag + 1..];
+    let end_tag = "</invoke>";
+    let end = after_open.find(end_tag)?;
+    let body = &after_open[..end];
+    let rest = &after_open[end + end_tag.len()..];
+
+    let param_tag = "<parameter ";
+    let param_close = "</parameter>";
+    let mut args_map = serde_json::Map::new();
+    let mut rem = body;
+    loop {
+        let Some(p) = rem.find(param_tag) else { break };
+        let after_p = &rem[p + param_tag.len()..];
+        let param_name = extract_attr_value(after_p, "name")?;
+        let str_attr = extract_attr_value(after_p, "string").unwrap_or_default();
+        let Some(gt) = after_p.find('>') else { break };
+        let content_start = &after_p[gt + 1..];
+        let Some(close) = content_start.find(param_close) else { break };
+        let value = content_start[..close].trim();
+        rem = &content_start[close + param_close.len()..];
+
+        let json_val = if str_attr == "true" {
+            serde_json::json!(value)
+        } else {
+            serde_json::from_str(value).unwrap_or_else(|_| serde_json::json!(value))
+        };
+        args_map.insert(param_name, json_val);
+    }
+
+    let args = serde_json::to_string(&args_map).unwrap_or_else(|_| "{}".into());
+    Some((name, args, rest))
 }
 
 fn extract_child_args(xml: &str) -> String {

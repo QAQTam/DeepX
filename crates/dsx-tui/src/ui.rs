@@ -502,15 +502,11 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     let body_width = body.width.saturating_sub(2) as usize;
 
     // Account for wrapping: count actual visual rows after line wrapping
+    // Use word-boundary wrap counting (matching ratatui's WordWrapper), not character-level division
     let mut wrapped_lines = 0usize;
     for line in &text_lines {
-        let line_w: usize = line.spans.iter()
-            .map(|s| s.content.width())
-            .sum();
-        let rows = if body_width > 0 {
-            (line_w.max(1) + body_width - 1) / body_width
-        } else { 1 };
-        wrapped_lines += rows.max(1);
+        let line_text: String = line.spans.iter().flat_map(|s| s.content.chars()).collect();
+        wrapped_lines += count_wrap_rows(&line_text, body_width);
     }
     let max_scroll = wrapped_lines.saturating_sub(content_height);
     let offset = if app.streaming { 0 } else { app.scroll_offset.min(max_scroll) };
@@ -817,4 +813,32 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
         let cursor_y = list_area.y + row;
         frame.set_cursor_position((cursor_x.min(area.width.saturating_sub(1)), cursor_y.min(area.height.saturating_sub(1))));
     }
+}
+
+/// Count visual rows after word-boundary wrapping, matching ratatui's WordWrapper.
+fn count_wrap_rows(text: &str, width: usize) -> usize {
+    if width == 0 || text.is_empty() {
+        return 1;
+    }
+    let total_w = unicode_width::UnicodeWidthStr::width(text);
+    if total_w <= width {
+        return 1;
+    }
+    let mut rows = 1usize;
+    let mut line_used = 0usize;
+    for word in text.split_inclusive(char::is_whitespace) {
+        let trimmed = word.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let word_w = unicode_width::UnicodeWidthStr::width(trimmed);
+        let sep = if line_used == 0 { 0 } else { 1 };
+        if line_used + sep + word_w > width {
+            rows += 1;
+            line_used = word_w;
+        } else {
+            line_used += sep + word_w;
+        }
+    }
+    rows
 }

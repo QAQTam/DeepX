@@ -41,7 +41,7 @@ pub fn build_and_push_assistant(
             });
         }
     }
-    if !content.is_empty() || parsed.is_empty() {
+    if !content.is_empty() {
         blocks.push(ContentBlock::Text {
             text: content.to_string(),
         });
@@ -53,6 +53,13 @@ pub fn build_and_push_assistant(
             id: tc.id.clone(),
             name: tc.function.name.clone(),
             input,
+        });
+    }
+
+    // Defensive: model returned zero text + zero tool calls + zero reasoning → placeholder
+    if blocks.is_empty() {
+        blocks.push(ContentBlock::Text {
+            text: "[Empty response]".to_string(),
         });
     }
     let assistant_msg = Message {
@@ -455,6 +462,8 @@ pub fn handle_user_input(
 
         if parsed.is_empty()
             && (content.contains("<tool_use>")
+                || content.contains("<invoke ")
+                || content.contains("<tool_calls>")
                 || content.contains("<read>")
                 || content.contains("<exec>")
                 || content.contains("<write>")
@@ -638,6 +647,8 @@ pub fn handle_user_input(
         }
         if parsed.is_empty()
             && (content.contains("<tool_use>")
+                || content.contains("<invoke ")
+                || content.contains("<tool_calls>")
                 || content.contains("<read>")
                 || content.contains("<exec>")
                 || content.contains("<write>")

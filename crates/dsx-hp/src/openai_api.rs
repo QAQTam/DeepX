@@ -348,6 +348,8 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
                 let mut obj = serde_json::json!({"role": "assistant"});
                 if !content.is_empty() {
                     obj["content"] = serde_json::json!(content);
+                } else if tool_calls.is_empty() && !reasoning.is_empty() {
+                    obj["content"] = serde_json::json!("[Thinking complete]");
                 }
                 if !reasoning.is_empty() {
                     obj["reasoning_content"] = serde_json::json!(reasoning);
@@ -355,7 +357,9 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
                 if !tool_calls.is_empty() {
                     obj["tool_calls"] = serde_json::json!(tool_calls);
                 }
-                out.push(obj);
+                if obj.as_object().map_or(false, |m| m.len() > 1) {
+                    out.push(obj);
+                }
             }
             "tool" => {
                 for block in &msg.content {

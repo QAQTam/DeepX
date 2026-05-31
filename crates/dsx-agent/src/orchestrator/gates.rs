@@ -67,8 +67,7 @@ pub fn re_read_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
         Some(p) => p.clone(),
         None => return false,
     };
-    let action = tool_action(args);
-    let is_read = tool_name == "file" && action == "read";
+    let is_read = tool_name == "read_file";
     let is_same_file = parse_file_arg(args)
         .map_or(false, |p| p == required_path);
     if is_read && is_same_file {
