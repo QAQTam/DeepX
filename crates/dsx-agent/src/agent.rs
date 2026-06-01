@@ -205,7 +205,14 @@ impl<'a> ToolResultAppender<'a> {
         if !failed && (tool_name == "write_file" || tool_name == "edit_file") {
             tracker::track_file_written(self.state, args);
             if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                self.state.re_read_required = Some(path);
+                self.state.re_read_required = Some(path.clone());
+                // Push diff context: model can reference file:line-range without re-reading
+                let label = format!("file:{}", path);
+                let ctx_lines: Vec<&str> = raw.lines().filter(|l| l.starts_with("  ") || l.starts_with("+") || l.starts_with("-")).collect();
+                let snippet = ctx_lines.join("\n");
+                if !snippet.is_empty() {
+                    self.state.push_context(&label, &snippet);
+                }
             }
         }
 

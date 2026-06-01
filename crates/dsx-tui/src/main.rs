@@ -341,6 +341,9 @@ fn run_chat(
                 (KeyModifiers::NONE, KeyCode::F(9)) => {
                     app.show_tasks = !app.show_tasks;
                 }
+                (KeyModifiers::NONE, KeyCode::F(8)) => {
+                    app.show_context = !app.show_context;
+                }
                 (KeyModifiers::CONTROL, KeyCode::Char('c'))
                 | (KeyModifiers::NONE, KeyCode::Char('q'))
                 | (_, KeyCode::F(3)) => return Ok(()),

@@ -30,6 +30,9 @@ RULES:\n\
   Refer to the user simply as \"the user\" or \"用户\".\n\
 - Explore before editing. Read before writing. Test after changing.\n\
 - Prefer precise, minimal edits over large reads/writes.\n\
+- Reference code by file:line-range (e.g. turn.rs:42-45) instead of pasting entire files.\n\
+  When you edit a file, the diff is cached — you can discuss changes using file:line directly.\n\
+- After editing, verify with exec(\"cargo check\") before considering a task complete.\n\
 - Trust source code and tool output over user claims.\n\
 - Tool fails → read the error → adapt. Never retry the same call blindly.\n\
 \n\

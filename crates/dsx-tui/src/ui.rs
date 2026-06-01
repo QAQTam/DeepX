@@ -674,6 +674,43 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         };
         frame.render_widget(Paragraph::new(lines), inner);
     }
+
+    // Context window
+    if app.show_context {
+        let d = &app.debug;
+        let files: Vec<&str> = d.read_files.iter()
+            .map(|a| a.split("/").last().unwrap_or(a).split("\\").last().unwrap_or(a))
+            .collect();
+        let ctx_w = 50u16;
+        let ctx_h = (files.len() as u16 + d.written_this_turn.len() as u16 + 3).min(18).max(4);
+        let ctx_rect = Rect::new(
+            area.width.saturating_sub(ctx_w + 2),
+            area.y + 1,
+            ctx_w,
+            ctx_h,
+        );
+        frame.render_widget(Clear, ctx_rect);
+        let ctx_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(Color::Rgb(120, 180, 255)))
+            .title(format!(" Context ({} files) ", files.len()))
+            .style(Style::new().bg(Color::Rgb(18, 22, 30)));
+        frame.render_widget(&ctx_block, ctx_rect);
+        let inner = ctx_block.inner(ctx_rect);
+        let mut lines: Vec<Line> = Vec::new();
+        for f in &files {
+            lines.push(Line::from(Span::styled(format!(" 📖 {} ", f), Style::new().fg(Color::Rgb(120, 200, 200)))));
+        }
+        for w in &d.written_this_turn {
+            let f = w.split("/").last().unwrap_or(w).split("\\").last().unwrap_or(w);
+            lines.push(Line::from(Span::styled(format!(" ✏️  {} ", f), Style::new().fg(Color::Rgb(200, 200, 100)))));
+        }
+        if files.is_empty() && d.written_this_turn.is_empty() {
+            lines.push(Line::from(Span::styled("  (no files in context)", Style::new().fg(Color::Gray))));
+        }
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
 }
 
 pub fn render_ask(frame: &mut Frame, app: &App) {

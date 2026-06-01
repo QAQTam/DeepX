@@ -244,6 +244,7 @@ pub struct App {
     pub resume_seed: Option<String>,
     pub show_debug: bool,
     pub show_tasks: bool,
+    pub show_context: bool,
     pub debug: DebugState,
     pub ask: Option<AskState>,
     pub balance: String,
@@ -579,6 +580,7 @@ impl App {
             resume_seed: None,
             show_debug: false,
             show_tasks: false,
+            show_context: false,
             debug: DebugState {
                 hp_connected: false,
                 session_seed: String::new(),
