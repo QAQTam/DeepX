@@ -348,7 +348,10 @@ fn run_chat(
                     app.status = app.setup.lang.t_chat_cancelled().to_string();
                 }
                 (KeyModifiers::CONTROL, KeyCode::Enter) => {
-                    if agent_dead { continue; }
+                    app.input.push('\n');
+                }
+                (_, KeyCode::Enter) => {
+                    if agent_dead || app.busy { continue; }
                     let text = app.input.drain(..).collect::<String>();
                     if !text.trim().is_empty() {
                         app.messages.push(app::ChatMessage {
@@ -357,11 +360,9 @@ fn run_chat(
                             lines: text.lines().map(|l| ratatui::text::Line::from(l.to_string())).collect(),
                         });
                         app.status = app.setup.lang.t_chat_thinking().to_string();
+                        app.busy = true;
                         send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
                     }
-                }
-                (_, KeyCode::Enter) => {
-                    app.input.push('\n');
                 }
                 (_, KeyCode::Backspace) => {
                     // Remove last grapheme cluster (supports emoji, CJK)

@@ -248,6 +248,7 @@ pub struct App {
     pub balance: String,
     block: BlockType,
     pub validating: bool,
+    pub busy: bool,
     streaming_rendered_len: usize,
 }
 
@@ -595,6 +596,7 @@ impl App {
             balance: String::new(),
             block: BlockType::None,
             validating: false,
+            busy: false,
         }
     }
 
@@ -751,6 +753,7 @@ impl App {
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.block = BlockType::None;
+                self.busy = false;
                 if let Some(last) = self.messages.last_mut() {
                     last.lines = crate::markdown::render_content(&last.content);
                 }
@@ -760,6 +763,7 @@ impl App {
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.block = BlockType::None;
+                self.busy = false;
                 if let Some(last) = self.messages.last_mut() {
                     last.lines = crate::markdown::render_content(&last.content);
                 }
