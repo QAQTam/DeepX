@@ -23,7 +23,7 @@ pub struct AgentState {
     // ── Explore-before-read state machine ──
     pub has_explored: bool,
     /// Per-file turn counters since last read/edit. Keyed by file path.
-    /// Blocked at >= 5 turns without refreshing.
+    /// Blocked at >= 7 turns without refreshing.
     pub file_last_read: std::collections::HashMap<String, u32>,
 
     /// After a file write/edit, forces a re-read before other tools.
@@ -155,9 +155,9 @@ impl AgentState {
         self.file_last_read.insert(path.to_string(), 0);
     }
 
-    /// Check if a file is stale (>= 5 turns since last touch).
+    /// Check if a file is stale (>= 7 turns since last touch).
     pub fn is_file_stale(&self, path: &str) -> bool {
-        self.file_last_read.get(path).copied().unwrap_or(10) >= 5
+        self.file_last_read.get(path).copied().unwrap_or(10) >= 7
     }
 
     /// Increment all file counters at end of turn.
