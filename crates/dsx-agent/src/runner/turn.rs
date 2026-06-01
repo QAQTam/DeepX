@@ -476,6 +476,11 @@ pub fn handle_user_input(
             if let Some(path) = dsx_types::arg::parse_file_arg(args) {
                 agent.touch_file(&path);
             }
+            if name == "delete_file" {
+                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
+                    agent.file_last_read.remove(&path);
+                }
+            }
         }
 
         let all_tool_calls: Vec<ToolCall> = agent
@@ -631,6 +636,11 @@ pub fn handle_user_input(
             }
             if let Some(path) = dsx_types::arg::parse_file_arg(args) {
                 agent.touch_file(&path);
+            }
+            if name == "delete_file" {
+                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
+                    agent.file_last_read.remove(&path);
+                }
             }
         }
 
