@@ -572,37 +572,33 @@ pub fn handle_user_input(
         };
 
         for (tc_idx, (name, id, args, tr_content)) in results.iter().enumerate() {
-            // Skip tools blocked by gates (checked before parallel spawn in serial mode,
-            // here we check after in parallel mode — gates that can't be pre-checked
-            // are handled by execute_single_tool for serial path)
-            if tc_idx == 0 && parsed.len() > 1 && !parsed.iter().any(|tc| tc.function.name == "ask_user") {
-                // Parallel path: gates were not pre-checked.
-                // Apply re-read gate post-hoc for the first tool (simplified).
-                if gates::re_read_gate(agent, name, id, args) {
-                    let msg = "[BLOCKED] Re-read gate prevented this tool.";
-                    let mut appender = ToolResultAppender::new(agent);
-                    appender.append(name, id, args, msg);
-                    emit_tool_result(agent_tx, id, name, msg, false, Some(args.clone()));
-                    continue;
-                }
-            }
-
-            let tr_content = tr_content;
-
-            if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
-                ipc_broken = true;
+            // Cancel check (before pushing result)
+            if dsx_tools::CANCEL.compare_exchange(
+                true, false,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            ).is_ok()
+            {
+                let msg = "[CANCELLED] Tool execution cancelled by user.";
+                let mut appender = ToolResultAppender::new(agent);
+                appender.append(name, id, args, msg);
+                emit_tool_result(agent_tx, id, name, msg, false, Some(args.clone()));
                 for remaining_idx in tc_idx + 1..results.len() {
                     let (rn, ri, ra, _) = &results[remaining_idx];
-                    let err = "[ERROR] Tools process disconnected — this tool was not executed.";
                     let mut appender = ToolResultAppender::new(agent);
-                    appender.append(rn, ri, ra, err);
-                    emit_tool_result(agent_tx, ri, rn, err, false, Some(ra.clone()));
+                    appender.append(rn, ri, ra, msg);
+                    emit_tool_result(agent_tx, ri, rn, msg, false, Some(ra.clone()));
                 }
                 break;
             }
 
             let tr_success =
                 !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
+
+            if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
+                ipc_broken = true;
+            }
+
             let failed = !tr_success;
 
             agent.health.record_tool_call();
@@ -610,6 +606,7 @@ pub fn handle_user_input(
                 agent.tool_failures += 1;
             }
 
+            // Push result to context (always — even for failed tools)
             {
                 let mut appender = ToolResultAppender::new(agent);
                 appender.append(name, id, args, tr_content);
@@ -622,42 +619,42 @@ pub fn handle_user_input(
             if name == "read_file" {
                 agent.turns_since_last_read = 0;
             }
-
-            let all_tool_calls: Vec<ToolCall> = agent
-                .ctx
-                .to_vec()
-                .iter()
-                .flat_map(|m| &m.content)
-                .filter_map(|b| {
-                    if let ContentBlock::ToolUse { id, name, input } = b {
-                        Some(ToolCall {
-                            id: id.clone(),
-                            call_type: "function".into(),
-                            function: dsx_types::FunctionCall {
-                                name: name.clone(),
-                                arguments: input.to_string(),
-                            },
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let _ = agent_tx.send(Agent2Ui::ToolState {
-                explored: agent.has_explored,
-                declared_files: all_tool_calls
-                    .iter()
-                    .filter(|tc| tc.function.name == "explore")
-                    .map(|tc| format!("{}: {}", tc.function.name, tc.function.arguments))
-                    .collect(),
-                read_files: all_tool_calls
-                    .iter()
-                    .filter(|tc| tc.function.name == "read_file")
-                    .map(|tc| tc.function.arguments.clone())
-                    .collect(),
-                written_this_turn: agent.files_written_this_turn.clone(),
-            });
         }
+
+        let all_tool_calls: Vec<ToolCall> = agent
+            .ctx
+            .to_vec()
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|b| {
+                if let ContentBlock::ToolUse { id, name, input } = b {
+                    Some(ToolCall {
+                        id: id.clone(),
+                        call_type: "function".into(),
+                        function: dsx_types::FunctionCall {
+                            name: name.clone(),
+                            arguments: input.to_string(),
+                        },
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let _ = agent_tx.send(Agent2Ui::ToolState {
+            explored: agent.has_explored,
+            declared_files: all_tool_calls
+                .iter()
+                .filter(|tc| tc.function.name == "explore")
+                .map(|tc| format!("{}: {}", tc.function.name, tc.function.arguments))
+                .collect(),
+            read_files: all_tool_calls
+                .iter()
+                .filter(|tc| tc.function.name == "read_file")
+                .map(|tc| tc.function.arguments.clone())
+                .collect(),
+            written_this_turn: agent.files_written_this_turn.clone(),
+        });
 
         if agent.pending_ask_user.is_some() {
             break;
