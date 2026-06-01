@@ -382,7 +382,7 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         app.status.clone()
     };
     let header_text = Line::from(vec![
-        Span::raw("DeepX | "),
+        Span::raw(format!("DeepX v{} | ", env!("CARGO_PKG_VERSION"))),
         Span::styled(format!("Context: {}", app.context_tokens), Style::new().fg(Color::Yellow)),
         Span::raw(" "),
         Span::styled(format!("({:.0}%)", if app.context_limit > 0 {
