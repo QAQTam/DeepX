@@ -268,6 +268,9 @@ impl Lang {
     pub fn t_chat_think(&self) -> &str {
         match self { Lang::En => "Think", Lang::Zh => "思考" }
     }
+    pub fn t_chat_think_title(&self) -> &str {
+        match self { Lang::En => "Thinking", Lang::Zh => "思考链" }
+    }
 
     // ── Chat status ──
 

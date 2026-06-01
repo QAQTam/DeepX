@@ -370,8 +370,14 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     let l = app.setup.lang;
     let input_lines = app.input.chars().filter(|&c| c == '\n').count() + 1;
     let input_height = (input_lines as u16 + 2).min(8).max(3);
-    let [header, body, input_area] = Layout::vertical([
+
+    let thinking_msgs: Vec<_> = app.messages.iter()
+        .filter(|m| m.role == ChatRole::Thinking)
+        .collect();
+    let think_h = if thinking_msgs.is_empty() { 0 } else { 5 };
+    let [header, think_area, body, input_area] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(think_h),
         Constraint::Fill(1),
         Constraint::Length(input_height),
     ]).areas(area);
@@ -422,8 +428,43 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     ]);
     frame.render_widget(header_text, header);
 
+    // ── Thinking window ──
+    if think_h > 0 {
+        let last_think = thinking_msgs.last().unwrap();
+        let think_block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(Color::Rgb(80, 80, 100)))
+            .title(l.t_chat_think_title());
+        let think_para = Paragraph::new(last_think.content.as_str())
+            .block(think_block)
+            .style(Style::new().fg(Color::Rgb(140, 140, 150)).italic())
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .scroll((0, 0));
+        frame.render_widget(think_para, think_area);
+    }
+
     let mut text_lines: Vec<Line> = Vec::with_capacity(app.messages.len() * 4);
+    let mut prev_role: Option<ChatRole> = None;
     for msg in &app.messages {
+        // Skip thinking messages — rendered in separate window
+        if msg.role == ChatRole::Thinking { continue; }
+
+        // Role separator: dim line between different non-divider roles
+        if let Some(pr) = prev_role {
+            if pr != msg.role && pr != ChatRole::Divider && msg.role != ChatRole::Divider
+                && pr != ChatRole::Status && msg.role != ChatRole::Status
+            {
+                let div_len = body.width.saturating_sub(2).min(60) as usize;
+                text_lines.push(Line::from(Span::styled(
+                    format!(" {}", "─".repeat(div_len)),
+                    Style::new().fg(DIM),
+                )));
+            }
+        }
+        if msg.role != ChatRole::Divider && msg.role != ChatRole::Status {
+            prev_role = Some(msg.role);
+        }
+
         match msg.role {
             ChatRole::Divider => {
                 let div_len = body.width.saturating_sub(2).min(60) as usize;
