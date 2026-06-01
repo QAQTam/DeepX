@@ -46,7 +46,8 @@ pub(super) fn walk_dir(dir: &str, output: &mut String, depth: usize, max_depth: 
                 output.push_str(&format!("{}    {}\n", indent, clean));
             }
         }
-        let sigs = extract_sigs(&f.path());
+        // Extract sigs from already-read content (avoid double read)
+        let sigs = extract_sigs_from_str(&content);
         for sig in &sigs[..5.min(sigs.len())] {
             output.push_str(&format!("{}    {}\n", indent, sig));
         }
@@ -72,8 +73,7 @@ pub(super) fn walk_dir(dir: &str, output: &mut String, depth: usize, max_depth: 
     Ok(())
 }
 
-pub(super) fn extract_sigs(path: &std::path::Path) -> Vec<String> {
-    let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
+fn extract_sigs_from_str(content: &str) -> Vec<String> {
     let mut sigs = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -281,7 +281,7 @@ pub(super) fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
 }
 
 fn exec_explore_inner(path: &str) -> String {
-    let max_depth = 3usize;
+    let max_depth = 4usize;
 
     let abs = std::path::Path::new(&path);
     let cwd = match std::env::current_dir() {
