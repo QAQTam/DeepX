@@ -961,7 +961,7 @@ fn tool_status(lang: crate::i18n::Lang, name: &str, args: Option<&str>) -> Strin
         "list_dir" => lang.t_tool_listing(),
         "diff" => lang.t_tool_diffing(),
         "commit" => lang.t_tool_committing(),
-        "git" => lang.t_tool_git(),
+        "git_checkpoint" | "git_status" | "git_diff" | "git_log" | "git_commit" | "git_push" | "git_pull" | "git_fetch" | "git_branch" | "git_checkout" | "git_reset" | "git_stash" | "git_restore" | "git_remote" | "git_init" | "git_merge" => lang.t_tool_git(),
         "task_create" | "plan_create" => lang.t_tool_creating(),
         "task_update" | "plan_update" => lang.t_tool_updating(),
         "context7_resolve" => lang.t_tool_resolving(),
@@ -1232,7 +1232,7 @@ fn build_tool_lines(lang: crate::i18n::Lang, name: &str, content: &str, args: Op
             }
             out
         }
-        "git" => {
+        "git_checkpoint" | "git_status" | "git_diff" | "git_log" | "git_commit" | "git_push" | "git_pull" | "git_fetch" | "git_branch" | "git_checkout" | "git_reset" | "git_stash" | "git_restore" | "git_remote" | "git_init" | "git_merge" => {
             let mut out = vec![Line::from("")];
             for line in content.lines().take(30) {
                 let style = if line.starts_with("[OK]") { Style::new().fg(Color::Rgb(100, 220, 100)) }
