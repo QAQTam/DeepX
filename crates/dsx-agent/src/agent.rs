@@ -268,6 +268,14 @@ impl<'a> ToolResultAppender<'a> {
             }
         }
 
+        // Push explore results to context for stable KV cache prefix
+        if !failed && tool_name == "explore" {
+            let lines: Vec<&str> = raw.lines().filter(|l| !l.is_empty()).take(80).collect();
+            if !lines.is_empty() {
+                self.state.push_context("project:map", &lines.join("\n"));
+            }
+        }
+
         if raw.starts_with("[OK]") && (tool_name == "write_file" || tool_name == "edit_file") {
             if !self.state.auto_verify.contains(&"cargo check".to_string()) {
                 if let Some(path) = dsx_types::arg::parse_file_arg(args) {

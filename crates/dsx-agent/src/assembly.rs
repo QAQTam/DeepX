@@ -522,8 +522,15 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
     }
 
     // ── Layer 3: Named context messages (document cache, code snippets, etc.) ──
-    // Stable content per label → KV cache prefix reuse across turns.
-    for (label, content) in &state.context_messages {
+    // Sorted: project:map first, then file:* entries, then others.
+    // Stable order per label → KV cache prefix reuse across turns.
+    let mut ctx_entries: Vec<&(String, String)> = state.context_messages.iter().collect();
+    ctx_entries.sort_by_key(|(k, _)| {
+        if k == "project:map" { (0, k.as_str()) }
+        else if k.starts_with("file:") { (1, k.as_str()) }
+        else { (2, k.as_str()) }
+    });
+    for (label, content) in ctx_entries {
         messages.push(Message {
             role: "user".into(),
             name: Some(label.clone()),
