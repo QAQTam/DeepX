@@ -205,9 +205,18 @@ pub fn execute_single_tool(
     if !failed && name == "write_file" {
         tracker::track_file_written(agent, args);
     }
-    if name == "read_file" {
-        agent.turns_since_last_read = 0;
-    }
+            if name == "read_file" {
+                agent.turns_since_last_read = 0;
+                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
+                    agent.cache_file(&path);
+                }
+            }
+            if !failed && name == "write_file" {
+                tracker::track_file_written(agent, args);
+                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
+                    agent.cache_file(&path);
+                }
+            }
 
     ToolOutcome::Executed
 }

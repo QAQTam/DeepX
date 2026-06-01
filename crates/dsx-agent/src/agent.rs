@@ -71,6 +71,32 @@ pub struct AgentState {
     /// `build_context()`. Key = label (used as `name` field), Value = content.
     /// Insertion order is preserved for deterministic KV cache prefix.
     pub context_messages: Vec<(String, String)>,
+
+    // ── File hash cache ──
+    /// File path → (lines, hash, last_modified). Used to skip re-reads
+    /// of unchanged files and serve cached diffs across turns.
+    pub file_cache: std::collections::HashMap<String, FileSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileSnapshot {
+    pub lines: usize,
+    pub hash: u64,
+    pub last_read_turn: u32,
+}
+
+impl FileSnapshot {
+    fn hash_of(path: &str) -> u64 {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        if let Ok(meta) = std::fs::metadata(path) {
+            std::hash::Hash::hash(&meta.len(), &mut h);
+            if let Ok(m) = meta.modified() {
+                std::hash::Hash::hash(&m, &mut h);
+            }
+        }
+        h.finish()
+    }
 }
 
 impl AgentState {
@@ -108,6 +134,7 @@ impl AgentState {
             max_tool_rounds,
             stream_cancelled: false,
             context_messages: Vec::new(),
+            file_cache: std::collections::HashMap::new(),
         };
 
         state
@@ -120,6 +147,20 @@ impl AgentState {
     }
 
     // ── Context helpers ──
+
+    /// Cache file snapshot after read. Returns true if file has changed since last cache.
+    pub fn cache_file(&mut self, path: &str) -> bool {
+        let new = FileSnapshot {
+            lines: 0,
+            hash: FileSnapshot::hash_of(path),
+            last_read_turn: self.turns_since_last_read,
+        };
+        if let Some(old) = self.file_cache.get(path) {
+            if old.hash == new.hash { return false; }
+        }
+        self.file_cache.insert(path.to_string(), new);
+        true
+    }
 
     /// Unified system note entry. Stored in turn_annotations for inclusion
     /// in the system prompt tail by build_context().
