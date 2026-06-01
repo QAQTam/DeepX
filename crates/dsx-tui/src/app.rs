@@ -363,17 +363,17 @@ impl MenuState {
         items.push(mk(MenuItemKind::Section, "", l.t_menu_agent_behavior().into(), "", false));
         items.push(mk(MenuItemKind::Value, "effort", l.t_menu_reasoning_effort().into(),
             &effort, true));
-        items.push(mk(MenuItemKind::Value, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
+        items.push(mk(MenuItemKind::Toggle, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
             &max_tool_rounds.to_string(), true));
         items.push(mk(MenuItemKind::Value, "context7_api_key", l.t_menu_c7_key().into(),
             if c7_key.is_empty() { "(not set)" } else { "****" }, true));
 
         // ── Model ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_model_section().into(), "", false));
-        items.push(mk(MenuItemKind::Value, "model", l.t_menu_model().into(), &model, false));
-        items.push(mk(MenuItemKind::Value, "max_tokens", l.t_menu_max_tokens().into(),
+        items.push(mk(MenuItemKind::Toggle, "model", l.t_menu_model().into(), &model, false));
+        items.push(mk(MenuItemKind::Toggle, "max_tokens", l.t_menu_max_tokens().into(),
             &max_tokens.to_string(), false));
-        items.push(mk(MenuItemKind::Value, "context_limit", l.t_menu_context_limit().into(),
+        items.push(mk(MenuItemKind::Toggle, "context_limit", l.t_menu_context_limit().into(),
             &context_limit.to_string(), false));
 
         // ── Profiles ──
@@ -427,6 +427,37 @@ impl MenuState {
         match item.key.as_str() {
             "effort" => {
                 item.value = if item.value == "high" { "max".into() } else { "high".into() };
+            }
+            "model" => {
+                item.value = match item.value.as_str() {
+                    "deepseek-v4-flash" => "deepseek-v4-pro".into(),
+                    _ => "deepseek-v4-flash".into(),
+                };
+            }
+            "max_tokens" => {
+                item.value = match item.value.as_str() {
+                    "4096" => "8192".into(),
+                    "8192" => "16384".into(),
+                    "16384" => "32000".into(),
+                    "32000" => "96000".into(),
+                    _ => "4096".into(),
+                };
+            }
+            "context_limit" => {
+                item.value = match item.value.as_str() {
+                    "128000" => "256000".into(),
+                    "256000" => "512000".into(),
+                    "512000" => "1000000".into(),
+                    _ => "128000".into(),
+                };
+            }
+            "max_tool_rounds" => {
+                item.value = match item.value.as_str() {
+                    "5" => "10".into(),
+                    "10" => "15".into(),
+                    "15" => "20".into(),
+                    _ => "5".into(),
+                };
             }
             "language" => {
                 app.setup.toggle_lang();
