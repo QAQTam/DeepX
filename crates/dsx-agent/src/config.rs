@@ -14,6 +14,7 @@ pub struct Config {
     pub profiles: HashMap<String, dsx_types::ProfileConfig>,
     pub active_profile: String,
     pub max_tool_rounds: Option<u32>,
+    pub context7_api_key: Option<String>,
 }
 
 impl Default for Config {
@@ -30,6 +31,7 @@ impl Default for Config {
             effort: None,
             profiles, active_profile: "default".into(),
             max_tool_rounds: None,
+            context7_api_key: None,
         }
     }
 }
@@ -60,6 +62,7 @@ impl Config {
             if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
             if let Some(ref e) = pc.effort { if !e.is_empty() { cfg.effort = Some(e.clone()); } }
             if let Some(v) = pc.max_tool_rounds { cfg.max_tool_rounds = Some(v); }
+            if let Some(ref k) = pc.context7_api_key { if !k.is_empty() { cfg.context7_api_key = Some(k.clone()); } }
         }
 
         if let Ok(k) = std::env::var("DEEPSEEK_API_KEY") { let k = k.trim().to_string(); if !k.is_empty() { cfg.api_key = k; } }
@@ -101,6 +104,7 @@ impl Config {
             active_profile: Some(self.active_profile.clone()),
             max_tool_rounds: self.max_tool_rounds,
             lang: existing_lang,
+            context7_api_key: self.context7_api_key.clone(),
     };
         if !store.save(&pc) {
             log::error!("Failed to save config");

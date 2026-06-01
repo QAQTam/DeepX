@@ -151,6 +151,12 @@ impl Lang {
             Lang::Zh => "最大工具轮数",
         }
     }
+    pub fn t_menu_c7_key(&self) -> &str {
+        match self {
+            Lang::En => "Context7 API Key",
+            Lang::Zh => "Context7 API 密钥",
+        }
+    }
     pub fn t_menu_model_section(&self) -> &str {
         match self {
             Lang::En => "── Model ──",

@@ -238,6 +238,11 @@ pub fn run() {
 
     // ── 6. Init in-process tools ──
     crate::tools::init_tools("pipe");
+    if let Some(ref key) = agent.config.context7_api_key {
+        if !key.is_empty() {
+            crate::tools::set_context7_key(key);
+        }
+    }
     agent.tool_defs = crate::tools::all_tools();
     eprintln!("dsx-agent: tools → {}", agent.tool_defs.len());
 

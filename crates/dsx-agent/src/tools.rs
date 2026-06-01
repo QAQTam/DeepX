@@ -19,7 +19,12 @@ pub fn init_tools(session_seed: &str) {
     if let Ok(mut guard) = TOOL_MANAGER.lock() {
         *guard = Some(mgr);
     }
+    // Context7 key: set from config if available (override may come later)
     log::info!("dsx: tool manager inited ({} tools)", all_tools().len());
+}
+
+pub fn set_context7_key(key: &str) {
+    dsx_tools::set_c7_key(key);
 }
 
 fn with_mgr<F, R>(f: F) -> Option<R>

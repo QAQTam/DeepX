@@ -5,8 +5,18 @@ use crate::{ToolCallCtx, ToolResult};
 // Context7 REST API v2.
 const C7_BASE: &str = "https://context7.com/api/v2";
 
+use std::sync::OnceLock;
+
+static C7_KEY: OnceLock<String> = OnceLock::new();
+
+pub fn set_c7_key(key: &str) {
+    let _ = C7_KEY.set(key.to_string());
+}
+
 fn c7_key() -> String {
-    std::env::var("CONTEXT7_API_KEY").unwrap_or_default()
+    C7_KEY.get().cloned()
+        .or_else(|| std::env::var("CONTEXT7_API_KEY").ok())
+        .unwrap_or_default()
 }
 
 fn c7_get(path: &str) -> Result<String, String> {

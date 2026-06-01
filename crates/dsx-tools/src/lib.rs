@@ -19,6 +19,8 @@ pub mod ipc;
 pub mod registration;
 pub mod persistence;
 
+pub use web::set_c7_key;
+
 /// Run the tools IPC server (stdin/stdout JSON-LP loop).
 pub fn run() {
     ipc::ipc_main_loop(&mut registration::build_tool_manager());

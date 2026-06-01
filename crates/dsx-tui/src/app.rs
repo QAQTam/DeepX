@@ -353,6 +353,7 @@ impl MenuState {
         let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
 
         let max_tool_rounds = config.as_ref().and_then(|c| c.max_tool_rounds).unwrap_or(10);
+        let c7_key = config.as_ref().and_then(|c| c.context7_api_key.clone()).unwrap_or_default();
         let mut items: Vec<MenuItem> = Vec::new();
         let mk = |kind, key: &str, label: String, value: &str, editable: bool| MenuItem {
             kind, key: key.into(), label, value: value.into(), editable,
@@ -364,6 +365,8 @@ impl MenuState {
             &effort, true));
         items.push(mk(MenuItemKind::Value, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
             &max_tool_rounds.to_string(), true));
+        items.push(mk(MenuItemKind::Value, "context7_api_key", l.t_menu_c7_key().into(),
+            if c7_key.is_empty() { "(not set)" } else { "****" }, true));
 
         // ── Model ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_model_section().into(), "", false));
@@ -483,6 +486,12 @@ impl MenuState {
                 }
                 "language" => {
                     config.lang = Some(item.value.clone());
+                }
+                "context7_api_key" => {
+                    let v = item.value.trim().to_string();
+                    if !v.is_empty() && v != "****" {
+                        config.context7_api_key = Some(v);
+                    }
                 }
                 _ => {}
             }
