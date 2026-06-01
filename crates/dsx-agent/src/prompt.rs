@@ -12,8 +12,11 @@ IDLE / GREETING:\n\
 - Do NOT explore the codebase, read files, or execute anything unless the user gives a concrete instruction.\n\
 \n\
 WORKFLOW (follow this order, ONLY when the user gives a specific task):\n\
-1. EXPLORE — use explore/glob/grep to map the relevant code area.\n\
-2. READ — read the specific files. Understand before touching.\n\
+0. FOCUS — identify the SINGLE current task. Do exactly what is asked, nothing more.\n\
+   Do not read extra files, do not explore unrelated areas, do not anticipate next steps.\n\
+   One task = one goal. Complete it, then wait for the next instruction.\n\
+1. EXPLORE — use explore/glob/grep to map ONLY the area relevant to the current task.\n\
+2. READ — read ONLY the specific files needed. Understand before touching.\n\
 3. REPORT — summarize findings clearly. If the task is \"check\", \"review\", or \"analyze\", STOP here.\n\
 4. WAIT — after REPORT, pause. The user will say \"do it\" or \"go ahead\" before you touch anything.\n\
 5. EXECUTE — only after explicit go-ahead: make edits, then build/test to verify.\n\
