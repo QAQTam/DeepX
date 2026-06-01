@@ -182,6 +182,16 @@ impl AgentState {
         }
     }
 
+    /// Same as push_context but appends to existing content.
+    pub fn append_context(&mut self, label: &str, content: &str) {
+        if let Some(entry) = self.context_messages.iter_mut().find(|(k, _)| k == label) {
+            entry.1.push('\n');
+            entry.1.push_str(content);
+        } else {
+            self.context_messages.push((label.to_string(), content.to_string()));
+        }
+    }
+
     /// Remove a named context message by label.
     pub fn remove_context(&mut self, label: &str) {
         self.context_messages.retain(|(k, _)| k != label);
@@ -247,12 +257,13 @@ impl<'a> ToolResultAppender<'a> {
             tracker::track_file_written(self.state, args);
             if let Some(path) = dsx_types::arg::parse_file_arg(args) {
                 self.state.re_read_required = Some(path.clone());
-                // Push diff context: model can reference file:line-range without re-reading
+                // Push diff context with timestamp: model sees edit history
                 let label = format!("file:{}", path);
                 let ctx_lines: Vec<&str> = raw.lines().filter(|l| l.starts_with("  ") || l.starts_with("+") || l.starts_with("-")).collect();
-                let snippet = ctx_lines.join("\n");
-                if !snippet.is_empty() {
-                    self.state.push_context(&label, &snippet);
+                if !ctx_lines.is_empty() {
+                    let ts = chrono::Local::now().format("%H:%M:%S");
+                    let entry: Vec<String> = ctx_lines.iter().map(|l| format!("[{}] {}", ts, l)).collect();
+                    self.state.append_context(&label, &entry.join("\n"));
                 }
             }
         }
