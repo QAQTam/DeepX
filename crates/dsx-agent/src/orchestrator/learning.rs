@@ -11,7 +11,8 @@ pub fn post_turn_maintenance(state: &mut AgentState, _final_msg: &Message) {
     state.health.context_limit = state.config.context_limit;
 
     // Explore-before-read: track turns since last read
-    state.turns_since_last_read = state.turns_since_last_read.saturating_add(1);
+    // Age all per-file counters
+    state.age_files();
 
     state.health.record_turn();
 }

@@ -473,8 +473,8 @@ pub fn handle_user_input(
             if !failed && name == "write_file" {
                 tracker::track_file_written(agent, args);
             }
-            if name == "read_file" {
-                agent.turns_since_last_read = 0;
+            if let Some(path) = dsx_types::arg::parse_file_arg(args) {
+                agent.touch_file(&path);
             }
         }
 
@@ -629,8 +629,8 @@ pub fn handle_user_input(
             if !failed && name == "write_file" {
                 tracker::track_file_written(agent, args);
             }
-            if name == "read_file" {
-                agent.turns_since_last_read = 0;
+            if let Some(path) = dsx_types::arg::parse_file_arg(args) {
+                agent.touch_file(&path);
             }
         }
 

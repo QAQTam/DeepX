@@ -22,7 +22,9 @@ pub struct AgentState {
 
     // ── Explore-before-read state machine ──
     pub has_explored: bool,
-    pub turns_since_last_read: u32,
+    /// Per-file turn counters since last read/edit. Keyed by file path.
+    /// Blocked at >= 5 turns without refreshing.
+    pub file_last_read: std::collections::HashMap<String, u32>,
 
     /// After a file write/edit, forces a re-read before other tools.
     pub re_read_required: Option<String>,
@@ -114,7 +116,7 @@ impl AgentState {
             api_usage: None,
             session_tokens: 0,
             has_explored: false,
-            turns_since_last_read: 0,
+            file_last_read: std::collections::HashMap::new(),
             re_read_required: None,
             tool_results: Vec::new(),
             session_seed: String::new(),
@@ -148,12 +150,29 @@ impl AgentState {
 
     // ── Context helpers ──
 
+    /// Mark a file as just read or edited (resets stale counter).
+    pub fn touch_file(&mut self, path: &str) {
+        self.file_last_read.insert(path.to_string(), 0);
+    }
+
+    /// Check if a file is stale (>= 5 turns since last touch).
+    pub fn is_file_stale(&self, path: &str) -> bool {
+        self.file_last_read.get(path).copied().unwrap_or(10) >= 5
+    }
+
+    /// Increment all file counters at end of turn.
+    pub fn age_files(&mut self) {
+        for v in self.file_last_read.values_mut() {
+            *v = v.saturating_add(1);
+        }
+    }
+
     /// Cache file snapshot after read. Returns true if file has changed since last cache.
     pub fn cache_file(&mut self, path: &str) -> bool {
         let new = FileSnapshot {
             lines: 0,
             hash: FileSnapshot::hash_of(path),
-            last_read_turn: self.turns_since_last_read,
+            last_read_turn: 0,
         };
         if let Some(old) = self.file_cache.get(path) {
             if old.hash == new.hash { return false; }
