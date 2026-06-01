@@ -20,20 +20,19 @@ fn find_dsx() -> Result<String, String> {
         if std::path::Path::new(&path).exists() { return Ok(path); }
     }
 
-    let exe = std::env::current_exe().ok();
-    if let Some(dir) = exe.as_ref().and_then(|e| e.parent()) {
-        let name = if cfg!(target_os = "windows") { "dsx.exe" } else { "dsx" };
+    let name = if cfg!(target_os = "windows") { "dsx.exe" } else { "dsx" };
 
-        // 1. Look alongside the current exe (same directory)
-        let candidate = dir.join(name);
+    // Try from executable path and from CWD
+    for start_dir in [std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())),
+                      std::env::current_dir().ok()].iter().flatten()
+    {
+        let candidate = start_dir.join(name);
         if candidate.exists() { return Ok(candidate.to_string_lossy().to_string()); }
 
-        // 2. Look in the resources/ subdirectory (Tauri v2 bundled release)
-        let resource = dir.join("resources").join(name);
+        let resource = start_dir.join("resources").join(name);
         if resource.exists() { return Ok(resource.to_string_lossy().to_string()); }
 
-        // 3. Walk up to find workspace target/debug/dsx or target/release/dsx
-        for ancestor in dir.ancestors().take(6) {
+        for ancestor in start_dir.ancestors().take(8) {
             for sub in &["debug", "release"] {
                 let c = ancestor.join("target").join(sub).join(name);
                 if c.exists() { return Ok(c.to_string_lossy().to_string()); }
@@ -41,7 +40,6 @@ fn find_dsx() -> Result<String, String> {
         }
     }
 
-    // 4. Unix: try which command
     #[cfg(unix)]
     if let Ok(out) = Command::new("sh").args(["which", "dsx"]).output() {
         if out.status.success() {
