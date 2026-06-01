@@ -12,7 +12,7 @@ export const T = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   contextLimit: '上下文限制',
-  language: '提示词语音',
+  language: '语言',
   theme: '主题',
   light: '亮色',
   dark: '深色',

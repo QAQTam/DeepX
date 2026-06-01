@@ -3,11 +3,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { T } from '../i18n'
 
 interface WorkspacePanelProps {
-  currentPhase: string
   planVersion: number
 }
 
-export function WorkspacePanel({ currentPhase, planVersion }: WorkspacePanelProps) {
+export function WorkspacePanel({ planVersion }: WorkspacePanelProps) {
   const [plans, setPlans] = useState<any[]>([])
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null)
   const [planContent, setPlanContent] = useState('')
@@ -53,19 +52,6 @@ export function WorkspacePanel({ currentPhase, planVersion }: WorkspacePanelProp
     <div className="h-full flex flex-col text-xs overflow-y-auto">
       <div className="p-3 border-b border-[var(--border)]">
         <div className="font-bold text-[var(--text-h)] text-sm mb-2">{T.workspace}</div>
-        <div className="text-[10px] flex items-center gap-1.5">
-          <span className="text-[var(--muted)]">阶段:</span>
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${
-            currentPhase === 'plan' ? 'text-[var(--warning)] border-[var(--warning)]' :
-            currentPhase === 'coding' ? 'text-[var(--text-h)] border-[var(--border)]' :
-            currentPhase === 'debug' ? 'text-[var(--error)] border-[var(--error)]' :
-            'text-[var(--accent)] border-[var(--accent)]'
-          }`}>
-            {currentPhase === 'plan' ? 'Plan' :
-             currentPhase === 'coding' ? 'Code' :
-             currentPhase === 'debug' ? 'Debug' : currentPhase}
-          </span>
-        </div>
       </div>
 
       <div className="p-3 border-b border-[var(--border)]">

@@ -1,3 +1,5 @@
+import { useRef, useEffect } from 'react'
+
 interface AskUserDialogProps {
   question: string
   options?: string[]
@@ -7,6 +9,9 @@ interface AskUserDialogProps {
 }
 
 export function AskUserDialog({ question, options, answer, setAnswer, onSubmit }: AskUserDialogProps) {
+  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  useEffect(() => () => clearTimeout(timerRef.current), [])
+
   return (
     <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-50">
       <div className="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-md w-full mx-4 shadow-md">
@@ -15,7 +20,7 @@ export function AskUserDialog({ question, options, answer, setAnswer, onSubmit }
         {options && options.length > 0 ? (
           <div className="flex flex-wrap gap-2 mb-4">
             {options.map((opt, i) => (
-              <button key={i} onClick={() => { setAnswer(opt); setTimeout(onSubmit, 100) }}
+              <button key={i} onClick={() => { setAnswer(opt); timerRef.current = setTimeout(onSubmit, 100) }}
                 className="px-3 py-1.5 rounded-lg text-xs border border-[var(--border)] bg-[var(--bg-tertiary)] text-[var(--text-h)] hover:bg-[var(--accent-light)] hover:border-[var(--accent)] transition-all">
                 {opt}
               </button>

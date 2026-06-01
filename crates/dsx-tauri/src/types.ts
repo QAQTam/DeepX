@@ -1,9 +1,11 @@
 export interface Message {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'tool'
   content: string
   reasoning?: string
   reasoningSegments?: string[]
   tool_calls?: ToolCallEntry[]
+  tool_call_id?: string
+  name?: string
 }
 
 export interface ToolCallEntry {

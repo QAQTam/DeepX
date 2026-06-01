@@ -1,11 +1,50 @@
-import { memo, useState } from 'react'
+import { memo, useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
 import { T } from '../i18n'
 import type { Message } from '../types'
 import { execLiveOutput, toolResults } from '../state'
+
+const mdComponents: Components = {
+  table({ children }) {
+    return <div className="overflow-x-auto my-2 border border-[var(--border)] rounded-lg"><table className="w-full text-xs border-collapse">{children}</table></div>
+  },
+  thead({ children }) { return <thead className="bg-[var(--bg-tertiary)]">{children}</thead> },
+  th({ children }) { return <th className="border-b border-[var(--border)] px-3 py-2 text-left font-medium">{children}</th> },
+  td({ children }) { return <td className="border-b border-[var(--border)] px-3 py-2">{children}</td> },
+  tr({ children }) { return <tr className="even:bg-[var(--bg-tertiary)]/50">{children}</tr> },
+  code({ className, children, ...props }: any) {
+    const match = /language-(\w+)/.exec(className || '')
+    return match ? (
+      <code className={className} {...props}>{children}</code>
+    ) : (
+      <code className="bg-[var(--bg-tertiary)] px-1.5 py-0.5 rounded text-xs font-mono text-[var(--accent)]" {...props}>{children}</code>
+    )
+  },
+  pre({ children }) { return <pre className="bg-[#0d1117] p-3 rounded-lg overflow-x-auto text-[12px] leading-relaxed my-2 border border-[var(--border)]">{children}</pre> },
+  a({ children, href }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="text-[var(--accent)] underline hover:opacity-80">{children}</a> },
+  ul({ children }) { return <ul className="list-disc pl-5 my-1 space-y-0.5">{children}</ul> },
+  ol({ children }) { return <ol className="list-decimal pl-5 my-1 space-y-0.5">{children}</ol> },
+  blockquote({ children }) { return <blockquote className="border-l-2 border-[var(--accent)] pl-3 my-2 italic text-[var(--muted)]">{children}</blockquote> },
+  h1({ children }) { return <h1 className="text-lg font-bold my-3">{children}</h1> },
+  h2({ children }) { return <h2 className="text-base font-bold my-2">{children}</h2> },
+  h3({ children }) { return <h3 className="text-sm font-bold my-2">{children}</h3> },
+  hr() { return <hr className="my-3 border-[var(--border)]" /> },
+  p({ children }) { return <p className="my-1.5 last:mb-0">{children}</p> },
+}
+
+function StreamingMarkdown({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm max-w-none prose-invert">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={mdComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  )
+}
 
 const ChatMessage = memo(function ChatMessage({ msg }: { msg: Message }) {
   const [openSegments, setOpenSegments] = useState<Record<number, boolean>>({})
@@ -59,41 +98,7 @@ const ChatMessage = memo(function ChatMessage({ msg }: { msg: Message }) {
         {msg.role === 'user' ? (
           <span className="whitespace-pre-wrap">{msg.content || '...'}</span>
         ) : (
-          <div className="prose prose-sm max-w-none prose-invert">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeHighlight]}
-              components={{
-                table({ children }) {
-                  return <div className="overflow-x-auto my-2 border border-[var(--border)] rounded-lg"><table className="w-full text-xs border-collapse">{children}</table></div>
-                },
-                thead({ children }) { return <thead className="bg-[var(--bg-tertiary)]">{children}</thead> },
-                th({ children }) { return <th className="border-b border-[var(--border)] px-3 py-2 text-left font-medium">{children}</th> },
-                td({ children }) { return <td className="border-b border-[var(--border)] px-3 py-2">{children}</td> },
-                tr({ children }) { return <tr className="even:bg-[var(--bg-tertiary)]/50">{children}</tr> },
-                code({ className, children, ...props }: any) {
-                  const match = /language-(\w+)/.exec(className || '')
-                  return match ? (
-                    <code className={className} {...props}>{children}</code>
-                  ) : (
-                    <code className="bg-[var(--bg-tertiary)] px-1.5 py-0.5 rounded text-[12px] font-mono text-[var(--accent)]" {...props}>{children}</code>
-                  )
-                },
-                pre({ children }) { return <pre className="bg-[#0d1117] p-3 rounded-lg overflow-x-auto text-[12px] leading-relaxed my-2 border border-[var(--border)]">{children}</pre> },
-                a({ children, href }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="text-[var(--accent)] underline hover:opacity-80">{children}</a> },
-                ul({ children }) { return <ul className="list-disc pl-5 my-1 space-y-0.5">{children}</ul> },
-                ol({ children }) { return <ol className="list-decimal pl-5 my-1 space-y-0.5">{children}</ol> },
-                blockquote({ children }) { return <blockquote className="border-l-2 border-[var(--accent)] pl-3 my-2 italic text-[var(--muted)]">{children}</blockquote> },
-                h1({ children }) { return <h1 className="text-lg font-bold my-3">{children}</h1> },
-                h2({ children }) { return <h2 className="text-base font-bold my-2">{children}</h2> },
-                h3({ children }) { return <h3 className="text-sm font-bold my-2">{children}</h3> },
-                hr() { return <hr className="my-3 border-[var(--border)]" /> },
-                p({ children }) { return <p className="my-1.5 last:mb-0">{children}</p> },
-              }}
-            >
-              {msg.content || ''}
-            </ReactMarkdown>
-          </div>
+          <StreamingMarkdown content={msg.content || ''} />
         )}
       </div>
     </div>

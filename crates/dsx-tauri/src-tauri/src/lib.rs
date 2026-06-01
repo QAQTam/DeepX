@@ -111,7 +111,11 @@ fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) {
         loop {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) => break, // silent exit — stale readers from old agents
+                Ok(0) => {
+                        log::info!("agent stdout closed");
+                        let _ = app.emit("agent-closed", serde_json::json!({}));
+                        break;
+                    }
                 Ok(_) => {
                     let t = line.trim();
                     if t.is_empty() { continue; }
@@ -123,14 +127,12 @@ fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) {
                             "api_response" => { let _ = app.emit("api-response", v); }
                             "done" => { let _ = app.emit("agent-done", v); }
                             "error" => { let _ = app.emit("agent-error", v); }
-                            "tool_confirm_req" => { let _ = app.emit("tool-confirm-req", v); }
                             "ask_user" => { let _ = app.emit("ask-user", v); }
-                            "phase_changed" => { let _ = app.emit("phase-changed", v); }
                             "tool_state" => { let _ = app.emit("tool-state", v); }
-                            "status" => { let _ = app.emit("status", v); }
-                            "exec_progress" => { let _ = app.emit("exec-progress", v); }
                             "tool_result" => { let _ = app.emit("tool-result", v); }
                             "session_restored" => { let _ = app.emit("session-restored", v); }
+                            "cache_prediction" => { let _ = app.emit("cache-prediction", v); }
+                            "balance" => { let _ = app.emit("balance", v); }
                             _ => {}
                         }
                     }
@@ -176,23 +178,13 @@ fn send_message(state: tauri::State<AgentState>, text: String) -> Result<(), Str
 }
 
 #[tauri::command]
-fn reload_agent(app: AppHandle, state: tauri::State<AgentState>) -> Result<(), String> {
-    // Drop current stdin — old agent exits cleanly
-    {
-        let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
-        *guard = None;
-    }
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    // Spawn fresh agent
-    let dsx_path = find_dsx()?;
-    ensure_hp(&dsx_path)?;
-    let (stdin, reader, stderr) = spawn_agent(&dsx_path, None)?;
-    *state.stdin.lock().map_err(|e| format!("lock: {e}"))? = Some(stdin);
-    start_reader(reader, app.clone());
-    start_stderr_reader(stderr, app);
-
-    log::info!("agent reloaded");
+fn reload_agent(state: tauri::State<AgentState>) -> Result<(), String> {
+    let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
+    let writer = guard.as_mut().ok_or("Agent not started")?;
+    let frame = serde_json::json!({"type": "reload_config"});
+    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap())
+        .map_err(|e| format!("write: {e}"))?;
+    writer.flush().map_err(|e| format!("flush: {e}"))?;
     Ok(())
 }
 
@@ -245,6 +237,102 @@ fn scan_sessions() -> Vec<serde_json::Value> {
         bu.cmp(&au)
     });
     sessions
+}
+
+#[tauri::command]
+fn load_session_messages(seed: String) -> Result<serde_json::Value, String> {
+    let dir = data_dir().join("sessions");
+    if !dir.is_dir() { return Err("No sessions directory".into()); }
+
+    let mut file_data: Option<String> = None;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path();
+            // New format: sessions/{seed}-{date}/session.json
+            if fname.starts_with(&seed) && path.is_dir() {
+                let inner = path.join("session.json");
+                if let Ok(data) = std::fs::read_to_string(&inner) {
+                    file_data = Some(data);
+                    break;
+                }
+            }
+            // Old format: sessions/{seed}.json
+            if fname == format!("{}.json", seed) && path.is_file() {
+                file_data = std::fs::read_to_string(&path).ok();
+                break;
+            }
+        }
+    }
+
+    let data = file_data.ok_or_else(|| format!("Session not found: {seed}"))?;
+    let file: dsx_types::SessionFile = serde_json::from_str(&data)
+        .map_err(|e| format!("Parse session: {e}"))?;
+    Ok(session_to_frontend(&file))
+}
+
+fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
+    use dsx_types::ContentBlock;
+    let mut ui: Vec<serde_json::Value> = Vec::new();
+
+    for msg in &file.messages {
+        match msg.role.as_str() {
+            "user" => {
+                let content: String = msg.content.iter().filter_map(|b| {
+                    if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }
+                }).collect();
+                ui.push(serde_json::json!({"role": "user", "content": content}));
+            }
+            "assistant" => {
+                let mut content = String::new();
+                let mut reasoning = String::new();
+                let mut reasoning_segs: Vec<String> = Vec::new();
+                let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+                for block in &msg.content {
+                    match block {
+                        ContentBlock::Text { text } => content.push_str(text),
+                        ContentBlock::Reasoning { reasoning: r } => {
+                            reasoning.push_str(r);
+                            reasoning_segs.push(r.clone());
+                        }
+                        ContentBlock::ToolUse { id, name, input } => {
+                            tool_calls.push(serde_json::json!({
+                                "id": id, "name": name,
+                                "args": serde_json::to_string(input).unwrap_or_default(),
+                                "output": "",
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+                ui.push(serde_json::json!({
+                    "role": "assistant", "content": content,
+                    "reasoning": if reasoning.is_empty() { serde_json::Value::Null } else { serde_json::json!(reasoning) },
+                    "reasoningSegments": reasoning_segs,
+                    "tool_calls": if tool_calls.is_empty() { serde_json::Value::Null } else { serde_json::json!(tool_calls) },
+                }));
+            }
+            "tool" => {
+                for block in &msg.content {
+                    if let ContentBlock::ToolResult { tool_use_id, content } = block {
+                        if let Some(last) = ui.last_mut() {
+                            if last["role"] == "assistant" {
+                                if let Some(tcs) = last["tool_calls"].as_array_mut() {
+                                    for tc in tcs.iter_mut() {
+                                        if tc["id"].as_str() == Some(tool_use_id.as_str()) {
+                                            tc["output"] = serde_json::json!(content);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    serde_json::json!(ui)
 }
 
 #[tauri::command]
@@ -453,17 +541,6 @@ fn scan_directory(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn confirm_tool(state: tauri::State<AgentState>, id: String, approved: bool) -> Result<(), String> {
-    let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
-    let writer = guard.as_mut().ok_or("Agent not started")?;
-    let frame = serde_json::json!({"type": "tool_confirm", "id": id, "approved": approved});
-    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap())
-        .map_err(|e| format!("write: {e}"))?;
-    writer.flush().map_err(|e| format!("flush: {e}"))?;
-    Ok(())
-}
-
-#[tauri::command]
 fn cancel_agent(state: tauri::State<AgentState>) -> Result<(), String> {
     let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
     if let Some(writer) = guard.as_mut() {
@@ -497,8 +574,8 @@ fn delete_session(seed: String) -> Result<(), String> {
 fn delete_all_sessions(app: AppHandle, state: tauri::State<AgentState>) -> Result<(), String> {
     let dir = data_dir().join("sessions");
     if !dir.is_dir() { return Ok(()); }
-    // Stop agent first so it doesn't re-create sessions while we delete
-    restart_agent(&app, &*state, None)?;
+    // Stop agent so it doesn't re-create sessions while we delete
+    stop_agent_inner(&app, &state);
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("read_dir: {e}"))?.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -510,19 +587,16 @@ fn delete_all_sessions(app: AppHandle, state: tauri::State<AgentState>) -> Resul
     Ok(())
 }
 
-#[allow(dead_code)]
-#[tauri::command]
-fn create_plan(name: String, goal: String, steps: Vec<String>) -> Result<(), String> {
-    let dir = dsx_types::platform::plans_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
-    let content = format!(
-        "---\nstatus: draft\ncreated_at: {}\nupdated_at: {}\nsession: pipe\n---\n\n# Plan: {}\n\n## Goal\n{}\n\n## Steps\n\n{}\n",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-        name, goal,
-        steps.iter().enumerate().map(|(i, s)| format!("{}. [ ] {}", i+1, s)).collect::<Vec<_>>().join("\n")
-    );
-    std::fs::write(dir.join(format!("{}.md", name)), content).map_err(|e| format!("write: {e}"))
+fn stop_agent_inner(_app: &AppHandle, state: &AgentState) {
+    if let Ok(mut guard) = state.stdin.lock() {
+        if let Some(writer) = guard.as_mut() {
+            let frame = serde_json::json!({"type": "shutdown"});
+            let _ = writeln!(writer, "{}", serde_json::to_string(&frame).unwrap());
+            let _ = writer.flush();
+        }
+        *guard = None;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
 }
 
 #[tauri::command]
@@ -562,18 +636,6 @@ fn read_plan(name: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))
 }
 
-#[allow(dead_code)]
-#[tauri::command]
-fn set_phase(state: tauri::State<AgentState>, phase: String) -> Result<(), String> {
-    let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
-    let writer = guard.as_mut().ok_or("Agent not started")?;
-    let frame = serde_json::json!({"type": "set_phase", "phase": phase});
-    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap())
-        .map_err(|e| format!("write: {e}"))?;
-    writer.flush().map_err(|e| format!("flush: {e}"))?;
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -589,9 +651,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_config, save_config, load_config, update_config, fetch_models,
             start_agent, send_message, reload_agent, stop_agent, resume_agent,
+            load_session_messages,
             set_workspace, get_workspace, scan_directory,
-        confirm_tool, cancel_agent,
-        cmd_sessions, delete_session, delete_all_sessions,
+            cancel_agent,
+            cmd_sessions, delete_session, delete_all_sessions,
             list_plans, read_plan, get_balance,
         ])
         .run(tauri::generate_context!())
