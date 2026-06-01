@@ -25,7 +25,7 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
                 }
             }
         }
-        if is_edit && state.turns_since_last_read >= 4 {
+        if is_edit && state.turns_since_last_read >= 5 {
             let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'file edit' blocked: {} turns since last read. Context may be stale.\n[HINT] Call read_file() first.", state.turns_since_last_read));
             return true;
         }
