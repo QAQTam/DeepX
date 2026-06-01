@@ -779,6 +779,7 @@ impl App {
                 self.debug.streaming = false;
                 self.block = BlockType::None;
                 self.busy = false;
+                self.scroll_offset = 0;
                 if let Some(last) = self.messages.last_mut() {
                     last.lines = crate::markdown::render_content(&last.content);
                 }
@@ -789,6 +790,7 @@ impl App {
                 self.debug.streaming = false;
                 self.block = BlockType::None;
                 self.busy = false;
+                self.scroll_offset = 0;
                 if let Some(last) = self.messages.last_mut() {
                     last.lines = crate::markdown::render_content(&last.content);
                 }
