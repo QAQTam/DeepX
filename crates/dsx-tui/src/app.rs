@@ -243,6 +243,7 @@ pub struct App {
     pub session_index: usize,
     pub resume_seed: Option<String>,
     pub show_debug: bool,
+    pub show_tasks: bool,
     pub debug: DebugState,
     pub ask: Option<AskState>,
     pub balance: String,
@@ -577,6 +578,7 @@ impl App {
             session_index: 0,
             resume_seed: None,
             show_debug: false,
+            show_tasks: false,
             debug: DebugState {
                 hp_connected: false,
                 session_seed: String::new(),
@@ -626,6 +628,27 @@ impl App {
     pub fn spinner(&self) -> &str {
         const CHARS: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
         CHARS[(self.frame_count as usize / 4) % CHARS.len()]
+    }
+
+    pub fn tasks(&self) -> Vec<(String, String)> {
+        if self.debug.session_seed.is_empty() {
+            return Vec::new();
+        }
+        let path = dsx_types::platform::sessions_dir()
+            .join(&self.debug.session_seed)
+            .join("tasks.md");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        content
+            .lines()
+            .filter(|l| l.starts_with("- [") && (l.contains("[pending]") || l.contains("[in_progress]") || l.contains("[completed]")))
+            .map(|l| {
+                let s = l.trim_start_matches("- ");
+                let status = if s.contains("[completed]") { "✓" }
+                    else if s.contains("[in_progress]") { "●" }
+                    else { "○" };
+                (status.to_string(), s.to_string())
+            })
+            .collect()
     }
 
     pub fn push_msg(&mut self, role: ChatRole, content: &str) {
@@ -1183,6 +1206,28 @@ fn build_tool_lines(lang: crate::i18n::Lang, name: &str, content: &str, args: Op
                     Style::new().fg(Color::Rgb(180, 190, 200))
                 };
                 out.push(Line::from(Span::styled(format!("  {}", line), style)));
+            }
+            out
+        }
+        "write_file" => {
+            let path = json.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let mut out = vec![Line::from("")];
+            if !path.is_empty() {
+                out.push(Line::from(Span::styled(format!("  {}", path), Style::new().fg(Color::Rgb(120, 200, 255)))));
+            }
+            out
+        }
+        "delete_file" | "move_file" | "copy_file" => {
+            let mut out = vec![Line::from("")];
+            for line in content.lines().take(5) {
+                out.push(Line::from(Span::styled(format!("  {}", line), Style::new().fg(Color::Rgb(180, 190, 200)))));
+            }
+            out
+        }
+        "task_list" | "plan_read" | "plan_list" => {
+            let mut out = vec![Line::from("")];
+            for line in content.lines().take(30) {
+                out.push(Line::from(Span::styled(format!("  {}", line), Style::new().fg(Color::Rgb(200, 200, 120)))));
             }
             out
         }

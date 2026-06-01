@@ -635,6 +635,45 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         ];
         frame.render_widget(Paragraph::new(lines), inner);
     }
+
+    // Task overlay
+    if app.show_tasks {
+        let tasks = app.tasks();
+        let task_w = 50u16;
+        let task_h = (tasks.len() as u16 + 3).min(20).max(5);
+        let task_rect = Rect::new(
+            area.width.saturating_sub(task_w + 2),
+            area.y + 14,
+            task_w,
+            task_h,
+        );
+        frame.render_widget(Clear, task_rect);
+        let task_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(Color::Rgb(120, 200, 200)))
+            .title(format!(" Tasks ({}) ", tasks.len()))
+            .style(Style::new().bg(Color::Rgb(18, 22, 30)));
+        frame.render_widget(&task_block, task_rect);
+
+        let inner = task_block.inner(task_rect);
+        let lines: Vec<Line> = if tasks.is_empty() {
+            vec![Line::from(Span::styled("  (no tasks)", Style::new().fg(Color::Gray)))]
+        } else {
+            tasks.iter().map(|(icon, text)| {
+                let icon_color = match icon.as_str() {
+                    "✓" => Color::Rgb(100, 220, 100),
+                    "●" => Color::Rgb(220, 200, 100),
+                    _ => Color::Rgb(140, 150, 160),
+                };
+                Line::from(vec![
+                    Span::styled(format!(" {} ", icon), Style::new().fg(icon_color).bold()),
+                    Span::styled(text.to_string(), Style::new().fg(Color::Rgb(200, 210, 220))),
+                ])
+            }).collect()
+        };
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
 }
 
 pub fn render_ask(frame: &mut Frame, app: &App) {
