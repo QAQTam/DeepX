@@ -8,6 +8,7 @@ members = [
     "crates/dsx-agent",
     "crates/dsx-tools",
     "crates/dsx-tui",
+    "crates/dsx-tauri/src-tauri",
 ]
 
 [workspace.package]

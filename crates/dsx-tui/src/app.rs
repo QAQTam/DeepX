@@ -708,7 +708,6 @@ impl App {
         } else {
             content.to_string()
         };
-        // Build a fresh renderer and push all lines at once (non-streaming message)
         let mut renderer = MarkdownRenderer::new();
         let mut lines = Vec::new();
         for line in content.lines() {
@@ -720,8 +719,14 @@ impl App {
             lines.push(l);
         }
         self.streaming_rendered_len = content.len();
-        self.md_renderer = None; // non-streaming: no renderer kept
+        self.md_renderer = None;
         self.messages.push(ChatMessage { role, content, lines });
+    }
+
+    /// Push a message placeholder for streaming — rendering is deferred to append_last().
+    fn push_streaming_msg(&mut self, role: ChatRole, content: &str) {
+        self.streaming_rendered_len = 0;
+        self.messages.push(ChatMessage { role, content: content.to_string(), lines: Vec::new() });
     }
 
     fn append_last(&mut self, content: &str) {
@@ -783,7 +788,7 @@ impl App {
                         if self.block == BlockType::Thinking && self.streaming {
                             self.append_last(&r);
                         } else {
-                            self.push_msg(ChatRole::Thinking, &r);
+                            self.push_streaming_msg(ChatRole::Thinking, &r);
                             self.streaming = true;
                         }
                     }
@@ -793,7 +798,7 @@ impl App {
                     if self.block == BlockType::Text && self.streaming {
                         self.append_last(&delta);
                     } else {
-                        self.push_msg(ChatRole::Assistant, &delta);
+                        self.push_streaming_msg(ChatRole::Assistant, &delta);
                         self.streaming = true;
                     }
                 }
