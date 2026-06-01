@@ -333,6 +333,7 @@ fn run_chat(
                     if agent_dead { continue; }
                     let menu = crate::app::MenuState::new(app);
                     run_menu(terminal, app, menu)?;
+                    send(stdin, &dsx_proto::Ui2Agent::ReloadConfig);
                 }
                 (KeyModifiers::NONE, KeyCode::F(12)) => {
                     app.show_debug = !app.show_debug;

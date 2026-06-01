@@ -152,6 +152,24 @@ pub fn run_agent_loop(
                 let _ = agent_tx.send(Agent2Ui::Cancelled);
             }
 
+            Ui2Agent::ReloadConfig => {
+                if let Ok(cfg) = crate::config::Config::load() {
+                    agent.config.api_key = cfg.api_key;
+                    agent.config.model = cfg.model;
+                    agent.config.effort = cfg.effort;
+                    agent.config.max_tokens = cfg.max_tokens;
+                    agent.config.context_limit = cfg.context_limit;
+                    agent.config.max_tool_rounds = cfg.max_tool_rounds;
+                    agent.health.context_limit = cfg.context_limit;
+                    if let Some(ref key) = cfg.context7_api_key {
+                        if !key.is_empty() {
+                            crate::tools::set_context7_key(key);
+                        }
+                    }
+                    log::info!("dsx-agent: config reloaded");
+                }
+            }
+
             Ui2Agent::Shutdown => {
                 maybe_save_session(&mut agent);
                 let _ = agent_tx.send(Agent2Ui::ShutdownAck);
