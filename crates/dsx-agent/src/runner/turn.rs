@@ -13,18 +13,11 @@ use dsx_types::{ContentBlock, Message, ToolCall};
 
 use crate::agent::{AgentState, ToolResultAppender};
 use crate::assembly::AssemblerError;
-use crate::orchestrator::{gates, learning, tracker};
+use crate::orchestrator::{learning, tracker};
 use crate::session;
 use crate::tool_parser;
 
 use super::hp_bridge::emit_tool_result;
-
-/// Outcome of `execute_single_tool` for the caller's loop control.
-pub enum ToolOutcome {
-    Continue,
-    Executed,
-    Break,
-}
 
 /// Build an assistant message from LLM response parts and push to context.
 pub fn build_and_push_assistant(
@@ -74,151 +67,6 @@ pub fn build_and_push_assistant(
     }
 
     assistant_msg
-}
-
-/// Handle the `ask_user` / `ask` tool: send an AskUser frame and await the reply.
-fn handle_ask_user_tool(
-    agent: &mut AgentState,
-    agent_tx: &mpsc::Sender<Agent2Ui>,
-    id: &str,
-    name: &str,
-    args: &str,
-) -> ToolOutcome {
-    let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-    let question = args_val
-        .get("question")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-    let options = args_val
-        .get("options")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect::<Vec<_>>()
-        })
-        .filter(|v| !v.is_empty());
-    let frame = Agent2Ui::AskUser {
-        id: id.to_string(),
-        question,
-        options,
-    };
-    let _ = agent_tx.send(frame);
-    agent.pending_ask_user = Some(id.to_string());
-    agent.tool_results.push((
-        id.to_string(),
-        "[ASK_USER] Awaiting your response.".to_string(),
-    ));
-    emit_tool_result(
-        agent_tx,
-        id,
-        name,
-        "[ASK_USER] Awaiting your response.",
-        false,
-        Some(args.to_string()),
-    );
-    ToolOutcome::Continue
-}
-
-/// Execute one tool call: gates → intercepts → cancel check → IPC → tracking.
-pub fn execute_single_tool(
-    agent: &mut AgentState,
-    tc: &ToolCall,
-    agent_tx: &mpsc::Sender<Agent2Ui>,
-) -> ToolOutcome {
-    let name = &tc.function.name;
-    let id = &tc.id;
-    let args = &tc.function.arguments;
-
-    if gates::explore_gate(agent, name, id, args) {
-        emit_tool_result(
-            agent_tx,
-            id,
-            name,
-            "[BLOCKED] Explore gate prevented this tool.",
-            false,
-            Some(args.to_string()),
-        );
-        return ToolOutcome::Continue;
-    }
-    if gates::re_read_gate(agent, name, id, args) {
-        emit_tool_result(
-            agent_tx,
-            id,
-            name,
-            "[BLOCKED] Re-read gate prevented this tool.",
-            false,
-            Some(args.to_string()),
-        );
-        return ToolOutcome::Continue;
-    }
-
-    if name == "ask_user" || name == "ask" {
-        return handle_ask_user_tool(agent, agent_tx, id, name, args);
-    }
-
-    if dsx_tools::CANCEL.compare_exchange(
-        true, false,
-        std::sync::atomic::Ordering::SeqCst,
-        std::sync::atomic::Ordering::SeqCst,
-    ).is_ok()
-    {
-        let _ = agent.ctx.push_tool_result(
-            &tc.id,
-            "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.",
-        );
-        emit_tool_result(
-            agent_tx,
-            id,
-            name,
-            "[CANCELLED] Tool execution cancelled by user.\n[HINT] This tool was not executed.",
-            false,
-            Some(args.to_string()),
-        );
-        return ToolOutcome::Continue;
-    }
-
-    let tr_content = crate::tools::execute_tool_with_id(name, "", args, id);
-    if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
-        let mut appender = ToolResultAppender::new(agent);
-        appender.append(name, &tc.id, args, &tr_content);
-        emit_tool_result(agent_tx, id, name, &tr_content, false, Some(args.to_string()));
-        return ToolOutcome::Break;
-    }
-
-    let tr_success =
-        !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
-    let failed = !tr_success;
-
-    agent.health.record_tool_call();
-    if failed {
-        agent.tool_failures += 1;
-    }
-
-    {
-        let mut appender = ToolResultAppender::new(agent);
-        appender.append(name, &tc.id, args, &tr_content);
-    }
-    emit_tool_result(agent_tx, id, name, &tr_content, tr_success, Some(args.to_string()));
-
-    if !failed && name == "write_file" {
-        tracker::track_file_written(agent, args);
-    }
-            if name == "read_file" {
-                agent.turns_since_last_read = 0;
-                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                    agent.cache_file(&path);
-                }
-            }
-            if !failed && name == "write_file" {
-                tracker::track_file_written(agent, args);
-                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                    agent.cache_file(&path);
-                }
-            }
-
-    ToolOutcome::Executed
 }
 
 /// Process a pending ask_user reply, pushing the user's text as a tool result.
@@ -693,122 +541,104 @@ pub fn handle_user_input(
         ));
     }
 
-    let max_post_rounds = 3u32;
-    let mut sent_final_response = false;
-    for _post_round in 0..max_post_rounds {
-        let (mut content, reasoning_content, tool_calls_raw, usage) =
-            match run_api_turn(agent, hp, agent_tx, _post_round, false) {
-                Ok(v) => v,
-                Err(()) => return,
-            };
+    // ── Post-tool-loop: single wrap-up call, parallel tool execution ──
+    let (mut content, reasoning_content, tool_calls_raw, usage) =
+        match run_api_turn(agent, hp, agent_tx, 0, false) {
+            Ok(v) => v,
+            Err(()) => return,
+        };
 
-
-        // ── Parse DSML/XML tool calls from content ──
-        content = tool_parser::strip_fenced_code(&content);
-        let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
-        if content.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
-            || content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls") {
-            let (cleaned, dsml_tcs) =
-                tool_parser::parse_dsml_tool_calls(&content, &agent.tool_defs);
-            content = cleaned;
-            parsed = dsml_tcs;
-            agent.dsml_compat_count += parsed.len() as u32;
-        }
-        if parsed.is_empty()
-            && (content.contains("<tool_use>")
-                || content.contains("<invoke ")
-                || content.contains("<tool_calls>")
-                || content.contains("<read>")
-                || content.contains("<exec>")
-                || content.contains("<write>")
-                || content.contains("<search>"))
-        {
-            let tool_names: Vec<String> =
-                agent.tool_defs.iter().map(|t| t.function.name.clone()).collect();
-            let (cleaned, xml_tcs) =
-                tool_parser::parse_xml_tool_calls(&content, &tool_names);
-            content = cleaned;
-            parsed = xml_tcs;
-            agent.dsml_compat_count += parsed.len() as u32;
-        }
-
-        if parsed.is_empty() {
-            let assistant_msg = build_and_push_assistant(
-                agent,
-                &content,
-                &reasoning_content,
-                &parsed,
-            );
-
-            let final_reasoning = (!agent.stream_reasoning.is_empty())
-                .then(|| agent.stream_reasoning.clone())
-                .or_else(|| reasoning_content.clone());
-            agent.stream_content.clear();
-            agent.stream_reasoning.clear();
-
-            learning::post_turn_maintenance(agent, &assistant_msg);
-
-            agent.health.record_turn();
-
-            let _ = agent_tx.send(Agent2Ui::ApiResponse {
-                content,
-                reasoning_content: final_reasoning,
-                tool_calls: None,
-                stop_reason: None,
-                usage,
-                context_tokens: agent.token_estimate,
-                context_limit: agent.config.context_limit,
-                session_tokens: agent.session_tokens,
-            });
-            sent_final_response = true;
-            break;
-        }
-
-        // ── DSML/XML tool calls found — execute them ──
-        build_and_push_assistant(
-            agent,
-            &content,
-            &reasoning_content,
-            &parsed,
-        );
-
-        // Pre-scan: mark explored if any tool call is exec(explore),
-        // so read_file doesn't get blocked by explore_gate in the same batch.
-        if !agent.has_explored {
-            if parsed.iter().any(|tc| {
-                tc.function.name == "exec"
-                    && dsx_types::arg::tool_action(&tc.function.arguments) == "explore"
-            }) {
-                agent.has_explored = true;
-            }
-        }
-
-        for (tc_idx, tc) in parsed.iter().enumerate() {
-            match execute_single_tool(agent, tc, agent_tx) {
-                ToolOutcome::Break => {
-                    // Push error results for remaining unexecuted tools
-                    for remaining in &parsed[tc_idx + 1..] {
-                        let err = "[ERROR] Tools process disconnected — this tool was not executed.";
-                        let mut appender = ToolResultAppender::new(agent);
-                        appender.append(&remaining.function.name, &remaining.id, &remaining.function.arguments, err);
-                        emit_tool_result(agent_tx, &remaining.id, &remaining.function.name, err, false, Some(remaining.function.arguments.to_string()));
-                    }
-                    break;
-                }
-                _ => {}
-            }
-        }
+    content = tool_parser::strip_fenced_code(&content);
+    let mut post_parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
+    if content.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
+        || content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls") {
+        let (cleaned, dsml_tcs) =
+            tool_parser::parse_dsml_tool_calls(&content, &agent.tool_defs);
+        content = cleaned;
+        post_parsed = dsml_tcs;
+        agent.dsml_compat_count += post_parsed.len() as u32;
+    }
+    if post_parsed.is_empty()
+        && (content.contains("<tool_use>")
+            || content.contains("<invoke ")
+            || content.contains("<tool_calls>")
+            || content.contains("<read>")
+            || content.contains("<exec>")
+            || content.contains("<write>")
+            || content.contains("<search>"))
+    {
+        let tool_names: Vec<String> =
+            agent.tool_defs.iter().map(|t| t.function.name.clone()).collect();
+        let (cleaned, xml_tcs) =
+            tool_parser::parse_xml_tool_calls(&content, &tool_names);
+        content = cleaned;
+        post_parsed = xml_tcs;
+        agent.dsml_compat_count += post_parsed.len() as u32;
     }
 
-    if !sent_final_response {
+    if post_parsed.is_empty() {
+        let assistant_msg = build_and_push_assistant(agent, &content, &reasoning_content, &post_parsed);
+        let final_reasoning = (!agent.stream_reasoning.is_empty())
+            .then(|| agent.stream_reasoning.clone())
+            .or_else(|| reasoning_content.clone());
+        agent.stream_content.clear();
+        agent.stream_reasoning.clear();
+        learning::post_turn_maintenance(agent, &assistant_msg);
+        agent.health.record_turn();
+
         let _ = agent_tx.send(Agent2Ui::ApiResponse {
-            content: format!(
-                "[System] Max post-tool rounds ({}) reached.",
-                max_post_rounds
-            ),
+            content,
+            reasoning_content: final_reasoning,
             tool_calls: None,
-            stop_reason: Some("max_rounds".into()),
-            usage: None,
+            stop_reason: None,
+            usage,
+            context_tokens: agent.token_estimate,
+            context_limit: agent.config.context_limit,
+            session_tokens: agent.session_tokens,
+        });
+    } else {
+        // Tools found — execute in parallel (same as main loop)
+        build_and_push_assistant(agent, &content, &reasoning_content, &post_parsed);
+
+        let results: Vec<(String, String, String, String)> = {
+            use std::thread;
+            let mut handles = Vec::new();
+            for tc in &post_parsed {
+                let name = tc.function.name.clone();
+                let args = tc.function.arguments.clone();
+                let id = tc.id.clone();
+                handles.push(thread::spawn(move || {
+                    let result =
+                        crate::tools::execute_tool_with_id(&name, "", &args, &id);
+                    (name, id, args, result)
+                }));
+            }
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        };
+
+        for (name, id, args, tr_content) in &results {
+            let tr_success = !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
+            let failed = !tr_success;
+            agent.health.record_tool_call();
+            if failed { agent.tool_failures += 1; }
+
+            let mut appender = ToolResultAppender::new(agent);
+            appender.append(name, id, args, tr_content);
+            emit_tool_result(agent_tx, id, name, tr_content, tr_success, Some(args.clone()));
+
+            if !failed && name == "write_file" {
+                tracker::track_file_written(agent, args);
+            }
+            if name == "read_file" {
+                agent.turns_since_last_read = 0;
+            }
+        }
+
+        let _ = agent_tx.send(Agent2Ui::ApiResponse {
+            content: String::new(),
+            tool_calls: None,
+            stop_reason: None,
+            usage,
             reasoning_content: None,
             context_tokens: agent.token_estimate,
             context_limit: agent.config.context_limit,
@@ -816,7 +646,7 @@ pub fn handle_user_input(
         });
     }
 
-    // End of post-tool-loop — finalize turn
+    // End of turn
     agent.health.reset_turn();
 
     session::save_live_snapshot(
