@@ -951,19 +951,17 @@ fn build_tool_lines(lang: crate::i18n::Lang, name: &str, content: &str, args: Op
     let json = args.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()).unwrap_or_default();
     match name {
         "read_file" => {
-            let start = json.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-            let end = json.get("end_line").and_then(|v| v.as_u64());
             let max_lines = 40usize;
             let total_lines = content.lines().count();
-
             let mut out = Vec::new();
-            for (i, line) in content.lines().take(max_lines).enumerate() {
-                let ln = start + i;
-                out.push(Line::from(vec![
-                    Span::styled(format!(" {:>4} │ ", ln), Style::new().fg(Color::Rgb(80, 90, 100))),
-                    Span::styled(line.to_string(), Style::new().fg(Color::Rgb(180, 190, 200))),
-                ]));
+            for line in content.lines().take(max_lines) {
+                out.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::new().fg(Color::Rgb(180, 190, 200)),
+                )));
             }
+            let end = json.get("end_line").and_then(|v| v.as_u64());
+            let start = json.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
             if let Some(e) = end {
                 if (e as usize).saturating_sub(start) >= max_lines {
                     out.push(Line::from(Span::styled(
