@@ -5,9 +5,7 @@
   "identifier": "com.dsx.app",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "cargo build -p dsx && pnpm dev",
-    "beforeBuildCommand": "cargo build --release -p dsx && pnpm build"
+    "devUrl": "http://localhost:5173"
   },
   "app": {
     "windows": [
@@ -34,9 +32,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "resources": {
-      "resources/dsx.exe": "dsx.exe"
-    }
+    ]
   }
 }

@@ -45,6 +45,11 @@ pub fn plans_dir() -> PathBuf {
     data_dir().join("plans")
 }
 
+/// DSX workspace path file.
+pub fn workspace_path() -> PathBuf {
+    data_dir().join("workspace.txt")
+}
+
 /// Kill a process by PID (cross-platform).
 /// - Windows: `taskkill /F /PID`
 /// - Unix: `kill -9`
