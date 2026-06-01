@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 struct AgentState {
     stdin: Mutex<Option<Box<dyn Write + Send>>>,
@@ -270,33 +270,23 @@ fn check_config() -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn save_config(provider: String, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, auto_mode: bool, prompt_lang: String, effort: String, protocol: Option<String>) -> Result<(), String> {
-    let proto = protocol.unwrap_or_else(|| {
-        if provider == "anthropic" { "anthropic".into() } else { "openai".into() }
-    });
+fn save_config(api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, effort: String, lang: String) -> Result<(), String> {
     let p = config_path();
     if let Some(dir) = p.parent() { std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?; }
-    // Load existing config to preserve fields we don't want to overwrite
     let mut old_cfg = serde_json::json!({});
     if let Ok(data) = std::fs::read_to_string(&p) {
         if let Ok(old) = serde_json::from_str::<serde_json::Value>(&data) { old_cfg = old; }
     }
-    // Use existing model if new one is empty
     let final_model = if model.is_empty() {
         old_cfg.get("model").and_then(|m| m.as_str()).unwrap_or("deepseek-v4-flash").to_string()
     } else { model };
-    // Preserve auxiliary fields
-    let mut extra = serde_json::json!({});
-    for key in &["phase_configs", "cached_models", "cached_models_deepseek", "cached_models_custom", "cached_models_anthropic", "profiles", "active_profile", "preferences"] {
-        if let Some(v) = old_cfg.get(*key) { extra[*key] = v.clone(); }
-    }
     let mut c = serde_json::json!({
-        "provider": provider, "protocol": proto, "api_key": api_key, "base_url": base_url,
+        "api_key": api_key, "base_url": base_url,
         "model": final_model, "context_limit": context_limit, "max_tokens": max_tokens,
-        "auto_mode": auto_mode, "prompt_lang": prompt_lang, "effort": effort,
+        "effort": effort, "lang": lang,
     });
-    if let Some(obj) = c.as_object_mut() {
-        if let Some(e) = extra.as_object() { for (k, v) in e { obj.entry(k).or_insert_with(|| v.clone()); } }
+    for key in &["profiles", "active_profile", "max_tool_rounds", "context7_api_key"] {
+        if let Some(v) = old_cfg.get(*key) { c[*key] = v.clone(); }
     }
     std::fs::write(&p, serde_json::to_string_pretty(&c).unwrap()).map_err(|e| format!("write: {e}"))?;
     Ok(())
@@ -522,6 +512,7 @@ fn delete_all_sessions(app: AppHandle, state: tauri::State<AgentState>) -> Resul
     Ok(())
 }
 
+#[allow(dead_code)]
 #[tauri::command]
 fn create_plan(name: String, goal: String, steps: Vec<String>) -> Result<(), String> {
     let dir = dsx_types::platform::plans_dir();
@@ -573,6 +564,7 @@ fn read_plan(name: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))
 }
 
+#[allow(dead_code)]
 #[tauri::command]
 fn set_phase(state: tauri::State<AgentState>, phase: String) -> Result<(), String> {
     let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
@@ -600,8 +592,8 @@ pub fn run() {
             check_config, save_config, load_config, update_config, fetch_models,
             start_agent, send_message, reload_agent, stop_agent, resume_agent,
             set_workspace, get_workspace, scan_directory,
-            confirm_tool, cancel_agent, set_phase,
-            cmd_sessions, delete_session, delete_all_sessions,
+        confirm_tool, cancel_agent,
+        cmd_sessions, delete_session, delete_all_sessions,
             list_plans, read_plan, get_balance,
         ])
         .run(tauri::generate_context!())
