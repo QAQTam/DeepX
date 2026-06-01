@@ -345,7 +345,7 @@ impl MenuState {
 
         let model = config.as_ref().and_then(|c| c.model.clone()).unwrap_or_else(|| "deepseek-v4-flash".into());
         let context_limit = config.as_ref().and_then(|c| c.context_limit).unwrap_or(1_000_000);
-        let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16000);
+        let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16384);
         let effort = config.as_ref().and_then(|c| c.effort.clone()).unwrap_or_else(|| "high".into());
         let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| "https://api.deepseek.com".into());
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
@@ -435,11 +435,12 @@ impl MenuState {
             }
             "max_tokens" => {
                 item.value = match item.value.as_str() {
-                    "4096" => "8192".into(),
-                    "8192" => "16384".into(),
                     "16384" => "32000".into(),
                     "32000" => "96000".into(),
-                    _ => "4096".into(),
+                    "96000" => "128000".into(),
+                    "128000" => "256000".into(),
+                    "256000" => "384000".into(),
+                    _ => "16384".into(),
                 };
             }
             "context_limit" => {
