@@ -7,6 +7,7 @@
 pub mod exec;
 pub mod explore;
 pub mod file;
+pub mod git;
 mod safety;
 mod web;
 mod ask;

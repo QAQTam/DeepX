@@ -10,6 +10,7 @@ use super::file;
 use super::task;
 use super::plan;
 use super::ask;
+use super::git;
 
 
 
@@ -32,6 +33,8 @@ pub fn build_tool_manager() -> ToolManager {
     // ── 用户交互 ──
     ask::register(&mut mgr);
 
+    // ── Git 操作 ──
+    git::register(&mut mgr);
 
     mgr
 }

@@ -454,6 +454,9 @@ impl Lang {
     pub fn t_tool_committing(&self) -> &str {
         match self { Lang::En => "Committing", Lang::Zh => "正在提交" }
     }
+    pub fn t_tool_git(&self) -> &str {
+        match self { Lang::En => "Git", Lang::Zh => "Git" }
+    }
     pub fn t_tool_creating(&self) -> &str {
         match self { Lang::En => "Creating", Lang::Zh => "正在创建" }
     }

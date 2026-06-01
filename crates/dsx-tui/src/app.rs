@@ -961,6 +961,7 @@ fn tool_status(lang: crate::i18n::Lang, name: &str, args: Option<&str>) -> Strin
         "list_dir" => lang.t_tool_listing(),
         "diff" => lang.t_tool_diffing(),
         "commit" => lang.t_tool_committing(),
+        "git" => lang.t_tool_git(),
         "task_create" | "plan_create" => lang.t_tool_creating(),
         "task_update" | "plan_update" => lang.t_tool_updating(),
         "context7_resolve" => lang.t_tool_resolving(),
@@ -1228,6 +1229,18 @@ fn build_tool_lines(lang: crate::i18n::Lang, name: &str, content: &str, args: Op
             let mut out = vec![Line::from("")];
             for line in content.lines().take(30) {
                 out.push(Line::from(Span::styled(format!("  {}", line), Style::new().fg(Color::Rgb(200, 200, 120)))));
+            }
+            out
+        }
+        "git" => {
+            let mut out = vec![Line::from("")];
+            for line in content.lines().take(30) {
+                let style = if line.starts_with("[OK]") { Style::new().fg(Color::Rgb(100, 220, 100)) }
+                    else if line.starts_with("[ERROR]") { Style::new().fg(Color::Red) }
+                    else if line.starts_with("M ") || line.starts_with("A ") || line.starts_with("D ") || line.starts_with("R ") { Style::new().fg(Color::Rgb(200, 200, 100)) }
+                    else if line.starts_with("?") { Style::new().fg(Color::Rgb(200, 80, 80)) }
+                    else { Style::new().fg(Color::Rgb(180, 190, 200)) };
+                out.push(Line::from(Span::styled(format!("  {}", line), style)));
             }
             out
         }
