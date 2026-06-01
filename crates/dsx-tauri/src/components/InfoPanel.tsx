@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { T } from '../i18n'
 
 interface InfoPanelProps {
@@ -12,7 +11,6 @@ interface InfoPanelProps {
   onSettings: () => void
   onNewSession: () => void
   onResumeSession: (seed: string) => void
-  onRefreshSessions: () => void
   onDeleteAllSessions: () => void
   onDeleteSession: (seed: string) => void
 }
@@ -20,7 +18,7 @@ interface InfoPanelProps {
 export function InfoPanel({
   tokens, cache, predictedCacheHitPct, balance,
   onSettings, onNewSession, onResumeSession,
-  sessionId, sessions, onRefreshSessions,
+  sessionId, sessions,
   onDeleteAllSessions, onDeleteSession,
 }: InfoPanelProps) {
   const pct = tokens.limit > 0 ? tokens.used / tokens.limit : 0

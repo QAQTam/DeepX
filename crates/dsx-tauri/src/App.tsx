@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 're
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { T } from './i18n'
-import { Message } from './types'
+import type { Message } from './types'
 import { clearToolOutputs, execLiveOutput, toolResults } from './state'
 import { ChatMessage } from './components/ChatMessage'
 import { InfoPanel } from './components/InfoPanel'
@@ -305,7 +305,6 @@ export default function App() {
             onSettings={() => setShowSettings(true)}
             onNewSession={newSession}
             onResumeSession={resumeSession}
-            onRefreshSessions={refreshSessions}
             onDeleteAllSessions={handleDeleteAllSessions}
             onDeleteSession={handleDeleteSession}
           />
