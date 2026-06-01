@@ -160,6 +160,7 @@ fn run_api_turn(
         Option<String>,
         serde_json::Value,
         Option<dsx_types::UsageInfo>,
+        Option<String>,
     ),
     (),
 > {
@@ -235,13 +236,14 @@ fn run_api_turn(
                 });
             }
             dsx_proto::HpToAgent::ApiResponse {
-                content, tool_calls, stop_reason: _, reasoning_content, usage,
+                content, tool_calls, stop_reason, reasoning_content, usage,
             } => {
                 return Ok((
                     content,
                     reasoning_content,
                     tool_calls.unwrap_or(serde_json::Value::Null),
                     usage,
+                    stop_reason,
                 ));
             }
             dsx_proto::HpToAgent::Balance { is_available, total_balance, currency } => {
@@ -299,7 +301,7 @@ pub fn handle_user_input(
             break;
         }
 
-        let (mut content, reasoning_content, tool_calls_raw, usage) =
+        let (mut content, reasoning_content, tool_calls_raw, usage, stop_reason) =
             match run_api_turn(agent, hp, agent_tx, _round, true) {
                 Ok(v) => v,
                 Err(()) => return,
@@ -343,6 +345,7 @@ pub fn handle_user_input(
         if let Some(ref u) = usage {
             agent.api_usage = Some(u.clone());
             agent.session_tokens += u.total_tokens as u64;
+            agent.token_estimate = u.prompt_tokens;
         }
 
         let assistant_msg = build_and_push_assistant(
@@ -353,6 +356,26 @@ pub fn handle_user_input(
         );
 
         if !has_tools {
+            // finish_reason="length" means the model ran out of tokens before completing
+            // its response. Give it another round to finish.
+            if stop_reason.as_deref() == Some("length") {
+                agent.stream_content.clear();
+                agent.stream_reasoning.clear();
+                log::info!("turn: stop_reason=length at r={}, nudging model to continue", _round);
+                continue;
+            }
+
+            // Other empty-content case: model thought but didn't write visible text
+            if content.trim().is_empty() {
+                agent.stream_content.clear();
+                agent.stream_reasoning.clear();
+                agent.turn_annotations.push(
+                    "[System] You produced reasoning but no visible response. Summarize your findings now."
+                        .to_string(),
+                );
+                continue;
+            }
+
             let final_reasoning = (!agent.stream_reasoning.is_empty())
                 .then(|| agent.stream_reasoning.clone())
                 .or_else(|| reasoning_content.clone());
@@ -547,7 +570,7 @@ pub fn handle_user_input(
     }
 
     // ── Post-tool-loop: single wrap-up call, parallel tool execution ──
-    let (mut content, reasoning_content, tool_calls_raw, usage) =
+    let (mut content, reasoning_content, tool_calls_raw, usage, _stop_reason) =
         match run_api_turn(agent, hp, agent_tx, 0, false) {
             Ok(v) => v,
             Err(()) => return,
@@ -590,6 +613,10 @@ pub fn handle_user_input(
         agent.stream_reasoning.clear();
         learning::post_turn_maintenance(agent, &assistant_msg);
         agent.health.record_turn();
+        if let Some(ref u) = usage {
+            agent.session_tokens += (u.prompt_cache_miss_tokens + u.completion_tokens) as u64;
+            agent.token_estimate = u.prompt_tokens;
+        }
 
         let _ = agent_tx.send(Agent2Ui::ApiResponse {
             content,

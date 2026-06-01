@@ -86,6 +86,21 @@ pub fn set_current_session(seed: &str) {
     dsx_tools::set_current_session(seed);
 }
 
+pub fn load_workspace(seed: &str) {
+    let dir = dsx_types::platform::sessions_dir().join(seed);
+    let ws = std::fs::read_to_string(dir.join("workspace.txt")).unwrap_or_default();
+    let ws = ws.trim();
+    if !ws.is_empty() {
+        dsx_tools::set_workspace(ws);
+    } else {
+        dsx_tools::set_workspace(".");
+    }
+}
+
+pub fn set_workspace(path: &str) {
+    dsx_tools::set_workspace(path);
+}
+
 // ── Wrap helper ──
 
 pub fn wrap_tool_result(name: &str, raw: &str) -> String {

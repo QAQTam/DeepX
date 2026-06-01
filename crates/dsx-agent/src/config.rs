@@ -15,6 +15,7 @@ pub struct Config {
     pub active_profile: String,
     pub max_tool_rounds: Option<u32>,
     pub context7_api_key: Option<String>,
+    pub lang: Option<String>,
 }
 
 impl Default for Config {
@@ -32,6 +33,7 @@ impl Default for Config {
             profiles, active_profile: "default".into(),
             max_tool_rounds: None,
             context7_api_key: None,
+            lang: None,
         }
     }
 }
@@ -63,6 +65,7 @@ impl Config {
             if let Some(ref e) = pc.effort { if !e.is_empty() { cfg.effort = Some(e.clone()); } }
             if let Some(v) = pc.max_tool_rounds { cfg.max_tool_rounds = Some(v); }
             if let Some(ref k) = pc.context7_api_key { if !k.is_empty() { cfg.context7_api_key = Some(k.clone()); } }
+            if let Some(ref l) = pc.lang { if !l.is_empty() { cfg.lang = Some(l.clone()); } }
         }
 
         if let Ok(k) = std::env::var("DEEPSEEK_API_KEY") { let k = k.trim().to_string(); if !k.is_empty() { cfg.api_key = k; } }
@@ -85,7 +88,6 @@ impl Config {
 
     pub fn save(&self) {
         let store = ConfigStore::default_location();
-        let existing_lang = store.load().and_then(|c| c.lang);
         let mut profiles = self.profiles.clone();
         profiles.insert(self.active_profile.clone(), dsx_types::ProfileConfig {
             model: self.model.clone(), max_tokens: self.max_tokens,
@@ -103,7 +105,7 @@ impl Config {
             profiles: Some(profiles),
             active_profile: Some(self.active_profile.clone()),
             max_tool_rounds: self.max_tool_rounds,
-            lang: existing_lang,
+            lang: self.lang.clone(),
             context7_api_key: self.context7_api_key.clone(),
     };
         if !store.save(&pc) {

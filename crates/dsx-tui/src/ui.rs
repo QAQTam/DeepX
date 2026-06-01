@@ -1,9 +1,9 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::app::{App, ChatRole};
@@ -374,59 +374,69 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     let thinking_msgs: Vec<_> = app.messages.iter()
         .filter(|m| m.role == ChatRole::Thinking)
         .collect();
-    let think_h = if thinking_msgs.is_empty() { 0 } else { 5 };
-    let [header, think_area, body, input_area] = Layout::vertical([
-        Constraint::Length(1),
+    let think_h = if !app.show_thinking || thinking_msgs.is_empty() { 0 } else { 5 };
+    let [header_area, think_area, body, input_area] = Layout::vertical([
+        Constraint::Length(2),
         Constraint::Length(think_h),
         Constraint::Fill(1),
         Constraint::Length(input_height),
-    ]).areas(area);
+    ]).spacing(1).areas(area);
+
+    let [header_line1, header_line2] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ]).areas(header_area);
 
     let status_text = if app.streaming {
         format!("{} {}", app.spinner(), &app.status)
     } else {
         app.status.clone()
     };
-    let header_text = Line::from(vec![
-        Span::raw(format!("DeepX v{} | ", env!("CARGO_PKG_VERSION"))),
-        Span::styled(format!("Context: {}", app.context_tokens), Style::new().fg(Color::Yellow)),
-        Span::raw(" "),
-        Span::styled(format!("({:.0}%)", if app.context_limit > 0 {
-            app.context_tokens as f64 / app.context_limit as f64 * 100.0
-        } else { 0.0 }), Style::new().fg(Color::Gray)),
+    let cache_total = app.cache_hit + app.cache_miss;
+    let cache_rate = if cache_total > 0 { app.cache_hit as f64 / cache_total as f64 * 100.0 } else { 0.0 };
+    let cache_color = if cache_rate > 0.5 { Color::Rgb(100, 200, 120) } else { Color::Rgb(200, 150, 100) };
+    let ctx_pct = if app.context_limit > 0 {
+        app.context_tokens as f64 / app.context_limit as f64 * 100.0
+    } else { 0.0 };
+
+    // Line 1: version | context bar | status | think toggle
+    let h1 = Line::from(vec![
+        Span::raw(format!("DeepX v{}", env!("CARGO_PKG_VERSION"))),
         Span::raw(" | "),
-        Span::styled(format!("Session: {}", app.session_tokens), Style::new().fg(Color::Rgb(180, 180, 200))),
-        if app.cache_hit > 0 || app.cache_miss > 0 {
-            Span::raw(" ")
-        } else { Span::raw("") },
-        Span::styled(format!("{}:{}", l.t_chat_hit(), app.cache_hit), Style::new().fg(Color::Rgb(100, 200, 120))),
-        Span::styled("/", Style::new().fg(DIM)),
-        Span::styled(format!("{}:{}", l.t_chat_miss(), app.cache_miss), Style::new().fg(Color::Rgb(200, 150, 100))),
-        Span::raw(" "),
-        Span::styled(format!("({:.0}%)", {
-            let total = app.cache_hit + app.cache_miss;
-            if total > 0 { app.cache_hit as f64 / total as f64 * 100.0 } else { 0.0 }
-        }), Style::new().fg(if app.cache_hit as f64 / (app.cache_hit + app.cache_miss).max(1) as f64 > 0.5 {
-            Color::Rgb(100, 200, 120)
-        } else {
-            Color::Rgb(200, 150, 100)
-        })),
-        if !app.balance.is_empty() {
-            Span::raw(" | ")
-        } else {
-            Span::raw("")
-        },
-        Span::styled(&app.balance, Style::new().fg(Color::Rgb(100, 200, 255))),
-        Span::raw(" | "),
-        Span::styled(format!("DSML compat: {}", app.debug.dsml_compat_count), Style::new().fg(Color::Rgb(100, 220, 140))),
+        Span::styled(format!("Context: {} / {} ({:.0}%)", app.context_tokens, app.context_limit, ctx_pct),
+            Style::new().fg(Color::Yellow)),
         Span::raw(" | "),
         Span::styled(&status_text, Style::new().fg(if app.streaming { Color::Yellow } else { Color::Green })),
-        if !app.cache_warning.is_empty() {
+        if !app.show_thinking && !thinking_msgs.is_empty() {
             Span::raw(" | ")
         } else { Span::raw("") },
-        Span::styled(&app.cache_warning, Style::new().fg(Color::Red).bold()),
+        if !app.show_thinking && !thinking_msgs.is_empty() {
+            Span::styled("Think hidden (F6)", Style::new().fg(DIM))
+        } else { Span::raw("") },
     ]);
-    frame.render_widget(header_text, header);
+    frame.render_widget(h1, header_line1);
+
+    // Line 2: session | cache | balance | dsml | warning
+    let mut h2_spans = vec![
+        Span::styled(format!("Session: {}", app.session_tokens), Style::new().fg(Color::Rgb(180, 180, 200))),
+        Span::raw("  "),
+    ];
+    if cache_total > 0 {
+        h2_spans.push(Span::styled(format!("Hit:{}", app.cache_hit), Style::new().fg(Color::Rgb(100, 200, 120))));
+        h2_spans.push(Span::styled(format!("/Miss:{}", app.cache_miss), Style::new().fg(Color::Rgb(200, 150, 100))));
+        h2_spans.push(Span::styled(format!(" ({:.0}%)", cache_rate), Style::new().fg(cache_color)));
+        h2_spans.push(Span::raw("  "));
+    }
+    if !app.balance.is_empty() {
+        h2_spans.push(Span::styled(&app.balance, Style::new().fg(Color::Rgb(100, 200, 255))));
+        h2_spans.push(Span::raw("  "));
+    }
+    h2_spans.push(Span::styled(format!("DSML: {}", app.debug.dsml_compat_count), Style::new().fg(Color::Rgb(100, 220, 140))));
+    if !app.cache_warning.is_empty() {
+        h2_spans.push(Span::raw("  "));
+        h2_spans.push(Span::styled(&app.cache_warning, Style::new().fg(Color::Red).bold()));
+    }
+    frame.render_widget(Line::from(h2_spans), header_line2);
 
     // ── Thinking window ──
     if think_h > 0 {
@@ -480,7 +490,7 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                 text_lines.push(Line::from(vec![
                     Span::styled(format!("{}> ", l.t_chat_you()), Style::new().fg(Color::Green).bold()),
                     Span::raw(&msg.content),
-                ]));
+                ]).alignment(Alignment::Right));
             }
             ChatRole::Thinking => {
                 let dim = Color::Rgb(140, 140, 150);
@@ -544,8 +554,8 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
         }
     }
 
+    let body_width = body.width.saturating_sub(1) as usize; // −1 for scrollbar column
     let content_height = body.height as usize;
-    let body_width = body.width as usize;
 
     // Count visual rows after word-boundary wrapping (matches ratatui's WordWrapper)
     let mut wrapped_lines = 0usize;
@@ -561,10 +571,23 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     let offset = if app.streaming { 0 } else { app.scroll_offset.min(max_scroll) };
     let scroll = max_scroll.saturating_sub(offset) as u16;
 
+    let [body_content, scrollbar_area] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+    ]).areas(body);
+
     let paragraph = Paragraph::new(text_lines)
         .wrap(ratatui::widgets::Wrap { trim: false })
         .scroll((scroll, 0));
-    frame.render_widget(paragraph, body);
+    frame.render_widget(paragraph, body_content);
+
+    let mut scrollbar_state = ScrollbarState::new(wrapped_lines)
+        .position(scroll as usize)
+        .viewport_content_length(content_height);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .thumb_symbol("█")
+        .track_symbol(Some("│"));
+    frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
 
     let input_block = Block::new()
         .borders(Borders::ALL)
@@ -678,11 +701,33 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     // Context window
     if app.show_context {
         let d = &app.debug;
-        let files: Vec<&str> = d.read_files.iter()
-            .map(|a| a.split("/").last().unwrap_or(a).split("\\").last().unwrap_or(a))
-            .collect();
+        let cwd = std::env::current_dir().ok();
+        let cwd_str = cwd.as_ref().and_then(|p| p.to_str()).unwrap_or("");
+        // Strip CWD prefix to get relative path; fallback to last 2 components
+        let short_path = |raw: &str| -> String {
+            let s = raw.replace('\\', "/");
+            if !cwd_str.is_empty() && s.starts_with(cwd_str) {
+                let rel = s[cwd_str.len()..].trim_start_matches('/');
+                if rel.len() > 44 {
+                    format!("...{}", &rel[rel.len().saturating_sub(44)..])
+                } else {
+                    rel.to_string()
+                }
+            } else {
+                // Show last 2-3 components for non-workspace paths
+                let parts: Vec<&str> = s.split('/').collect();
+                let take = 3.min(parts.len());
+                let rel: String = parts[parts.len() - take..].join("/");
+                if rel.len() > 44 {
+                    format!("...{}", &rel[rel.len().saturating_sub(44)..])
+                } else {
+                    rel
+                }
+            }
+        };
         let ctx_w = 50u16;
-        let ctx_h = (files.len() as u16 + d.written_this_turn.len() as u16 + 3).min(18).max(4);
+        let n_files = d.read_files.len() + d.written_this_turn.len();
+        let ctx_h = (n_files as u16 + 3).min(18).max(4);
         let ctx_rect = Rect::new(
             area.width.saturating_sub(ctx_w + 2),
             area.y + 1,
@@ -694,19 +739,18 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::new().fg(Color::Rgb(120, 180, 255)))
-            .title(format!(" Context ({} files) ", files.len()))
+            .title(format!(" Context ({} files) ", d.read_files.len()))
             .style(Style::new().bg(Color::Rgb(18, 22, 30)));
         frame.render_widget(&ctx_block, ctx_rect);
         let inner = ctx_block.inner(ctx_rect);
         let mut lines: Vec<Line> = Vec::new();
-        for f in &files {
-            lines.push(Line::from(Span::styled(format!(" 📖 {} ", f), Style::new().fg(Color::Rgb(120, 200, 200)))));
+        for f in &d.read_files {
+            lines.push(Line::from(Span::styled(format!(" 📖 {} ", short_path(f)), Style::new().fg(Color::Rgb(120, 200, 200)))));
         }
         for w in &d.written_this_turn {
-            let f = w.split("/").last().unwrap_or(w).split("\\").last().unwrap_or(w);
-            lines.push(Line::from(Span::styled(format!(" ✏️  {} ", f), Style::new().fg(Color::Rgb(200, 200, 100)))));
+            lines.push(Line::from(Span::styled(format!(" ✏️  {} ", short_path(w)), Style::new().fg(Color::Rgb(200, 200, 100)))));
         }
-        if files.is_empty() && d.written_this_turn.is_empty() {
+        if d.read_files.is_empty() && d.written_this_turn.is_empty() {
             lines.push(Line::from(Span::styled("  (no files in context)", Style::new().fg(Color::Gray))));
         }
         frame.render_widget(Paragraph::new(lines), inner);

@@ -211,6 +211,18 @@ impl Lang {
             Lang::Zh => "── 界面 ──",
         }
     }
+    pub fn t_menu_workspace(&self) -> &str {
+        match self {
+            Lang::En => "── Workspace ──",
+            Lang::Zh => "── 工作区 ──",
+        }
+    }
+    pub fn t_menu_workspace_root(&self) -> &str {
+        match self {
+            Lang::En => "Workspace Root",
+            Lang::Zh => "工作区根路径",
+        }
+    }
     pub fn t_menu_language(&self) -> &str {
         match self {
             Lang::En => "Language",
@@ -253,13 +265,6 @@ impl Lang {
 
     // ── Chat header ──
 
-    pub fn t_chat_hit(&self) -> &str {
-        match self { Lang::En => "hit", Lang::Zh => "命中" }
-    }
-    pub fn t_chat_miss(&self) -> &str {
-        match self { Lang::En => "miss", Lang::Zh => "未命中" }
-    }
-
     // ── Chat roles ──
 
     pub fn t_chat_you(&self) -> &str {
@@ -269,7 +274,7 @@ impl Lang {
         match self { Lang::En => "Think", Lang::Zh => "思考" }
     }
     pub fn t_chat_think_title(&self) -> &str {
-        match self { Lang::En => "Thinking", Lang::Zh => "思考链" }
+        match self { Lang::En => " Thinking (F6 toggle) ", Lang::Zh => " 思考链 (F6 切换) " }
     }
 
     // ── Chat status ──
@@ -291,8 +296,8 @@ impl Lang {
 
     pub fn t_chat_input_title(&self) -> &str {
         match self {
-            Lang::En => " Input (Ctrl+Enter: send, Esc: cancel, Ctrl-C: quit) ",
-            Lang::Zh => " 输入 (Ctrl+Enter: 发送, Esc: 取消, Ctrl-C: 退出) ",
+            Lang::En => " Input (Enter: send, Ctrl+Enter: newline, Esc: cancel) ",
+            Lang::Zh => " 输入 (Enter: 发送, Ctrl+Enter: 换行, Esc: 取消) ",
         }
     }
     pub fn t_chat_input_placeholder(&self) -> &str {

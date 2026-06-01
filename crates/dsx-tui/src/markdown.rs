@@ -10,6 +10,10 @@
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use std::sync::OnceLock;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
 use unicode_width::UnicodeWidthStr;
 
 const CODE_BG: Color = Color::Rgb(30, 34, 38);
@@ -20,21 +24,6 @@ const QUOTE_FG: Color = Color::Rgb(140, 160, 140);
 const LINK_FG: Color = Color::Rgb(100, 200, 255);
 
 // ── Public convenience ──
-
-/// Render a complete markdown string into ratatui Lines.
-pub fn render_content(content: &str) -> Vec<Line<'static>> {
-    let mut renderer = MarkdownRenderer::new();
-    let mut lines = Vec::new();
-    for line in content.lines() {
-        for l in renderer.push_line(line) {
-            lines.push(l);
-        }
-    }
-    for l in renderer.flush() {
-        lines.push(l);
-    }
-    lines
-}
 
 // ── State machine ──
 
@@ -202,6 +191,76 @@ impl MarkdownRenderer {
     }
 }
 
+// ── Syntax highlighting ──
+
+fn syntax_set() -> &'static SyntaxSet {
+    static SS: OnceLock<SyntaxSet> = OnceLock::new();
+    SS.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+fn theme() -> &'static syntect::highlighting::Theme {
+    static TH: OnceLock<syntect::highlighting::Theme> = OnceLock::new();
+    TH.get_or_init(|| {
+        let ts = ThemeSet::load_defaults();
+        ts.themes.get("base16-eighties.dark")
+            .cloned()
+            .unwrap_or_else(|| ts.themes.values().next().cloned().unwrap())
+    })
+}
+
+fn resolve_syntax(lang: &str) -> &'static syntect::parsing::SyntaxReference {
+    let ss = syntax_set();
+    let lang_lower = lang.trim().to_lowercase();
+    match lang_lower.as_str() {
+        "rs" | "rust" => ss.find_syntax_by_extension("rs"),
+        "py" | "python" => ss.find_syntax_by_extension("py"),
+        "js" | "javascript" => ss.find_syntax_by_extension("js"),
+        "ts" | "typescript" => ss.find_syntax_by_extension("ts"),
+        "go" => ss.find_syntax_by_extension("go"),
+        "c" => ss.find_syntax_by_extension("c"),
+        "cpp" | "c++" => ss.find_syntax_by_extension("cpp"),
+        "h" | "hpp" => ss.find_syntax_by_extension("h"),
+        "java" => ss.find_syntax_by_extension("java"),
+        "sh" | "bash" | "shell" | "zsh" => ss.find_syntax_by_extension("sh"),
+        "json" => ss.find_syntax_by_extension("json"),
+        "yaml" | "yml" => ss.find_syntax_by_extension("yaml"),
+        "toml" => ss.find_syntax_by_extension("toml"),
+        "md" | "markdown" => ss.find_syntax_by_extension("md"),
+        "sql" => ss.find_syntax_by_extension("sql"),
+        "html" => ss.find_syntax_by_extension("html"),
+        "css" => ss.find_syntax_by_extension("css"),
+        "xml" => ss.find_syntax_by_extension("xml"),
+        "diff" | "patch" => ss.find_syntax_by_extension("diff"),
+        "proto" | "protobuf" => ss.find_syntax_by_extension("proto"),
+        "lua" => ss.find_syntax_by_extension("lua"),
+        "rb" | "ruby" => ss.find_syntax_by_extension("rb"),
+        "php" => ss.find_syntax_by_extension("php"),
+        "swift" => ss.find_syntax_by_extension("swift"),
+        "kt" | "kotlin" => ss.find_syntax_by_extension("kt"),
+        "scala" => ss.find_syntax_by_extension("scala"),
+        "r" => ss.find_syntax_by_extension("r"),
+        "dart" => ss.find_syntax_by_extension("dart"),
+        "elm" => ss.find_syntax_by_extension("elm"),
+        "erl" | "erlang" => ss.find_syntax_by_extension("erl"),
+        "hs" | "haskell" => ss.find_syntax_by_extension("hs"),
+        "clj" | "clojure" => ss.find_syntax_by_extension("clj"),
+        "ex" | "elixir" => ss.find_syntax_by_extension("ex"),
+        "zig" => ss.find_syntax_by_extension("zig"),
+        "nim" => ss.find_syntax_by_extension("nim"),
+        "dockerfile" | "docker" => ss.find_syntax_by_name("Dockerfile"),
+        "makefile" | "make" => ss.find_syntax_by_name("Makefile"),
+        "cmake" => ss.find_syntax_by_name("CMake"),
+        "ini" | "cfg" | "conf" => ss.find_syntax_by_extension("ini"),
+        "nix" => ss.find_syntax_by_extension("nix"),
+        _ => ss.find_syntax_by_extension(&lang_lower),
+    }
+    .unwrap_or_else(|| ss.find_syntax_plain_text())
+}
+
+fn syntect_color(c: syntect::highlighting::Color) -> Color {
+    Color::Rgb(c.r, c.g, c.b)
+}
+
 // ── Line classification helpers ──
 
 fn heading_level(line: &str) -> Option<u8> {
@@ -271,17 +330,35 @@ fn render_code_block(lines: &[String], lang: &str) -> Vec<Line<'static>> {
     if !lang.is_empty() {
         out.push(Line::from(Span::styled(
             format!("  {} {} ", "─".repeat(2), lang),
-            Style::new().fg(CODE_FG),
+            Style::new().fg(Color::Rgb(100, 100, 110)),
         )));
     }
+    let syntax = resolve_syntax(lang);
+    let theme = theme();
+    let mut highlighter = HighlightLines::new(syntax, theme);
     for line in lines {
-        let l = line.replace('\t', "    ").chars()
-            .filter(|&c| c.is_ascii_graphic() || c == ' ' || !c.is_ascii())
-            .collect::<String>();
-        out.push(Line::from(Span::styled(
-            format!("  {l}"),
-            Style::new().fg(CODE_FG).bg(CODE_BG),
-        )));
+        let expanded = line.replace('\t', "    ");
+        let ranges = highlighter.highlight_line(&expanded, syntax_set());
+        match ranges {
+            Ok(ranges) => {
+                let mut line_spans = vec![Span::raw("  ")];
+                for (style, text) in ranges {
+                    line_spans.push(Span::styled(
+                        text.to_string(),
+                        Style::new()
+                            .fg(syntect_color(style.foreground))
+                            .bg(CODE_BG),
+                    ));
+                }
+                out.push(Line::from(line_spans));
+            }
+            Err(_) => {
+                out.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(expanded, Style::new().fg(CODE_FG).bg(CODE_BG)),
+                ]));
+            }
+        }
     }
     out.push(Line::from(""));
     out

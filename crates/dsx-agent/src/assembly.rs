@@ -446,11 +446,61 @@ impl ContextAssembler {
     // ── Build: conversation messages ──
 
     /// Return conversation messages (user/assistant/tool), system messages stripped.
-    pub fn build(&self, _context_limit: u32) -> Vec<Message> {
+    /// Old tool results (before last user message) are truncated to short summaries.
+    pub fn build(&self) -> Vec<Message> {
         let mut msgs = self.to_vec();
         msgs.retain(|m| m.role != "system");
+
+        // Find index of the last real user message (name=None → actual user, not context)
+        let last_user_idx = msgs.iter().rposition(|m| {
+            m.role == "user" && m.name.is_none()
+        });
+
+        if let Some(idx) = last_user_idx {
+            for msg in msgs.iter_mut().take(idx) {
+                if msg.role != "tool" { continue; }
+                for block in &mut msg.content {
+                    if let dsx_types::ContentBlock::ToolResult { ref mut content, .. } = block {
+                        *content = compact_tool_result(content);
+                    }
+                }
+            }
+        }
+
         msgs
     }
+}
+
+/// Compress a tool result to a one-line summary.
+/// "read_file:\n[OK] 200 lines 1-200/1347 of D:\...\file.rs\n  [code...]" → "read_file: D:\...\file.rs L1-200 ✓"
+fn compact_tool_result(raw: &str) -> String {
+    let tool_name = raw.lines().next().unwrap_or("tool").trim_end_matches(':');
+    let short_path = raw.lines().nth(1).unwrap_or("").trim();
+
+    // Extract status icon
+    let status = if raw.contains("[OK]") { "✓" }
+        else if raw.contains("[ERROR]") { "✗" }
+        else if raw.contains("[PARTIAL]") { "⋯" }
+        else if raw.contains("[CANCELLED]") { "✕" }
+        else { "·" };
+
+    // read_file format: "[OK] 200 lines 1-200/1347 of D:\...\file.rs"
+    // extract just the last path segment + line range
+    let summary = if let Some(of_pos) = short_path.find(" of ") {
+        let path = &short_path[of_pos + 4..];
+        let filename = path.rsplit(&['/', '\\']).next().unwrap_or(path);
+        // Try to get line range: "200 lines L1-L200/1347"
+        if let Some(lines_part) = short_path.find(" lines ") {
+            let line_info = &short_path[lines_part..];
+            format!("{} {} {}", filename, line_info.split(" of ").next().unwrap_or(line_info).trim(), status)
+        } else {
+            format!("{} {}", filename, status)
+        }
+    } else {
+        format!("{} {}", short_path, status)
+    };
+
+    format!("{}: {}", tool_name, summary)
 }
 
 // ── build_context ──
@@ -468,10 +518,8 @@ impl ContextAssembler {
 /// ```
 /// Layer  System prompt (static — always fully cached):
 ///   1.   Base prompt + DSML schema + tools (± Think Max)
-///   2.   Preset exchanges         ← static (always cached)
-///   3.   Context messages         ← stable per label (cached)
-///   4.   Conversation history     ← stable prefix (cached)
-///   5.   Last user message        ← dynamic annotations (uncached suffix)
+///   2.   Conversation history     ← prefix-stable (cached)
+///   3.   Context messages         ← append-only at tail (leaves history positions untouched)
 /// ```
 pub fn build_context(state: &mut AgentState) -> Vec<Message> {
 
@@ -492,51 +540,12 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
 
     let mut messages = vec![Message::system(&sys)];
 
-    // ── Layer 2: Preset exchanges (stable prefix for KV cache priming) ──
-    // Always injected; never persisted to session files; never rendered to UI.
-    const PRESET_EXCHANGES: &[(&str, &str)] = &[
-        (
-            "你好",
-            "你好，我是 DeepX，运行在 HP Agents 平台上。\
-             我可以帮你阅读和编辑代码、执行命令、搜索项目、\
-             探索目录结构、查询文档。请问有什么可以帮助你？",
-        ),
-        (
-            "Hello",
-            "I'm DeepX, running on the HP Agents platform. \
-             I can help with code, commands, search, \
-             file operations, and more. What would you like to do?",
-        ),
-    ];
-    for (user_text, assistant_text) in PRESET_EXCHANGES {
-        messages.push(Message {
-            role: "user".into(),
-            name: None,
-            content: vec![dsx_types::ContentBlock::text(user_text)],
-        });
-        messages.push(Message {
-            role: "assistant".into(),
-            name: None,
-            content: vec![dsx_types::ContentBlock::text(assistant_text)],
-        });
-    }
+    // ── Layer 2: Conversation history ──
+    // Must come BEFORE context messages so that history token positions
+    // stay fixed across turns — KV cache can reuse them exactly.
+    let mut conv = state.ctx.build();
 
-    // ── Layer 3: Named context messages (document cache, code snippets, etc.) ──
-    // Stable content per label → KV cache prefix reuse across turns.
-    // Insertion order is preserved: explore runs first → project:map naturally at front.
-    for (label, content) in &state.context_messages {
-        messages.push(Message {
-            role: "user".into(),
-            name: Some(label.clone()),
-            content: vec![dsx_types::ContentBlock::text(content)],
-        });
-    }
-
-    // ── Layer 4: Conversation history ──
-    let conv = state.ctx.build(state.config.context_limit);
-    messages.extend(conv);
-
-    // Turn annotations → appended to last user message (dynamic, per round)
+    // Turn annotations → appended to last user message in conv (not full messages)
     let mut dyn_suffix = String::new();
     if !state.turn_annotations.is_empty() {
         let ann = state.turn_annotations.join("\n");
@@ -544,9 +553,8 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
         dyn_suffix.push_str(&ann);
     }
 
-    // Append dynamic suffix to the last user message in the copy (source ctx unchanged)
     if !dyn_suffix.is_empty() {
-        if let Some(last_user) = messages.iter_mut().rev().find(|m| m.role == "user") {
+        if let Some(last_user) = conv.iter_mut().rev().find(|m| m.role == "user") {
             let existing = last_user.content.iter_mut().find_map(|b| {
                 if let dsx_types::ContentBlock::Text { ref mut text } = b {
                     Some(text)
@@ -560,6 +568,19 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
                 last_user.content.push(dsx_types::ContentBlock::text(&dyn_suffix));
             }
         }
+    }
+
+    messages.extend(conv);
+
+    // ── Layer 3: Named context messages (diff snapshots, project:map, etc.) ──
+    // Append-only at the tail; growing here does NOT shift conversation history
+    // token positions, preserving KV cache across turns.
+    for (label, content) in &state.context_messages {
+        messages.push(Message {
+            role: "user".into(),
+            name: Some(label.clone()),
+            content: vec![dsx_types::ContentBlock::text(content)],
+        });
     }
 
     // Clear per-turn annotations for next round

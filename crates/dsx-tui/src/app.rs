@@ -2,6 +2,7 @@ use dsx_proto::Agent2Ui;
 use dsx_types::{ConfigStore, PersistentConfig, SessionMeta, SessionFile, ContentBlock};
 use ratatui::text::{Line, Span};
 use ratatui::style::{Color, Style};
+use crate::markdown::MarkdownRenderer;
 
 // ── Active screen ──
 
@@ -245,6 +246,7 @@ pub struct App {
     pub show_debug: bool,
     pub show_tasks: bool,
     pub show_context: bool,
+    pub show_thinking: bool,
     pub debug: DebugState,
     pub ask: Option<AskState>,
     pub balance: String,
@@ -252,6 +254,8 @@ pub struct App {
     pub validating: bool,
     pub busy: bool,
     streaming_rendered_len: usize,
+    pub last_render: std::time::Instant,
+    md_renderer: Option<MarkdownRenderer>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -312,6 +316,7 @@ pub struct MenuState {
     pub status: String,
     pub profiles: std::collections::HashMap<String, dsx_types::ProfileConfig>,
     pub lang: crate::i18n::Lang,
+    session_seed: String,
 }
 
 #[derive(Clone)]
@@ -321,6 +326,7 @@ pub struct MenuItem {
     pub value: String,
     pub editable: bool,
     pub key: String,
+    pub secret: String,
 }
 
 #[derive(Clone, PartialEq)]
@@ -338,10 +344,11 @@ impl MenuState {
         let l = app.setup.lang;
 
         let api_key = store.load_api_key().unwrap_or_default();
-        let api_key_masked = if api_key.len() > 3 {
-            format!("sk-{}", "●".repeat(api_key.len().saturating_sub(3).min(20)))
-        } else if api_key.is_empty() {
+        // item.value stores the REAL key; masking is done only in render_menu
+        let api_key_display = if api_key.is_empty() {
             if l.as_str() == "zh" { "(未设置)" } else { "(not set)" }.into()
+        } else if api_key.len() > 3 {
+            format!("sk-{}", "●".repeat(api_key.len().saturating_sub(3).min(20)))
         } else {
             api_key.clone()
         };
@@ -356,14 +363,24 @@ impl MenuState {
 
         let max_tool_rounds = config.as_ref().and_then(|c| c.max_tool_rounds).unwrap_or(10);
         let c7_key = config.as_ref().and_then(|c| c.context7_api_key.clone()).unwrap_or_default();
+
+        let session_seed = app.debug.session_seed.clone();
+        let ws_root = if session_seed.is_empty() {
+            ".".to_string()
+        } else {
+            let ws_path = dsx_types::platform::sessions_dir().join(&session_seed).join("workspace.txt");
+            std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+        };
+        let ws_root_display = if ws_root.is_empty() { "." } else { &ws_root };
+
         let mut items: Vec<MenuItem> = Vec::new();
         let mk = |kind, key: &str, label: String, value: &str, editable: bool| MenuItem {
-            kind, key: key.into(), label, value: value.into(), editable,
+            kind, key: key.into(), label, value: value.into(), editable, secret: String::new(),
         };
 
         // ── Agent Behavior ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_agent_behavior().into(), "", false));
-        items.push(mk(MenuItemKind::Value, "effort", l.t_menu_reasoning_effort().into(),
+        items.push(mk(MenuItemKind::Toggle, "effort", l.t_menu_reasoning_effort().into(),
             &effort, true));
         items.push(mk(MenuItemKind::Toggle, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
             &max_tool_rounds.to_string(), true));
@@ -372,11 +389,11 @@ impl MenuState {
 
         // ── Model ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_model_section().into(), "", false));
-        items.push(mk(MenuItemKind::Toggle, "model", l.t_menu_model().into(), &model, false));
+        items.push(mk(MenuItemKind::Toggle, "model", l.t_menu_model().into(), &model, true));
         items.push(mk(MenuItemKind::Toggle, "max_tokens", l.t_menu_max_tokens().into(),
-            &max_tokens.to_string(), false));
+            &max_tokens.to_string(), true));
         items.push(mk(MenuItemKind::Toggle, "context_limit", l.t_menu_context_limit().into(),
-            &context_limit.to_string(), false));
+            &context_limit.to_string(), true));
 
         // ── Profiles ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_profiles().into(), "", false));
@@ -398,8 +415,14 @@ impl MenuState {
 
         // ── API ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_api().into(), "", false));
-        items.push(mk(MenuItemKind::Value, "api_key", l.t_menu_api_key().into(),
-            &api_key_masked, true));
+        items.push(MenuItem {
+            kind: MenuItemKind::Value,
+            key: "api_key".into(),
+            label: l.t_menu_api_key().into(),
+            value: api_key_display,
+            secret: api_key,
+            editable: true,
+        });
         items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
             &base_url, false));
 
@@ -407,6 +430,11 @@ impl MenuState {
         items.push(mk(MenuItemKind::Section, "", l.t_menu_interface().into(), "", false));
         items.push(mk(MenuItemKind::Toggle, "language", l.t_menu_language().into(),
             l.as_str(), true));
+
+        // ── Workspace ──
+        items.push(mk(MenuItemKind::Section, "", l.t_menu_workspace().into(), "", false));
+        items.push(mk(MenuItemKind::Value, "workspace_root", l.t_menu_workspace_root().into(),
+            ws_root_display, true));
 
         Self {
             selected: 1,
@@ -416,6 +444,7 @@ impl MenuState {
             items,
             profiles,
             lang: l,
+            session_seed,
         }
     }
 
@@ -522,8 +551,8 @@ impl MenuState {
                     config.lang = Some(item.value.clone());
                 }
                 "api_key" => {
-                    let v = item.value.trim().to_string();
-                    if !v.is_empty() && !v.starts_with("sk-") { return; }
+                    // secret holds the real key; value is the masked display
+                    let v = item.secret.trim().to_string();
                     if !v.is_empty() { config.api_key = Some(v); }
                 }
                 "base_url" => {
@@ -534,6 +563,12 @@ impl MenuState {
                     let v = item.value.trim().to_string();
                     if !v.is_empty() && v != "****" {
                         config.context7_api_key = Some(v);
+                    }
+                }
+                "workspace_root" => {
+                    let v = item.value.trim().to_string();
+                    if !v.is_empty() && !self.save_workspace(&v) {
+                        self.status = self.lang.t_menu_save_failed().into();
                     }
                 }
                 _ => {}
@@ -552,6 +587,13 @@ impl MenuState {
     pub fn go_back(mut self, app: &mut App) {
         self.save_all();
         app.screen = Screen::Chat;
+    }
+
+    fn save_workspace(&self, path: &str) -> bool {
+        if self.session_seed.is_empty() { return false; }
+        let dir = dsx_types::platform::sessions_dir().join(&self.session_seed);
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("workspace.txt"), path).is_ok()
     }
 }
 
@@ -574,6 +616,8 @@ impl App {
             streaming: false,
             scroll_offset: 0,
             streaming_rendered_len: 0,
+            last_render: std::time::Instant::now(),
+            md_renderer: None,
             frame_count: 0,
             sessions: Vec::new(),
             session_index: 0,
@@ -581,6 +625,7 @@ impl App {
             show_debug: false,
             show_tasks: false,
             show_context: false,
+            show_thinking: true,
             debug: DebugState {
                 hp_connected: false,
                 session_seed: String::new(),
@@ -654,6 +699,8 @@ impl App {
     }
 
     pub fn push_msg(&mut self, role: ChatRole, content: &str) {
+        // Flush previous renderer state before starting a new message
+        self.finalize_last_message();
         const MAX_STORED: usize = 50_000;
         let content = if content.chars().count() > MAX_STORED {
             let truncated: String = content.chars().take(MAX_STORED).collect();
@@ -661,30 +708,64 @@ impl App {
         } else {
             content.to_string()
         };
-        let lines = crate::markdown::render_content(&content);
+        // Build a fresh renderer and push all lines at once (non-streaming message)
+        let mut renderer = MarkdownRenderer::new();
+        let mut lines = Vec::new();
+        for line in content.lines() {
+            for l in renderer.push_line(line) {
+                lines.push(l);
+            }
+        }
+        for l in renderer.flush() {
+            lines.push(l);
+        }
         self.streaming_rendered_len = content.len();
+        self.md_renderer = None; // non-streaming: no renderer kept
         self.messages.push(ChatMessage { role, content, lines });
     }
 
     fn append_last(&mut self, content: &str) {
         if let Some(last) = self.messages.last_mut() {
             last.content.push_str(content);
-            // Re-render when content has grown by 30+ chars (smooth updates, minimal overhead)
-            if last.content.len() >= self.streaming_rendered_len + 30 {
-                last.lines = crate::markdown::render_content(&last.content);
-                self.streaming_rendered_len = last.content.len();
+            let renderer = self.md_renderer.get_or_insert_with(MarkdownRenderer::new);
+            // Push only *complete* lines through the renderer — incomplete tail
+            // stays in content until the next delta or finalize.
+            let full = &last.content[self.streaming_rendered_len..];
+            let mut processed = 0;
+            while let Some(nl) = full[processed..].find('\n') {
+                let line = &full[processed..processed + nl];
+                for l in renderer.push_line(line) {
+                    last.lines.push(l);
+                }
+                processed += nl + 1; // consume the line + newline
+            }
+            self.streaming_rendered_len += processed;
+        }
+    }
+
+    /// Flush the incremental renderer and write remaining lines to the last message.
+    fn finalize_last_message(&mut self) {
+        if let Some(mut renderer) = self.md_renderer.take() {
+            if let Some(last) = self.messages.last_mut() {
+                let remaining = last.content[self.streaming_rendered_len..].to_string();
+                if !remaining.is_empty() {
+                    for l in renderer.push_line(&remaining) {
+                        last.lines.push(l);
+                    }
+                }
+            }
+            let flushed = renderer.flush();
+            if let Some(last) = self.messages.last_mut() {
+                for l in flushed {
+                    last.lines.push(l);
+                }
             }
         }
     }
 
     fn switch_block(&mut self, new_block: BlockType) {
         if self.block != new_block {
-            // Finalize streaming message before switching
-            if let Some(last) = self.messages.last_mut() {
-                if !last.content.is_empty() {
-                    last.lines = crate::markdown::render_content(&last.content);
-                }
-            }
+            self.finalize_last_message();
             self.streaming_rendered_len = 0;
             self.block = new_block;
             self.streaming = false;
@@ -780,9 +861,7 @@ impl App {
                 self.block = BlockType::None;
                 self.busy = false;
                 self.scroll_offset = 0;
-                if let Some(last) = self.messages.last_mut() {
-                    last.lines = crate::markdown::render_content(&last.content);
-                }
+                self.finalize_last_message();
             }
             Agent2Ui::Cancelled => {
                 self.status = self.setup.lang.t_chat_cancelled().to_string();
@@ -791,9 +870,7 @@ impl App {
                 self.block = BlockType::None;
                 self.busy = false;
                 self.scroll_offset = 0;
-                if let Some(last) = self.messages.last_mut() {
-                    last.lines = crate::markdown::render_content(&last.content);
-                }
+                self.finalize_last_message();
             }
             Agent2Ui::SessionRestored { seed, message_count, tokens_used, .. } => {
                 self.status = self.setup.lang.t_session_restored(&seed, message_count, tokens_used);
@@ -879,7 +956,7 @@ impl App {
     }
 
     fn push_messages_from_file(&mut self, file: &SessionFile) {
-        let mut pending_tool_use: Option<(String, String)> = None;
+        let mut pending_tool_uses: Vec<(String, String)> = Vec::new();
         for msg in &file.messages {
             if msg.role == "system" { continue; }
             for block in &msg.content {
@@ -893,11 +970,11 @@ impl App {
                     }
                     ContentBlock::ToolUse { name, input, .. } => {
                         let args: String = serde_json::to_string(&input).unwrap_or_default();
-                        pending_tool_use = Some((name.clone(), args));
+                        pending_tool_uses.push((name.clone(), args));
                     }
                     ContentBlock::ToolResult { content, .. } => {
                         let lang = self.setup.lang;
-                        if let Some((name, args)) = pending_tool_use.take() {
+                        if let Some((name, args)) = if pending_tool_uses.is_empty() { None } else { Some(pending_tool_uses.remove(0)) } {
                             let label = tool_status(lang, &name, Some(&args));
                             let styled_lines = build_tool_lines(lang, &name, content, Some(&args));
                             let is_exec = matches!(name.as_str(), "bash" | "run" | "exec");
@@ -929,7 +1006,7 @@ impl App {
                 }
             }
         }
-        if let Some((name, args)) = pending_tool_use.take() {
+        for (name, args) in pending_tool_uses {
             let label = tool_status(self.setup.lang, &name, Some(&args));
             self.push_msg(ChatRole::Tool, &label);
         }

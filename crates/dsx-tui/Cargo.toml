@@ -19,3 +19,4 @@ anyhow = "1"
 ureq = { version = "3", features = ["json"] }
 unicode-width = "0.2"
 chrono = { version = "0.4", features = ["clock"] }
+syntect = "5"

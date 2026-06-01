@@ -48,6 +48,13 @@ pub fn set_current_session(seed: &str) {
     let _ = CURRENT_SESSION.set(seed.to_string());
 }
 
+/// 工作区根路径 — per-session，explore/git 等工具以此为基准。
+pub static CURRENT_WORKSPACE: OnceLock<String> = OnceLock::new();
+
+pub fn set_workspace(path: &str) {
+    let _ = CURRENT_WORKSPACE.set(path.to_string());
+}
+
 // ── 工具键（名称 + 二级操作）──
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

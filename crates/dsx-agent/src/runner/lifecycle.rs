@@ -17,6 +17,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
 
             dsx_log::set_session(&agent.session_seed);
             tools::set_current_session(&agent.session_seed);
+            tools::load_workspace(&agent.session_seed);
             log::info!(
                 "dsx-agent: restored session {} ({} msgs, {} tokens)",
                 agent.session_seed,

@@ -289,11 +289,16 @@ fn run_chat(
 
         if agent_dead && app.should_quit { return Ok(()); }
 
-        // 2. Render (ask overlay included if active)
-        terminal.draw(|frame| {
-            ui::render_chat(frame, app);
-            if app.ask.is_some() { ui::render_ask(frame, app); }
-        })?;
+        // 2. Render — rate‑limited to 30 fps during streaming to avoid CPU melt
+        let now = std::time::Instant::now();
+        let should_render = !app.streaming || now.duration_since(app.last_render).as_millis() >= 33;
+        if should_render {
+            terminal.draw(|frame| {
+                ui::render_chat(frame, app);
+                if app.ask.is_some() { ui::render_ask(frame, app); }
+            })?;
+            app.last_render = now;
+        }
         app.tick();
 
         if app.should_quit { return Ok(()); }
@@ -343,6 +348,9 @@ fn run_chat(
                 }
                 (KeyModifiers::NONE, KeyCode::F(8)) => {
                     app.show_context = !app.show_context;
+                }
+                (KeyModifiers::NONE, KeyCode::F(6)) => {
+                    app.show_thinking = !app.show_thinking;
                 }
                 (KeyModifiers::CONTROL, KeyCode::Char('c'))
                 | (KeyModifiers::NONE, KeyCode::Char('q'))
@@ -445,6 +453,9 @@ fn run_menu(
                         if !menu.edit_buf.is_empty() {
                             let item = &mut menu.items[menu.selected];
                             item.value = menu.edit_buf.clone();
+                            if item.key == "api_key" {
+                                item.secret = menu.edit_buf.clone();
+                            }
                         }
                         menu.editing = false;
                         menu.edit_buf.clear();

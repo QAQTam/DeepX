@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use crate::CANCEL;
 use crate::{ToolCallCtx, ToolResult};
+use crate::CURRENT_WORKSPACE;
 
 pub(super) fn walk_dir(dir: &str, output: &mut String, depth: usize, max_depth: usize, _rel_prefix: &str) -> std::io::Result<()> {
     if depth >= max_depth || CANCEL.load(Ordering::Relaxed) { return Ok(()); }
@@ -276,7 +277,8 @@ fn walk_ext_files(dir: &std::path::Path, ext: &str) -> Vec<std::path::PathBuf> {
 // ── Handler ──
 
 pub(super) fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
-    let path = ctx.get_str("path").unwrap_or(".");
+    let default_path = CURRENT_WORKSPACE.get().map(|s| s.as_str()).unwrap_or(".");
+    let path = ctx.get_str("path").unwrap_or(default_path);
     ToolResult::ok(exec_explore_inner(path))
 }
 
