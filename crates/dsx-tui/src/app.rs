@@ -63,6 +63,9 @@ impl SetupState {
             if let Some(c) = v.get("context_limit").and_then(|c| c.as_u64()) {
                 self.context_limit = c.to_string();
             }
+            if let Some(l) = v.get("lang").and_then(|l| l.as_str()) {
+                self.lang = crate::i18n::Lang::from_str(l);
+            }
         }
     }
 
@@ -211,6 +214,7 @@ impl SetupState {
             model: Some(self.model.trim().to_string()),
             base_url: Some("https://api.deepseek.com".into()),
             context_limit: Some(self.context_limit.parse().unwrap_or(1_000_000)),
+            lang: Some(self.lang.as_str().to_string()),
             ..Default::default()
         }
     }
@@ -348,6 +352,7 @@ impl MenuState {
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
         let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
 
+        let max_tool_rounds = config.as_ref().and_then(|c| c.max_tool_rounds).unwrap_or(10);
         let mut items: Vec<MenuItem> = Vec::new();
         let mk = |kind, key: &str, label: String, value: &str, editable: bool| MenuItem {
             kind, key: key.into(), label, value: value.into(), editable,
@@ -358,7 +363,7 @@ impl MenuState {
         items.push(mk(MenuItemKind::Value, "effort", l.t_menu_reasoning_effort().into(),
             &effort, true));
         items.push(mk(MenuItemKind::Value, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
-            "10", false));
+            &max_tool_rounds.to_string(), true));
 
         // ── Model ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_model_section().into(), "", false));
@@ -472,6 +477,12 @@ impl MenuState {
                 }
                 "max_tokens" => {
                     if let Ok(v) = item.value.parse::<u32>() { config.max_tokens = Some(v); }
+                }
+                "max_tool_rounds" => {
+                    if let Ok(v) = item.value.parse::<u32>() { config.max_tool_rounds = Some(v); }
+                }
+                "language" => {
+                    config.lang = Some(item.value.clone());
                 }
                 _ => {}
             }

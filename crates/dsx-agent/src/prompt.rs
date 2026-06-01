@@ -54,6 +54,43 @@ ENDING A RESPONSE:\n\
   Stop pleasantries, execute with minimal chatter, and report results\n\
   concisely. The user gives orders — you execute and report.";
 
+/// DSML tool call schema (from DeepSeek v4 spec).
+pub const DSML_SCHEMA: &str = "\
+## Tools\n\
+\n\
+You have access to a set of tools to help answer the user's question. You can\n\
+invoke tools by writing a \"<|DSML|tool_calls>\" block like the following:\n\
+\n\
+<|DSML|tool_calls>\n\
+<|DSML|invoke name=\"$TOOL_NAME\">\n\
+<|DSML|parameter name=\"$PARAMETER_NAME\" string=\"true|false\">$PARAMETER_VALUE\n\
+</|DSML|parameter>\n\
+...\n\
+</|DSML|invoke>\n\
+</|DSML|tool_calls>\n\
+\n\
+String parameters should be specified as is and set string=\"true\". For all\n\
+other types (numbers, booleans, arrays, objects), pass the value in JSON\n\
+format and set string=\"false\".\n\
+\n\
+If thinking_mode is enabled (triggered by <think>), you MUST output your\n\
+complete reasoning inside <think>...</think> BEFORE any tool calls or\n\
+final response.\n\
+\n\
+Otherwise, output directly after </think> with tool calls or final response.\n\
+\n\
+You MUST strictly follow the above defined tool name and parameter schemas to\n\
+invoke tool calls.\n";
+
+/// Think-max instruction (DeepSeek v4 spec, appended when effort=\"max\").
+pub const THINK_MAX: &str = "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n\
+You MUST be very thorough in your thinking and comprehensively decompose the\n\
+problem to resolve the root cause, rigorously stress-testing your logic against\n\
+all potential paths, edge cases, and adversarial scenarios.\n\
+Explicitly write out your entire deliberation process, documenting every\n\
+intermediate step, considered alternative, and rejected hypothesis to ensure\n\
+absolutely no assumption is left unchecked.\n";
+
 pub fn system_prompt() -> String {
     PROMPT.to_string()
 }

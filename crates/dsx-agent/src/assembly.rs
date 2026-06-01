@@ -467,7 +467,7 @@ impl ContextAssembler {
 ///
 /// ```
 /// Layer  System prompt (static — always fully cached):
-///   1.   Base prompt              ← static
+///   1.   Base prompt + DSML schema + tools (± Think Max)
 ///   2.   Preset exchanges         ← static (always cached)
 ///   3.   Context messages         ← stable per label (cached)
 ///   4.   Conversation history     ← stable prefix (cached)
@@ -476,7 +476,21 @@ impl ContextAssembler {
 pub fn build_context(state: &mut AgentState) -> Vec<Message> {
 
     // ── Layer 1: System prompt ──
-    let mut messages = vec![Message::system(&crate::config::system_prompt())];
+    let mut sys = crate::config::system_prompt();
+    sys.push_str("\n\n");
+    sys.push_str(crate::prompt::DSML_SCHEMA);
+
+    sys.push_str("### Available Tools\n\n");
+    for td in &state.tool_defs {
+        sys.push_str(&format!("- {}: {}\n", td.function.name, td.function.description));
+    }
+
+    if state.config.effort.as_deref() == Some("max") {
+        sys.push('\n');
+        sys.push_str(crate::prompt::THINK_MAX);
+    }
+
+    let mut messages = vec![Message::system(&sys)];
 
     // ── Layer 2: Preset exchanges (stable prefix for KV cache priming) ──
     // Always injected; never persisted to session files; never rendered to UI.
