@@ -777,14 +777,6 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
                     Span::styled(&item.value, Style::new().fg(Color::Gray)),
                 ])
             }
-            MenuItemKind::Info => {
-                Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(format!("{:<20}", item.label), Style::new().fg(Color::Gray)),
-                    Span::raw("  "),
-                    Span::styled(&item.value, Style::new().fg(Color::Rgb(160, 170, 190))),
-                ])
-            }
         };
         lines.push(line);
     }

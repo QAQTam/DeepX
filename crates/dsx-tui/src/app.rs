@@ -326,7 +326,6 @@ pub enum MenuItemKind {
     Toggle,
     Value,
     Action,
-    Info,
 }
 
 impl MenuState {
@@ -396,10 +395,10 @@ impl MenuState {
 
         // ── API ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_api().into(), "", false));
-        items.push(mk(MenuItemKind::Info, "api_key", l.t_menu_api_key().into(),
-            &api_key_masked, false));
-        items.push(mk(MenuItemKind::Info, "base_url", l.t_menu_base_url().into(),
-            &base_url, false));
+        items.push(mk(MenuItemKind::Value, "api_key", l.t_menu_api_key().into(),
+            &api_key_masked, true));
+        items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
+            &base_url, true));
 
         // ── Interface ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_interface().into(), "", false));
@@ -517,6 +516,15 @@ impl MenuState {
                 }
                 "language" => {
                     config.lang = Some(item.value.clone());
+                }
+                "api_key" => {
+                    let v = item.value.trim().to_string();
+                    if !v.is_empty() && !v.starts_with("sk-") { return; }
+                    if !v.is_empty() { config.api_key = Some(v); }
+                }
+                "base_url" => {
+                    let v = item.value.trim().to_string();
+                    if !v.is_empty() { config.base_url = Some(v); }
                 }
                 "context7_api_key" => {
                     let v = item.value.trim().to_string();
