@@ -21,11 +21,14 @@ pub struct PersistentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_lang: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub profiles: Option<HashMap<String, ProfileConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tool_rounds: Option<u32>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
 }
 
 // ── Profile / Preferences ──

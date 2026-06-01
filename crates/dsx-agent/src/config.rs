@@ -59,6 +59,7 @@ impl Config {
             if let Some(mt) = pc.max_tokens { cfg.max_tokens = mt; }
             if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
             if let Some(ref e) = pc.effort { if !e.is_empty() { cfg.effort = Some(e.clone()); } }
+            if let Some(v) = pc.max_tool_rounds { cfg.max_tool_rounds = Some(v); }
         }
 
         if let Ok(k) = std::env::var("DEEPSEEK_API_KEY") { let k = k.trim().to_string(); if !k.is_empty() { cfg.api_key = k; } }
@@ -81,6 +82,7 @@ impl Config {
 
     pub fn save(&self) {
         let store = ConfigStore::default_location();
+        let existing_lang = store.load().and_then(|c| c.lang);
         let mut profiles = self.profiles.clone();
         profiles.insert(self.active_profile.clone(), dsx_types::ProfileConfig {
             model: self.model.clone(), max_tokens: self.max_tokens,
@@ -95,10 +97,11 @@ impl Config {
             context_limit: Some(self.context_limit),
             thinking: None,
             effort: self.effort.clone(),
-            prompt_lang: None,
             profiles: Some(profiles),
             active_profile: Some(self.active_profile.clone()),
-        };
+            max_tool_rounds: self.max_tool_rounds,
+            lang: existing_lang,
+    };
         if !store.save(&pc) {
             log::error!("Failed to save config");
         }

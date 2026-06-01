@@ -12,6 +12,13 @@ impl Lang {
         }
     }
 
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "zh" => Lang::Zh,
+            _ => Lang::En,
+        }
+    }
+
     pub fn t_setup_welcome(&self) -> &str {
         match self {
             Lang::En => "⚡ DeepX Setup",
