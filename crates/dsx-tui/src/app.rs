@@ -398,7 +398,7 @@ impl MenuState {
         items.push(mk(MenuItemKind::Value, "api_key", l.t_menu_api_key().into(),
             &api_key_masked, true));
         items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
-            &base_url, true));
+            &base_url, false));
 
         // ── Interface ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_interface().into(), "", false));
