@@ -548,23 +548,79 @@ pub fn handle_user_input(
             }
         }
 
-        for (tc_idx, tc) in parsed.iter().enumerate() {
-            match execute_single_tool(agent, tc, agent_tx) {
-                ToolOutcome::Break => {
-                    ipc_broken = true;
-                    // Push error tool_results for ALL remaining unexecuted tools.
-                    // Without this, the context has orphaned tool_use blocks
-                    // → next API call → HTTP 400 "tool_use without tool_result".
-                    for remaining in &parsed[tc_idx + 1..] {
-                        let err = "[ERROR] Tools process disconnected — this tool was not executed.";
-                        let mut appender = ToolResultAppender::new(agent);
-                        appender.append(&remaining.function.name, &remaining.id, &remaining.function.arguments, err);
-                        emit_tool_result(agent_tx, &remaining.id, &remaining.function.name, err, false, Some(remaining.function.arguments.to_string()));
-                    }
-                    break;
+        let results: Vec<(String, String, String, String)> =
+            if parsed.len() > 1 && !parsed.iter().any(|tc| tc.function.name == "ask_user") {
+            use std::thread;
+            let mut handles = Vec::new();
+            for tc in &parsed {
+                let name = tc.function.name.clone();
+                let args = tc.function.arguments.clone();
+                let id = tc.id.clone();
+                handles.push(thread::spawn(move || {
+                    let result =
+                        crate::tools::execute_tool_with_id(&name, "", &args, &id);
+                    (name, id, args, result)
+                }));
+            }
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        } else {
+            parsed.iter().map(|tc| {
+                let result =
+                    crate::tools::execute_tool_with_id(&tc.function.name, "", &tc.function.arguments, &tc.id);
+                (tc.function.name.clone(), tc.id.clone(), tc.function.arguments.clone(), result)
+            }).collect()
+        };
+
+        for (tc_idx, (name, id, args, tr_content)) in results.iter().enumerate() {
+            // Skip tools blocked by gates (checked before parallel spawn in serial mode,
+            // here we check after in parallel mode — gates that can't be pre-checked
+            // are handled by execute_single_tool for serial path)
+            if tc_idx == 0 && parsed.len() > 1 && !parsed.iter().any(|tc| tc.function.name == "ask_user") {
+                // Parallel path: gates were not pre-checked.
+                // Apply re-read gate post-hoc for the first tool (simplified).
+                if gates::re_read_gate(agent, name, id, args) {
+                    let msg = "[BLOCKED] Re-read gate prevented this tool.";
+                    let mut appender = ToolResultAppender::new(agent);
+                    appender.append(name, id, args, msg);
+                    emit_tool_result(agent_tx, id, name, msg, false, Some(args.clone()));
+                    continue;
                 }
-                ToolOutcome::Continue => continue,
-                ToolOutcome::Executed => {}
+            }
+
+            let tr_content = tr_content;
+
+            if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
+                ipc_broken = true;
+                for remaining_idx in tc_idx + 1..results.len() {
+                    let (rn, ri, ra, _) = &results[remaining_idx];
+                    let err = "[ERROR] Tools process disconnected — this tool was not executed.";
+                    let mut appender = ToolResultAppender::new(agent);
+                    appender.append(rn, ri, ra, err);
+                    emit_tool_result(agent_tx, ri, rn, err, false, Some(ra.clone()));
+                }
+                break;
+            }
+
+            let tr_success =
+                !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
+            let failed = !tr_success;
+
+            agent.health.record_tool_call();
+            if failed {
+                agent.tool_failures += 1;
+            }
+
+            {
+                let mut appender = ToolResultAppender::new(agent);
+                appender.append(name, id, args, tr_content);
+            }
+            emit_tool_result(agent_tx, id, name, tr_content, tr_success, Some(args.clone()));
+
+            if !failed && name == "write_file" {
+                tracker::track_file_written(agent, args);
+            }
+            if name == "read_file" {
+                agent.turns_since_last_read = 0;
             }
 
             let all_tool_calls: Vec<ToolCall> = agent
