@@ -38,7 +38,12 @@ const mdComponents: Components = {
 }
 
 function StreamingMarkdown({ content }: { content: string }) {
-  const cleaned = content.replace(/<\/?(?:th|td|tr|thead|tbody|table|colgroup|col|caption)(?:\s[^>]*)?>/gi, '')
+  // strip DSML tool call blocks and raw HTML tags — prevents ReactMarkdown from
+  // trying to parse them as HTML (which explodes CPU on fullwidth-pipe DSML)
+  const cleaned = content
+    .replace(/^<[\u{ff5c}|]DSML[\u{ff5c}|][^>]*>.*?<\/[\u{ff5c}|]DSML[\u{ff5c}|][^>]*>/gmsu, '')
+    .replace(/^<[\u{ff5c}|]DSML[\u{ff5c}|](?:invoke|parameter)\b[^>]*>.*?<\/[\u{ff5c}|]DSML[\u{ff5c}|](?:invoke|parameter)>/gmsu, '')
+    .replace(/<\/?(?:th|td|tr|thead|tbody|table|colgroup|col|caption)(?:\s[^>]*)?>/gi, '')
   return (
     <div className="prose prose-sm max-w-none prose-invert">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={mdComponents}>
