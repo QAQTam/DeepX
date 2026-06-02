@@ -152,9 +152,14 @@ export default function App() {
     try { localStorage.removeItem('dsx-session-id') } catch { /* ignore */ }
     clearToolOutputs()
     invoke('stop_agent').then(() => {
-      setConnected(true)
-      setTimeout(() => { restartingRef.current = false }, 1000)
-      refreshSessions()
+      setConnected(false)
+      invoke<any>('start_agent').then((r) => {
+        setConnected(true)
+        if (r?.sessions) setSessions(r.sessions)
+        if (r?.sessions?.length > 0) setSessionId(r.sessions[0].seed || '')
+        setTimeout(() => { restartingRef.current = false }, 1000)
+        refreshSessions()
+      }).catch(() => { setConnected(false); restartingRef.current = false })
     }).catch(() => { restartingRef.current = false })
   }
 
