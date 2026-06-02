@@ -16,11 +16,7 @@ export default function App() {
   const [configDone, setConfigDone] = useState(false)
   const [checking, setChecking] = useState(true)
   const [connected, setConnected] = useState(false)
-  const restoreMessages = (): Message[] => {
-    try { const s = localStorage.getItem('dsx-messages'); if (s) { const m = JSON.parse(s); if (Array.isArray(m) && m.length) return m } } catch { /* empty */ }
-    return []
-  }
-  const [messages, setMessages] = useState<Message[]>(restoreMessages)
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamMode, setStreamMode] = useState<'idle' | 'think' | 'answer'>('idle')
@@ -29,10 +25,7 @@ export default function App() {
     streamModeRef.current = mode
     setStreamMode(mode)
   }
-  const [sessionId, setSessionId] = useState(() => {
-    try { return localStorage.getItem('dsx-session-id') || '' } catch { return '' }
-  })
-  const sessionKey = sessionId || '__default__'
+  const [sessionId, setSessionId] = useState('')
   const [tokenUsage, setTokenUsage] = useState<{ used: number; limit: number }>({ used: 0, limit: 150000 })
   const [cacheInfo, setCacheInfo] = useState<{ hit: number; miss: number }>({ hit: 0, miss: 0 })
   const [predictedCacheHitPct, setPredictedCacheHitPct] = useState<number | null>(null)
@@ -77,20 +70,6 @@ export default function App() {
   }, [])
   useEffect(() => () => { cancelAnimationFrame(rafId.current) }, [])
 
-  useEffect(() => { try { localStorage.setItem('dsx-messages', JSON.stringify(messages)) } catch { /* full */ } }, [messages])
-  useEffect(() => { try { if (sessionId) localStorage.setItem('dsx-session-id', sessionId) } catch { /* full */ } }, [sessionId])
-  useEffect(() => {
-    if (!sessionId) return
-    try {
-      const tk = localStorage.getItem(`dsx-tokens-${sessionId}`)
-      if (tk) setTokenUsage(JSON.parse(tk))
-      const ch = localStorage.getItem(`dsx-cache-${sessionId}`)
-      if (ch) setCacheInfo(JSON.parse(ch))
-    } catch { /* ignore */ }
-  }, [sessionId])
-  useEffect(() => { try { localStorage.setItem(`dsx-tokens-${sessionKey}`, JSON.stringify({ used: tokenUsage.used, limit: tokenUsage.limit })) } catch { /* full */ } }, [tokenUsage, sessionKey])
-  useEffect(() => { try { localStorage.setItem(`dsx-cache-${sessionKey}`, JSON.stringify(cacheInfo)) } catch { /* full */ } }, [cacheInfo, sessionKey])
-
   useEffect(() => {
     invoke<any>('load_config').then((c: any) => {
       const limit = c.context_limit || 150000
@@ -102,29 +81,11 @@ export default function App() {
     }).catch(() => {})
   }, [configVersion])
 
-  const clearSessionLocalStorage = (seed: string) => {
-    try { localStorage.removeItem(`dsx-tokens-${seed}`) } catch { /* ignore */ }
-    try { localStorage.removeItem(`dsx-cache-${seed}`) } catch { /* ignore */ }
-  }
-  const clearAllSessionLocalStorage = () => {
-    const keys: string[] = []
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i)
-      if (k && (k.startsWith('dsx-tokens-') || k.startsWith('dsx-cache-'))) keys.push(k)
-    }
-    keys.forEach(k => { try { localStorage.removeItem(k) } catch { /* ignore */ } })
-    try { localStorage.removeItem('dsx-messages') } catch { /* ignore */ }
-    try { localStorage.removeItem('dsx-session-id') } catch { /* ignore */ }
-    setCacheInfo({ hit: 0, miss: 0 })
-    setTokenUsage(p => ({ ...p, used: 0 }))
-  }
-
   const handleDeleteAllSessions = () => {
     invoke('delete_all_sessions').then(() => {
       setMessages([]); setSessionId('')
       setCacheInfo({ hit: 0, miss: 0 })
       setTokenUsage(p => ({ ...p, used: 0 }))
-      clearAllSessionLocalStorage()
       invoke('start_agent').then((r: any) => {
         setConnected(true)
         if (r?.sessions) setSessions(r.sessions)
@@ -134,13 +95,12 @@ export default function App() {
   }
   const handleDeleteSession = (seed: string) => {
     invoke('delete_session', { seed }).then(() => {
-      refreshSessions(); clearSessionLocalStorage(seed)
-      if (sessionId === seed) { setCacheInfo({ hit: 0, miss: 0 }); setTokenUsage(p => ({ ...p, used: 0 })) }
+      refreshSessions()
+      if (sessionId === seed) { setCacheInfo({ hit: 0, miss: 0 }); setTokenUsage(p => ({ ...p, used: 0 })); setMessages([]) }
     }).catch(() => {})
   }
 
   const newSession = () => {
-    if (sessionId) clearSessionLocalStorage(sessionId)
     restartingRef.current = true
     setIsStreaming(false)
     setMessages([])
@@ -148,8 +108,6 @@ export default function App() {
     setSessionId('')
     setCacheInfo({ hit: 0, miss: 0 })
     setTokenUsage(p => ({ ...p, used: 0 }))
-    try { localStorage.removeItem('dsx-messages') } catch { /* ignore */ }
-    try { localStorage.removeItem('dsx-session-id') } catch { /* ignore */ }
     clearToolOutputs()
     invoke('stop_agent').then(() => {
       setConnected(false)
@@ -169,14 +127,8 @@ export default function App() {
     scRef.current = ''; srRef.current = ''; stRef.current = []
     setSessionId(seed)
     clearToolOutputs()
-    try {
-      const tk = localStorage.getItem(`dsx-tokens-${seed}`)
-      if (tk) setTokenUsage(JSON.parse(tk))
-      else setTokenUsage(p => ({ ...p, used: 0 }))
-      const ch = localStorage.getItem(`dsx-cache-${seed}`)
-      if (ch) setCacheInfo(JSON.parse(ch))
-      else setCacheInfo({ hit: 0, miss: 0 })
-    } catch { /* ignore */ }
+    setTokenUsage(p => ({ ...p, used: 0 }))
+    setCacheInfo({ hit: 0, miss: 0 })
     invoke<any[]>('load_session_messages', { seed }).then(msgs => setMessages(msgs.map((m: any, i: number) => ({ ...m, _id: `loaded-${i}-${Date.now()}` })))).catch(() => {})
     invoke('resume_agent', { seed }).then(() => {
       setConnected(true)
@@ -184,7 +136,7 @@ export default function App() {
       refreshSessions()
     }).catch((e: any) => {
       restartingRef.current = false
-      pushMsg({ role: 'assistant', content: `\u26a0 恢复失败: ${e}` })
+      pushMsg({ role: 'assistant', content: `\u26a0 ${e}` })
     })
   }
 
@@ -202,45 +154,29 @@ export default function App() {
   useEffect(() => {
     if (!configDone || connected || connectingRef.current) return
     connectingRef.current = true
-    const prevSessionId = (() => { try { return localStorage.getItem('dsx-session-id') } catch { return null } })()
-    const resume = prevSessionId ? invoke<any>('resume_agent', { seed: prevSessionId }) : Promise.reject()
-    resume.then(() => {
-      setConnected(true)
-      if (prevSessionId) {
-        setSessionId(prevSessionId)
-        invoke<any[]>('load_session_messages', { seed: prevSessionId })
-          .then(msgs => setMessages(msgs)).catch(() => {})
+    invoke<any[]>('cmd_sessions').then((existing) => {
+      const latest = Array.isArray(existing) && existing.length > 0 ? existing[0].seed : null
+      if (latest) {
+        invoke<any>('resume_agent', { seed: latest }).then(() => {
+          setConnected(true); setSessionId(latest)
+          invoke<any[]>('load_session_messages', { seed: latest })
+            .then(msgs => setMessages(msgs.map((m: any, i: number) => ({ ...m, _id: `loaded-${i}-${Date.now()}` })))).catch(() => {})
+          invoke<any>('cmd_sessions').then(setSessions).catch(() => {})
+        }).catch((e: any) => {
+          setConnected(false)
+          pushMsg({ role: 'assistant', content: `\u26a0 ${e}` })
+        })
+      } else {
+        invoke<any>('start_agent').then((r: any) => {
+          setConnected(true)
+          if (r?.sessions) setSessions(r.sessions)
+          if (r?.sessions?.length > 0) setSessionId(r.sessions[0].seed || '')
+        }).catch((e: any) => {
+          setConnected(false)
+          pushMsg({ role: 'assistant', content: `\u26a0 ${e}` })
+        })
       }
-      invoke<any>('cmd_sessions').then(setSessions).catch(() => {})
-    }).catch(() => {
-      // Resume failed — try existing sessions before starting fresh
-      invoke<any[]>('cmd_sessions').then((existing) => {
-        const latest = Array.isArray(existing) && existing.length > 0 ? existing[0].seed : null
-        if (latest) {
-          invoke<any>('resume_agent', { seed: latest }).then(() => {
-            setConnected(true); setSessionId(latest)
-            invoke<any[]>('load_session_messages', { seed: latest })
-          .then(msgs => setMessages(msgs.map((m: any, i: number) => ({ ...m, _id: `loaded-${i}-${Date.now()}` })))).catch(() => {})
-            invoke<any>('cmd_sessions').then(setSessions).catch(() => {})
-          }).catch((e: any) => {
-            setConnected(false)
-            pushMsg({ role: 'assistant', content: `\u26a0 ${e}` })
-          })
-        } else {
-          invoke<any>('start_agent').then((r: any) => {
-            setConnected(true)
-            if (r?.sessions) setSessions(r.sessions)
-            if (r?.sessions?.length > 0) setSessionId(r.sessions[0].seed || '')
-          }).catch((e: any) => {
-            setConnected(false)
-            pushMsg({ role: 'assistant', content: `\u26a0 ${e}` })
-          })
-        }
-      }).catch((e: any) => {
-        setConnected(false)
-        pushMsg({ role: 'assistant', content: `\u26a0 ${e}` })
-      })
-    })
+    }).catch(() => {})
   }, [configDone])
 
   useEffect(() => {
