@@ -1,106 +1,23 @@
-//! dsx-hp — Health Platform daemon.
+//! dsx-gate — API Proxy daemon.
 //!
 //! Security boundary process that holds API keys, proxies LLM requests,
-//! tracks process liveness, and exposes a `HealthProbe` service over TCP.
+//! and applies output quality guards.
 //!
 //! ## IPC protocol
 //!
 //! JSON-LP frames over TCP `localhost`. Port written to
 //! `{data_dir}/hp.port`.
-//!
-//! ## Build
-//!
-//! This is a separate binary target. Add to `Cargo.toml`:
-//!
-//! ```toml
-//! [[bin]]
-//! name = "dsx-hp"
-//! path = "src/dsx-hp/main.rs"
-//! ```
-//!
-//! ## Startup sequence
-//!
-//! 1. Parse CLI args (port, log level).
-//! 2. Bind TCP listener on `127.0.0.1:{port}`.
-//! 3. Write port to `{data_dir}/hp.port`.
-//! 4. Enter accept loop — one thread per connection.
-//! 5. On SIGTERM/SIGINT: write empty port file, drain connections, exit.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::thread;
-use std::time::Duration;
 
-use crate::liveness::LivenessResult;
-use crate::registry::ProcessRegistry;
-use crate::types::{HpError, ProcessKind, Verdict};
 use crate::openai_api::{Provider, StreamEvent};
 use dsx_proto::AgentToHp;
 
 static HP_CONFIG: OnceLock<Provider> = OnceLock::new();
 static HP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-// ── Health service implementation ──
-
-/// Concrete implementation of the `HealthProbe` trait.
-///
-/// Owns the process registry and delegates pipeline judgment.
-/// Runs synchronously; the IPC layer wraps calls in async tasks.
-struct HealthService {
-    registry: ProcessRegistry,
-}
-
-impl HealthService {
-    fn new(timeout_secs: u64) -> Self {
-        Self {
-            registry: ProcessRegistry::new(timeout_secs),
-        }
-    }
-
-    pub fn register(
-        &mut self,
-        kind: ProcessKind,
-        name: &str,
-        pid: u32,
-    ) -> Result<(), HpError> {
-        self.registry.register(kind, name, pid)
-    }
-
-    fn heartbeat(&mut self, pid: u32) -> Result<(), HpError> {
-        self.registry.heartbeat(pid)
-    }
-
-    fn unregister(&mut self, pid: u32) -> Result<(), HpError> {
-        self.registry.unregister(pid)
-    }
-
-    fn judge(&self) -> Vec<Verdict> {
-        let mut verdicts = Vec::new();
-        for (pid, result) in self.registry.check_all() {
-            if let LivenessResult::Dead { reason } = &result {
-                if let Some(reg) = self.registry.query(pid) {
-                    let since = reg.liveness.last_activity.elapsed().as_secs();
-                    verdicts.push(Verdict::Dead {
-                        pid,
-                        name: reg.name.clone(),
-                        reason: reason.clone(),
-                        since_secs: since,
-                    });
-                }
-            }
-        }
-        verdicts
-    }
-
-    fn query(&self, pid: u32) -> Result<crate::types::ProcessHealth, HpError> {
-        self.registry.health(pid)
-    }
-
-    fn list_processes(&self) -> Vec<crate::types::ProcessSummary> {
-        self.registry.summaries()
-    }
-}
 
 // ── Main ──
 
@@ -116,96 +33,49 @@ fn load_hp_config() -> Provider {
 }
 
 pub fn run() {
-    // 0. Load API config
     let hp_cfg = load_hp_config();
     let _ = HP_CONFIG.set(hp_cfg);
     let _ = HP_RUNTIME.set(tokio::runtime::Runtime::new().expect("create tokio runtime"));
     if HP_CONFIG.get().map_or(true, |c| c.api_key.is_empty()) {
-        eprintln!("dsx-hp: WARNING — no API key configured, run 'dsx config' to set up");
+        eprintln!("dsx-gate: WARNING — no API key configured, run 'dsx config' to set up");
     } else {
-        eprintln!("dsx-hp: API proxy configured");
+        eprintln!("dsx-gate: API proxy configured");
     }
 
-    // 1. CLI defaults
     let port = std::env::var("DSX_HP_PORT")
         .ok()
         .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(0); // 0 = OS-assigned
-
-    let timeout_secs = std::env::var("DSX_HP_TIMEOUT")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(30);
+        .unwrap_or(0);
 
     let addr = format!("127.0.0.1:{port}");
-
-    // 2. Bind TCP listener
-    let listener = TcpListener::bind(&addr).expect("dsx-hp: failed to bind TCP listener");
+    let listener = TcpListener::bind(&addr).expect("dsx-gate: failed to bind TCP listener");
     let actual_port = listener.local_addr().unwrap().port();
 
-    // 3. Write port file
     write_port_file(actual_port);
-    eprintln!("dsx-hp: listening on 127.0.0.1:{actual_port} (timeout={timeout_secs}s)");
+    eprintln!("dsx-gate: listening on 127.0.0.1:{actual_port}");
 
-    // 4. Create health service
-    let service = Arc::new(Mutex::new(HealthService::new(timeout_secs)));
-
-    // 5. Accept loop
-    let (_shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
-
-    // Register self as the HP process
-    {
-        let mut svc = match service.lock() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("dsx-hp: mutex poisoned at startup: {e}");
-                return;
-            }
-        };
-        svc.register(ProcessKind::Tui, "dsx-hp", std::process::id())
-            .ok();
-    }
-
-    // Heartbeat ticker — self-heartbeat every 15s
-    let svc_heartbeat = service.clone();
-    let _hb_ticker = thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(15));
-        if shutdown_rx.try_recv().is_ok() {
-            break;
-        }
-        if let Ok(mut svc) = svc_heartbeat.lock() {
-            svc.heartbeat(std::process::id()).ok();
-        }
-    });
-
-    // Accept connections
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let svc = service.clone();
-                thread::spawn(|| handle_connection(stream, svc));
+                thread::spawn(|| handle_connection(stream));
             }
             Err(e) => {
-                eprintln!("dsx-hp: accept error: {e}");
+                eprintln!("dsx-gate: accept error: {e}");
             }
         }
     }
 
-    // Cleanup on exit
     clear_port_file();
 }
 
 // ── Connection handler ──
 
-fn handle_connection(
-    stream: TcpStream,
-    service: Arc<Mutex<HealthService>>,
-) {
+fn handle_connection(stream: TcpStream) {
     let peer = stream.peer_addr().ok();
     let mut reader = match stream.try_clone() {
         Ok(s) => BufReader::new(s),
         Err(e) => {
-            eprintln!("dsx-hp: try_clone failed for {:?}: {e}", peer);
+            eprintln!("dsx-gate: try_clone failed for {:?}: {e}", peer);
             return;
         }
     };
@@ -214,7 +84,7 @@ fn handle_connection(
     loop {
         buf.clear();
         match reader.read_line(&mut buf) {
-            Ok(0) => break, // EOF
+            Ok(0) => break,
             Ok(_) => {
                 let trimmed = buf.trim();
                 if trimmed.is_empty() {
@@ -225,7 +95,7 @@ fn handle_connection(
                         handle_api_chat_streaming(trimmed, &mut w);
                     }
                 } else {
-                    let response = dispatch_frame(trimmed, &service);
+                    let response = dispatch_frame(trimmed);
                     if let Ok(mut w) = stream.try_clone() {
                         let _ = writeln!(w, "{response}");
                         let _ = w.flush();
@@ -237,71 +107,19 @@ fn handle_connection(
     }
 
     if let Some(addr) = peer {
-        eprintln!("dsx-hp: connection closed: {addr}");
+        eprintln!("dsx-gate: connection closed: {addr}");
     }
 }
 
-fn dispatch_frame(
-    line: &str,
-    service: &Mutex<HealthService>,
-) -> String {
-    let frame: AgentToHp = match serde_json::from_str(line) {
-        Ok(f) => f,
-        Err(e) => return json_response("error", &format!("invalid frame: {e}")),
-    };
-
-    let mut svc = match service.lock() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("dsx-hp: mutex poisoned in dispatch: {e}");
-            return json_response("error", "internal: lock poisoned");
-        }
-    };
-
-    match frame {
-        AgentToHp::Register { kind, name, pid } => {
-            let pk = match kind.as_str() {
-                "Agent" => ProcessKind::Agent,
-                "Tools" => ProcessKind::Tools,
-                _ => ProcessKind::Tui,
-            };
-            match svc.register(pk, &name, pid) {
-                Ok(()) => json_response("ok", "registered"),
-                Err(e) => json_response("error", &e.to_string()),
-            }
-        }
-        AgentToHp::Heartbeat { pid } => {
-            match svc.heartbeat(pid) {
-                Ok(()) => json_response("ok", "heartbeat recorded"),
-                Err(e) => json_response("error", &e.to_string()),
-            }
-        }
-        AgentToHp::Unregister { pid } => {
-            match svc.unregister(pid) {
-                Ok(()) => json_response("ok", "unregistered"),
-                Err(e) => json_response("error", &e.to_string()),
-            }
-        }
-        AgentToHp::Judge => {
-            let verdicts = svc.judge();
-            let json = serde_json::to_string(&verdicts).unwrap_or_else(|_| "[]".into());
-            format!("{{\"type\":\"verdicts\",\"data\":{json}}}")
-        }
-        AgentToHp::Query { pid } => {
-            match svc.query(pid) {
-                Ok(health) => {
-                    let data = serde_json::to_string(&health).unwrap_or_default();
-                    format!("{{\"type\":\"health\",\"data\":{data}}}")
-                }
-                Err(e) => json_response("error", &e.to_string()),
-            }
-        }
-        AgentToHp::List => {
-            let summaries = svc.list_processes();
-            let json = serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".into());
-            format!("{{\"type\":\"process_list\",\"data\":{json}}}")
-        }
-        _ => json_response("error", "unsupported frame type"),
+/// Minimal dispatch — Register/Heartbeat/Unregister are accepted as no-ops.
+/// All other frame types (Judge, Query, List) are obsolete and ignored.
+fn dispatch_frame(line: &str) -> String {
+    match serde_json::from_str::<AgentToHp>(line) {
+        Ok(AgentToHp::Register { .. }) => json_response("ok", "registered"),
+        Ok(AgentToHp::Heartbeat { .. }) => json_response("ok", "heartbeat recorded"),
+        Ok(AgentToHp::Unregister { .. }) => json_response("ok", "unregistered"),
+        Ok(_) => json_response("ok", "ok"),
+        Err(e) => json_response("error", &format!("invalid frame: {e}")),
     }
 }
 
@@ -385,7 +203,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                 &gw, &model_o, sys, msgs, tools, max_tokens, effort_o, uid, tx,
             ).await;
             if let Err(e) = result {
-                eprintln!("dsx-hp: gateway error: {e:?}");
+                eprintln!("dsx-gate: gateway error: {e:?}");
                 let _ = tx_err.send(StreamEvent::Error(format!("{e:?}"))).await;
             }
         });

@@ -83,8 +83,8 @@ pub fn try_reconnect() -> Option<TcpStream> {
 
     let current_exe = std::env::current_exe().ok()?;
 
-    // current_exe IS the dsx umbrella binary — just run it with "hp" arg
-    if let Ok(mut child) = std::process::Command::new(&current_exe).arg("hp")
+    // current_exe IS the dsx umbrella binary — just run it with "gate" arg
+    if let Ok(mut child) = std::process::Command::new(&current_exe).arg("gate")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

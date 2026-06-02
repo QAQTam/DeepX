@@ -5,7 +5,7 @@ fn main() {
 
     let role = std::env::args().nth(1).unwrap_or_default();
     match role.as_str() {
-        "hp" => dsx_hp::runner::run(),
+        "gate" => dsx_gate::runner::run(),
         "agent" => dsx_agent::runner::run(),
         "tools" => dsx_tools::run(),
         "config" | "init" => run_config(),

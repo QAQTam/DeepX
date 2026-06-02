@@ -5,6 +5,6 @@ edition.workspace = true
 
 [dependencies]
 dsx-types = { path = "../dsx-types" }
-dsx-hp = { path = "../dsx-hp" }
+dsx-gate = { path = "../dsx-gate" }
 dsx-agent = { path = "../dsx-agent" }
 dsx-tools = { path = "../dsx-tools" }

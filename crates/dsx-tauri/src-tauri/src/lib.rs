@@ -96,10 +96,10 @@ fn ensure_hp(dsx_path: &str, state: &AgentState) -> Result<(), String> {
         }
     }
 
-    log::info!("starting dsx-hp...");
+    log::info!("starting dsx-gate...");
     let _ = std::fs::write(&port_path, "");
     let mut child = Command::new(dsx_path)
-        .arg("hp")
+        .arg("gate")
         .stdout(Stdio::null()).stderr(Stdio::null())
         .spawn().map_err(|e| format!("spawn hp: {e}"))?;
 
@@ -121,12 +121,12 @@ fn ensure_hp(dsx_path: &str, state: &AgentState) -> Result<(), String> {
             }
         }
         if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!("dsx hp exited early with status {status}"));
+            return Err(format!("dsx gate exited early with status {status}"));
         }
     }
     let _ = child.kill();
     let _ = child.wait();
-    Err("HP failed to start. Run 'dsx hp' manually.".to_string())
+    Err("gate failed to start. Run 'dsx gate' manually.".to_string())
 }
 
 fn spawn_agent(dsx_path: &str, resume_seed: Option<&str>) -> Result<(Box<dyn Write + Send>, BufReader<Box<dyn Read + Send>>, Box<dyn Read + Send>, Child), String> {

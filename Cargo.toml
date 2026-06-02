@@ -4,7 +4,7 @@ members = [
     "crates/dsx-types",
     "crates/dsx-proto",
     "crates/dsx",
-    "crates/dsx-hp",
+    "crates/dsx-gate",
     "crates/dsx-agent",
     "crates/dsx-tools",
     "crates/dsx-tui",
