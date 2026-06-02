@@ -1,16 +1,20 @@
 fn main() {
-  // Copy pre-built dsx binary to resources/ so tauri_build can validate & bundle it.
-  // dsx is built in beforeDevCommand / beforeBuildCommand (to avoid nested cargo deadlocks).
-  let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  let manifest = match std::env::var("CARGO_MANIFEST_DIR") {
+    Ok(m) => m,
+    Err(_) => { tauri_build::build(); return; }
+  };
   let profile = std::env::var("PROFILE").unwrap_or_default();
   let m = std::path::Path::new(&manifest);
-  let ws_root = m.parent().unwrap().parent().unwrap().parent().unwrap();
+  let ws_root = match m.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+    Some(r) => r,
+    None => { tauri_build::build(); return; }
+  };
   let src = ws_root.join("target").join(&profile).join("dsx.exe");
   if src.exists() {
-    let dest = m.join("resources").join("dsx.exe");
-    let _ = std::fs::create_dir_all(dest.parent().unwrap());
-    let _ = std::fs::copy(&src, &dest);
+    if let Some(dest_dir) = m.join("resources").parent() {
+      let _ = std::fs::create_dir_all(dest_dir);
+      let _ = std::fs::copy(&src, &m.join("resources").join("dsx.exe"));
+    }
   }
-
   tauri_build::build()
 }

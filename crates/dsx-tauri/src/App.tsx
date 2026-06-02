@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { T } from './i18n'
 import type { Message } from './types'
-import { clearToolOutputs, toolResults } from './state'
+import { clearToolOutputs, toolResults, execLiveOutput, onToolOutputChange } from './state'
 import { ChatMessage } from './components/ChatMessage'
 import { InfoPanel } from './components/InfoPanel'
 import { WorkspacePanel } from './components/WorkspacePanel'
@@ -25,18 +25,16 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamMode, setStreamMode] = useState<'idle' | 'think' | 'answer'>('idle')
   const streamModeRef = useRef<'idle' | 'think' | 'answer'>('idle')
+  const setStream = (mode: 'idle' | 'think' | 'answer') => {
+    streamModeRef.current = mode
+    setStreamMode(mode)
+  }
   const [sessionId, setSessionId] = useState(() => {
     try { return localStorage.getItem('dsx-session-id') || '' } catch { return '' }
   })
   const sessionKey = sessionId || '__default__'
-  const [tokenUsage, setTokenUsage] = useState<{ used: number; limit: number }>(() => {
-    try { const s = localStorage.getItem(`dsx-tokens-${sessionKey}`); if (s) { const c = JSON.parse(s); return c } } catch { /* empty */ }
-    return { used: 0, limit: 150000 }
-  })
-  const [cacheInfo, setCacheInfo] = useState<{ hit: number; miss: number }>(() => {
-    try { const s = localStorage.getItem(`dsx-cache-${sessionKey}`); if (s) return JSON.parse(s) } catch { /* empty */ }
-    return { hit: 0, miss: 0 }
-  })
+  const [tokenUsage, setTokenUsage] = useState<{ used: number; limit: number }>({ used: 0, limit: 150000 })
+  const [cacheInfo, setCacheInfo] = useState<{ hit: number; miss: number }>({ hit: 0, miss: 0 })
   const [predictedCacheHitPct, setPredictedCacheHitPct] = useState<number | null>(null)
   const [balance, setBalance] = useState('')
   const fetchBalance = useCallback(() => {
@@ -63,18 +61,21 @@ export default function App() {
   const scRef = useRef(''); const srRef = useRef(''); const stRef = useRef<{ name: string; args: string; output?: string }[]>([])
   const thinkSegmentsRef = useRef<string[]>([]); const currentThinkRef = useRef('')
   const [tick, setTick] = useState(0); const chatEnd = useRef<HTMLDivElement>(null); const inputRef = useRef<HTMLTextAreaElement>(null)
-  const listenersSetupRef = useRef(false); const connectingRef = useRef(false); const restartingRef = useRef(false)
+  const connectingRef = useRef(false); const restartingRef = useRef(false)
   const rafPending = useRef(false)
+  const rafId = useRef(0)
   const msgSeq = useRef(0)
+  const lastApiPushedRef = useRef(false)
   const pushMsg = (msg: Message) => { msgSeq.current++; (msg as any)._id = msgSeq.current; setMessages(p => [...p, msg]) }
-  const rerender = () => {
+  const rerender = useCallback(() => {
     if (rafPending.current) return
     rafPending.current = true
-    requestAnimationFrame(() => {
+    rafId.current = requestAnimationFrame(() => {
       rafPending.current = false
       setTick(n => n + 1)
     })
-  }
+  }, [])
+  useEffect(() => () => { cancelAnimationFrame(rafId.current) }, [])
 
   useEffect(() => { try { localStorage.setItem('dsx-messages', JSON.stringify(messages)) } catch { /* full */ } }, [messages])
   useEffect(() => { try { if (sessionId) localStorage.setItem('dsx-session-id', sessionId) } catch { /* full */ } }, [sessionId])
@@ -171,7 +172,7 @@ export default function App() {
       if (ch) setCacheInfo(JSON.parse(ch))
       else setCacheInfo({ hit: 0, miss: 0 })
     } catch { /* ignore */ }
-    invoke<any[]>('load_session_messages', { seed }).then(msgs => setMessages(msgs)).catch(() => {})
+    invoke<any[]>('load_session_messages', { seed }).then(msgs => setMessages(msgs.map((m: any, i: number) => ({ ...m, _id: `loaded-${i}-${Date.now()}` })))).catch(() => {})
     invoke('resume_agent', { seed }).then(() => {
       setConnected(true)
       setTimeout(() => { restartingRef.current = false }, 1000)
@@ -214,7 +215,7 @@ export default function App() {
           invoke<any>('resume_agent', { seed: latest }).then(() => {
             setConnected(true); setSessionId(latest)
             invoke<any[]>('load_session_messages', { seed: latest })
-              .then(msgs => setMessages(msgs)).catch(() => {})
+          .then(msgs => setMessages(msgs.map((m: any, i: number) => ({ ...m, _id: `loaded-${i}-${Date.now()}` })))).catch(() => {})
             invoke<any>('cmd_sessions').then(setSessions).catch(() => {})
           }).catch((e: any) => {
             setConnected(false)
@@ -238,83 +239,102 @@ export default function App() {
   }, [configDone])
 
   useEffect(() => {
-    if (listenersSetupRef.current) return
-    listenersSetupRef.current = true
-    listen<any>('content-delta', (e: any) => {
-      if (e.payload.delta) { scRef.current += e.payload.delta; streamModeRef.current = 'answer'; setStreamMode('answer') }
+    const unlistens: Array<Promise<() => void>> = []
+    unlistens.push(listen<any>('content-delta', (e: any) => {
+      if (e.payload.delta) { scRef.current += e.payload.delta; setStream('answer') }
       if (e.payload.reasoning) {
         currentThinkRef.current += e.payload.reasoning; srRef.current += e.payload.reasoning
-        streamModeRef.current = 'think'; setStreamMode('think')
+        setStream('think')
       }
       rerender()
-    })
-    listen<any>('tool-progress', (e: any) => {
+    }))
+    unlistens.push(listen<any>('tool-progress', (e: any) => {
       if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
       const a = stRef.current; const i = a.findIndex(t => t.name === e.payload.id)
       if (i >= 0) a[i] = { name: e.payload.id, args: e.payload.content }; else a.push({ name: e.payload.id, args: e.payload.content })
       rerender()
-    })
-      listen<any>('api-response', (e: any) => {
-        const { content, tool_calls, usage, reasoning_content } = e.payload
-        if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-        if (tool_calls?.length) {
-          const tcs = tool_calls.map((tc: any) => ({
-            id: tc.id || '', name: tc.name || tc.function?.name || '', args: tc.arguments || tc.function?.arguments || '',
-          }))
-          const intermediateContent = content || scRef.current || ''
-          scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
-          streamModeRef.current = 'think'; setStreamMode('think')
-          pushMsg({ role: 'assistant', content: intermediateContent, tool_calls: tcs })
-          if (usage) { setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit })) }
-          rerender()
-          return
-        }
-        const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
-        const finalContent = content || scRef.current || ''
-        const finalReasoning = reasoning_content || srRef.current || undefined
-        const finalToolCalls = stRef.current.length ? stRef.current.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined
-        scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []; streamModeRef.current = 'think'; setStreamMode('think')
-        pushMsg({ role: 'assistant', content: finalContent, reasoning: finalReasoning, reasoningSegments: segments, tool_calls: finalToolCalls })
-        if (usage) {
-          setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit }))
-          if (usage.prompt_cache_hit_tokens !== undefined || usage.prompt_cache_miss_tokens !== undefined) {
-            setCacheInfo((c: { hit: number; miss: number }) => ({ hit: c.hit + (usage.prompt_cache_hit_tokens || 0), miss: c.miss + (usage.prompt_cache_miss_tokens || 0) }))
-          }
-          fetchBalance()
-        } else if (content) { addTokens(content, false) }
+    }))
+    unlistens.push(listen<any>('api-response', (e: any) => {
+      const { content, tool_calls, usage, reasoning_content } = e.payload
+      if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
+      if (tool_calls?.length) {
+        const tcs = tool_calls.map((tc: any) => ({
+          id: tc.id || '', name: tc.name || tc.function?.name || '', args: tc.arguments || tc.function?.arguments || '',
+        }))
+        const intermediateContent = content || scRef.current || ''
+        scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
+        setStream('think')
+        pushMsg({ role: 'assistant', content: intermediateContent, tool_calls: tcs })
+        lastApiPushedRef.current = true
+        if (usage) { setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit })) }
         rerender()
-      })
-    listen('agent-done', () => {
+        return
+      }
+      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
+      const finalContent = content || scRef.current || ''
+      const finalReasoning = reasoning_content || srRef.current || undefined
+      const finalToolCalls = stRef.current.length ? stRef.current.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined
+      scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []; setStream('think')
+      pushMsg({ role: 'assistant', content: finalContent, reasoning: finalReasoning, reasoningSegments: segments, tool_calls: finalToolCalls })
+      lastApiPushedRef.current = true
+      if (usage) {
+        setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit }))
+        if (usage.prompt_cache_hit_tokens !== undefined || usage.prompt_cache_miss_tokens !== undefined) {
+          setCacheInfo((c: { hit: number; miss: number }) => ({ hit: c.hit + (usage.prompt_cache_hit_tokens || 0), miss: c.miss + (usage.prompt_cache_miss_tokens || 0) }))
+        }
+        fetchBalance()
+      } else if (content) { addTokens(content, false) }
+      rerender()
+    }))
+    unlistens.push(listen('agent-done', () => {
       if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
       const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
       const finalContent = scRef.current
       const finalReasoning = srRef.current
       const finalTools = stRef.current.length ? stRef.current.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined
       scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
-      if (finalContent || finalReasoning || finalTools) { pushMsg({ role: 'assistant', content: finalContent || '', reasoning: finalReasoning || undefined, reasoningSegments: segments, tool_calls: finalTools }) }
-      setIsStreaming(false); setStreamMode('idle'); rerender()
+      if (!lastApiPushedRef.current && (finalContent || finalReasoning || finalTools)) { pushMsg({ role: 'assistant', content: finalContent || '', reasoning: finalReasoning || undefined, reasoningSegments: segments, tool_calls: finalTools }) }
+      lastApiPushedRef.current = false
+      setIsStreaming(false); setStream('idle'); rerender()
       setPlanVersion(v => v + 1)
-    })
-    listen('agent-error', () => { setIsStreaming(false); setStreamMode('idle'); rerender() })
-    listen('agent-closed', () => { if (!restartingRef.current) setConnected(false); setIsStreaming(false) })
-    listen<any>('ask-user', (e: any) => {
+    }))
+    unlistens.push(listen('agent-error', () => { setIsStreaming(false); setStream('idle'); rerender() }))
+    unlistens.push(listen('agent-closed', () => { if (!restartingRef.current) setConnected(false); setIsStreaming(false) }))
+    unlistens.push(listen<any>('ask-user', (e: any) => {
       setAskUser({ question: e.payload.question || '需要输入', options: e.payload.options })
       setAskAnswer('')
-    })
-      listen<any>('tool-result', (e: any) => {
-        const { id, name, content, success } = e.payload
-        toolResults[id] = { content: content || '', success }
-        toolResults[name] = { content: content || '', success }
-        rerender()
-      })
-    listen<any>('tool-state', (e: any) => { setToolState(e.payload) })
-    listen<any>('session-restored', (e: any) => {
+    }))
+    unlistens.push(listen<any>('tool-result', (e: any) => {
+      const { id, name, content, success } = e.payload
+      toolResults[id] = { content: content || '', success }
+      toolResults[name] = { content: content || '', success }
+      if (name === 'exec' || name === 'exec/run') {
+        execLiveOutput[id] = content || ''
+        execLiveOutput[name] = content || ''
+      }
+      setMessages(prev => prev.map(msg => {
+        if (!msg.tool_calls) return msg
+        const hasMatch = msg.tool_calls.some((tc: any) => tc.id === id || tc.name === name)
+        if (!hasMatch) return msg
+        return {
+          ...msg,
+          tool_calls: msg.tool_calls.map((tc: any) =>
+            (tc.id === id || tc.name === name) ? { ...tc, output: content || '' } : tc
+          )
+        }
+      }))
+      rerender()
+    }))
+    unlistens.push(listen<any>('tool-state', (e: any) => { setToolState(e.payload) }))
+    unlistens.push(listen<any>('session-restored', (e: any) => {
       setSessionId(e.payload.seed || '')
       if (e.payload.tokens_used) { setTokenUsage(p => ({ ...p, used: e.payload.tokens_used })) }
-    })
-    listen<any>('cache-prediction', (e: any) => {
+    }))
+    unlistens.push(listen<any>('cache-prediction', (e: any) => {
       setPredictedCacheHitPct(e.payload.hit_rate ?? null)
-    })
+    }))
+    const unsubTool = onToolOutputChange(rerender)
+    return () => { unlistens.forEach(p => p.then(fn => fn()).catch(() => {})); unsubTool() }
   }, [])
 
   useEffect(() => { if (connected) inputRef.current?.focus() }, [connected])
@@ -325,7 +345,7 @@ export default function App() {
     pushMsg({ role: 'user', content: text })
     addTokens(text, true)
     scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []; currentThinkRef.current = ''
-    streamModeRef.current = 'think'; setStreamMode('think'); setIsStreaming(true)
+    setStream('think'); setIsStreaming(true)
     invoke('send_message', { text }).catch(() => setIsStreaming(false))
     setTimeout(() => inputRef.current?.focus(), 50)
   }, [input, isStreaming, connected, addTokens])

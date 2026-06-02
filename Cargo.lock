@@ -1007,7 +1007,6 @@ dependencies = [
 name = "dsx-tauri"
 version = "4.0.0"
 dependencies = [
- "anyhow",
  "dsx-proto",
  "dsx-types",
  "log",

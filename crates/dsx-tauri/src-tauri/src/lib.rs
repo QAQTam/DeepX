@@ -1,10 +1,19 @@
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::thread::JoinHandle;
 use tauri::{AppHandle, Emitter};
+
+struct ProcessHandle {
+    child: Child,
+    reader_handle: JoinHandle<()>,
+    stderr_handle: JoinHandle<()>,
+}
 
 struct AgentState {
     stdin: Mutex<Option<Box<dyn Write + Send>>>,
+    process: Mutex<Option<ProcessHandle>>,
+    hp_child: Mutex<Option<Child>>,
 }
 
 fn data_dir() -> std::path::PathBuf {
@@ -22,7 +31,6 @@ fn find_dsx() -> Result<String, String> {
 
     let name = if cfg!(target_os = "windows") { "dsx.exe" } else { "dsx" };
 
-    // Try from executable path and from CWD
     for start_dir in [std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())),
                       std::env::current_dir().ok()].iter().flatten()
     {
@@ -32,6 +40,7 @@ fn find_dsx() -> Result<String, String> {
         let resource = start_dir.join("resources").join(name);
         if resource.exists() { return Ok(resource.to_string_lossy().to_string()); }
 
+        #[cfg(debug_assertions)]
         for ancestor in start_dir.ancestors().take(8) {
             for sub in &["debug", "release"] {
                 let c = ancestor.join("target").join(sub).join(name);
@@ -51,7 +60,7 @@ fn find_dsx() -> Result<String, String> {
     Err("dsx binary not found. Try: cargo build --release -p dsx".to_string())
 }
 
-fn ensure_hp(dsx_path: &str) -> Result<(), String> {
+fn ensure_hp(dsx_path: &str, state: &AgentState) -> Result<(), String> {
     let port_path = dsx_types::platform::hp_port_path();
 
     if let Ok(s) = std::fs::read_to_string(&port_path) {
@@ -60,7 +69,6 @@ fn ensure_hp(dsx_path: &str) -> Result<(), String> {
                 log::info!("hp already running on port {port}");
                 return Ok(());
             }
-            let _ = std::fs::write(&port_path, "");
         }
     }
 
@@ -77,6 +85,13 @@ fn ensure_hp(dsx_path: &str) -> Result<(), String> {
             if let Ok(port) = s.trim().parse::<u16>() {
                 if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
                     log::info!("hp started on port {port}");
+                    if let Ok(mut guard) = state.hp_child.lock() {
+                        let old = guard.replace(child);
+                        if let Some(mut old_child) = old {
+                            let _ = old_child.kill();
+                            let _ = old_child.wait();
+                        }
+                    }
                     return Ok(());
                 }
             }
@@ -85,10 +100,12 @@ fn ensure_hp(dsx_path: &str) -> Result<(), String> {
             return Err(format!("dsx hp exited early with status {status}"));
         }
     }
+    let _ = child.kill();
+    let _ = child.wait();
     Err("HP failed to start. Run 'dsx hp' manually.".to_string())
 }
 
-fn spawn_agent(dsx_path: &str, resume_seed: Option<&str>) -> Result<(Box<dyn Write + Send>, BufReader<Box<dyn Read + Send>>, Box<dyn Read + Send>), String> {
+fn spawn_agent(dsx_path: &str, resume_seed: Option<&str>) -> Result<(Box<dyn Write + Send>, BufReader<Box<dyn Read + Send>>, Box<dyn Read + Send>, Child), String> {
     let mut cmd = Command::new(dsx_path);
     cmd.arg("agent");
     if let Some(seed) = resume_seed {
@@ -101,10 +118,10 @@ fn spawn_agent(dsx_path: &str, resume_seed: Option<&str>) -> Result<(Box<dyn Wri
     let stdout = child.stdout.take().ok_or("agent: no stdout")?;
     let stderr = child.stderr.take().ok_or("agent: no stderr")?;
     let reader = BufReader::new(Box::new(stdout) as Box<dyn Read + Send>);
-    Ok((stdin, reader, Box::new(stderr)))
+    Ok((stdin, reader, Box::new(stderr), child))
 }
 
-fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) {
+fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut line = String::new();
@@ -112,38 +129,43 @@ fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) {
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) => {
-                        log::info!("agent stdout closed");
-                        let _ = app.emit("agent-closed", serde_json::json!({}));
-                        break;
-                    }
+                    log::info!("agent stdout closed");
+                    let _ = app.emit("agent-closed", serde_json::json!({}));
+                    break;
+                }
                 Ok(_) => {
                     let t = line.trim();
                     if t.is_empty() { continue; }
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
-                        let kind = v["type"].as_str().unwrap_or("").to_string();
-                        match kind.as_str() {
-                            "content_delta" => { let _ = app.emit("content-delta", v); }
-                            "tool_progress" => { let _ = app.emit("tool-progress", v); }
-                            "api_response" => { let _ = app.emit("api-response", v); }
-                            "done" => { let _ = app.emit("agent-done", v); }
-                            "error" => { let _ = app.emit("agent-error", v); }
-                            "ask_user" => { let _ = app.emit("ask-user", v); }
-                            "tool_state" => { let _ = app.emit("tool-state", v); }
-                            "tool_result" => { let _ = app.emit("tool-result", v); }
-                            "session_restored" => { let _ = app.emit("session-restored", v); }
-                            "cache_prediction" => { let _ = app.emit("cache-prediction", v); }
-                            "balance" => { let _ = app.emit("balance", v); }
-                            _ => {}
+                    match serde_json::from_str::<serde_json::Value>(t) {
+                        Ok(v) => {
+                            let kind = v["type"].as_str().unwrap_or("");
+                            match kind {
+                                "content_delta" => { let _ = app.emit("content-delta", v); }
+                                "tool_progress" => { let _ = app.emit("tool-progress", v); }
+                                "api_response" => { let _ = app.emit("api-response", v); }
+                                "done" => { let _ = app.emit("agent-done", v); }
+                                "error" => { let _ = app.emit("agent-error", v); }
+                                "ask_user" => { let _ = app.emit("ask-user", v); }
+                                "tool_state" => { let _ = app.emit("tool-state", v); }
+                                "tool_result" => { let _ = app.emit("tool-result", v); }
+                                "session_restored" => { let _ = app.emit("session-restored", v); }
+                                "cache_prediction" => { let _ = app.emit("cache-prediction", v); }
+                                "balance" => { let _ = app.emit("balance", v); }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("agent: non-JSON stdout line ({} chars): {}", t.len(), e);
                         }
                     }
                 }
                 Err(_) => break,
             }
         }
-    });
+    })
 }
 
-fn start_stderr_reader(stderr: Box<dyn Read + Send>, app: AppHandle) {
+fn start_stderr_reader(stderr: Box<dyn Read + Send>, app: AppHandle) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut line = String::new();
@@ -155,7 +177,10 @@ fn start_stderr_reader(stderr: Box<dyn Read + Send>, app: AppHandle) {
                     let t = line.trim();
                     if !t.is_empty() {
                         log::warn!("agent stderr: {t}");
-                        if t.contains("refused") || t.contains("error") || t.contains("Error") {
+                        let lower = t.to_lowercase();
+                        if lower.contains("refused") || lower.contains("connection reset")
+                           || lower.contains("broken pipe") || lower.contains("timeout")
+                           || lower.contains("panic") || lower.contains("fatal") {
                             let _ = app.emit("agent-error", serde_json::json!({"message": t}));
                         }
                     }
@@ -163,7 +188,7 @@ fn start_stderr_reader(stderr: Box<dyn Read + Send>, app: AppHandle) {
                 Err(_) => break,
             }
         }
-    });
+    })
 }
 
 #[tauri::command]
@@ -171,7 +196,7 @@ fn send_message(state: tauri::State<AgentState>, text: String) -> Result<(), Str
     let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
     let writer = guard.as_mut().ok_or("Agent not started")?;
     let frame = serde_json::json!({"type": "user_input", "text": text});
-    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap())
+    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default())
         .map_err(|e| format!("write: {e}"))?;
     writer.flush().map_err(|e| format!("flush: {e}"))?;
     Ok(())
@@ -182,43 +207,42 @@ fn reload_agent(state: tauri::State<AgentState>) -> Result<(), String> {
     let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
     let writer = guard.as_mut().ok_or("Agent not started")?;
     let frame = serde_json::json!({"type": "reload_config"});
-    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap())
+    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default())
         .map_err(|e| format!("write: {e}"))?;
     writer.flush().map_err(|e| format!("flush: {e}"))?;
     Ok(())
 }
 
-/// Scan sessions/ dir for both flat *.json and subdirectory session.json files.
 fn scan_sessions() -> Vec<serde_json::Value> {
     let dir = data_dir().join("sessions");
     let mut sessions = Vec::new();
     if !dir.is_dir() { return sessions; }
-    // Non-session files to skip
-    let skip = |name: &str| name == "index.json" || name == "pitfalls.json";
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             let fname = entry.file_name().to_string_lossy().to_string();
-            if skip(&fname) { continue; }
-            // Old format: sessions/{seed}.json
-            if path.is_file() && path.extension().map(|e| e == "json").unwrap_or(false) {
-                if let Ok(data) = std::fs::read_to_string(&path) {
-                    if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&data) {
-                        // Compute message_count from messages array
-                        if meta.get("message_count").is_none() {
-                            let count = meta["messages"].as_array().map(|a| a.len()).unwrap_or(0);
-                            meta["message_count"] = serde_json::json!(count);
-                        }
-                        sessions.push(meta);
-                        continue;
-                    }
-                }
-            }
             // New format: sessions/{seed}-{date}/session.json
             if path.is_dir() {
                 let inner = path.join("session.json");
                 if inner.is_file() {
                     if let Ok(data) = std::fs::read_to_string(&inner) {
+                        if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&data) {
+                            if meta.get("message_count").is_none() {
+                                let count = meta["messages"].as_array().map(|a| a.len()).unwrap_or(0);
+                                meta["message_count"] = serde_json::json!(count);
+                            }
+                            sessions.push(meta);
+                        }
+                    }
+                }
+                continue;
+            }
+            // Old format: only {seed}.json or {seed}.live.json (skip index.json, pitfalls.json, etc.)
+            if path.is_file() && path.extension().map(|e| e == "json").unwrap_or(false) {
+                if fname == "index.json" || fname == "pitfalls.json" { continue; }
+                let is_session = fname.ends_with(".live.json") || fname.ends_with(".json");
+                if is_session {
+                    if let Ok(data) = std::fs::read_to_string(&path) {
                         if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&data) {
                             if meta.get("message_count").is_none() {
                                 let count = meta["messages"].as_array().map(|a| a.len()).unwrap_or(0);
@@ -250,15 +274,15 @@ fn load_session_messages(seed: String) -> Result<serde_json::Value, String> {
             let fname = entry.file_name().to_string_lossy().to_string();
             let path = entry.path();
             // New format: sessions/{seed}-{date}/session.json
-            if fname.starts_with(&seed) && path.is_dir() {
+            if path.is_dir() && fname.starts_with(&format!("{}-", seed)) {
                 let inner = path.join("session.json");
                 if let Ok(data) = std::fs::read_to_string(&inner) {
                     file_data = Some(data);
                     break;
                 }
             }
-            // Old format: sessions/{seed}.json
-            if fname == format!("{}.json", seed) && path.is_file() {
+            // Old format: sessions/{seed}.json or sessions/{seed}.live.json
+            if path.is_file() && (fname == format!("{}.json", seed) || fname == format!("{}.live.json", seed)) {
                 file_data = std::fs::read_to_string(&path).ok();
                 break;
             }
@@ -298,7 +322,7 @@ fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
                         ContentBlock::ToolUse { id, name, input } => {
                             tool_calls.push(serde_json::json!({
                                 "id": id, "name": name,
-                                "args": serde_json::to_string(input).unwrap_or_default(),
+                                "args": input.clone(),
                                 "output": "",
                             }));
                         }
@@ -337,13 +361,21 @@ fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
 
 #[tauri::command]
 fn start_agent(app: AppHandle, state: tauri::State<AgentState>) -> Result<serde_json::Value, String> {
+    if state.stdin.lock().map_err(|e| format!("lock: {e}"))?.is_some() {
+        return Err("Agent already started".to_string());
+    }
     let dsx_path = find_dsx()?;
     log::info!("dsx binary: {dsx_path}");
-    ensure_hp(&dsx_path)?;
-    let (stdin, reader, stderr) = spawn_agent(&dsx_path, None)?;
+    ensure_hp(&dsx_path, &state)?;
+    let (stdin, reader, stderr, child) = spawn_agent(&dsx_path, None)?;
+    let reader_handle = start_reader(reader, app.clone());
+    let stderr_handle = start_stderr_reader(stderr, app);
     *state.stdin.lock().map_err(|e| format!("lock: {e}"))? = Some(stdin);
-    start_reader(reader, app.clone());
-    start_stderr_reader(stderr, app);
+    *state.process.lock().map_err(|e| format!("lock: {e}"))? = Some(ProcessHandle {
+        child,
+        reader_handle,
+        stderr_handle,
+    });
 
     let sessions = scan_sessions();
     log::info!("agent connected");
@@ -374,8 +406,8 @@ fn save_config(api_key: String, base_url: String, model: String, context_limit: 
     for key in &["profiles", "active_profile", "max_tool_rounds", "context7_api_key"] {
         if let Some(v) = old_cfg.get(*key) { c[*key] = v.clone(); }
     }
-    std::fs::write(&p, serde_json::to_string_pretty(&c).unwrap()).map_err(|e| format!("write: {e}"))?;
-    Ok(())
+    let data = serde_json::to_string_pretty(&c).map_err(|e| format!("json: {e}"))?;
+    std::fs::write(&p, data).map_err(|e| format!("write: {e}"))
 }
 
 #[tauri::command]
@@ -384,7 +416,6 @@ async fn fetch_models(api_key: String, base_url: String) -> Result<Vec<String>, 
         .timeout(std::time::Duration::from_secs(10))
         .build().map_err(|e| format!("http client: {e}"))?;
 
-    // Strip /chat/completions or trailing /v1, then append /models
     let stripped = base_url
         .trim_end_matches('/')
         .trim_end_matches("/chat/completions")
@@ -414,6 +445,7 @@ async fn fetch_models(api_key: String, base_url: String) -> Result<Vec<String>, 
         .unwrap_or_default();
 
     if models.is_empty() {
+        log::warn!("No models returned from API, using hardcoded defaults");
         Ok(vec![
             "deepseek-v4-flash".into(),
             "deepseek-reasoner-v4".into(),
@@ -430,10 +462,16 @@ async fn get_balance(api_key: String) -> Result<serde_json::Value, String> {
     if key.is_empty() || key == "null" {
         return Err("API Key 无效".to_string());
     }
+    let base_url = std::fs::read_to_string(&config_path()).ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .and_then(|c| c["base_url"].as_str().map(String::from))
+        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+    let stripped = base_url.trim_end_matches('/').trim_end_matches("/chat/completions").trim_end_matches("/v1");
+    let url = format!("{}/user/balance", stripped);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build().map_err(|e| format!("http client: {e}"))?;
-    let resp = client.get("https://api.deepseek.com/user/balance")
+    let resp = client.get(&url)
         .header("Authorization", format!("Bearer {}", key))
         .send().await.map_err(|e| format!("request: {e}"))?;
     if !resp.status().is_success() {
@@ -445,7 +483,11 @@ async fn get_balance(api_key: String) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn load_config() -> Result<serde_json::Value, String> {
-    let data = std::fs::read_to_string(&config_path()).map_err(|e| format!("read: {e}"))?;
+    let path = config_path();
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let data = std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))?;
     serde_json::from_str(&data).map_err(|e| format!("parse: {e}"))
 }
 
@@ -455,7 +497,6 @@ fn update_config(field: String, value: String) -> Result<(), String> {
     let mut cfg: serde_json::Value = std::fs::read_to_string(&p).ok()
         .and_then(|d| serde_json::from_str(&d).ok()).unwrap_or(serde_json::json!({}));
     if let Some(obj) = cfg.as_object_mut() {
-        // Try JSON parse first (handles arrays, objects from frontend)
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&value) {
             obj.insert(field, parsed);
         } else if let Ok(n) = value.parse::<u32>() { obj.insert(field, serde_json::json!(n)); }
@@ -463,39 +504,50 @@ fn update_config(field: String, value: String) -> Result<(), String> {
         else if value == "false" { obj.insert(field, serde_json::json!(false)); }
         else { obj.insert(field, serde_json::json!(value)); }
     }
-    std::fs::write(&p, serde_json::to_string_pretty(&cfg).unwrap()).map_err(|e| format!("write: {e}"))?;
-    Ok(())
+    let data = serde_json::to_string_pretty(&cfg).map_err(|e| format!("json: {e}"))?;
+    std::fs::write(&p, data).map_err(|e| format!("write: {e}"))
 }
 
 #[tauri::command]
-// Session listing is included in start_agent return value
 fn cmd_sessions() -> Result<Vec<serde_json::Value>, String> {
     Ok(scan_sessions())
 }
 
 fn restart_agent(app: &AppHandle, state: &AgentState, seed: Option<&str>) -> Result<(), String> {
-    // Politely ask the old agent to exit before dropping stdin
     if let Ok(mut guard) = state.stdin.lock() {
         if let Some(writer) = guard.as_mut() {
             let frame = serde_json::json!({"type": "shutdown"});
-            let _ = writeln!(writer, "{}", serde_json::to_string(&frame).unwrap());
+            let _ = writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default());
             let _ = writer.flush();
         }
         *guard = None;
     }
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    if let Ok(mut proc) = state.process.lock() {
+        if let Some(mut handle) = proc.take() {
+            let _ = handle.child.kill();
+            let _ = handle.child.wait();
+            let _ = handle.reader_handle.join();
+            let _ = handle.stderr_handle.join();
+        }
+    }
     let dsx_path = find_dsx()?;
-    ensure_hp(&dsx_path)?;
-    let (stdin, reader, stderr) = spawn_agent(&dsx_path, seed)?;
+    ensure_hp(&dsx_path, state)?;
+    let (stdin, reader, stderr, child) = spawn_agent(&dsx_path, seed)?;
+    let reader_handle = start_reader(reader, app.clone());
+    let stderr_handle = start_stderr_reader(stderr, app.clone());
     *state.stdin.lock().map_err(|e| format!("lock: {e}"))? = Some(stdin);
-    start_reader(reader, app.clone());
-    start_stderr_reader(stderr, app.clone());
+    *state.process.lock().map_err(|e| format!("lock: {e}"))? = Some(ProcessHandle {
+        child,
+        reader_handle,
+        stderr_handle,
+    });
     Ok(())
 }
 
 #[tauri::command]
 fn stop_agent(app: AppHandle, state: tauri::State<AgentState>) -> Result<(), String> {
-    restart_agent(&app, &state, None)
+    stop_agent_inner(&app, &state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -515,7 +567,11 @@ fn set_workspace(path: String) -> Result<(), String> {
 #[tauri::command]
 fn get_workspace() -> Result<String, String> {
     let f = dsx_types::platform::workspace_path();
-    std::fs::read_to_string(&f).map_err(|_| "No workspace set".to_string())
+    let path = std::fs::read_to_string(&f).map_err(|_| "No workspace set".to_string())?;
+    if !std::path::Path::new(&path).exists() {
+        return Err(format!("Workspace no longer exists: {path}"));
+    }
+    Ok(path)
 }
 
 #[tauri::command]
@@ -545,7 +601,7 @@ fn cancel_agent(state: tauri::State<AgentState>) -> Result<(), String> {
     let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
     if let Some(writer) = guard.as_mut() {
         let frame = serde_json::json!({"type": "cancel"});
-        writeln!(writer, "{}", serde_json::to_string(&frame).unwrap())
+        writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default())
             .map_err(|e| format!("write: {e}"))?;
         writer.flush().map_err(|e| format!("flush: {e}"))?;
     }
@@ -556,7 +612,6 @@ fn cancel_agent(state: tauri::State<AgentState>) -> Result<(), String> {
 fn delete_session(seed: String) -> Result<(), String> {
     let dir = data_dir().join("sessions");
     if !dir.is_dir() { return Ok(()); }
-    // Sessions are stored as {seed}-{date}/ directories or {seed}.live.json files
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("read_dir: {e}"))?.flatten() {
         let fname = entry.file_name().to_string_lossy().to_string();
         if fname.starts_with(&seed) {
@@ -574,29 +629,44 @@ fn delete_session(seed: String) -> Result<(), String> {
 fn delete_all_sessions(app: AppHandle, state: tauri::State<AgentState>) -> Result<(), String> {
     let dir = data_dir().join("sessions");
     if !dir.is_dir() { return Ok(()); }
-    // Stop agent so it doesn't re-create sessions while we delete
     stop_agent_inner(&app, &state);
+    let mut errors = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("read_dir: {e}"))?.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path).map_err(|e| format!("rm_dir {}: {e}", path.display()))?;
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
         } else {
-            std::fs::remove_file(&path).map_err(|e| format!("rm_file {}: {e}", path.display()))?;
+            std::fs::remove_file(&path)
+        };
+        if let Err(e) = result {
+            errors.push(format!("{}: {e}", path.display()));
         }
     }
-    Ok(())
+    restart_agent(&app, &state, None)?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("Partial errors: {}", errors.join("; ")))
+    }
 }
 
 fn stop_agent_inner(_app: &AppHandle, state: &AgentState) {
     if let Ok(mut guard) = state.stdin.lock() {
         if let Some(writer) = guard.as_mut() {
             let frame = serde_json::json!({"type": "shutdown"});
-            let _ = writeln!(writer, "{}", serde_json::to_string(&frame).unwrap());
+            let _ = writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default());
             let _ = writer.flush();
         }
         *guard = None;
     }
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    if let Ok(mut proc) = state.process.lock() {
+        if let Some(mut handle) = proc.take() {
+            let _ = handle.child.kill();
+            let _ = handle.child.wait();
+            let _ = handle.reader_handle.join();
+            let _ = handle.stderr_handle.join();
+        }
+    }
 }
 
 #[tauri::command]
@@ -613,9 +683,9 @@ fn list_plans() -> Result<Vec<serde_json::Value>, String> {
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
                     .to_string();
-                let status = if content.contains("status: done") { "done" }
-                    else if content.contains("status: active") { "active" }
-                    else if content.contains("status: cancelled") { "cancelled" }
+                let status = if content.lines().any(|l| l.trim() == "status: done") { "done" }
+                    else if content.lines().any(|l| l.trim() == "status: active") { "active" }
+                    else if content.lines().any(|l| l.trim() == "status: cancelled") { "cancelled" }
                     else { "draft" };
                 plans.push(serde_json::json!({
                     "name": name,
@@ -639,7 +709,7 @@ fn read_plan(name: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(AgentState { stdin: Mutex::new(None) })
+        .manage(AgentState { stdin: Mutex::new(None), process: Mutex::new(None), hp_child: Mutex::new(None) })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(tauri_plugin_log::Builder::default()
