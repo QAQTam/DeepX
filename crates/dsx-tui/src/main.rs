@@ -318,8 +318,13 @@ fn run_chat(
                     (_, KeyCode::Enter) => {
                         let reply = if ask.selected < ask.options.len() {
                             let opt = &ask.options[ask.selected];
-                            if opt.is_empty() && !ask.custom_input.is_empty() { ask.custom_input.clone() } else { opt.clone() }
-                        } else { String::new() };
+                            if opt.is_empty() {
+                                if ask.custom_input.is_empty() { continue; }
+                                ask.custom_input.clone()
+                            } else {
+                                opt.clone()
+                            }
+                        } else { continue };
                         if !reply.is_empty() {
                             send(stdin, &dsx_proto::Ui2Agent::UserInput { text: reply });
                         }

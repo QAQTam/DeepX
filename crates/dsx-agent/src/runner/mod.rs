@@ -146,6 +146,7 @@ pub fn run_agent_loop(
             }
 
             Ui2Agent::Cancel => {
+                agent.pending_ask_user = None;
                 dsx_tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
                 agent.stream_cancelled = true;
                 crate::tools::cancel_current_tool();
