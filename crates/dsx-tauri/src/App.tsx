@@ -58,7 +58,7 @@ export default function App() {
   const [planVersion, setPlanVersion] = useState(0)
   const [configVersion, setConfigVersion] = useState(0)
 
-  const scRef = useRef(''); const srRef = useRef(''); const stRef = useRef<{ name: string; args: string; output?: string }[]>([])
+  const scRef = useRef(''); const srRef = useRef('');   const stRef = useRef<{ id: string; name: string; args: string; body?: any; output?: string }[]>([])
   const thinkSegmentsRef = useRef<string[]>([]); const currentThinkRef = useRef('')
   const [tick, setTick] = useState(0); const chatEnd = useRef<HTMLDivElement>(null); const inputRef = useRef<HTMLTextAreaElement>(null)
   const connectingRef = useRef(false); const restartingRef = useRef(false)
@@ -253,69 +253,71 @@ export default function App() {
       }
       rerender()
     }))
-    unlistens.push(listen<any>('tool-progress', (e: any) => {
+    unlistens.push(listen<any>('tool-start', (e: any) => {
       if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      const a = stRef.current; const i = a.findIndex(t => t.name === e.payload.id)
-      if (i >= 0) a[i] = { name: e.payload.id, args: e.payload.content }; else a.push({ name: e.payload.id, args: e.payload.content })
+      const { id, name, args_display, body } = e.payload
+      const existing = stRef.current.findIndex(t => t.id === id)
+      if (existing >= 0) {
+        stRef.current[existing] = { id, name, args: args_display, body }
+      } else {
+        stRef.current.push({ id, name, args: args_display, body })
+      }
+      rerender()
+    }))
+    unlistens.push(listen<any>('tool-done', (e: any) => {
+      const { id, name, output, success } = e.payload
+      toolResults[id] = { content: output || '', success }
+      toolResults[name] = { content: output || '', success }
+      if (name === 'exec' || name === 'exec/run') {
+        execLiveOutput[id] = output || ''
+        execLiveOutput[name] = output || ''
+      }
+      // update tool output in messages
+      setMessages(prev => prev.map(msg => {
+        if (!msg.tool_calls) return msg
+        const hasMatch = msg.tool_calls.some((tc: any) => tc.id === id || tc.name === name)
+        if (!hasMatch) return msg
+        return {
+          ...msg,
+          tool_calls: msg.tool_calls.map((tc: any) =>
+            (tc.id === id || tc.name === name) ? { ...tc, output: output || '' } : tc
+          )
+        }
+      }))
+      setPlanVersion(v => v + 1)
       rerender()
     }))
     unlistens.push(listen<any>('api-response', (e: any) => {
-      const { content, tool_calls, usage, reasoning_content, stop_reason } = e.payload
+      const { content, usage, reasoning_content } = e.payload
       if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      if (tool_calls?.length) {
-        const tcs = tool_calls.map((tc: any) => ({
-          id: tc.id || '', name: tc.name || tc.function?.name || '', args: tc.arguments || tc.function?.arguments || '',
-        }))
-        const intermediateContent = content || scRef.current || ''
-        // merge tool-only rounds into the previous message — no empty chat bubbles
-        if (!intermediateContent && !srRef.current && thinkSegmentsRef.current.length === 0) {
-          setMessages(prev => {
-            const last = prev.length > 0 ? prev[prev.length - 1] : null
-            if (last?.role === 'assistant') {
-              return prev.map((m, i) =>
-                i === prev.length - 1 ? { ...m, tool_calls: [...(m.tool_calls || []), ...tcs] } : m
-              )
-            }
-            return [...prev, { role: 'assistant' as const, content: '', tool_calls: tcs }]
-          })
-        } else {
-          pushMsg({ role: 'assistant', content: intermediateContent, reasoning: srRef.current || undefined, reasoningSegments: thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined, tool_calls: tcs })
-        }
-        scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
-        lastApiPushedRef.current = true
-        if (usage) { setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit })) }
-        rerender()
-        return
-      }
-      // skip empty tool-round acks (stop_reason="tool_calls" with no content)
-      if (stop_reason === 'tool_calls' && !content && !scRef.current && !srRef.current) {
-        if (usage) { setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit })) }
-        return
-      }
-      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
+      // push tool cards accumulated via tool-start into the message
+      const finalTools = stRef.current.length ? stRef.current.map(tc => ({ id: tc.id, name: tc.name, args: tc.args, output: '', body: tc.body })) : undefined
       const finalContent = content || scRef.current || ''
       const finalReasoning = reasoning_content || srRef.current || undefined
-      const finalToolCalls = stRef.current.length ? stRef.current.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined
-      scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []; setStream('think')
-      pushMsg({ role: 'assistant', content: finalContent, reasoning: finalReasoning, reasoningSegments: segments, tool_calls: finalToolCalls })
-      lastApiPushedRef.current = true
+      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
+      scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
+      if (finalContent || finalReasoning || finalTools) {
+        pushMsg({ role: 'assistant', content: finalContent, reasoning: finalReasoning, reasoningSegments: segments, tool_calls: finalTools })
+        lastApiPushedRef.current = true
+      }
       if (usage) {
         setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit }))
         if (usage.prompt_cache_hit_tokens !== undefined || usage.prompt_cache_miss_tokens !== undefined) {
           setCacheInfo((c: { hit: number; miss: number }) => ({ hit: c.hit + (usage.prompt_cache_hit_tokens || 0), miss: c.miss + (usage.prompt_cache_miss_tokens || 0) }))
         }
         fetchBalance()
-      } else if (content) { addTokens(content, false) }
+      }
       rerender()
     }))
     unlistens.push(listen('agent-done', () => {
       if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
       const finalContent = scRef.current
       const finalReasoning = srRef.current
-      const finalTools = stRef.current.length ? stRef.current.map(tc => ({ id: tc.name, name: tc.name, args: tc.args, output: '' })) : undefined
+      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
       scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
-      if (!lastApiPushedRef.current && (finalContent || finalReasoning || finalTools)) { pushMsg({ role: 'assistant', content: finalContent || '', reasoning: finalReasoning || undefined, reasoningSegments: segments, tool_calls: finalTools }) }
+      if (!lastApiPushedRef.current && (finalContent || finalReasoning)) {
+        pushMsg({ role: 'assistant', content: finalContent || '', reasoning: finalReasoning || undefined, reasoningSegments: segments })
+      }
       lastApiPushedRef.current = false
       setIsStreaming(false); setStream('idle'); rerender()
       setPlanVersion(v => v + 1)
@@ -327,6 +329,7 @@ export default function App() {
       setAskAnswer('')
     }))
     unlistens.push(listen<any>('tool-result', (e: any) => {
+      // backward compat: update tool output via old event (tool-done handles newer agents)
       const { id, name, content, success } = e.payload
       toolResults[id] = { content: content || '', success }
       toolResults[name] = { content: content || '', success }
@@ -334,18 +337,6 @@ export default function App() {
         execLiveOutput[id] = content || ''
         execLiveOutput[name] = content || ''
       }
-      setMessages(p => [...p, { role: 'tool' as const, tool_call_id: id, content: content || '', name }])
-      setMessages(prev => prev.map(msg => {
-        if (!msg.tool_calls) return msg
-        const hasMatch = msg.tool_calls.some((tc: any) => tc.id === id || tc.name === name)
-        if (!hasMatch) return msg
-        return {
-          ...msg,
-          tool_calls: msg.tool_calls.map((tc: any) =>
-            (tc.id === id || tc.name === name) ? { ...tc, output: content || '' } : tc
-          )
-        }
-      }))
       if (name && /^(task_|plan_)/.test(name)) setPlanVersion(v => v + 1)
       rerender()
     }))

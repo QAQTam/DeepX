@@ -40,6 +40,28 @@ pub enum Ui2Agent {
 #[serde(tag = "type")]
 #[non_exhaustive]
 pub enum Agent2Ui {
+    /// Tool execution started (agent tells UI to render a tool card).
+    #[serde(rename = "tool_start")]
+    ToolStart {
+        id: String,
+        name: String,
+        /// Pre-formatted one-line args summary for display
+        args_display: String,
+        /// Tool-specific structured body for rich rendering (diff, exec command, etc.)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body: Option<serde_json::Value>,
+    },
+
+    /// Tool execution completed (agent sends formatted output).
+    #[serde(rename = "tool_done")]
+    ToolDone {
+        id: String,
+        name: String,
+        /// Pre-rendered output text (agent already formatted)
+        output: String,
+        success: bool,
+    },
+
     /// Streaming content delta (one token or small chunk).
     #[serde(rename = "content_delta")]
     ContentDelta {

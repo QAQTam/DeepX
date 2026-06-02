@@ -171,7 +171,11 @@ function ToolCard({ tc }: { tc: any }) {
           : isGit ? <span className="text-[var(--warning)]">⎇</span>
           : <span className="text-[var(--accent)]">◇</span>}
         <span className={isExec ? 'text-[#e6edf3]' : 'text-[var(--text-h)]'}>{tc.name}</span>
-        {tc.args && !isExec && <span className="truncate text-[var(--muted)]">{safeArgsStr(tc).slice(0, 90)}</span>}
+        {tc.body?.command ? (
+          <span className="truncate text-[var(--muted)] text-[10px]">$ {String(tc.body.command)}</span>
+        ) : tc.args ? (
+          <span className="truncate text-[var(--muted)]">{safeArgsStr(tc).slice(0, 90)}</span>
+        ) : null}
       </div>
 
       {isExec && <ExecBody tc={tc} />}
@@ -248,6 +252,28 @@ function KVBody({ tc, icon }: { tc: any; icon?: string }) {
 }
 
 function DiffFileBody({ tc }: { tc: any }) {
+  // use structured body from ToolStart if available
+  if (tc.body?.old_lines && tc.body?.new_lines) {
+    const file = tc.body.file || ''
+    const oldLines = tc.body.old_lines as string[]
+    const newLines = tc.body.new_lines as string[]
+    return (
+      <div className="px-3 py-2 text-[12px] font-mono">
+        {file && <div className="text-[var(--accent)] font-bold mb-1 text-[11px]">{file}</div>}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-0 text-[11px] leading-snug">
+          <div className="text-[var(--muted)] text-[10px] mb-0.5">— 旧</div>
+          <div className="text-[var(--muted)] text-[10px] mb-0.5">+ 新</div>
+          {Array.from({ length: Math.max(oldLines.length, newLines.length, 1) }).map((_, i) => (
+            <>
+              <div key={`old-${i}`} className="text-red-400/80 bg-red-500/5 border-l-2 border-red-500/30 pl-1.5 truncate">{oldLines[i] || '\u00A0'}</div>
+              <div key={`new-${i}`} className="text-green-400/80 bg-green-500/5 border-l-2 border-green-500/30 pl-1.5 truncate">{newLines[i] || '\u00A0'}</div>
+            </>
+          ))}
+        </div>
+      </div>
+    )
+  }
+  // fallback: parse from raw args
   const p = parseArgs(tc)
   if (!p) return <div className="px-3 py-2 text-[12px] font-mono text-[var(--muted)]">{safeArgsStr(tc).slice(0, 80)}</div>
   const file = (p.path || p.file_path) as string || ''

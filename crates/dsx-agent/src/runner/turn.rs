@@ -69,6 +69,79 @@ pub fn build_and_push_assistant(
     assistant_msg
 }
 
+/// Format tool args for UI display: a one-line summary and optional structured body.
+fn format_tool_display(name: &str, args: &str) -> (String, Option<serde_json::Value>) {
+    let parsed: serde_json::Value = serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
+    let display = match name {
+        "exec" => {
+            parsed.get("command").and_then(|v| v.as_str())
+                .map(|c| format!("$ {}", c))
+                .unwrap_or_else(|| name.to_string())
+        }
+        "read_file" | "write_file" => {
+            parsed.get("path").and_then(|v| v.as_str())
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| name.to_string())
+        }
+        "edit_file" | "edit_file_diff" => {
+            parsed.get("path").and_then(|v| v.as_str())
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| name.to_string())
+        }
+        "explore" => {
+            parsed.get("path").or(parsed.get("directory"))
+                .and_then(|v| v.as_str())
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| name.to_string())
+        }
+        "search" | "grep" | "glob" => {
+            parsed.get("pattern").and_then(|v| v.as_str())
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| name.to_string())
+        }
+        "plan_create" | "plan_update" => {
+            parsed.get("name").and_then(|v| v.as_str())
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| name.to_string())
+        }
+        "task_create" | "task_update" => {
+            parsed.get("subject").and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| name.to_string())
+        }
+        "web_fetch" => {
+            parsed.get("url").and_then(|v| v.as_str())
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| name.to_string())
+        }
+        "git_init" | "git_status" | "git_log" | "git_commit" | "git_diff" => {
+            parsed.get("path").and_then(|v| v.as_str())
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| name.to_string())
+        }
+        _ => name.to_string(),
+    };
+
+    let body = if name == "edit_file" || name == "edit_file_diff" {
+        let old_str = parsed.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+        let new_str = parsed.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+        let file = parsed.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let old_lines: Vec<&str> = old_str.lines().collect();
+        let new_lines: Vec<&str> = new_str.lines().collect();
+        Some(serde_json::json!({
+            "file": file,
+            "old_lines": old_lines,
+            "new_lines": new_lines,
+        }))
+    } else if name == "exec" {
+        parsed.get("command").map(|c| serde_json::json!({ "command": c }))
+    } else {
+        None
+    };
+
+    (display, body)
+}
+
 /// Process a pending ask_user reply, pushing the user's text as a tool result.
 /// Returns `true` if a pending ask_user was handled (caller skips normal push flow).
 fn process_ask_user_response(agent: &mut AgentState, text: &str) -> bool {
@@ -451,6 +524,18 @@ pub fn handle_user_input(
             }).collect()
         };
 
+        // emit ToolStart for each tool (rich UI event)
+        for (name, id, args, _) in results.iter() {
+            if name == "ask_user" { continue; } // ask_user has its own UI
+            let (display, body) = format_tool_display(name, args);
+            let _ = agent_tx.send(Agent2Ui::ToolStart {
+                id: id.clone(),
+                name: name.clone(),
+                args_display: display,
+                body,
+            });
+        }
+
         for (tc_idx, (name, id, args, tr_content)) in results.iter().enumerate() {
             // Cancel check (before pushing result)
             if dsx_tools::CANCEL.compare_exchange(
@@ -492,6 +577,12 @@ pub fn handle_user_input(
                 appender.append(name, id, args, tr_content);
             }
             emit_tool_result(agent_tx, id, name, tr_content, tr_success, Some(args.clone()));
+            let _ = agent_tx.send(Agent2Ui::ToolDone {
+                id: id.clone(),
+                name: name.clone(),
+                output: tr_content.clone(),
+                success: tr_success,
+            });
 
             if !failed && name == "write_file" {
                 tracker::track_file_written(agent, args);
