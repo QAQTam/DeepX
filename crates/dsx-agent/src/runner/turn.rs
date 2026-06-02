@@ -397,7 +397,7 @@ pub fn handle_user_input(
             let _ = agent_tx.send(Agent2Ui::ApiResponse {
                 content,
                 tool_calls: None,
-                stop_reason: None,
+                stop_reason,
                 usage,
                 reasoning_content: final_reasoning,
                 context_tokens: agent.token_estimate,
@@ -595,7 +595,7 @@ pub fn handle_user_input(
     }
 
     // ── Post-tool-loop: single wrap-up call, parallel tool execution ──
-    let (mut content, reasoning_content, tool_calls_raw, usage, _stop_reason) =
+    let (mut content, reasoning_content, tool_calls_raw, usage, stop_reason) =
         match run_api_turn(agent, hp, agent_tx, 0, false) {
             Ok(v) => v,
             Err(()) => return,
@@ -647,7 +647,7 @@ pub fn handle_user_input(
             content,
             reasoning_content: final_reasoning,
             tool_calls: None,
-            stop_reason: None,
+            stop_reason,
             usage,
             context_tokens: agent.token_estimate,
             context_limit: agent.config.context_limit,
@@ -697,9 +697,9 @@ pub fn handle_user_input(
         }
 
         let _ = agent_tx.send(Agent2Ui::ApiResponse {
-            content: String::new(),
+            content: if content.trim().is_empty() { String::new() } else { content.clone() },
             tool_calls: None,
-            stop_reason: None,
+            stop_reason: Some("tool_calls".to_string()),
             usage,
             reasoning_content: None,
             context_tokens: agent.token_estimate,

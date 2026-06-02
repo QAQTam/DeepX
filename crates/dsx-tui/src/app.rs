@@ -832,15 +832,18 @@ impl App {
                     lines,
                 });
             }
-            Agent2Ui::ApiResponse { content, reasoning_content, usage, context_limit, session_tokens, context_tokens, .. } => {
+            Agent2Ui::ApiResponse { content, reasoning_content, usage, context_limit, session_tokens, context_tokens, stop_reason, .. } => {
                 if !self.streaming {
-                    if let Some(ref rc) = reasoning_content {
-                        if !rc.is_empty() {
-                            self.push_msg(ChatRole::Thinking, rc);
+                    // skip empty tool-round acks — only push real final answers
+                    if stop_reason.as_deref() != Some("tool_calls") || !content.is_empty() {
+                        if let Some(ref rc) = reasoning_content {
+                            if !rc.is_empty() {
+                                self.push_msg(ChatRole::Thinking, rc);
+                            }
                         }
-                    }
-                    if !content.is_empty() {
-                        self.push_msg(ChatRole::Assistant, &content);
+                        if !content.is_empty() {
+                            self.push_msg(ChatRole::Assistant, &content);
+                        }
                     }
                 }
                 self.context_tokens = context_tokens;

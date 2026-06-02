@@ -260,7 +260,7 @@ export default function App() {
       rerender()
     }))
     unlistens.push(listen<any>('api-response', (e: any) => {
-      const { content, tool_calls, usage, reasoning_content } = e.payload
+      const { content, tool_calls, usage, reasoning_content, stop_reason } = e.payload
       if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
       if (tool_calls?.length) {
         const tcs = tool_calls.map((tc: any) => ({
@@ -273,6 +273,11 @@ export default function App() {
         lastApiPushedRef.current = true
         if (usage) { setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit })) }
         rerender()
+        return
+      }
+      // skip empty tool-round acks (stop_reason="tool_calls" with no content)
+      if (stop_reason === 'tool_calls' && !content && !scRef.current && !srRef.current) {
+        if (usage) { setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit })) }
         return
       }
       const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
