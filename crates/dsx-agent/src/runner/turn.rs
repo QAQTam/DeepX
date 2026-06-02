@@ -506,6 +506,31 @@ pub fn handle_user_input(
             }
         }
 
+        // detect ask_user tool — emit UI event and pause agent for user interaction
+        for (name, id, args, _) in results.iter() {
+            if name == "ask_user" {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
+                    let question = parsed.get("question")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let options = parsed.get("options")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect::<Vec<_>>());
+                    let options_field = if options.as_ref().map(|o| o.is_empty()).unwrap_or(true) { None } else { options };
+                    let _ = agent_tx.send(Agent2Ui::AskUser {
+                        id: id.clone(),
+                        question,
+                        options: options_field,
+                    });
+                    agent.pending_ask_user = Some(id.clone());
+                }
+                break;
+            }
+        }
+
         let all_tool_calls: Vec<ToolCall> = agent
             .ctx
             .to_vec()

@@ -897,9 +897,11 @@ impl App {
                 self.debug.dsml_compat_count = dsml_compat_count;
             }
             Agent2Ui::AskUser { question, options, .. } => {
+                let mut opts = options.unwrap_or_default();
+                opts.push(String::new()); // custom input slot
                 self.ask = Some(AskState {
                     question,
-                    options: options.unwrap_or_default(),
+                    options: opts,
                     selected: 0,
                     custom_input: String::new(),
                 });
