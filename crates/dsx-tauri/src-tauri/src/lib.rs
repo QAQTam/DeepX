@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 struct ProcessHandle {
     child: Child,
@@ -24,12 +24,17 @@ fn config_path() -> std::path::PathBuf {
     dsx_types::platform::config_path()
 }
 
-fn find_dsx() -> Result<String, String> {
+fn find_dsx(app: &AppHandle) -> Result<String, String> {
     if let Ok(path) = std::env::var("DSX_BIN") {
         if std::path::Path::new(&path).exists() { return Ok(path); }
     }
 
     let name = if cfg!(target_os = "windows") { "dsx.exe" } else { "dsx" };
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let r = resource_dir.join(name);
+        if r.exists() { return Ok(r.to_string_lossy().to_string()); }
+    }
 
     for start_dir in [std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())),
                       std::env::current_dir().ok()].iter().flatten()
@@ -364,7 +369,7 @@ fn start_agent(app: AppHandle, state: tauri::State<AgentState>) -> Result<serde_
     if state.stdin.lock().map_err(|e| format!("lock: {e}"))?.is_some() {
         return Err("Agent already started".to_string());
     }
-    let dsx_path = find_dsx()?;
+    let dsx_path = find_dsx(&app)?;
     log::info!("dsx binary: {dsx_path}");
     ensure_hp(&dsx_path, &state)?;
     let (stdin, reader, stderr, child) = spawn_agent(&dsx_path, None)?;
@@ -530,7 +535,7 @@ fn restart_agent(app: &AppHandle, state: &AgentState, seed: Option<&str>) -> Res
             let _ = handle.stderr_handle.join();
         }
     }
-    let dsx_path = find_dsx()?;
+    let dsx_path = find_dsx(app)?;
     ensure_hp(&dsx_path, state)?;
     let (stdin, reader, stderr, child) = spawn_agent(&dsx_path, seed)?;
     let reader_handle = start_reader(reader, app.clone());
