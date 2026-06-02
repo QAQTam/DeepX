@@ -1,24 +1,47 @@
 //! dsx-agent runner — main event loop and headless adapter.
-//!
-//! Submodules:
-//! - `lifecycle` — session init, health status, phase config
-//! - `hp_bridge` — HP TCP stream reading, result emission
-//! - `turn` — user input handling, tool execution, context building
 
 pub mod lifecycle;
-pub mod hp_bridge;
+pub mod gate_bridge;
+pub mod ui_emit;
+pub mod api_turn;
 pub mod turn;
+pub mod headless;
+pub use headless::run;
 
 use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, Agent2Ui, HpToAgent, Ui2Agent};
+use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, HpToAgent, Ui2Agent};
 
 use crate::agent::AgentState;
-use crate::orchestrator::maybe_save_session;
+use crate::orchestrator::{maybe_save_session, learning};
 
-// ── Channel-based main loop (primary entry point, called by tui.rs) ──
+fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
+    let mut docs: Vec<DocInfo> = agent.file_last_read.iter()
+        .map(|(path, turns)| {
+            let is_stale = *turns >= 7;
+            DocInfo {
+                tag: learning::doc_tag(path),
+                path: path.clone(),
+                turns_since_read: *turns,
+                is_stale,
+            }
+        })
+        .collect();
+    docs.sort_by(|a, b| b.turns_since_read.cmp(&a.turns_since_read));
+    docs.truncate(20);
+    docs
+}
+
+fn build_recent_edits(agent: &AgentState) -> Vec<String> {
+    agent.context_messages.iter()
+        .find(|(k, _)| k == "edit:log")
+        .map(|(_, content)| {
+            content.lines().rev().take(10).map(String::from).collect()
+        })
+        .unwrap_or_default()
+}
 
 pub fn run_agent_loop(
     mut agent: AgentState,
@@ -26,7 +49,8 @@ pub fn run_agent_loop(
     tui_rx: mpsc::Receiver<Ui2Agent>,
     agent_tx: mpsc::Sender<Agent2Ui>,
 ) {
-    // Drain HP register response
+    crate::skills::init();
+
     if let Some(ref mut hp) = hp_conn {
         let _: Option<HpToAgent> = dsx_proto::read_frame(hp).ok().flatten();
     }
@@ -40,9 +64,10 @@ pub fn run_agent_loop(
         current_phase: "single".to_string(),
         streaming: false,
         dsml_compat_count: agent.dsml_compat_count,
+        documents: build_documents(&agent),
+        recent_edits: build_recent_edits(&agent),
     });
 
-    // Init session immediately (before first user input) so TUI can load history
     if agent.session_seed.is_empty() {
         let seed = agent.resume_seed.clone();
         lifecycle::init_session(&mut agent, seed.as_deref());
@@ -81,8 +106,6 @@ pub fn run_agent_loop(
 
         match frame {
             Ui2Agent::UserInput { text } => {
-                // Tools are now in-process — always available, no respawn needed
-                // Process input — if HP not connected or fails, try reconnect once
                 let hp_failed = if let Some(ref mut hp) = hp_conn {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                         || turn::handle_user_input(&mut agent, &text, hp, &agent_tx),
@@ -93,23 +116,23 @@ pub fn run_agent_loop(
                 };
 
                 if hp_failed {
-                    log::warn!("dsx-agent: HP failed, reconnecting...");
+                    log::warn!("dsx-agent: gate failed, reconnecting...");
                     let _ = agent_tx.send(Agent2Ui::Error {
-                        message: "HP disconnected. Attempting reconnect...".into(),
+                        message: "gate disconnected. Attempting reconnect...".into(),
                     });
-                    if let Some(stream) = crate::hp::try_reconnect() {
+                    if let Some(stream) = crate::gate::try_reconnect() {
                         let reader = BufReader::new(stream);
                         hp_conn = Some(reader);
-                        log::info!("dsx-agent: HP reconnected, retry input");
+                        log::info!("dsx-agent: gate reconnected, retry input");
                         if let Some(ref mut hp) = hp_conn {
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                                 || turn::handle_user_input(&mut agent, &text, hp, &agent_tx),
                             ));
                         }
                     } else {
-                        log::error!("dsx-agent: HP reconnect failed");
+                        log::error!("dsx-agent: gate reconnect failed");
                         let _ = agent_tx.send(Agent2Ui::Error {
-                            message: "HP disconnected. Please try again.".into(),
+                            message: "gate disconnected. Please try again.".into(),
                         });
                     }
                 }
@@ -122,6 +145,8 @@ pub fn run_agent_loop(
                     current_phase: "single".to_string(),
                     streaming: false,
                     dsml_compat_count: agent.dsml_compat_count,
+                    documents: build_documents(&agent),
+                    recent_edits: build_recent_edits(&agent),
                 });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
@@ -136,11 +161,10 @@ pub fn run_agent_loop(
                 let content = crate::tools::execute_tool_with_id(&name, &action, &args_str, &id);
                 let success = !content.starts_with("[ERROR]") && !content.starts_with("[FAIL]");
                 let _ = agent_tx.send(Agent2Ui::ToolResult {
-                    id,
-                    name,
-                    content,
+                    tool_id: id.clone(),
+                    output: content,
                     success,
-                    args: None,
+                    file: None,
                 });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
@@ -189,6 +213,8 @@ pub fn run_agent_loop(
                     current_phase: "single".to_string(),
                     streaming: false,
                     dsml_compat_count: agent.dsml_compat_count,
+                    documents: build_documents(&agent),
+                    recent_edits: build_recent_edits(&agent),
                 });
                 if cmd == "dump_context" {
                     let json = serde_json::to_string_pretty(&agent.ctx.to_vec())
@@ -203,9 +229,8 @@ pub fn run_agent_loop(
         }
     }
 
-    // ── Cleanup ──
     crate::tools::shutdown_tools();
-    crate::hp::kill_hp_daemon();
+    crate::gate::kill_hp_daemon();
 
     agent.maybe_save_session();
 
@@ -222,101 +247,4 @@ pub fn run_agent_loop(
         agent.ctx.turn_count(),
         agent.session_tokens
     );
-}
-
-// ── Headless mode (stdin/stdout pipes) ──
-
-pub fn run() {
-    eprintln!("dsx-agent starting (headless mode)");
-
-    // ── 1. Initialize logging ──
-    crate::dsx_log::init();
-
-    // ── 2. Load configuration ──
-    let config = crate::config::Config::load().unwrap_or_default();
-    eprintln!(
-        "dsx-agent: model={} effort={:?} context_limit={}",
-        config.model, config.effort, config.context_limit
-    );
-
-    // ── 3. Parse CLI args ──
-    let args: Vec<String> = std::env::args().collect();
-    let resume_seed = args
-        .windows(2)
-        .find(|w| w[0] == "--session")
-        .and_then(|w| Some(w[1].clone()));
-    if let Some(ref seed) = resume_seed {
-        eprintln!("dsx-agent: resume request for session {seed}");
-    }
-
-    // ── 4. Initialize AgentState ──
-    let mut agent = AgentState::new(config);
-    agent.resume_seed = resume_seed;
-    agent.health.context_limit = agent.config.context_limit;
-
-    // ── 5. Connect to HP ──
-    let hp_conn = crate::hp::try_reconnect().map(BufReader::new);
-
-    // ── 6. Init in-process tools ──
-    crate::tools::init_tools("pipe");
-    if let Some(ref key) = agent.config.context7_api_key {
-        if !key.is_empty() {
-            crate::tools::set_context7_key(key);
-        }
-    }
-    agent.tool_defs = crate::tools::all_tools();
-    eprintln!("dsx-agent: tools → {}", agent.tool_defs.len());
-
-    // ── 7. Session check ──
-    let lives = crate::session::find_live_sessions();
-    if !lives.is_empty() {
-        eprintln!(
-            "dsx-agent: {} live session(s) available for resume",
-            lives.len()
-        );
-    }
-
-    // ── 8. Create channels + adapter threads ──
-    let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
-    let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
-
-    // Thread: read Ui2Agent frames from stdin, forward to channel
-    let stdin_handle = std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        let mut reader = BufReader::new(stdin.lock());
-        loop {
-            match dsx_proto::read_frame::<Ui2Agent>(&mut reader) {
-                Ok(Some(frame)) => {
-                    if tui_tx.send(frame).is_err() {
-                        break;
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    eprintln!("dsx-agent: stdin parse error: {e}");
-                    continue;
-                }
-            }
-        }
-    });
-
-    // Thread: receive Agent2Ui frames from channel, write JSON-LP to stdout
-    let stdout_handle = std::thread::spawn(move || {
-        let mut stdout = std::io::stdout();
-        while let Ok(frame) = agent_rx.recv() {
-            if dsx_proto::write_frame(&mut stdout, &frame).is_err() {
-                break;
-            }
-        }
-    });
-
-    // ── 9. Run agent loop ──
-    run_agent_loop(agent, hp_conn, tui_rx, agent_tx);
-
-    // ── 10. Cleanup ──
-    crate::tools::shutdown_tools();
-    crate::hp::kill_hp_daemon();
-    // stdin/stdout threads die with process; joining risks deadlock if TUI pipe breaks
-    drop(stdin_handle);
-    drop(stdout_handle);
 }

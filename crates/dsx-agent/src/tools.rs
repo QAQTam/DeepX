@@ -13,13 +13,19 @@ static TOOL_MANAGER: Mutex<Option<dsx_tools::ToolManager>> = Mutex::new(None);
 
 /// Initialize the in-process tool manager.
 /// Must be called once at startup, before any tool execution.
-pub fn init_tools(session_seed: &str) {
+pub fn init_tools(session_seed: &str, mcp_servers: &[dsx_tools::mcp_bridge::McpServerConfig]) {
     let mut mgr = dsx_tools::registration::build_tool_manager();
     mgr.apply_init(vec![], session_seed);
+
+    if !mcp_servers.is_empty() {
+        if let Err(e) = dsx_tools::mcp_bridge::register_mcp_servers(&mut mgr, mcp_servers) {
+            log::warn!("dsx: failed to register MCP servers: {e}");
+        }
+    }
+
     if let Ok(mut guard) = TOOL_MANAGER.lock() {
         *guard = Some(mgr);
     }
-    // Context7 key: set from config if available (override may come later)
     log::info!("dsx: tool manager inited ({} tools)", all_tools().len());
 }
 
@@ -116,7 +122,7 @@ pub fn cancel_current_tool() {
 // ── Shutdown ──
 
 pub fn shutdown_tools() {
-    // No subprocess to kill — just clear the manager
+    dsx_tools::mcp_bridge::shutdown_mcp_servers();
     if let Ok(mut guard) = TOOL_MANAGER.lock() {
         *guard = None;
     }

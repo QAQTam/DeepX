@@ -164,17 +164,14 @@ fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) -> Join
                         Ok(v) => {
                             let kind = v["type"].as_str().unwrap_or("");
                             match kind {
-                                "content_delta" => { let _ = app.emit("content-delta", v); }
-                                "tool_progress" => { let _ = app.emit("tool-progress", v); }
-                                "api_response" => { let _ = app.emit("api-response", v); }
-                                "done" => { let _ = app.emit("agent-done", v); }
-                                "error" => { let _ = app.emit("agent-error", v); }
-                                "ask_user" => { let _ = app.emit("ask-user", v); }
-                                "tool_state" => { let _ = app.emit("tool-state", v); }
-                                "tool_result" => { let _ = app.emit("tool-result", v); }
-                                "session_restored" => { let _ = app.emit("session-restored", v); }
-                                "cache_prediction" => { let _ = app.emit("cache-prediction", v); }
-                                "balance" => { let _ = app.emit("balance", v); }
+                                "stream_start" | "stream_delta" | "stream_end" |
+                                "assistant_msg" | "user_msg" |
+                                "tool_call" | "tool_result" |
+                                "turn_end" | "done" | "error" | "cancelled" |
+                                "ask_user" | "balance" | "session_restored" |
+                                "debug_snapshot" | "shutdown_ack" => {
+                                    let _ = app.emit("agent-event", v);
+                                }
                                 _ => {}
                             }
                         }
@@ -357,7 +354,7 @@ fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
                     "role": "assistant", "content": content,
                     "reasoning": if reasoning.is_empty() { serde_json::Value::Null } else { serde_json::json!(reasoning) },
                     "reasoningSegments": reasoning_segs,
-                    "tool_calls": if tool_calls.is_empty() { serde_json::Value::Null } else { serde_json::json!(tool_calls) },
+                        "tool_cards": if tool_calls.is_empty() { serde_json::Value::Null } else { serde_json::json!(tool_calls) },
                 }));
             }
             "tool" => {
@@ -365,7 +362,7 @@ fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
                     if let ContentBlock::ToolResult { tool_use_id, content } = block {
                         if let Some(last) = ui.last_mut() {
                             if last["role"] == "assistant" {
-                                if let Some(tcs) = last["tool_calls"].as_array_mut() {
+                                if let Some(tcs) = last["tool_cards"].as_array_mut() {
                                     for tc in tcs.iter_mut() {
                                         if tc["id"].as_str() == Some(tool_use_id.as_str()) {
                                             tc["output"] = serde_json::json!(content);
@@ -694,47 +691,6 @@ fn stop_agent_inner(_app: &AppHandle, state: &AgentState) {
 }
 
 #[tauri::command]
-fn list_plans() -> Result<Vec<serde_json::Value>, String> {
-    let plans_dir = dsx_types::platform::plans_dir();
-    if !plans_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut plans = Vec::new();
-    for entry in std::fs::read_dir(&plans_dir).map_err(|e| format!("read_dir: {e}"))?.flatten() {
-        if entry.path().extension().map(|e| e == "md").unwrap_or(false) {
-            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                let name = entry.path().file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                let status = if content.lines().any(|l| l.trim() == "status: done") { "done" }
-                    else if content.lines().any(|l| l.trim() == "status: active") { "active" }
-                    else if content.lines().any(|l| l.trim() == "status: cancelled") { "cancelled" }
-                    else { "draft" };
-                let summary = content.lines()
-                    .find(|l| l.starts_with("## "))
-                    .map(|l| l.trim_start_matches("## ").to_string())
-                    .unwrap_or_default();
-                plans.push(serde_json::json!({
-                    "name": name,
-                    "status": status,
-                    "summary": summary,
-                }));
-            }
-        }
-    }
-    plans.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-    Ok(plans)
-}
-
-#[tauri::command]
-fn read_plan(name: String) -> Result<String, String> {
-    let path = dsx_types::platform::plans_dir()
-        .join(format!("{}.md", name));
-    std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))
-}
-
-#[tauri::command]
 fn list_tasks() -> Result<Vec<serde_json::Value>, String> {
     let sessions_dir = dsx_types::platform::sessions_dir();
     if !sessions_dir.is_dir() {
@@ -794,7 +750,7 @@ pub fn run() {
             set_workspace, get_workspace, scan_directory,
             cancel_agent,
             cmd_sessions, delete_session, delete_all_sessions,
-            list_plans, read_plan, list_tasks, get_balance,
+            list_tasks, get_balance,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

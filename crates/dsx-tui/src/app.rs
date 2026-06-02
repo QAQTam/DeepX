@@ -1,4 +1,4 @@
-use dsx_proto::Agent2Ui;
+use dsx_proto::{Agent2Ui, DocInfo};
 use dsx_types::{ConfigStore, PersistentConfig, SessionMeta, SessionFile, ContentBlock};
 use ratatui::text::{Line, Span};
 use ratatui::style::{Color, Style};
@@ -8,7 +8,6 @@ use crate::markdown::MarkdownRenderer;
 
 #[derive(PartialEq)]
 pub enum Screen {
-    Setup,
     Session,
     Chat,
     Menu,
@@ -297,14 +296,9 @@ pub struct DebugState {
     pub context_tokens: u32,
     pub tool_calls_total: u32,
     pub tool_failures: u32,
-    pub current_phase: String,
     pub streaming: bool,
     pub dsml_compat_count: u32,
-    pub explored: bool,
-    pub declared_files: Vec<String>,
-    pub read_files: Vec<String>,
-    pub written_this_turn: Vec<String>,
-    pub tool_progress: String,
+    pub documents: Vec<DocInfo>,
 }
 
 #[derive(Clone)]
@@ -598,9 +592,9 @@ impl MenuState {
 }
 
 impl App {
-    pub fn new(need_setup: bool) -> Self {
+    pub fn new(_need_setup: bool) -> Self {
         Self {
-            screen: if need_setup { Screen::Setup } else { Screen::Session },
+            screen: Screen::Session,
             setup: SetupState::new(),
             messages: Vec::new(),
             input: String::new(),
@@ -632,14 +626,9 @@ impl App {
                 context_tokens: 0,
                 tool_calls_total: 0,
                 tool_failures: 0,
-                current_phase: String::from("plan"),
                 streaming: false,
                 dsml_compat_count: 0,
-                explored: false,
-                declared_files: Vec::new(),
-                read_files: Vec::new(),
-                written_this_turn: Vec::new(),
-                tool_progress: String::new(),
+                documents: Vec::new(),
             },
             ask: None,
             balance: String::new(),
@@ -780,72 +769,71 @@ impl App {
 
     pub fn handle_frame(&mut self, frame: Agent2Ui) {
         match frame {
-            Agent2Ui::ContentDelta { delta, reasoning } => {
+            Agent2Ui::StreamStart { msg_id: _, kind } => {
                 self.debug.streaming = true;
-                if let Some(r) = reasoning {
-                    if !r.is_empty() {
-                        self.switch_block(BlockType::Thinking);
-                        if self.block == BlockType::Thinking && self.streaming {
-                            self.append_last(&r);
-                        } else {
-                            self.push_streaming_msg(ChatRole::Thinking, &r);
-                            self.streaming = true;
-                        }
-                    }
-                }
-                if !delta.is_empty() {
-                    self.switch_block(BlockType::Text);
-                    if self.block == BlockType::Text && self.streaming {
-                        self.append_last(&delta);
-                    } else {
-                        self.push_streaming_msg(ChatRole::Assistant, &delta);
-                        self.streaming = true;
-                    }
-                }
-            }
-            Agent2Ui::ToolResult { name, content, args, success, .. } => {
-                self.debug.tool_calls_total += 1;
-                if !success { self.debug.tool_failures += 1; }
-                self.switch_block(BlockType::Tool);
-                let lang = self.setup.lang;
-                let label = tool_status(lang, &name, args.as_deref());
-                let styled_lines = build_tool_lines(lang, &name, &content, args.as_deref());
-                // Skip char truncation for exec tools (handled by line limit in build_tool_lines)
-                let trunc_note = if matches!(name.as_str(), "bash" | "run" | "exec") {
-                    String::new()
-                } else {
-                    let char_count = content.chars().count();
-                    if char_count > 200 {
-                        lang.t_tool_truncated(char_count - 200)
-                    } else { String::new() }
+                self.streaming = true;
+                let role = match kind {
+                    dsx_proto::StreamKind::Reasoning => ChatRole::Thinking,
+                    dsx_proto::StreamKind::Text => ChatRole::Assistant,
                 };
-                let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
-                    Span::styled(label.clone(), Style::new().fg(Color::Cyan).bold())
-                ])];
-                lines.extend(styled_lines);
-                if !trunc_note.is_empty() {
-                    lines.push(Line::from(Span::styled(trunc_note, Style::new().fg(Color::Gray))));
-                }
-                self.messages.push(ChatMessage {
-                    role: ChatRole::Tool,
-                    content: label,
-                    lines,
-                });
+                self.switch_block(if matches!(kind, dsx_proto::StreamKind::Reasoning) { BlockType::Thinking } else { BlockType::Text });
+                self.push_streaming_msg(role, "");
             }
-            Agent2Ui::ApiResponse { content, reasoning_content, usage, context_limit, session_tokens, context_tokens, stop_reason, .. } => {
-                if !self.streaming {
-                    // skip empty tool-round acks — only push real final answers
-                    if stop_reason.as_deref() != Some("tool_calls") || !content.is_empty() {
-                        if let Some(ref rc) = reasoning_content {
-                            if !rc.is_empty() {
-                                self.push_msg(ChatRole::Thinking, rc);
-                            }
-                        }
-                        if !content.is_empty() {
-                            self.push_msg(ChatRole::Assistant, &content);
+            Agent2Ui::StreamDelta { msg_id: _, delta } => {
+                if self.streaming {
+                    self.append_last(&delta);
+                } else {
+                    self.push_streaming_msg(ChatRole::Assistant, &delta);
+                    self.streaming = true;
+                }
+            }
+            Agent2Ui::StreamEnd { .. } => {
+                // Streaming block ended — AssistantMsg will follow with final content.
+                // No action needed here.
+            }
+            Agent2Ui::AssistantMsg { id: _, thinking, text } => {
+                // Override streaming state with final content
+                self.streaming = false;
+                if let Some(ref t) = thinking {
+                    if !t.is_empty() {
+                        self.push_msg(ChatRole::Thinking, t);
+                    }
+                }
+                if !text.is_empty() {
+                    self.push_msg(ChatRole::Assistant, &text);
+                }
+                self.status = self.setup.lang.t_chat_ready().to_string();
+            }
+            Agent2Ui::UserMsg { id: _, text } => {
+                self.push_msg(ChatRole::User, &text);
+            }
+            Agent2Ui::ToolCall { msg_id: _, tool } => {
+                self.debug.tool_calls_total += 1;
+                self.switch_block(BlockType::Tool);
+                let label = format!("{} {}", tool.name, tool.args_display);
+                self.push_streaming_msg(ChatRole::Tool, &label);
+                self.streaming = false;
+            }
+            Agent2Ui::ToolResult { tool_id: _, output, success, .. } => {
+                if !success { self.debug.tool_failures += 1; }
+                // Find the tool card we created and update it
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == ChatRole::Tool {
+                        let lang = self.setup.lang;
+                        let trunc_note = {
+                            let char_count = output.chars().count();
+                            if char_count > 200 {
+                                lang.t_tool_truncated(char_count - 200)
+                            } else { String::new() }
+                        };
+                        last.content.push_str(&format!("\n{}", &output[..output.len().min(500)]));
+                        if !trunc_note.is_empty() {
+                            last.content.push_str(&format!("\n{}", trunc_note));
                         }
                     }
                 }
+            }
+            Agent2Ui::TurnEnd { stop_reason: _, usage, context_tokens, context_limit, session_tokens } => {
                 self.context_tokens = context_tokens;
                 self.session_tokens = session_tokens;
                 self.context_limit = context_limit;
@@ -854,8 +842,8 @@ impl App {
                     self.cache_miss += u.prompt_cache_miss_tokens;
                     self.update_cache(u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens);
                 }
-                self.status = self.setup.lang.t_chat_ready().to_string();
                 self.streaming = false;
+                self.status = self.setup.lang.t_chat_ready().to_string();
             }
             Agent2Ui::Error { message } => {
                 let status_text = format!("{}: {}", self.setup.lang.t_chat_error(), message);
@@ -889,19 +877,19 @@ impl App {
                 self.load_messages_from_session(&seed);
             }
             Agent2Ui::DebugSnapshot { hp_connected, session_seed, context_tokens,
-                tool_calls_total, tool_failures, current_phase, streaming, dsml_compat_count, .. } => {
+                tool_calls_total, tool_failures, current_phase: _, streaming, dsml_compat_count, documents, .. } => {
                 self.debug.hp_connected = hp_connected;
                 self.debug.session_seed = session_seed;
                 self.debug.context_tokens = context_tokens;
                 self.debug.tool_calls_total = tool_calls_total;
                 self.debug.tool_failures = tool_failures;
-                self.debug.current_phase = current_phase;
                 self.debug.streaming = streaming;
                 self.debug.dsml_compat_count = dsml_compat_count;
+                self.debug.documents = documents;
             }
             Agent2Ui::AskUser { question, options, .. } => {
                 let mut opts = options.unwrap_or_default();
-                opts.push(String::new()); // custom input slot
+                opts.push(String::new());
                 self.ask = Some(AskState {
                     question,
                     options: opts,
@@ -912,21 +900,6 @@ impl App {
             Agent2Ui::Balance { is_available, total_balance, currency } => {
                 let status = if is_available { "✓" } else { "✗" };
                 self.balance = format!("{} {}{} {}", status, if currency == "CNY" { "¥" } else { "$" }, total_balance, currency);
-            }
-            Agent2Ui::ToolProgress { content, .. } => {
-                self.debug.tool_progress = content;
-            }
-            Agent2Ui::ToolState { explored, declared_files, read_files, written_this_turn, .. } => {
-                self.debug.explored = explored;
-                self.debug.declared_files = declared_files;
-                self.debug.read_files = read_files;
-                self.debug.written_this_turn = written_this_turn;
-            }
-            Agent2Ui::CachePrediction { hit_rate } => {
-                self.cache_rates.push(hit_rate);
-                if hit_rate < 0.3 {
-                    self.cache_warning = format!("cache miss: {:.1}%", (1.0 - hit_rate) * 100.0);
-                }
             }
             Agent2Ui::ShutdownAck => {
                 self.streaming = false;

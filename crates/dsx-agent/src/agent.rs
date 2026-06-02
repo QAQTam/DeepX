@@ -6,6 +6,10 @@ use crate::health::DsAgentsHealthPlatform;
 use crate::session;
 use dsx_types::{Message, UsageInfo};
 
+pub mod result;
+pub use result::ToolResultAppender;
+use result::FileSnapshot;
+
 // ── AgentState ──
 
 pub struct AgentState {
@@ -42,7 +46,6 @@ pub struct AgentState {
     pub tool_calls_this_turn: u32,
     /// Cumulative count of tool calls successfully parsed via DSML/XML (DeepSeek compat).
     pub dsml_compat_count: u32,
-    pub auto_verify: Vec<String>,
 
     // ── Registered tool definitions (from dsx-tools) ──
     pub tool_defs: Vec<dsx_types::ToolDef>,
@@ -80,27 +83,6 @@ pub struct AgentState {
     pub file_cache: std::collections::HashMap<String, FileSnapshot>,
 }
 
-#[derive(Debug, Clone)]
-pub struct FileSnapshot {
-    pub lines: usize,
-    pub hash: u64,
-    pub last_read_turn: u32,
-}
-
-impl FileSnapshot {
-    fn hash_of(path: &str) -> u64 {
-        use std::hash::Hasher;
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        if let Ok(meta) = std::fs::metadata(path) {
-            std::hash::Hash::hash(&meta.len(), &mut h);
-            if let Ok(m) = meta.modified() {
-                std::hash::Hash::hash(&m, &mut h);
-            }
-        }
-        h.finish()
-    }
-}
-
 impl AgentState {
     pub fn new(config: crate::config::Config) -> Self {
         let prompt = config::system_prompt();
@@ -125,7 +107,6 @@ impl AgentState {
             tool_failures: 0,
             tool_calls_this_turn: 0,
             dsml_compat_count: 0,
-            auto_verify: Vec::new(),
             tool_defs: Vec::new(),
             pending_ask_user: None,
             health: DsAgentsHealthPlatform::new(),
@@ -211,10 +192,6 @@ impl AgentState {
         }
     }
 
-    /// Remove a named context message by label.
-    pub fn remove_context(&mut self, label: &str) {
-        self.context_messages.retain(|(k, _)| k != label);
-    }
 
     // ── Persist ──
 
@@ -231,80 +208,54 @@ impl AgentState {
             );
         }
     }
-}
 
-// ── ToolResultAppender ──
-//
-// Unified entry point for writing tool results to the context.
+    // ── Task progress injection ──
 
-use crate::orchestrator::tracker;
-use crate::tools::wrap_tool_result;
+    /// Refresh task progress entries in context_messages.
+    /// Called each turn before build_context() so the model always sees
+    /// current task state without re-reading task files.
+    pub fn refresh_progress_context(&mut self) {
 
-pub struct ToolResultAppender<'a> {
-    pub state: &'a mut AgentState,
-}
-
-impl<'a> ToolResultAppender<'a> {
-    pub fn new(state: &'a mut AgentState) -> Self {
-        Self { state }
-    }
-
-    /// Append a tool result to the context and record all side effects.
-    pub fn append(&mut self, tool_name: &str, tc_id: &str, args: &str, raw: &str) -> bool {
-        // Global size gate: any tool result > 50K chars gets truncated
-        // to prevent LLM context bloat regardless of per-tool limits.
-        const MAX_TOOL_RESULT_CHARS: usize = 50_000;
-        let truncated = if raw.len() > MAX_TOOL_RESULT_CHARS {
-            let mut t = raw[..MAX_TOOL_RESULT_CHARS].to_string();
-            t.push_str(&format!("\n...[TRUNCATED: {} total chars, showing first {MAX_TOOL_RESULT_CHARS}]", raw.len()));
-            t
-        } else {
-            raw.to_string()
-        };
-
-        let failed = raw.starts_with("[ERROR]") || raw.starts_with("[FAIL]");
-        let result = wrap_tool_result(tool_name, &truncated);
-
-        if let Err(e) = self.state.ctx.push_tool_result(tc_id, &result) {
-            log::warn!("ToolResultAppender: push_tool_result failed for {}: {:?}", tc_id, e);
-            let _ = self.state.ctx.push_tool_result_for(tc_id, &result);
-        }
-
-        self.state.tool_results.push((tool_name.to_string(), result.clone()));
-
-        if !failed && (tool_name == "write_file" || tool_name == "edit_file") {
-            tracker::track_file_written(self.state, args);
-            if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                self.state.re_read_required = Some(path.clone());
-                // Push diff context with timestamp: model sees edit history
-                let label = format!("file:{}", path);
-                let ctx_lines: Vec<&str> = raw.lines().filter(|l| l.starts_with("  ") || l.starts_with("+") || l.starts_with("-")).collect();
-                if !ctx_lines.is_empty() {
-                    let ts = chrono::Local::now().format("%H:%M:%S");
-                    let entry: Vec<String> = ctx_lines.iter().map(|l| format!("[{}] {}", ts, l)).collect();
-                    self.state.append_context(&label, &entry.join("\n"));
-                }
-            }
-        }
-
-        // Push explore results to context for stable KV cache prefix
-        if !failed && tool_name == "explore" {
-            let lines: Vec<&str> = raw.lines().filter(|l| !l.is_empty()).take(80).collect();
-            if !lines.is_empty() {
-                self.state.push_context("project:map", &lines.join("\n"));
-            }
-        }
-
-        if raw.starts_with("[OK]") && (tool_name == "write_file" || tool_name == "edit_file") {
-            if !self.state.auto_verify.contains(&"cargo check".to_string()) {
-                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                    if path.ends_with(".rs") {
-                        self.state.auto_verify.push("cargo check".to_string());
+        // ── Tasks ──
+        if !self.session_seed.is_empty() {
+            if let Ok(session_entries) = std::fs::read_dir(dsx_types::platform::sessions_dir()) {
+                for entry in session_entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() { continue; }
+                    if !path.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with(&self.session_seed)).unwrap_or(false) { continue; }
+                    let tasks_path = path.join("memory").join("tasks.md");
+                    if let Ok(content) = std::fs::read_to_string(&tasks_path) {
+                        let mut pending = 0u32;
+                        let mut in_progress = 0u32;
+                        let mut completed = 0u32;
+                        let mut items: Vec<String> = Vec::new();
+                        for line in content.lines() {
+                            let t = line.trim();
+                            if t.starts_with("- [pending]") {
+                                pending += 1;
+                                items.push(format!("[ ] {}", t.trim_start_matches("- [pending] ").trim()));
+                            } else if t.starts_with("- [in_progress]") {
+                                in_progress += 1;
+                                items.push(format!("[>] {}", t.trim_start_matches("- [in_progress] ").trim()));
+                            } else if t.starts_with("- [completed]") {
+                                completed += 1;
+                                items.push(format!("[✓] {}", t.trim_start_matches("- [completed] ").trim()));
+                            } else if t.starts_with("- [cancelled]") {
+                                items.push(format!("[x] {}", t.trim_start_matches("- [cancelled] ").trim()));
+                            }
+                        }
+                        if pending + in_progress + completed > 0 {
+                            let status_line = format!("pending:{}, progress:{}, done:{}", pending, in_progress, completed);
+                            let mut text = format!("{}\n{}", status_line, items.join("\n"));
+                            if text.len() > 2000 {
+                                text = format!("{}\n{}...", status_line, &items.iter().take(10).cloned().collect::<Vec<_>>().join("\n"));
+                            }
+                            self.push_context("task:list", &text);
+                        }
                     }
+                    break; // only one session dir matches the seed
                 }
             }
         }
-
-        !failed
     }
 }

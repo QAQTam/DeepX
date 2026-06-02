@@ -16,6 +16,7 @@ pub struct Config {
     pub max_tool_rounds: Option<u32>,
     pub context7_api_key: Option<String>,
     pub lang: Option<String>,
+    pub mcp_servers: Vec<dsx_tools::mcp_bridge::McpServerConfig>,
 }
 
 impl Default for Config {
@@ -34,6 +35,7 @@ impl Default for Config {
             max_tool_rounds: None,
             context7_api_key: None,
             lang: None,
+            mcp_servers: Vec::new(),
         }
     }
 }

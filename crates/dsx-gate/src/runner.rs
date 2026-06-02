@@ -1,7 +1,6 @@
 //! dsx-gate — API Proxy daemon.
 //!
-//! Security boundary process that holds API keys, proxies LLM requests,
-//! and applies output quality guards.
+//! Security boundary process that holds API keys and proxies LLM requests.
 //!
 //! ## IPC protocol
 //!
@@ -210,19 +209,10 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
 
         let mut full_content = String::new();
         let mut reasoning = String::new();
-        let mut last_delta: String = String::new();
-        let mut repeat_count: u32 = 0;
         while let Some(event) = rx.recv().await {
             match event {
                 StreamEvent::ContentDelta(delta) => {
-                    if check_repetition_guard(&delta, &mut last_delta, &mut repeat_count, &full_content, writer) {
-                        return;
-                    }
-
                     full_content.push_str(&delta);
-                    if check_degenerate_output(&full_content, writer) {
-                        return;
-                    }
 
                     let frame = serde_json::json!({
                         "type": "content_delta",
@@ -283,58 +273,6 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
             }
         }
     });
-}
-
-// ── Streaming helpers ──
-
-/// Check if the same delta repeats excessively, indicating a stuck model.
-/// Returns `true` if repetition was detected and the stream was cut off.
-fn check_repetition_guard(
-    delta: &str,
-    last_delta: &mut String,
-    repeat_count: &mut u32,
-    full_content: &str,
-    writer: &mut impl Write,
-) -> bool {
-    if delta == *last_delta {
-        *repeat_count += 1;
-        if *repeat_count > 20 {
-            log::warn!("hp: repetition detected ({}x same delta), cutting off", repeat_count);
-            let _ = writeln!(writer, "{}", serde_json::json!({
-                "type": "api_response",
-                "content": full_content,
-                "stop_reason": "repetition",
-            }));
-            let _ = writer.flush();
-            return true;
-        }
-    } else {
-        *repeat_count = 0;
-    }
-    *last_delta = delta.to_string();
-    false
-}
-
-/// Check if the accumulated output has become degenerate (e.g., same character
-/// repeated). Returns `true` if degenerate output was detected and cut off.
-fn check_degenerate_output(full_content: &str, writer: &mut impl Write) -> bool {
-    if full_content.chars().count() > 100 {
-        let tail = &full_content[full_content.char_indices().map(|(i,_)| i).nth(full_content.chars().count().saturating_sub(100)).unwrap_or(0)..];
-        if let Some(most_common) = tail.chars().max_by_key(|c| tail.matches(*c).count()) {
-            let ratio = tail.matches(most_common).count() as f64 / tail.chars().count().max(1) as f64;
-            if ratio > 0.60 && most_common != ' ' {
-                log::warn!("hp: degenerate output detected ({:.0}% '{:?}'), cutting off", ratio * 100.0, most_common);
-                let _ = writeln!(writer, "{}", serde_json::json!({
-                    "type": "api_response",
-                    "content": full_content,
-                    "stop_reason": "degenerate",
-                }));
-                let _ = writer.flush();
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Build and write the final API response from the Done stream event.

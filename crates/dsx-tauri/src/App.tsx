@@ -3,14 +3,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { T } from './i18n'
 import type { Message } from './types'
-import { clearToolOutputs, toolResults, execLiveOutput, onToolOutputChange } from './state'
 import { ChatMessage } from './components/ChatMessage'
 import { InfoPanel } from './components/InfoPanel'
 import { WorkspacePanel } from './components/WorkspacePanel'
 import { ConfigWizard } from './components/ConfigWizard'
 import { SettingsDialog } from './components/SettingsDialog'
 import { AskUserDialog } from './components/AskUserDialog'
-import { ToolStateIndicator } from './components/ToolStateIndicator'
 
 export default function App() {
   const [configDone, setConfigDone] = useState(false)
@@ -28,7 +26,6 @@ export default function App() {
   const [sessionId, setSessionId] = useState('')
   const [tokenUsage, setTokenUsage] = useState<{ used: number; limit: number }>({ used: 0, limit: 150000 })
   const [cacheInfo, setCacheInfo] = useState<{ hit: number; miss: number }>({ hit: 0, miss: 0 })
-  const [predictedCacheHitPct, setPredictedCacheHitPct] = useState<number | null>(null)
   const [balance, setBalance] = useState('')
   const fetchBalance = useCallback(() => {
     invoke<any>('load_config').then((c: any) => {
@@ -42,23 +39,25 @@ export default function App() {
   const [configInfo, setConfigInfo] = useState({ model: '', effort: '' })
   const [modelOptions, setModelOptions] = useState<string[]>([])
   const [askUser, setAskUser] = useState<{ question: string; options?: string[] } | null>(null)
-  const [toolState, setToolState] = useState<any>(null)
   const [askAnswer, setAskAnswer] = useState('')
   const [sessions, setSessions] = useState<any[]>([])
   const refreshSessions = useCallback(() => {
     invoke<any[]>('cmd_sessions').then(setSessions).catch(() => {})
   }, [])
-  const [planVersion, setPlanVersion] = useState(0)
+  const [taskVersion, setTaskVersion] = useState(0)
+  const [documents, setDocuments] = useState<any[]>([])
+  const [recentEdits, setRecentEdits] = useState<string[]>([])
   const [configVersion, setConfigVersion] = useState(0)
+  const [leftOpen, setLeftOpen] = useState(true)
+  const [rightOpen, setRightOpen] = useState(true)
 
-  const scRef = useRef(''); const srRef = useRef('');   const stRef = useRef<{ id: string; name: string; args: string; body?: any; output?: string }[]>([])
-  const thinkSegmentsRef = useRef<string[]>([]); const currentThinkRef = useRef('')
+  // v4.1: streaming state simplified to single content + reasoning refs
+  const streamRef = useRef({ content: '', reasoning: '', toolCards: [] as any[] })
   const [tick, setTick] = useState(0); const chatEnd = useRef<HTMLDivElement>(null); const inputRef = useRef<HTMLTextAreaElement>(null)
   const connectingRef = useRef(false); const restartingRef = useRef(false)
   const rafPending = useRef(false)
   const rafId = useRef(0)
   const msgSeq = useRef(0)
-  const lastApiPushedRef = useRef(false)
   const pushMsg = (msg: Message) => { msgSeq.current++; (msg as any)._id = msgSeq.current; setMessages(p => [...p, msg]) }
   const rerender = useCallback(() => {
     if (rafPending.current) return
@@ -104,11 +103,10 @@ export default function App() {
     restartingRef.current = true
     setIsStreaming(false)
     setMessages([])
-    scRef.current = ''; srRef.current = ''; stRef.current = []
+    streamRef.current = { content: '', reasoning: '', toolCards: [] }
     setSessionId('')
     setCacheInfo({ hit: 0, miss: 0 })
     setTokenUsage(p => ({ ...p, used: 0 }))
-    clearToolOutputs()
     invoke('stop_agent').then(() => {
       setConnected(false)
       invoke<any>('start_agent').then((r) => {
@@ -124,9 +122,8 @@ export default function App() {
   const resumeSession = (seed: string) => {
     restartingRef.current = true
     setIsStreaming(false); setMessages([])
-    scRef.current = ''; srRef.current = ''; stRef.current = []
+    streamRef.current = { content: '', reasoning: '', toolCards: [] }
     setSessionId(seed)
-    clearToolOutputs()
     setTokenUsage(p => ({ ...p, used: 0 }))
     setCacheInfo({ hit: 0, miss: 0 })
     invoke<any[]>('load_session_messages', { seed }).then(msgs => setMessages(msgs.map((m: any, i: number) => ({ ...m, _id: `loaded-${i}-${Date.now()}` })))).catch(() => {})
@@ -181,116 +178,146 @@ export default function App() {
 
   useEffect(() => {
     const unlistens: Array<Promise<() => void>> = []
-    unlistens.push(listen<any>('content-delta', (e: any) => {
-      if (e.payload.delta) { scRef.current += e.payload.delta; setStream('answer') }
-      if (e.payload.reasoning) {
-        currentThinkRef.current += e.payload.reasoning; srRef.current += e.payload.reasoning
-        setStream('think')
-      }
-      rerender()
-    }))
-    unlistens.push(listen<any>('tool-start', (e: any) => {
-      if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      const { id, name, args_display, body } = e.payload
-      const existing = stRef.current.findIndex(t => t.id === id)
-      if (existing >= 0) {
-        stRef.current[existing] = { id, name, args: args_display, body }
-      } else {
-        stRef.current.push({ id, name, args: args_display, body })
-      }
-      rerender()
-    }))
-    unlistens.push(listen<any>('tool-done', (e: any) => {
-      const { id, name, output, success } = e.payload
-      toolResults[id] = { content: output || '', success }
-      toolResults[name] = { content: output || '', success }
-      if (name === 'exec' || name === 'exec/run') {
-        execLiveOutput[id] = output || ''
-        execLiveOutput[name] = output || ''
-      }
-      // update tool output in messages
-      setMessages(prev => prev.map(msg => {
-        if (!msg.tool_calls) return msg
-        const hasMatch = msg.tool_calls.some((tc: any) => tc.id === id || tc.name === name)
-        if (!hasMatch) return msg
-        return {
-          ...msg,
-          tool_calls: msg.tool_calls.map((tc: any) =>
-            (tc.id === id || tc.name === name) ? { ...tc, output: output || '' } : tc
-          )
+
+    unlistens.push(listen<any>('agent-event', (e: any) => {
+      const p = e.payload
+      const kind = p?.type as string
+      switch (kind) {
+        case 'stream_start': {
+          setIsStreaming(true)
+          setStream(p.kind === 'reasoning' ? 'think' : 'answer')
+          break
         }
-      }))
-      setPlanVersion(v => v + 1)
-      rerender()
-    }))
-    unlistens.push(listen<any>('api-response', (e: any) => {
-      const { content, tool_calls, usage, reasoning_content } = e.payload
-      if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      // merge tool-start info with raw api tool_calls (backward compat for API-native tools)
-      const rawTools = tool_calls?.length ? tool_calls.map((tc: any) => ({
-        id: tc.id || '', name: tc.name || tc.function?.name || '', args: tc.arguments || tc.function?.arguments || '', output: ''
-      })) : []
-      // prefer stRef (tool-start events) over raw, merge if both exist
-      const stTools = stRef.current.map(tc => ({ id: tc.id, name: tc.name, args: tc.args, output: '', body: tc.body }))
-      const finalTools = stTools.length ? stTools : (rawTools.length ? rawTools : undefined)
-      const finalContent = content || scRef.current || ''
-      const finalReasoning = reasoning_content || srRef.current || undefined
-      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
-      scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
-      if (finalContent || finalReasoning || finalTools) {
-        pushMsg({ role: 'assistant', content: finalContent, reasoning: finalReasoning, reasoningSegments: segments, tool_calls: finalTools })
-        lastApiPushedRef.current = true
-      }
-      if (usage) {
-        setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit }))
-        if (usage.prompt_cache_hit_tokens !== undefined || usage.prompt_cache_miss_tokens !== undefined) {
-          setCacheInfo((c: { hit: number; miss: number }) => ({ hit: c.hit + (usage.prompt_cache_hit_tokens || 0), miss: c.miss + (usage.prompt_cache_miss_tokens || 0) }))
+        case 'stream_delta': {
+          const delta = p.delta || ''
+          if (streamModeRef.current === 'think') streamRef.current.reasoning += delta
+          else streamRef.current.content += delta
+          rerender()
+          break
         }
-        fetchBalance()
+        case 'stream_end': {
+          // no-op — assistant_msg will follow with final content
+          break
+        }
+        case 'assistant_msg': {
+          const { thinking, text } = p
+          // Override streaming state with final content
+          streamRef.current = { content: '', reasoning: '', toolCards: [] }
+          pushMsg({
+            role: 'assistant' as const,
+            content: text || '',
+            reasoning: thinking || undefined,
+            tool_cards: streamRef.current.toolCards.length > 0 ? [...streamRef.current.toolCards] : undefined
+          })
+          setStream('idle')
+          break
+        }
+        case 'tool_call': {
+          const tool = p.tool || p
+          const card = { id: tool.id, name: tool.name, args: tool.args_display || '', body: tool.body, output: '' }
+          streamRef.current.toolCards.push(card)
+          break
+        }
+        case 'tool_result': {
+          const { tool_id, output, success } = p
+          // Update tool card result
+          const card = streamRef.current.toolCards.find(t => t.id === tool_id)
+          if (card) { card.output = output || ''; card.success = success }
+          // Also update in messages
+          setMessages(prev => prev.map(msg => {
+            if (!msg.tool_cards) return msg
+            const hasMatch = msg.tool_cards.some((tc: any) => tc.id === tool_id)
+            if (!hasMatch) return msg
+            return {
+              ...msg,
+              tool_cards: msg.tool_cards.map((tc: any) =>
+                tc.id === tool_id ? { ...tc, output: output || '' } : tc
+              )
+            }
+          }))
+          if (p.name && /^task_/.test(p.name)) setTaskVersion(v => v + 1)
+          rerender()
+          break
+        }
+        case 'turn_end': {
+          // Flush any remaining streaming content
+          const finalContent = streamRef.current.content
+          const finalReasoning = streamRef.current.reasoning
+          streamRef.current = { content: '', reasoning: '', toolCards: [] }
+          if (finalContent || finalReasoning) {
+            pushMsg({ role: 'assistant' as const, content: finalContent || '', reasoning: finalReasoning || undefined })
+          }
+          if (p.usage) {
+            setTokenUsage(prev => ({ used: (p.usage.prompt_tokens || 0) + (p.usage.completion_tokens || 0), limit: prev.limit }))
+            if (p.usage.prompt_cache_hit_tokens !== undefined || p.usage.prompt_cache_miss_tokens !== undefined) {
+              setCacheInfo((c: { hit: number; miss: number }) => ({
+                hit: c.hit + (p.usage.prompt_cache_hit_tokens || 0),
+                miss: c.miss + (p.usage.prompt_cache_miss_tokens || 0)
+              }))
+            }
+          }
+          setTokenUsage(prev => ({ ...prev, used: p.context_tokens || prev.used, limit: p.context_limit || prev.limit }))
+          fetchBalance()
+          setIsStreaming(false)
+          setStream('idle')
+          setTaskVersion(v => v + 1)
+          rerender()
+          break
+        }
+        case 'done': {
+          setIsStreaming(false); setStream('idle'); rerender()
+          setTaskVersion(v => v + 1)
+          break
+        }
+        case 'error': {
+          setIsStreaming(false); setStream('idle'); rerender()
+          break
+        }
+        case 'cancelled': {
+          setIsStreaming(false); setStream('idle')
+          streamRef.current = { content: '', reasoning: '', toolCards: [] }
+          rerender()
+          break
+        }
+        case 'ask_user': {
+          setAskUser({ question: p.question || '需要输入', options: p.options })
+          setAskAnswer('')
+          break
+        }
+        case 'balance': {
+          setBalance(`${p.total_balance || '0'} ${p.currency || 'CNY'}`)
+          break
+        }
+        case 'session_restored': {
+          setSessionId(p.seed || '')
+          if (p.tokens_used) { setTokenUsage(prev => ({ ...prev, used: p.tokens_used })) }
+          break
+        }
+        case 'debug_snapshot': {
+          if (p.context_tokens) {
+            setTokenUsage(prev => ({ ...prev, used: p.context_tokens, limit: p.context_limit || prev.limit }))
+          }
+          if (p.documents) setDocuments(p.documents)
+          if (p.recent_edits) setRecentEdits(p.recent_edits)
+          break
+        }
+        case 'shutdown_ack': {
+          setIsStreaming(false)
+          setStream('idle')
+          break
+        }
       }
-      rerender()
     }))
-    unlistens.push(listen('agent-done', () => {
-      if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      const finalContent = scRef.current
-      const finalReasoning = srRef.current
-      const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
-      scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
-      if (!lastApiPushedRef.current && (finalContent || finalReasoning)) {
-        pushMsg({ role: 'assistant', content: finalContent || '', reasoning: finalReasoning || undefined, reasoningSegments: segments })
-      }
-      lastApiPushedRef.current = false
-      setIsStreaming(false); setStream('idle'); rerender()
-      setPlanVersion(v => v + 1)
-    }))
-    unlistens.push(listen('agent-error', () => { setIsStreaming(false); setStream('idle'); rerender() }))
+
     unlistens.push(listen('agent-closed', () => { if (!restartingRef.current) setConnected(false); setIsStreaming(false) }))
-    unlistens.push(listen<any>('ask-user', (e: any) => {
-      setAskUser({ question: e.payload.question || '需要输入', options: e.payload.options })
-      setAskAnswer('')
+
+    unlistens.push(listen('agent-error', (e: any) => {
+      const msg = (e.payload?.message || 'Agent error') as string
+      pushMsg({ role: 'assistant', content: `\u26a0 ${msg}` })
+      setIsStreaming(false); setStream('idle'); rerender()
     }))
-    unlistens.push(listen<any>('tool-result', (e: any) => {
-      // backward compat: update tool output via old event (tool-done handles newer agents)
-      const { id, name, content, success } = e.payload
-      toolResults[id] = { content: content || '', success }
-      toolResults[name] = { content: content || '', success }
-      if (name === 'exec' || name === 'exec/run') {
-        execLiveOutput[id] = content || ''
-        execLiveOutput[name] = content || ''
-      }
-      if (name && /^(task_|plan_)/.test(name)) setPlanVersion(v => v + 1)
-      rerender()
-    }))
-    unlistens.push(listen<any>('tool-state', (e: any) => { setToolState(e.payload) }))
-    unlistens.push(listen<any>('session-restored', (e: any) => {
-      setSessionId(e.payload.seed || '')
-      if (e.payload.tokens_used) { setTokenUsage(p => ({ ...p, used: e.payload.tokens_used })) }
-    }))
-    unlistens.push(listen<any>('cache-prediction', (e: any) => {
-      setPredictedCacheHitPct(e.payload.hit_rate ?? null)
-    }))
-    const unsubTool = onToolOutputChange(rerender)
-    return () => { unlistens.forEach(p => p.then(fn => fn()).catch(() => {})); unsubTool() }
+
+    return () => { unlistens.forEach(p => p.then(fn => fn()).catch(() => {})) }
   }, [])
 
   useEffect(() => { if (connected) inputRef.current?.focus() }, [connected])
@@ -300,7 +327,7 @@ export default function App() {
     const text = input.trim(); setInput('')
     pushMsg({ role: 'user', content: text })
     addTokens(text, true)
-    scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []; currentThinkRef.current = ''
+    streamRef.current = { content: '', reasoning: '', toolCards: [] }
     setStream('think'); setIsStreaming(true)
     invoke('send_message', { text }).catch(() => setIsStreaming(false))
     setTimeout(() => inputRef.current?.focus(), 50)
@@ -320,9 +347,10 @@ export default function App() {
   return (
     <div className="h-screen flex flex-col bg-[var(--bg-primary)]">
       <div className="flex-1 flex min-h-0">
-        <div className="w-56 border-r border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0">
+        <div className={`${leftOpen ? 'w-56' : 'w-0'} border-r border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0 overflow-hidden transition-all duration-200`}>
+          <div className="w-56">
           <InfoPanel
-            tokens={tokenUsage} cache={cacheInfo} predictedCacheHitPct={predictedCacheHitPct}
+            tokens={tokenUsage} cache={cacheInfo}
             balance={balance} sessionId={sessionId} sessions={sessions}
             onSettings={() => setShowSettings(true)}
             onNewSession={newSession}
@@ -330,32 +358,38 @@ export default function App() {
             onDeleteAllSessions={handleDeleteAllSessions}
             onDeleteSession={handleDeleteSession}
           />
+          </div>
         </div>
         <div className="flex-1 flex flex-col min-w-0">
           <div className="h-9 border-b border-[var(--border)] bg-[var(--bg-secondary)] flex items-center px-4 gap-2 text-xs text-[var(--muted)]">
+            <button onClick={() => setLeftOpen(o => !o)} className="hover:text-[var(--text)] transition-colors" title={leftOpen ? '折叠侧栏' : '展开侧栏'}>
+              {leftOpen ? '◀' : '▶'}
+            </button>
             <span className={`w-2 h-2 rounded-full ${connected ? 'bg-[var(--success)]' : 'bg-[var(--warning)]'}`} />
             {connected ? T.hpConnected : T.connecting}
             {isStreaming && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+              <span className={`text-[14px] px-1.5 py-0.5 rounded ${
                 streamMode === 'think' ? 'text-[var(--warning)] bg-[var(--warning)]/10' : 'text-[var(--success)] bg-[var(--success)]/10'
               }`}>
                 {streamMode === 'think' ? '🧠 思考中' : streamMode === 'answer' ? '💬 回答中' : ''}
               </span>
             )}
             <div className="flex-1" />
+            <button onClick={() => setRightOpen(o => !o)} className="hover:text-[var(--text)] transition-colors" title={rightOpen ? '折叠侧栏' : '展开侧栏'}>
+              {rightOpen ? '▶' : '◀'}
+            </button>
             {isStreaming && (
               <button onClick={() => {
                 setIsStreaming(false)
                 pushMsg({ role: 'assistant', content: '⚠ 已终止操作' })
                 invoke('cancel_agent').catch(() => {})
               }}
-                className="px-2 py-0.5 rounded text-[11px] bg-[var(--error)]/10 text-[var(--error)] border border-[var(--error)]/30 hover:bg-[var(--error)]/20 transition-all">
+                className="px-2 py-0.5 rounded text-[13px] bg-[var(--error)]/10 text-[var(--error)] border border-[var(--error)]/30 hover:bg-[var(--error)]/20 transition-all">
                 ■ 停止
               </button>
             )}
           </div>
           <div className="h-7 border-b border-[var(--border)] bg-[var(--bg-secondary)] flex items-center px-4 gap-3 text-xs text-[var(--muted)]">
-            <ToolStateIndicator toolState={toolState} />
           </div>
           <div className="flex-1 overflow-y-auto px-6 py-4">
             {messages.length === 0 && !isStreaming && (
@@ -364,25 +398,24 @@ export default function App() {
               </div>
             )}
             {messages.map((msg, i) => <ChatMessage key={(msg as any)._id ?? i} msg={msg} />)}
-            {isStreaming && (scRef.current || srRef.current || thinkSegmentsRef.current.length > 0 || currentThinkRef.current || stRef.current.length > 0) &&
+            {isStreaming && (streamRef.current.content || streamRef.current.reasoning) &&
               <ChatMessage msg={{
                 role: 'assistant',
-                content: scRef.current || '',
-                reasoning: srRef.current || undefined,
-                reasoningSegments: [...thinkSegmentsRef.current, ...(currentThinkRef.current ? [currentThinkRef.current] : [])],
-                tool_calls: stRef.current.length > 0 ? stRef.current : undefined
+                content: streamRef.current.content || '',
+                reasoning: streamRef.current.reasoning || undefined,
+                tool_cards: streamRef.current.toolCards.length > 0 ? streamRef.current.toolCards : undefined
               }} />}
-            {isStreaming && !scRef.current && !srRef.current && thinkSegmentsRef.current.length === 0 && !currentThinkRef.current && stRef.current.length === 0 &&
+            {isStreaming && !streamRef.current.content && !streamRef.current.reasoning &&
               <div className="text-center text-[var(--muted)] text-xs py-8">{T.thinking}</div>}
             <div ref={chatEnd} />
           </div>
-          <div className="border-t border-[var(--border)] px-4 py-1.5 bg-[var(--bg-secondary)] flex items-center gap-2 text-[10px] text-[var(--muted)]">
+          <div className="border-t border-[var(--border)] px-4 py-1.5 bg-[var(--bg-secondary)] flex items-center gap-2 text-[14px] text-[var(--muted)]">
             {modelOptions.length > 0 ? (
                 <select value={configInfo.model || modelOptions[0]} onChange={e => {
                   invoke('update_config', { field: 'model', value: e.target.value }).catch(() => {})
                   invoke('reload_agent').catch(() => {})
                 }}
-                className="bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-1.5 py-0.5 text-[10px] text-[var(--accent)] font-mono outline-none cursor-pointer">
+                className="bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-1.5 py-0.5 text-[14px] text-[var(--accent)] font-mono outline-none cursor-pointer">
                 {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             ) : (
@@ -407,8 +440,10 @@ export default function App() {
             </div>
           </div>
         </div>
-        <div className="w-56 border-l border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0">
-          <WorkspacePanel planVersion={planVersion} sessionId={sessionId} />
+        <div className={`${rightOpen ? 'w-56' : 'w-0'} border-l border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0 overflow-hidden transition-all duration-200`}>
+          <div className="w-56">
+          <WorkspacePanel sessionId={sessionId} documents={documents} recentEdits={recentEdits} />
+          </div>
         </div>
       </div>
       {showSettings && <SettingsDialog onClose={() => { setShowSettings(false); setConfigVersion(v => v + 1) }} />}

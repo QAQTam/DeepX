@@ -8,6 +8,7 @@ pub mod config;
 pub mod assembly;
 pub mod dsx_log;
 pub mod prompt;
+pub mod skills;
 // ── Core modules ──
 pub mod agent;
 pub mod health;
@@ -16,4 +17,4 @@ pub mod tools;
 pub mod orchestrator;
 pub mod session;
 pub mod tool_parser;
-pub mod hp;
+pub mod gate;

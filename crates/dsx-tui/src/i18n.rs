@@ -310,7 +310,7 @@ impl Lang {
         match self { Lang::En => " Debug (F12) ", Lang::Zh => " 调试 (F12) " }
     }
     pub fn t_debug_hp(&self) -> &str {
-        match self { Lang::En => "HP", Lang::Zh => "HP" }
+        match self { Lang::En => "Gate", Lang::Zh => "Gate" }
     }
     pub fn t_debug_stream(&self) -> &str {
         match self { Lang::En => "Stream", Lang::Zh => "流" }

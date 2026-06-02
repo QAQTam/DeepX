@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use dsx_proto::{self, AgentToHp};
 
-/// Stores the most recently spawned HP daemon child process so it can be
+/// Stores the most recently spawned gate daemon child process so it can be
 /// killed during shutdown. Without this, `try_reconnect()` orphans every
 /// process it spawns.
 static HP_DAEMON: Mutex<Option<Child>> = Mutex::new(None);
@@ -20,14 +20,14 @@ pub(crate) fn hp_port() -> u16 {
 pub fn connect() -> Option<TcpStream> {
     let port = hp_port();
     if port == 0 {
-        eprintln!("dsx-agent: HP not running (no hp.port) — continuing without AI");
+        eprintln!("dsx-agent: gate not running (no hp.port) — continuing without AI");
         return None;
     }
 
     let mut stream = match TcpStream::connect(format!("127.0.0.1:{port}")) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("dsx-agent: cannot connect HP: {e}");
+            eprintln!("dsx-agent: cannot connect gate: {e}");
             return None;
         }
     };
@@ -44,7 +44,7 @@ pub fn connect() -> Option<TcpStream> {
     };
     let _ = dsx_proto::write_frame(&mut stream, &reg);
 
-    eprintln!("dsx-agent: connected to HP on port {port}");
+    eprintln!("dsx-agent: connected to gate on port {port}");
     Some(stream)
 }
 

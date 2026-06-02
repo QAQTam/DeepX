@@ -960,7 +960,6 @@ version = "4.1.0"
 dependencies = [
  "dsx-agent",
  "dsx-gate",
- "dsx-tools",
  "dsx-types",
 ]
 

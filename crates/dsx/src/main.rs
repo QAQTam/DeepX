@@ -7,7 +7,6 @@ fn main() {
     match role.as_str() {
         "gate" => dsx_gate::runner::run(),
         "agent" => dsx_agent::runner::run(),
-        "tools" => dsx_tools::run(),
         "config" | "init" => run_config(),
         _ => {
             // Default: headless agent (stdin/stdout JSON-LP)

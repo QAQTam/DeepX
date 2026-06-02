@@ -174,7 +174,6 @@ pub fn render_setup(frame: &mut Frame, app: &App) {
                 lines.push(Line::from(Span::styled(format!("  {}", l.t_select_model()), Style::new().fg(Color::Gray))));
                 lines.push(Line::from(""));
                 let show = &app.setup.model_list;
-                let _total = show.len().min(6);
                 for name in show.iter().take(6) {
                     let selected = app.setup.model == *name;
                     let mark = if selected { "●" } else { "○" };
@@ -657,6 +656,43 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
             ]),
         ];
         frame.render_widget(Paragraph::new(lines), inner);
+
+        // Document tracking overlay
+        if !d.documents.is_empty() {
+            let n = d.documents.len().min(10);
+            let doc_w = 55u16;
+            let doc_h = (n as u16 + 3).min(15);
+            let doc_rect = Rect::new(
+                area.width.saturating_sub(doc_w + 2),
+                area.y + 10,
+                doc_w,
+                doc_h,
+            );
+            frame.render_widget(Clear, doc_rect);
+            let doc_block = Block::new()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::new().fg(Color::Rgb(180, 140, 100)))
+                .title(format!(" Docs ({}) ", n))
+                .style(Style::new().bg(Color::Rgb(18, 22, 30)));
+            frame.render_widget(&doc_block, doc_rect);
+
+            let inner = doc_block.inner(doc_rect);
+            let doc_lines: Vec<Line> = d.documents.iter().take(10).map(|doc| {
+                let tag_style = if doc.is_stale {
+                    Style::new().fg(Color::Rgb(220, 100, 100))
+                } else {
+                    Style::new().fg(Color::Rgb(100, 200, 120))
+                };
+                let turns_text = format!("{}t", doc.turns_since_read);
+                Line::from(vec![
+                    Span::styled(format!(" {} ", doc.tag), tag_style.bold()),
+                    Span::styled(format!("{} ", doc.path), Style::new().fg(Color::Rgb(180, 180, 200))),
+                    Span::styled(turns_text, Style::new().fg(Color::Rgb(100, 120, 140))),
+                ])
+            }).collect();
+            frame.render_widget(Paragraph::new(doc_lines), inner);
+        }
     }
 
     // Task overlay
@@ -701,33 +737,8 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     // Context window
     if app.show_context {
         let d = &app.debug;
-        let cwd = std::env::current_dir().ok();
-        let cwd_str = cwd.as_ref().and_then(|p| p.to_str()).unwrap_or("");
-        // Strip CWD prefix to get relative path; fallback to last 2 components
-        let short_path = |raw: &str| -> String {
-            let s = raw.replace('\\', "/");
-            if !cwd_str.is_empty() && s.starts_with(cwd_str) {
-                let rel = s[cwd_str.len()..].trim_start_matches('/');
-                if rel.len() > 44 {
-                    format!("...{}", &rel[rel.len().saturating_sub(44)..])
-                } else {
-                    rel.to_string()
-                }
-            } else {
-                // Show last 2-3 components for non-workspace paths
-                let parts: Vec<&str> = s.split('/').collect();
-                let take = 3.min(parts.len());
-                let rel: String = parts[parts.len() - take..].join("/");
-                if rel.len() > 44 {
-                    format!("...{}", &rel[rel.len().saturating_sub(44)..])
-                } else {
-                    rel
-                }
-            }
-        };
         let ctx_w = 50u16;
-        let n_files = d.read_files.len() + d.written_this_turn.len();
-        let ctx_h = (n_files as u16 + 3).min(18).max(4);
+        let ctx_h = 4u16;
         let ctx_rect = Rect::new(
             area.width.saturating_sub(ctx_w + 2),
             area.y + 1,
@@ -739,20 +750,16 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::new().fg(Color::Rgb(120, 180, 255)))
-            .title(format!(" Context ({} files) ", d.read_files.len()))
+            .title(" Context ")
             .style(Style::new().bg(Color::Rgb(18, 22, 30)));
         frame.render_widget(&ctx_block, ctx_rect);
         let inner = ctx_block.inner(ctx_rect);
-        let mut lines: Vec<Line> = Vec::new();
-        for f in &d.read_files {
-            lines.push(Line::from(Span::styled(format!(" 📖 {} ", short_path(f)), Style::new().fg(Color::Rgb(120, 200, 200)))));
-        }
-        for w in &d.written_this_turn {
-            lines.push(Line::from(Span::styled(format!(" ✏️  {} ", short_path(w)), Style::new().fg(Color::Rgb(200, 200, 100)))));
-        }
-        if d.read_files.is_empty() && d.written_this_turn.is_empty() {
-            lines.push(Line::from(Span::styled("  (no files in context)", Style::new().fg(Color::Gray))));
-        }
+        let lines: Vec<Line> = vec![
+            Line::from(Span::styled(
+                format!(" tokens: {} / {}", d.context_tokens, 0),
+                Style::new().fg(Color::Rgb(120, 200, 200)),
+            )),
+        ];
         frame.render_widget(Paragraph::new(lines), inner);
     }
 }
@@ -827,7 +834,7 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
     let area = frame.area();
     frame.render_widget(Paragraph::new("").style(Style::new().bg(BG)), area);
 
-    let [_title_area, list_area, status_area, footer_area] = Layout::vertical([
+    let [_, list_area, status_area, footer_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Fill(1),
         Constraint::Length(1),

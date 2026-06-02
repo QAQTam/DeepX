@@ -1,61 +1,69 @@
-//! 进程内 ToolManager 框架。
+//! ToolManager framework — tool registration, execution, and lifecycle.
 //!
-//! 提供：**ToolManager** — 工具注册 + 安全分类 + 请求路由
-//!
-//! 子模块通过 `pub fn register(mgr: &mut ToolManager)` 注册各自 handler。
+//! Submodules register handlers via `pub fn register(mgr: &mut ToolManager)`.
 
 pub mod exec;
 pub mod explore;
-pub mod file;
+pub mod file_read;
+pub mod file_write;
+pub mod file_edit;
+pub mod file_edit_diff;
+pub mod file_list_dir;
+pub mod file_search;
+pub mod file_delete;
+pub mod file_move;
+pub mod file_copy;
+pub mod file_glob;
+pub mod file_diff;
+pub mod file_shared;
 pub mod git;
 mod safety;
 mod web;
 mod ask;
-
-// Tool handlers for plan and task
-pub mod plan;
 pub mod task;
-
-pub mod ipc;
 pub mod registration;
 pub mod persistence;
+pub mod manager;
+pub mod mcp_bridge;
 
 pub use web::set_c7_key;
+pub use safety::SafetyVerdict;
+pub use manager::ToolManager;
 
-/// Run the tools IPC server (stdin/stdout JSON-LP loop).
-pub fn run() {
-    ipc::ipc_main_loop(&mut registration::build_tool_manager());
+// ── Macro: handler! ──
+
+#[macro_export]
+macro_rules! handler {
+    ($name:ident, $exec:ident) => {
+        fn $name(ctx: ToolCallCtx) -> ToolResult {
+            let args = serde_json::to_string(&ctx.args).unwrap_or_default();
+            ToolResult::ok($exec(&args))
+        }
+    };
 }
 
-use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use dsx_types::ToolDef;
 
-pub use safety::SafetyVerdict;
+// ── Global state ──
 
-// ── 全局状态 ──
-
-/// 全局取消标志 — TUI 按 Esc 时设置，长工具在循环中检查。
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
-
-/// 当前会话 seed — 由 TUI 启动时设置，memory 工具使用。
 pub static CURRENT_SESSION: OnceLock<String> = OnceLock::new();
 
 pub fn set_current_session(seed: &str) {
     let _ = CURRENT_SESSION.set(seed.to_string());
 }
 
-/// 工作区根路径 — per-session，explore/git 等工具以此为基准。
 pub static CURRENT_WORKSPACE: OnceLock<String> = OnceLock::new();
 
 pub fn set_workspace(path: &str) {
     let _ = CURRENT_WORKSPACE.set(path.to_string());
 }
 
-// ── 工具键（名称 + 二级操作）──
+// ── ToolKey ──
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ToolKey {
@@ -75,15 +83,13 @@ impl std::fmt::Display for ToolKey {
     }
 }
 
-// ── handler 上下文与返回值 ──
+// ── ToolCallCtx ──
 
-/// handler 执行上下文：包含请求参数和进度通道。
 pub struct ToolCallCtx {
     pub id: String,
     pub name: String,
     pub action: String,
     pub args: serde_json::Value,
-    /// 可选进度发送通道 — handler 可在执行期间推送进度帧。
     pub tx_progress: Option<std::sync::mpsc::Sender<String>>,
     pub timeout_secs: Option<u64>,
 }
@@ -92,17 +98,16 @@ impl ToolCallCtx {
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.args.get(key).and_then(|v| v.as_str())
     }
-
     pub fn get_u64(&self, key: &str) -> Option<u64> {
         self.args.get(key).and_then(|v| v.as_u64())
     }
-
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.args.get(key).and_then(|v| v.as_bool())
     }
 }
 
-/// handler 返回值。
+// ── ToolResult ──
+
 #[derive(Clone, Debug)]
 pub struct ToolResult {
     pub success: bool,
@@ -115,9 +120,8 @@ impl ToolResult {
     }
 }
 
-// ── 参数解析工具（供子模块共享）──
+// ── parse helpers ──
 
-/// Parse a string parameter from JSON args (legacy compat).
 pub fn parse_arg(args: &str, key: &str) -> String {
     dsx_types::arg::parse_arg(args, key).unwrap_or_default()
 }
@@ -136,9 +140,8 @@ pub fn parse_opt_bool(args: &str, key: &str) -> Option<bool> {
     val.as_bool().or_else(|| val.as_str().and_then(|s| s.parse::<bool>().ok()))
 }
 
-// ── 工具句柄 ──
+// ── ToolHandler ──
 
-/// 一个工具操作（name/action）的完整定义。
 #[derive(Clone)]
 pub struct ToolHandler {
     pub key: ToolKey,
@@ -160,175 +163,4 @@ impl ToolHandler {
             },
         }
     }
-}
-
-// ── ToolManager ──
-
-pub struct ToolManager {
-    handlers: HashMap<ToolKey, ToolHandler>,
-    /// 若 Some，仅允许列表中 name 的工具通过。
-    allowed: Option<Vec<String>>,
-    /// inflight 任务的取消标志（id → should_cancel）。
-    inflight_tasks: HashMap<String, Arc<AtomicBool>>,
-}
-
-impl ToolManager {
-    pub fn new() -> Self {
-        Self {
-            handlers: HashMap::new(),
-            allowed: None,
-            inflight_tasks: HashMap::new(),
-        }
-    }
-
-    // ── 注册 ──
-
-    pub fn register(&mut self, handler: ToolHandler) {
-        self.handlers.insert(handler.key.clone(), handler);
-    }
-
-    /// Look up a handler by (name, action). Falls back to action="" if the
-    /// exact key is not found. This allows `read_file/read` to match the
-    /// base `read_file/""` registration without needing alias entries.
-    pub fn lookup(&self, name: &str, action: &str) -> Option<&ToolHandler> {
-        let key = ToolKey::new(name, action);
-        self.handlers.get(&key).or_else(|| {
-            if action.is_empty() {
-                None
-            } else {
-                self.handlers.get(&ToolKey::new(name, ""))
-            }
-        })
-    }
-
-    // ── Init（IPC 中由 ToolsInit 帧触发）──
-
-    pub fn apply_init(&mut self, allowed_tools: Vec<String>, session_seed: &str) {
-        // Empty list = allow all (no restriction)
-        self.allowed = if allowed_tools.is_empty() { None } else { Some(allowed_tools) };
-        let _ = CURRENT_SESSION.set(session_seed.to_string());
-    }
-
-    // ── 定义查询 ──
-
-    pub fn all_defs(&self) -> Vec<ToolDef> {
-        let mut seen = std::collections::HashSet::new();
-        let mut defs = Vec::new();
-        for (key, handler) in &self.handlers {
-            if seen.insert(key.name.clone()) {
-                defs.push(handler.to_tool_def());
-            }
-        }
-        defs
-    }
-
-    pub fn filtered_defs(&self) -> Vec<ToolDef> {
-        match &self.allowed {
-            Some(allowed) => self.all_defs().into_iter()
-                .filter(|d| allowed.contains(&d.function.name))
-                .collect(),
-            None => self.all_defs(),
-        }
-    }
-
-    // ── IPC 路由 ──
-
-    /// 处理一个入站 CallReq 帧，返回对应的出站帧。
-    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>) -> dsx_proto::ToolsToAgent {
-        // 授权检查
-        if let Some(ref allowed) = self.allowed {
-            if !allowed.contains(&name.to_string()) {
-                return dsx_proto::ToolsToAgent::ToolError {
-                    id, error: format!("Tool '{}' not in allowed list", name), code: "FORBIDDEN".into(),
-                };
-            }
-        }
-
-        let key = ToolKey::new(name, action);
-        let handler = match self.handlers.get(&key) {
-            Some(h) => h,
-            None => {
-                // Fallback: try to find handler by name only (ignore action)
-                match self.handlers.iter().find(|(k, _)| k.name == name) {
-                    Some((_, h)) => h,
-                    None => return dsx_proto::ToolsToAgent::ToolError {
-                        id, error: format!("Unknown tool: {}/{}", name, action), code: "UNKNOWN_TOOL".into(),
-                    },
-                }
-            }
-        };
-
-        // 安全检查
-        let ctx = ToolCallCtx {
-            id: id.clone(),
-            name: name.to_string(),
-            action: action.to_string(),
-            args: args.clone(),
-            tx_progress: None,
-            timeout_secs,
-        };
-        match (handler.safety)(&ctx) {
-            SafetyVerdict::Block(reason) => {
-                return dsx_proto::ToolsToAgent::ToolError {
-                    id, error: reason, code: "BLOCKED".into(),
-                };
-            }
-            SafetyVerdict::Allow => {}
-        }
-
-        // 注册 inflight 取消标志
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        self.inflight_tasks.insert(id.clone(), cancel_flag);
-
-        let ctx = ToolCallCtx {
-            id: id.clone(),
-            name: name.to_string(),
-            action: action.to_string(),
-            args,
-            tx_progress: None,
-            timeout_secs,
-        };
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            (handler.handler)(ctx)
-        }));
-
-        self.inflight_tasks.remove(&id);
-
-        let (content, success) = match result {
-            Ok(tr) => (tr.content, tr.success),
-            Err(panic_info) => {
-                let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
-                    else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
-                    else { "unknown panic".to_string() };
-                (format!("[ERROR] Tool panicked: {}", msg), false)
-            }
-        };
-
-        dsx_proto::ToolsToAgent::ToolResultMessage {
-            id,
-            name: name.into(),
-            action: action.into(),
-            success,
-            content,
-        }
-    }
-
-    /// 取消工具。
-    pub fn cancel_tool(&mut self, id: Option<&str>) {
-        match id {
-            Some(specific) => {
-                if let Some(flag) = self.inflight_tasks.get(specific) {
-                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            }
-            None => {
-                CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
-                for flag in self.inflight_tasks.values() {
-                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            }
-        }
-    }
-
 }

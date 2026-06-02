@@ -538,6 +538,9 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
         sys.push_str(crate::prompt::THINK_MAX);
     }
 
+    // Inject skills list
+    sys.push_str(&crate::skills::skills_prompt_section());
+
     let mut messages = vec![Message::system(&sys)];
 
     // ── Layer 2: Conversation history ──
