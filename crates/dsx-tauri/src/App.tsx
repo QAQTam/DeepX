@@ -329,6 +329,7 @@ export default function App() {
           )
         }
       }))
+      if (name && /^(task_|plan_)/.test(name)) setPlanVersion(v => v + 1)
       rerender()
     }))
     unlistens.push(listen<any>('tool-state', (e: any) => { setToolState(e.payload) }))
@@ -458,7 +459,7 @@ export default function App() {
           </div>
         </div>
         <div className="w-56 border-l border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0">
-          <WorkspacePanel planVersion={planVersion} />
+          <WorkspacePanel planVersion={planVersion} sessionId={sessionId} />
         </div>
       </div>
       {showSettings && <SettingsDialog onClose={() => { setShowSettings(false); setConfigVersion(v => v + 1) }} />}

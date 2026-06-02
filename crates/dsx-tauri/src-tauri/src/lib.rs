@@ -711,10 +711,14 @@ fn list_plans() -> Result<Vec<serde_json::Value>, String> {
                     else if content.lines().any(|l| l.trim() == "status: active") { "active" }
                     else if content.lines().any(|l| l.trim() == "status: cancelled") { "cancelled" }
                     else { "draft" };
+                let summary = content.lines()
+                    .find(|l| l.starts_with("## "))
+                    .map(|l| l.trim_start_matches("## ").to_string())
+                    .unwrap_or_default();
                 plans.push(serde_json::json!({
                     "name": name,
                     "status": status,
-                    "summary": content.lines().find(|l| l.starts_with("## ")).unwrap_or("").to_string(),
+                    "summary": summary,
                 }));
             }
         }
@@ -728,6 +732,47 @@ fn read_plan(name: String) -> Result<String, String> {
     let path = dsx_types::platform::plans_dir()
         .join(format!("{}.md", name));
     std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))
+}
+
+#[tauri::command]
+fn list_tasks() -> Result<Vec<serde_json::Value>, String> {
+    let sessions_dir = dsx_types::platform::sessions_dir();
+    if !sessions_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut tasks: Vec<serde_json::Value> = Vec::new();
+    for entry in std::fs::read_dir(&sessions_dir).map_err(|e| format!("read_dir: {e}"))?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+        let task_file = path.join("tasks-mem.md");
+        if !task_file.is_file() { continue; }
+        let content = match std::fs::read_to_string(&task_file) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let seed = path.file_name().and_then(|s| s.to_str()).unwrap_or("").split('-').next().unwrap_or("");
+        for line in content.lines() {
+            let trimmed = line.trim_start_matches("- ");
+            let status = if trimmed.contains("[pending]") { "pending" }
+                else if trimmed.contains("[in_progress]") { "in_progress" }
+                else if trimmed.contains("[completed]") { "completed" }
+                else if trimmed.contains("[cancelled]") { "cancelled" }
+                else { continue };
+            let task_text = trimmed
+                .replacen("[pending] ", "", 1)
+                .replacen("[in_progress] ", "", 1)
+                .replacen("[completed] ", "", 1)
+                .replacen("[cancelled] ", "", 1);
+            let (subject, description) = task_text.split_once(" — ").unwrap_or((&task_text, ""));
+            tasks.push(serde_json::json!({
+                "seed": seed,
+                "subject": subject.trim(),
+                "description": description.trim(),
+                "status": status,
+            }));
+        }
+    }
+    Ok(tasks)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -749,7 +794,7 @@ pub fn run() {
             set_workspace, get_workspace, scan_directory,
             cancel_agent,
             cmd_sessions, delete_session, delete_all_sessions,
-            list_plans, read_plan, get_balance,
+            list_plans, read_plan, list_tasks, get_balance,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
