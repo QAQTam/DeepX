@@ -38,10 +38,11 @@ const mdComponents: Components = {
 }
 
 function StreamingMarkdown({ content }: { content: string }) {
+  const cleaned = content.replace(/<\/?(?:th|td|tr|thead|tbody|table|colgroup|col|caption)(?:\s[^>]*)?>/gi, '')
   return (
     <div className="prose prose-sm max-w-none prose-invert">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={mdComponents}>
-        {content}
+        {cleaned}
       </ReactMarkdown>
     </div>
   )
@@ -91,20 +92,51 @@ const ChatMessage = memo(function ChatMessage({ msg }: { msg: Message }) {
           })}
         </div>
       )}
-      <div className={`inline-block max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
-        msg.role === 'user'
-          ? 'bg-[var(--accent)] text-white rounded-br-md shadow-sm'
-          : 'bg-[var(--bg-secondary)] text-[var(--text-h)] border border-[var(--border)] rounded-bl-md'
-      }`}>
-        {msg.role === 'user' ? (
-          <span className="whitespace-pre-wrap">{msg.content || '...'}</span>
-        ) : (
-          <StreamingMarkdown content={msg.content || ''} />
+      {msg.role === 'tool' ? (
+        <ToolResultBubble name={msg.name || ''} content={msg.content || ''} />
+      ) : (
+        <div className={`inline-block max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+          msg.role === 'user'
+            ? 'bg-[var(--accent)] text-white rounded-br-md shadow-sm'
+            : 'bg-[var(--bg-secondary)] text-[var(--text-h)] border border-[var(--border)] rounded-bl-md'
+        }`}>
+          {msg.role === 'user' ? (
+            <span className="whitespace-pre-wrap">{msg.content || '...'}</span>
+          ) : (
+            <StreamingMarkdown content={msg.content || ''} />
+          )}
+        </div>
+      )}
+    </div>
+  )
+})
+
+function ToolResultBubble({ name, content }: { name: string; content: string }) {
+  const lines = content.split('\n')
+  const totalLines = lines.length
+  const displayLines = lines.slice(0, 100)
+  const isTruncated = totalLines > 100
+
+  return (
+    <div className="inline-block max-w-[80%] rounded-2xl border border-[var(--border)] overflow-hidden bg-[#0d1117] rounded-bl-md">
+      <div className="flex items-center gap-1.5 px-3 py-1 border-b border-[#30363d] bg-[#161b22]">
+        <span className="text-[10px] font-mono text-[var(--success)]">✓</span>
+        <span className="text-[10px] font-mono text-[var(--muted)]">{name}</span>
+        <span className="text-[10px] font-mono text-[var(--muted)]">· {totalLines} 行</span>
+      </div>
+      <div className="max-h-64 overflow-y-auto font-mono text-[11px] leading-relaxed text-[var(--text)] p-2">
+        {displayLines.map((line, i) => (
+          <div key={i} className="px-1 py-px">{line || '\u00A0'}</div>
+        ))}
+        {isTruncated && (
+          <div className="text-[10px] text-[var(--muted)] italic mt-1 pt-1 border-t border-[#30363d]">
+            ... 仅显示前 100 / {totalLines} 行
+          </div>
         )}
       </div>
     </div>
   )
-})
+}
 
 function ToolCard({ tc }: { tc: any }) {
   const isExec = tc.name === 'exec'
@@ -134,7 +166,7 @@ function ToolCard({ tc }: { tc: any }) {
           : isGit ? <span className="text-[var(--warning)]">⎇</span>
           : <span className="text-[var(--accent)]">◇</span>}
         <span className={isExec ? 'text-[#e6edf3]' : 'text-[var(--text-h)]'}>{tc.name}</span>
-        {tc.args && !isExec && <span className="truncate text-[var(--muted)]">{tc.args.slice(0, 90)}</span>}
+        {tc.args && !isExec && <span className="truncate text-[var(--muted)]">{safeArgsStr(tc).slice(0, 90)}</span>}
       </div>
 
       {isExec && <ExecBody tc={tc} />}
@@ -161,11 +193,13 @@ function ToolCard({ tc }: { tc: any }) {
 }
 
 function ExecBody({ tc }: { tc: any }) {
+  const p = parseArgs(tc)
+  const cmd = p ? String(p.command || p.cmd || '') : safeArgsStr(tc)
   return (
     <div className="px-3 py-2 font-mono text-[12px] leading-relaxed text-[#e6edf3]">
       <div className="flex items-center gap-2 text-[#8b949e] mb-1">
         <span>$</span>
-        <span>{(() => { try { const p = JSON.parse(tc.args); return p.command || tc.args } catch { return tc.args } })()}</span>
+        <span>{cmd}</span>
       </div>
       {(() => {
         const live = execLiveOutput[tc.id || ''] || execLiveOutput[tc.name]
@@ -182,13 +216,22 @@ function ExecBody({ tc }: { tc: any }) {
   )
 }
 
+function safeArgsStr(tc: any): string {
+  if (typeof tc.args === 'string') return tc.args
+  if (tc.args && typeof tc.args === 'object') return JSON.stringify(tc.args)
+  return ''
+}
+
 function parseArgs(tc: any): Record<string, unknown> | null {
-  try { return JSON.parse(tc.args) } catch { return null }
+  const a = tc.args
+  if (a && typeof a === 'object' && !Array.isArray(a)) return a as Record<string, unknown>
+  if (typeof a === 'string') { try { return JSON.parse(a) } catch { return null } }
+  return null
 }
 
 function KVBody({ tc, icon }: { tc: any; icon?: string }) {
   const p = parseArgs(tc)
-  if (!p) return <div className="px-3 py-2 text-[12px] font-mono text-[var(--muted)]">{tc.args.slice(0, 80)}</div>
+  if (!p) return <div className="px-3 py-2 text-[12px] font-mono text-[var(--muted)]">{safeArgsStr(tc).slice(0, 80)}</div>
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
       {icon && <div className="mb-1">{icon}</div>}
@@ -201,7 +244,7 @@ function KVBody({ tc, icon }: { tc: any; icon?: string }) {
 
 function DiffFileBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
-  if (!p) return <div className="px-3 py-2 text-[12px] font-mono text-[var(--muted)]">{tc.args.slice(0, 80)}</div>
+  if (!p) return <div className="px-3 py-2 text-[12px] font-mono text-[var(--muted)]">{safeArgsStr(tc).slice(0, 80)}</div>
   const file = (p.path || p.file_path) as string || ''
   const oldStr = (p.old_string || p.old_str) as string || ''
   const newStr = (p.new_string || p.new_str) as string || ''
@@ -222,7 +265,7 @@ function DiffFileBody({ tc }: { tc: any }) {
           ))}
         </div>
       ) : (
-        <div className="text-[var(--muted)] text-[11px]">{tc.args.slice(0, 120)}</div>
+        <div className="text-[var(--muted)] text-[11px]">{safeArgsStr(tc).slice(0, 120)}</div>
       )}
     </div>
   )
@@ -236,7 +279,7 @@ function DiffBody({ tc }: { tc: any }) {
         {p?.path_a ? <span className="text-red-400/80">- {String(p.path_a)}</span> : null}
         {p?.path_b ? <span className="text-green-400/80">+ {String(p.path_b)}</span> : null}
       </div>
-      {(!p?.path_a && !p?.path_b) && <span className="text-[var(--muted)]">{tc.args.slice(0, 80)}</span>}
+      {(!p?.path_a && !p?.path_b) && <span className="text-[var(--muted)]">{safeArgsStr(tc).slice(0, 80)}</span>}
     </div>
   )
 }
@@ -245,7 +288,7 @@ function DirBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
-      <span>{p && p.path ? `📁 ${String(p.path)}` : `📁 ${tc.args.slice(0, 60)}`}</span>
+      <span>{p && p.path ? `📁 ${String(p.path)}` : `📁 ${safeArgsStr(tc).slice(0, 60)}`}</span>
     </div>
   )
 }
@@ -254,7 +297,7 @@ function ExploreBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
-      <span className="text-[var(--accent)]">🔍 {p && (p.path || p.directory) ? String(p.path || p.directory) : tc.args.slice(0, 60)}</span>
+      <span className="text-[var(--accent)]">🔍 {p && (p.path || p.directory) ? String(p.path || p.directory) : safeArgsStr(tc).slice(0, 60)}</span>
       {p?.depth !== undefined ? <span className="text-[var(--muted)] ml-2">depth={String(p.depth)}</span> : null}
     </div>
   )
@@ -264,7 +307,7 @@ function SearchBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
-      <span>🔍 <span className="text-[var(--accent)]">{p && p.pattern ? String(p.pattern) : tc.args.slice(0, 60)}</span></span>
+      <span>🔍 <span className="text-[var(--accent)]">{p && p.pattern ? String(p.pattern) : safeArgsStr(tc).slice(0, 60)}</span></span>
     </div>
   )
 }
@@ -273,7 +316,7 @@ function AskBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
   return (
     <div className="px-3 py-2 text-[12px] text-[var(--text-h)]">
-      <span>❓ {p && p.question ? String(p.question) : tc.args.slice(0, 80)}</span>
+      <span>❓ {p && p.question ? String(p.question) : safeArgsStr(tc).slice(0, 80)}</span>
     </div>
   )
 }
@@ -282,7 +325,7 @@ function WebBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
-      <span>🌐 {p && (p.url || p.query) ? String(p.url || p.query) : tc.args.slice(0, 80)}</span>
+      <span>🌐 {p && (p.url || p.query) ? String(p.url || p.query) : safeArgsStr(tc).slice(0, 80)}</span>
     </div>
   )
 }
@@ -291,7 +334,7 @@ function MemBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
-      <span>🧠 {p && (p.name || p.key) ? String(p.name || p.key) : tc.args.slice(0, 80)}</span>
+      <span>🧠 {p && (p.name || p.key) ? String(p.name || p.key) : safeArgsStr(tc).slice(0, 80)}</span>
     </div>
   )
 }
@@ -300,14 +343,14 @@ function PitfallBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
-      <span>⚠️ {p && p.issue ? String(p.issue) : tc.args.slice(0, 80)}</span>
+      <span>⚠️ {p && p.issue ? String(p.issue) : safeArgsStr(tc).slice(0, 80)}</span>
     </div>
   )
 }
 
 function GitBody({ tc }: { tc: any }) {
   const p = parseArgs(tc)
-  const action = (p && (p.action || p.subcommand)) ? String(p.action || p.subcommand) : tc.args.slice(0, 80)
+  const action = (p && (p.action || p.subcommand)) ? String(p.action || p.subcommand) : safeArgsStr(tc).slice(0, 80)
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
       <span className="text-[var(--warning)]">⎇ {action}</span>

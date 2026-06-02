@@ -312,6 +312,7 @@ export default function App() {
         execLiveOutput[id] = content || ''
         execLiveOutput[name] = content || ''
       }
+      setMessages(p => [...p, { role: 'tool' as const, tool_call_id: id, content: content || '', name }])
       setMessages(prev => prev.map(msg => {
         if (!msg.tool_calls) return msg
         const hasMatch = msg.tool_calls.some((tc: any) => tc.id === id || tc.name === name)
