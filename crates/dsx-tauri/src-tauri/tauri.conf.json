@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DSX",
-  "version": "4.0.0",
-  "identifier": "com.dsx.app",
+  "productName": "DeepX",
+  "version": "4.0.1",
+  "identifier": "com.deepx.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "DSX",
+        "title": "DeepX 4.0.1",
         "width": 1200,
         "height": 800,
         "minWidth": 800,

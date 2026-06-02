@@ -49,7 +49,7 @@ fn find_dsx(app: &AppHandle) -> Result<String, String> {
         for ancestor in dir.ancestors().take(3) {
             let lib = ancestor.join("lib").join("DSX").join(name);
             if let Some(p) = check(lib) { return Ok(p); }
-            let lib_res = ancestor.join("lib").join("DSX").join("resources").join(name);
+            let lib_res = ancestor.join("lib").join("DeepX").join("resources").join(name);
             if let Some(p) = check(lib_res) { return Ok(p); }
         }
     }
