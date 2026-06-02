@@ -31,25 +31,42 @@ fn find_dsx(app: &AppHandle) -> Result<String, String> {
 
     let name = if cfg!(target_os = "windows") { "dsx.exe" } else { "dsx" };
 
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let r = resource_dir.join(name);
-        if r.exists() { return Ok(r.to_string_lossy().to_string()); }
+    let check = |p: std::path::PathBuf| -> Option<String> {
+        if p.exists() { Some(p.to_string_lossy().to_string()) } else { None }
+    };
+
+    // 1) Tauri resource dir
+    if let Ok(d) = app.path().resource_dir() {
+        if let Some(p) = check(d.join(name)) { return Ok(p); }
     }
 
-    for start_dir in [std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())),
-                      std::env::current_dir().ok()].iter().flatten()
-    {
-        let candidate = start_dir.join(name);
-        if candidate.exists() { return Ok(candidate.to_string_lossy().to_string()); }
+    let current_exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf()));
 
-        let resource = start_dir.join("resources").join(name);
-        if resource.exists() { return Ok(resource.to_string_lossy().to_string()); }
+    // 2) next to dsx-tauri binary (e.g. /usr/bin/)
+    if let Some(ref dir) = current_exe_dir {
+        if let Some(p) = check(dir.join(name)) { return Ok(p); }
+        // 2b) lib/<productName>/resources/ (deb structure: binary in /usr/bin, resources in /usr/lib/DSX/)
+        for ancestor in dir.ancestors().take(3) {
+            let lib = ancestor.join("lib").join("DSX").join(name);
+            if let Some(p) = check(lib) { return Ok(p); }
+            let lib_res = ancestor.join("lib").join("DSX").join("resources").join(name);
+            if let Some(p) = check(lib_res) { return Ok(p); }
+        }
+    }
 
+    // 3) resources/ subdir next to executable
+    if let Some(ref dir) = current_exe_dir {
+        if let Some(p) = check(dir.join("resources").join(name)) { return Ok(p); }
+    }
+
+    // 4) cwd and ancestors (debug/dev)
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(p) = check(cwd.join(name)) { return Ok(p); }
+        if let Some(p) = check(cwd.join("resources").join(name)) { return Ok(p); }
         #[cfg(debug_assertions)]
-        for ancestor in start_dir.ancestors().take(8) {
+        for ancestor in cwd.ancestors().take(8) {
             for sub in &["debug", "release"] {
-                let c = ancestor.join("target").join(sub).join(name);
-                if c.exists() { return Ok(c.to_string_lossy().to_string()); }
+                if let Some(p) = check(ancestor.join("target").join(sub).join(name)) { return Ok(p); }
             }
         }
     }
@@ -58,7 +75,9 @@ fn find_dsx(app: &AppHandle) -> Result<String, String> {
     if let Ok(out) = Command::new("sh").args(["which", "dsx"]).output() {
         if out.status.success() {
             let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() { return Ok(p); }
+            if !p.is_empty() {
+                if let Some(p) = check(std::path::PathBuf::from(p)) { return Ok(p); }
+            }
         }
     }
 
