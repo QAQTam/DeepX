@@ -267,9 +267,21 @@ export default function App() {
           id: tc.id || '', name: tc.name || tc.function?.name || '', args: tc.arguments || tc.function?.arguments || '',
         }))
         const intermediateContent = content || scRef.current || ''
+        // merge tool-only rounds into the previous message — no empty chat bubbles
+        if (!intermediateContent && !srRef.current && thinkSegmentsRef.current.length === 0) {
+          setMessages(prev => {
+            const last = prev.length > 0 ? prev[prev.length - 1] : null
+            if (last?.role === 'assistant') {
+              return prev.map((m, i) =>
+                i === prev.length - 1 ? { ...m, tool_calls: [...(m.tool_calls || []), ...tcs] } : m
+              )
+            }
+            return [...prev, { role: 'assistant' as const, content: '', tool_calls: tcs }]
+          })
+        } else {
+          pushMsg({ role: 'assistant', content: intermediateContent, reasoning: srRef.current || undefined, reasoningSegments: thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined, tool_calls: tcs })
+        }
         scRef.current = ''; srRef.current = ''; stRef.current = []; thinkSegmentsRef.current = []
-        setStream('think')
-        pushMsg({ role: 'assistant', content: intermediateContent, tool_calls: tcs })
         lastApiPushedRef.current = true
         if (usage) { setTokenUsage(p => ({ used: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0), limit: p.limit })) }
         rerender()
