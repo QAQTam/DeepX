@@ -9,11 +9,12 @@ fn main() {
     Some(r) => r,
     None => { tauri_build::build(); return; }
   };
-  let src = ws_root.join("target").join(&profile).join("dsx.exe");
+  let exe_name = format!("dsx{}", std::env::consts::EXE_SUFFIX);
+  let src = ws_root.join("target").join(&profile).join(&exe_name);
   if src.exists() {
     if let Some(dest_dir) = m.join("resources").parent() {
       let _ = std::fs::create_dir_all(dest_dir);
-      let _ = std::fs::copy(&src, &m.join("resources").join("dsx.exe"));
+      let _ = std::fs::copy(&src, &m.join("resources").join(&exe_name));
     }
   }
   tauri_build::build()

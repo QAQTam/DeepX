@@ -9,7 +9,7 @@ interface AskUserDialogProps {
 }
 
 export function AskUserDialog({ question, options, answer, setAnswer, onSubmit }: AskUserDialogProps) {
-  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timerRef.current), [])
 
   return (

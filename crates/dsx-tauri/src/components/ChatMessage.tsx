@@ -255,7 +255,7 @@ function ExploreBody({ tc }: { tc: any }) {
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
       <span className="text-[var(--accent)]">🔍 {p && (p.path || p.directory) ? String(p.path || p.directory) : tc.args.slice(0, 60)}</span>
-      {p?.depth !== undefined && <span className="text-[var(--muted)] ml-2">depth={p.depth}</span>}
+      {p?.depth !== undefined ? <span className="text-[var(--muted)] ml-2">depth={String(p.depth)}</span> : null}
     </div>
   )
 }
@@ -311,8 +311,8 @@ function GitBody({ tc }: { tc: any }) {
   return (
     <div className="px-3 py-2 text-[12px] font-mono text-[var(--text)]">
       <span className="text-[var(--warning)]">⎇ {action}</span>
-      {p?.message && <span className="text-[var(--muted)] ml-2">{String(p.message).slice(0, 60)}</span>}
-      {p?.path && <span className="text-[var(--muted)] ml-2">{String(p.path).slice(0, 40)}</span>}
+      {p?.message ? <span className="text-[var(--muted)] ml-2">{String(p.message).slice(0, 60)}</span> : null}
+      {p?.path ? <span className="text-[var(--muted)] ml-2">{String(p.path).slice(0, 40)}</span> : null}
     </div>
   )
 }
@@ -366,7 +366,6 @@ function ResultViewer({ content, toolName, maxLines = 500 }: { content: string; 
     <div className="font-mono leading-relaxed">
       {lines.map((line, i) => {
         const trimmed = line.trimStart()
-        const indent = line.length - trimmed.length
         let cls = ''
 
         if (trimmed.startsWith('- ') || line.startsWith('  -   ')) {
