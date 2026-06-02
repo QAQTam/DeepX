@@ -224,10 +224,15 @@ export default function App() {
       rerender()
     }))
     unlistens.push(listen<any>('api-response', (e: any) => {
-      const { content, usage, reasoning_content } = e.payload
+      const { content, tool_calls, usage, reasoning_content } = e.payload
       if (currentThinkRef.current) { thinkSegmentsRef.current.push(currentThinkRef.current); currentThinkRef.current = '' }
-      // push tool cards accumulated via tool-start into the message
-      const finalTools = stRef.current.length ? stRef.current.map(tc => ({ id: tc.id, name: tc.name, args: tc.args, output: '', body: tc.body })) : undefined
+      // merge tool-start info with raw api tool_calls (backward compat for API-native tools)
+      const rawTools = tool_calls?.length ? tool_calls.map((tc: any) => ({
+        id: tc.id || '', name: tc.name || tc.function?.name || '', args: tc.arguments || tc.function?.arguments || '', output: ''
+      })) : []
+      // prefer stRef (tool-start events) over raw, merge if both exist
+      const stTools = stRef.current.map(tc => ({ id: tc.id, name: tc.name, args: tc.args, output: '', body: tc.body }))
+      const finalTools = stTools.length ? stTools : (rawTools.length ? rawTools : undefined)
       const finalContent = content || scRef.current || ''
       const finalReasoning = reasoning_content || srRef.current || undefined
       const segments = thinkSegmentsRef.current.length > 0 ? [...thinkSegmentsRef.current] : undefined
