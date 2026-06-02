@@ -11,8 +11,17 @@ use crate::CURRENT_WORKSPACE;
 // ── Handler ──
 
 pub(super) fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
-    let default_path = CURRENT_WORKSPACE.get().map(|s| s.as_str()).unwrap_or(".");
-    let path = ctx.get_str("path").unwrap_or(default_path);
+    let default_path = {
+        let ws = CURRENT_WORKSPACE.get().map(|s| s.as_str()).unwrap_or(".");
+        if ws == "." || ws.is_empty() {
+            std::fs::read_to_string(dsx_types::platform::workspace_path())
+                .ok().filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| ".".into())
+        } else {
+            ws.to_string()
+        }
+    };
+    let path = ctx.get_str("path").unwrap_or(&default_path);
     ToolResult::ok(exec_architecture(path))
 }
 

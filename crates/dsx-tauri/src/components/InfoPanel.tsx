@@ -52,13 +52,15 @@ export function InfoPanel({
         </div>
         {cache.hit + cache.miss > 0 && (
           <div>
-            <div className="text-[var(--muted)] mb-1">Cache</div>
+            <div className="text-[var(--muted)] mb-1">KV Cache</div>
             <div className="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
               <div className="h-full rounded-full bg-[var(--success)] transition-all"
-                style={{ width: `${(cache.hit / (cache.hit + cache.miss)) * 100}%` }} />
+                style={{ width: `${cache.hit + cache.miss > 0 ? (cache.hit / (cache.hit + cache.miss)) * 100 : 0}%` }} />
             </div>
             <div className="text-[14px] text-[var(--muted)] mt-0.5">
-              {Math.round((cache.hit / (cache.hit + cache.miss)) * 100)}% hit · {(cache.hit / 1000).toFixed(0)}K hit / {(cache.miss / 1000).toFixed(0)}K miss
+              {cache.hit + cache.miss > 0
+                ? `${Math.round((cache.hit / (cache.hit + cache.miss)) * 100)}% hit · ${(cache.hit / 1000).toFixed(1)}K / ${((cache.hit + cache.miss) / 1000).toFixed(1)}K`
+                : '—'}
             </div>
           </div>
         )}

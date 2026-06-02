@@ -269,7 +269,10 @@ export default function App() {
               tool_cards: finalCards.length > 0 ? finalCards : undefined })
           }
           if (p.usage) {
-            setTokenUsage(prev => ({ used: (p.usage.prompt_tokens || 0) + (p.usage.completion_tokens || 0), limit: prev.limit }))
+            setTokenUsage(prev => ({
+              used: p.usage.prompt_tokens || 0,
+              limit: prev.limit
+            }))
             if (p.usage.prompt_cache_hit_tokens !== undefined || p.usage.prompt_cache_miss_tokens !== undefined) {
               setCacheInfo((c: { hit: number; miss: number }) => ({
                 hit: c.hit + (p.usage.prompt_cache_hit_tokens || 0),
@@ -277,7 +280,9 @@ export default function App() {
               }))
             }
           }
-          setTokenUsage(prev => ({ ...prev, used: p.context_tokens || prev.used, limit: p.context_limit || prev.limit }))
+          if (p.context_limit) {
+            setTokenUsage(prev => ({ ...prev, limit: p.context_limit }))
+          }
           fetchBalance()
           setIsStreaming(false)
           setStream('idle')
@@ -310,6 +315,10 @@ export default function App() {
         case 'session_restored': {
           setSessionId(p.seed || '')
           if (p.tokens_used) { setTokenUsage(prev => ({ ...prev, used: p.tokens_used })) }
+          if (p.cache_hit_pct !== undefined && p.cache_hit_pct > 0) {
+            const total = p.tokens_used || 1
+            setCacheInfo({ hit: Math.round(total * p.cache_hit_pct / 100), miss: Math.round(total * (100 - p.cache_hit_pct) / 100) })
+          }
           break
         }
         case 'debug_snapshot': {

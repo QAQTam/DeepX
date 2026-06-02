@@ -769,14 +769,15 @@ impl App {
 
     pub fn handle_frame(&mut self, frame: Agent2Ui) {
         match frame {
-            Agent2Ui::StreamStart { msg_id: _, kind } => {
+            Agent2Ui::StreamStart { msg_id: _, kind, .. } => {
                 self.debug.streaming = true;
                 self.streaming = true;
                 let role = match kind {
-                    dsx_proto::StreamKind::Reasoning => ChatRole::Thinking,
-                    dsx_proto::StreamKind::Text => ChatRole::Assistant,
+                    dsx_proto::StreamKind::Thinking => ChatRole::Thinking,
+                    dsx_proto::StreamKind::Answering => ChatRole::Assistant,
+                    dsx_proto::StreamKind::ToolCalling => ChatRole::Assistant,
                 };
-                self.switch_block(if matches!(kind, dsx_proto::StreamKind::Reasoning) { BlockType::Thinking } else { BlockType::Text });
+                self.switch_block(if matches!(kind, dsx_proto::StreamKind::Thinking) { BlockType::Thinking } else { BlockType::Text });
                 self.push_streaming_msg(role, "");
             }
             Agent2Ui::StreamDelta { msg_id: _, delta } => {
