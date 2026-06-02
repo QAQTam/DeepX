@@ -82,7 +82,7 @@ pub fn activate_skill(state: &mut crate::agent::AgentState, name: &str) -> bool 
         Err(_) => return false,
     };
     let label = format!("skill:{}", name);
-    state.push_context(&label, &content);
+    state.turn_annotations.push(format!("[{}]\n{}", label, content));
     true
 }
 

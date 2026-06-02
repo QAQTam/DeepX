@@ -46,6 +46,7 @@ pub struct AgentState {
     pub tool_calls_this_turn: u32,
     /// Cumulative count of tool calls successfully parsed via DSML/XML (DeepSeek compat).
     pub dsml_compat_count: u32,
+    pub session_title: Option<String>,
 
     // ── Registered tool definitions (from dsx-tools) ──
     pub tool_defs: Vec<dsx_types::ToolDef>,
@@ -70,12 +71,6 @@ pub struct AgentState {
     pub stream_content: String,
     pub stream_reasoning: String,
     pub stream_cancelled: bool,
-
-    // ── Document context cache ──
-    /// Named context messages injected before conversation history in
-    /// `build_context()`. Key = label (used as `name` field), Value = content.
-    /// Insertion order is preserved for deterministic KV cache prefix.
-    pub context_messages: Vec<(String, String)>,
 
     // ── File hash cache ──
     /// File path → (lines, hash, last_modified). Used to skip re-reads
@@ -107,6 +102,7 @@ impl AgentState {
             tool_failures: 0,
             tool_calls_this_turn: 0,
             dsml_compat_count: 0,
+            session_title: None,
             tool_defs: Vec::new(),
             pending_ask_user: None,
             health: DsAgentsHealthPlatform::new(),
@@ -116,7 +112,6 @@ impl AgentState {
             stream_reasoning: String::new(),
             max_tool_rounds,
             stream_cancelled: false,
-            context_messages: Vec::new(),
             file_cache: std::collections::HashMap::new(),
         };
 
@@ -168,30 +163,6 @@ impl AgentState {
         self.turn_annotations.push(format!("[{}] {}", tag, msg));
     }
 
-    // ── Document context cache ──
-
-    /// Insert or update a named context message. These are injected before
-    /// the conversation history in `build_context()` as `role: "user"` messages
-    /// with the `name` field set. Same label replaces previous content.
-    /// The content should be stable across turns for KV cache reuse.
-    pub fn push_context(&mut self, label: &str, content: &str) {
-        if let Some(entry) = self.context_messages.iter_mut().find(|(k, _)| k == label) {
-            entry.1 = content.to_string();
-        } else {
-            self.context_messages.push((label.to_string(), content.to_string()));
-        }
-    }
-
-    /// Same as push_context but appends to existing content.
-    pub fn append_context(&mut self, label: &str, content: &str) {
-        if let Some(entry) = self.context_messages.iter_mut().find(|(k, _)| k == label) {
-            entry.1.push('\n');
-            entry.1.push_str(content);
-        } else {
-            self.context_messages.push((label.to_string(), content.to_string()));
-        }
-    }
-
 
     // ── Persist ──
 
@@ -211,7 +182,7 @@ impl AgentState {
 
     // ── Task progress injection ──
 
-    /// Refresh task progress entries in context_messages.
+    /// Refresh task progress, injected into turn annotations.
     /// Called each turn before build_context() so the model always sees
     /// current task state without re-reading task files.
     pub fn refresh_progress_context(&mut self) {
@@ -250,7 +221,7 @@ impl AgentState {
                             if text.len() > 2000 {
                                 text = format!("{}\n{}...", status_line, &items.iter().take(10).cloned().collect::<Vec<_>>().join("\n"));
                             }
-                            self.push_context("task:list", &text);
+                            self.turn_annotations.push(format!("[task] {}", text));
                         }
                     }
                     break; // only one session dir matches the seed

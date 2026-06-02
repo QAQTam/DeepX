@@ -63,6 +63,8 @@ impl ToolManager {
     }
 
     pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>) -> ToolsToAgent {
+        let t0 = std::time::Instant::now();
+
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
                 return ToolsToAgent::ToolError {
@@ -97,8 +99,11 @@ impl ToolManager {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.inflight_tasks.insert(id.clone(), cancel_flag);
 
+        let tool_name = name.to_string();
+        let audit_args = args.clone();
+
         let ctx = ToolCallCtx {
-            id: id.clone(), name: name.to_string(), action: action.to_string(),
+            id: id.clone(), name: tool_name.clone(), action: action.to_string(),
             args, tx_progress: None, timeout_secs,
         };
 
@@ -118,8 +123,17 @@ impl ToolManager {
             }
         };
 
+        let elapsed_ms = t0.elapsed().as_millis() as u64;
+        let output_size = content.len();
+
+        // Audit log
+        let status = if success { "OK" } else { "FAIL" };
+        let args_summary = audit_args_summary(&tool_name, &audit_args);
+        eprintln!("[AUDIT] {tool_name}  {status}  {elapsed_ms}ms  {output_size}chars  args={{{args_summary}}}");
+
         ToolsToAgent::ToolResultMessage {
-            id, name: name.into(), action: action.into(), success, content,
+            id, name: tool_name, action: action.into(), success, content,
+            elapsed_ms, output_size,
         }
     }
 
@@ -137,5 +151,33 @@ impl ToolManager {
                 }
             }
         }
+    }
+}
+
+/// Compact args summary for audit log — path and key values only.
+fn audit_args_summary(_tool: &str, args: &serde_json::Value) -> String {
+    let obj = match args.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+    // Show path-like args first, then command, then truncate to 80 chars
+    let mut parts: Vec<String> = Vec::new();
+    for key in ["path", "file_a", "file_b", "dest", "target", "command", "pattern", "query", "question"] {
+        if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
+            let short = if v.len() > 50 {
+                // Show last path segment
+                let seg = v.rsplit(&['/', '\\']).next().unwrap_or(v);
+                format!("{key}=\"{seg}\"")
+            } else {
+                format!("{key}=\"{v}\"")
+            };
+            parts.push(short);
+        }
+    }
+    let s = parts.join(", ");
+    if s.len() > 80 {
+        format!("{}…", &s[..77])
+    } else {
+        s
     }
 }

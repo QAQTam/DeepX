@@ -73,6 +73,13 @@ pub struct DocInfo {
     pub is_stale: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskInfo {
+    pub subject: String,
+    pub description: String,
+    pub status: String,
+}
+
 /// Agent → UI frames. Backend owns all message structure; frontend
 /// receives pre-rendered, role-annotated blocks in guaranteed order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,28 +133,27 @@ pub enum Agent2Ui {
         file: Option<FileSnapshotInfo>,
     },
 
-    // ── Streaming (typing effect) ──
+    // ── Streaming / animation ──
 
-    /// Begin streaming content for the given message.
     #[serde(rename = "stream_start")]
     StreamStart {
         msg_id: String,
-        /// "text" or "reasoning"
         kind: StreamKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_names: Vec<String>,
     },
 
-    /// Streaming content delta — append to the current block.
     #[serde(rename = "stream_delta")]
     StreamDelta {
         msg_id: String,
         delta: String,
     },
 
-    /// Streaming block ended. The next event will be a new
-    /// StreamStart or a complete message.
     #[serde(rename = "stream_end")]
     StreamEnd {
         msg_id: String,
+        #[serde(default)]
+        is_final: bool,
     },
 
     // ── Turn lifecycle ──
@@ -209,6 +215,10 @@ pub enum Agent2Ui {
         documents: Vec<DocInfo>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         recent_edits: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tasks: Vec<TaskInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_title: Option<String>,
     },
 
     #[serde(rename = "done")]
@@ -225,6 +235,10 @@ pub enum Agent2Ui {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamKind {
-    Text,
-    Reasoning,
+    /// Model is reasoning (thinking phase).
+    Thinking,
+    /// Agent is executing tool calls — tool names follow in the StreamStart.
+    ToolCalling,
+    /// Model is generating the visible answer.
+    Answering,
 }

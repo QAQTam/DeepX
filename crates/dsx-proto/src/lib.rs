@@ -27,7 +27,7 @@ mod hp;
 
 // ── Re-exports (backward-compatible paths) ──────────────────────────────
 
-pub use agent_protocol::{Agent2Ui, DocInfo, FileSnapshotInfo, StreamKind, Ui2Agent, UiToolDef};
+pub use agent_protocol::{Agent2Ui, DocInfo, FileSnapshotInfo, StreamKind, TaskInfo, Ui2Agent, UiToolDef};
 pub use tools::{AgentToTools, ToolsToAgent};
 pub use hp::{AgentToHp, HpToAgent};
 

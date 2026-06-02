@@ -446,12 +446,14 @@ impl ContextAssembler {
     // ── Build: conversation messages ──
 
     /// Return conversation messages (user/assistant/tool), system messages stripped.
-    /// Old tool results (before last user message) are truncated to short summaries.
+    /// Old tool results (before the last user message) are smart-compressed:
+    ///   Collapse: exec exit-code, cargo-check pass, write_file confirm
+    ///   Summary: read_file → path+lines, diff → what changed
+    ///   Keep: explore, errors, unresolved content
     pub fn build(&self) -> Vec<Message> {
         let mut msgs = self.to_vec();
         msgs.retain(|m| m.role != "system");
 
-        // Find index of the last real user message (name=None → actual user, not context)
         let last_user_idx = msgs.iter().rposition(|m| {
             m.role == "user" && m.name.is_none()
         });
@@ -471,55 +473,122 @@ impl ContextAssembler {
     }
 }
 
-/// Compress a tool result to a one-line summary.
-/// "read_file:\n[OK] 200 lines 1-200/1347 of D:\...\file.rs\n  [code...]" → "read_file: D:\...\file.rs L1-200 ✓"
+/// Truncate read_file output by file boundary: keep complete `[OK]` blocks
+/// without cutting in the middle of file contents.
+fn truncate_by_file_blocks(raw: &str) -> String {
+    const MAX_CHARS: usize = 4000;
+    if raw.len() <= MAX_CHARS { return raw.to_string(); }
+
+    let mut blocks: Vec<String> = Vec::new();
+    let mut current_block = String::new();
+    for line in raw.lines() {
+        if line.starts_with("[OK]") && !current_block.is_empty() {
+            blocks.push(std::mem::take(&mut current_block));
+        }
+        current_block.push_str(line);
+        current_block.push('\n');
+    }
+    if !current_block.is_empty() {
+        blocks.push(current_block);
+    }
+
+    let mut kept = String::new();
+    for (i, block) in blocks.iter().enumerate() {
+        if kept.len() + block.len() > MAX_CHARS && !kept.is_empty() {
+            kept.push_str(&format!(
+                "\n...[truncated: {} files kept, {} file(s) omitted, {} total chars]\n",
+                i, blocks.len() - i, raw.len()
+            ));
+            break;
+        }
+        kept.push_str(block);
+    }
+    // Ensure first line (tool_name:) is always included
+    if !kept.starts_with("read_file:") {
+        kept.insert_str(0, "read_file:\n");
+    }
+    kept
+}
+
+/// Smart-compress a tool result.
+/// Collapse: shell success / cargo check passes / write confirms.
+/// Summary: read_file/diff retain path + key info.
+/// Keep: explore, errors, unresolved bugs.
 fn compact_tool_result(raw: &str) -> String {
     let tool_name = raw.lines().next().unwrap_or("tool").trim_end_matches(':');
-    let short_path = raw.lines().nth(1).unwrap_or("").trim();
+    let body = raw.lines().skip(1).collect::<Vec<_>>().join("\n").trim().to_string();
 
-    // Extract status icon
-    let status = if raw.contains("[OK]") { "✓" }
-        else if raw.contains("[ERROR]") { "✗" }
-        else if raw.contains("[PARTIAL]") { "⋯" }
-        else if raw.contains("[CANCELLED]") { "✕" }
-        else { "·" };
+    let is_err = raw.contains("[ERROR]") || raw.contains("[FAIL]") || raw.contains("[CANCELLED]");
+    let is_warn = raw.contains("[PARTIAL]") || raw.contains("[WARN]");
 
-    // read_file format: "[OK] 200 lines 1-200/1347 of D:\...\file.rs"
-    // extract just the last path segment + line range
-    let summary = if let Some(of_pos) = short_path.find(" of ") {
-        let path = &short_path[of_pos + 4..];
-        let filename = path.rsplit(&['/', '\\']).next().unwrap_or(path);
-        // Try to get line range: "200 lines L1-L200/1347"
-        if let Some(lines_part) = short_path.find(" lines ") {
-            let line_info = &short_path[lines_part..];
-            format!("{} {} {}", filename, line_info.split(" of ").next().unwrap_or(line_info).trim(), status)
-        } else {
-            format!("{} {}", filename, status)
+    // ── Keep: read_file (file-boundary truncation) ──
+    if tool_name == "read_file" {
+        return truncate_by_file_blocks(raw);
+    }
+
+    // ── Keep: explore, errors, warnings ──
+    if tool_name == "explore" || is_err || is_warn {
+        if raw.len() <= 3000 { return raw.to_string(); }
+        let prefix: String = raw.lines().take(40).collect::<Vec<_>>().join("\n");
+        return format!("{}...\n[{}: truncated to {} lines, {} total chars]\n",
+            prefix, tool_name, 40, raw.len());
+    }
+
+    // ── Collapse: shell success / cargo check ──
+    if tool_name == "exec" {
+        let cmd = body.lines().next().unwrap_or("?").trim().chars().take(60).collect::<String>();
+        if raw.contains("cargo check") && raw.contains("[OK]") {
+            return format!("exec: cargo check → passed");
         }
-    } else {
-        format!("{} {}", short_path, status)
-    };
+        let code = if raw.contains("exit=0") || raw.contains("exit: 0") { "ok" }
+            else if raw.contains("[OK]") { "ok" }
+            else if is_err { "FAIL" }
+            else { "ran" };
+        return format!("exec: {} → {}", cmd, code);
+    }
 
-    format!("{}: {}", tool_name, summary)
+    // ── Collapse: write_file / edit_file confirmations ──
+    if tool_name == "write_file" || tool_name == "edit_file" {
+        let first = body.lines().next().unwrap_or("").trim();
+        if first.contains("[OK]") {
+            let path = first.trim_start_matches("[OK] ").trim();
+            let filename = path.rsplit(&['/', '\\']).next().unwrap_or(path);
+            return format!("{}: {} ✓", tool_name, filename);
+        }
+        return format!("{}: {}", tool_name, first);
+    }
+
+    // ── Summary: diff → what changed ──
+    if tool_name == "diff" {
+        let lines = body.lines().count();
+        return format!("diff: {} lines changed", lines);
+    }
+
+    // ── Summary: search / glob / list_dir ──
+    if matches!(tool_name, "search" | "glob" | "list_dir" | "grep") {
+        let count = body.lines().count();
+        let first = body.lines().next().unwrap_or("?").trim().chars().take(60).collect::<String>();
+        return format!("{}: {} ({} lines)", tool_name, first, count);
+    }
+
+    // ── Default: first line only ──
+    let first = body.lines().next().unwrap_or("?").trim().chars().take(80).collect::<String>();
+    format!("{}: {}", tool_name, first)
 }
 
 // ── build_context ──
 
 /// Build context for the next API request.
 ///
-/// # Cache-friendly design for DeepSeek KV cache
+/// # Design
 ///
-/// DeepSeek caches via exact-match prefix detection. To maximise reuse,
-/// the system prompt is kept completely static (no dynamic content).
-/// Phase-specific content is injected as a separate `role: "system"` message
-/// at the front of the messages array — it changes per phase but sits
-/// after the stable system prompt, so the system prefix is always cached.
+/// DeepSeek V4 preserves reasoning across tool-calling context.
+/// Two-layer design keeps V4 in tool-calling mode (no synthetic user messages):
 ///
-/// ```
-/// Layer  System prompt (static — always fully cached):
-///   1.   Base prompt + DSML schema + tools (± Think Max)
-///   2.   Conversation history     ← prefix-stable (cached)
-///   3.   Context messages         ← append-only at tail (leaves history positions untouched)
+/// Layer 1: System prompt (static — KV cached)
+/// Layer 2: Conversation history with smart-compressed old tool results
+///
+/// Turn annotations appended to the last real user message.
 /// ```
 pub fn build_context(state: &mut AgentState) -> Vec<Message> {
 
@@ -575,18 +644,6 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
 
     messages.extend(conv);
 
-    // ── Layer 3: Named context messages (diff snapshots, project:map, etc.) ──
-    // Append-only at the tail; growing here does NOT shift conversation history
-    // token positions, preserving KV cache across turns.
-    for (label, content) in &state.context_messages {
-        messages.push(Message {
-            role: "user".into(),
-            name: Some(label.clone()),
-            content: vec![dsx_types::ContentBlock::text(content)],
-        });
-    }
-
-    // Clear per-turn annotations for next round
     state.turn_annotations.clear();
 
     messages

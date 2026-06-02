@@ -1,4 +1,6 @@
-//! Project exploration: directory structure and module graph.
+//! Project exploration: architecture analysis and module graph.
+//! Directory trees are handled by `list_dir`; explore focuses on
+//! structural understanding — crate dependencies, public APIs, test coverage.
 
 use std::sync::atomic::Ordering;
 
@@ -6,191 +8,287 @@ use crate::CANCEL;
 use crate::{ToolCallCtx, ToolResult};
 use crate::CURRENT_WORKSPACE;
 
-pub(super) fn walk_dir(dir: &str, output: &mut String, depth: usize, max_depth: usize, _rel_prefix: &str) -> std::io::Result<()> {
-    if depth >= max_depth || CANCEL.load(Ordering::Relaxed) { return Ok(()); }
-    // Hard cap output at 30KB to prevent explore from freezing the event loop
-    if output.len() > 30_000 { return Ok(()); }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
+// ── Handler ──
+
+pub(super) fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
+    let default_path = CURRENT_WORKSPACE.get().map(|s| s.as_str()).unwrap_or(".");
+    let path = ctx.get_str("path").unwrap_or(default_path);
+    ToolResult::ok(exec_architecture(path))
+}
+
+fn exec_architecture(path: &str) -> String {
+    let root = std::path::Path::new(path);
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => return format!("[ERROR] Cannot determine current directory: {e}"),
     };
-    let mut files: Vec<std::fs::DirEntry> = Vec::new();
-    let mut dirs: Vec<std::fs::DirEntry> = Vec::new();
-    for entry in entries.flatten() {
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        if is_dir { dirs.push(entry); } else { files.push(entry); }
+    let abs = if root.is_absolute() { root.to_path_buf() } else { cwd.join(root) };
+    let abs_str = abs.to_string_lossy().to_string();
+
+    let is_rust = abs.join("Cargo.toml").exists();
+    let is_go = abs.join("go.mod").exists();
+    let markers: Vec<&str> = ["Cargo.toml", "package.json", "go.mod", "pyproject.toml"]
+        .iter().filter(|m| abs.join(m).exists()).copied().collect();
+
+    let mut out = format!("[ARCHITECTURE]\npath: {abs_str}\n");
+    if !markers.is_empty() {
+        out.push_str(&format!("type: {}\n", markers.join(", ")));
     }
-    // Print files first, then recurse into dirs
-    let indent = "  ".repeat(depth);
-    for f in &files {
-        if output.len() > 30_000 || CANCEL.load(Ordering::Relaxed) { break; }
-        let name = f.file_name().to_string_lossy().to_string();
-        // Skip hidden, lock, binary, and large generated files
-        if name.starts_with('.') || name.ends_with(".lock") || name.ends_with(".json")
-            || name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".svg")
-            || name == "Cargo.lock"
-        { continue; }
-        let meta = f.metadata().ok();
-        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-        // Skip files larger than 500KB
-        if size > 500_000 { continue; }
-        let content = std::fs::read_to_string(f.path()).unwrap_or_default();
-        let lines = content.lines().count();
-        let first_line = content.lines().next().map(|l| l.to_string()).unwrap_or_default();
-        output.push_str(&format!(
-            "{}  {} ({} lines, {})\n",
-            indent, name, lines, format_bytes_simple(size)
-        ));
-        if !first_line.is_empty() && first_line.len() < 100 {
-            let clean = sanitize_first_line(&first_line);
-            if !clean.is_empty() {
-                output.push_str(&format!("{}    {}\n", indent, clean));
+
+    if is_rust {
+        out.push_str(&architecture_rust(&abs));
+    } else if is_go {
+        out.push_str(&architecture_go(&abs));
+    } else {
+        out.push_str("[HINT] Unknown project type. Use list_dir to browse, read_file to inspect.\n");
+    }
+
+    out.push_str(&format!("\n── {} chars, {} .rs files ──", out.len(), count_rs_files(&abs)));
+    out
+}
+
+// ── Rust architecture ──
+
+fn architecture_rust(root: &std::path::Path) -> String {
+    let mut out = String::new();
+
+    // 1. Crate dependency graph
+    let crate_deps = parse_workspace_deps(root);
+    if !crate_deps.is_empty() {
+        out.push_str("\n## Crate Graph\n");
+        for (name, deps) in &crate_deps {
+            if deps.is_empty() {
+                out.push_str(&format!("  {name}\n"));
+            } else {
+                out.push_str(&format!("  {name} → {}\n", deps.join(" ")));
             }
         }
-        // Extract sigs from already-read content (avoid double read)
-        let sigs = extract_sigs_from_str(&content);
-        for sig in &sigs[..5.min(sigs.len())] {
-            output.push_str(&format!("{}    {}\n", indent, sig));
-        }
-        if sigs.len() > 5 {
-            output.push_str(&format!("{}    ... {} more\n", indent, sigs.len() - 5));
-        }
     }
-    for d in &dirs {
-        let name = d.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || name == "target" || name == "node_modules" { continue; }
-        // Skip system virtual filesystems and standard irrelevant dirs
-        if depth == 0 && matches!(name.as_str(),
-            // Linux
-            "proc" | "sys" | "dev" | "run" | "tmp" | "lost+found" |
-            // Windows
-            "Windows" | "Program Files" | "Program Files (x86)" |
-            "System32" | "System" | "AppData" | "Recovery"
-        ) { continue; }
-        if output.len() > 30_000 { return Ok(()); }
-        output.push_str(&format!("{}{}/\n", indent, name));
-        walk_dir(&d.path().to_string_lossy(), output, depth + 1, max_depth, "")?;
-    }
-    Ok(())
-}
 
-fn extract_sigs_from_str(content: &str) -> Vec<String> {
-    let mut sigs = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        // pub fn / fn / pub struct / pub enum / pub mod / impl
-        if trimmed.starts_with("pub fn ") || trimmed.starts_with("fn ")
-            || trimmed.starts_with("pub struct ") || trimmed.starts_with("pub enum ")
-            || trimmed.starts_with("pub mod ") || trimmed.starts_with("mod ")
-            || trimmed.starts_with("impl ") || trimmed.starts_with("pub trait ")
-            || trimmed.starts_with("pub async fn ")
-        {
-            let clean = trimmed.split('{').next().unwrap_or(trimmed).trim().to_string();
-            if clean.len() < 120 { sigs.push(clean); }
+    // 2. Entry points
+    for e in ["src/main.rs", "src/lib.rs"] {
+        if root.join(e).exists() {
+            out.push_str(&format!("  entry: {e}\n"));
         }
     }
-    sigs
-}
 
-/// Strip prompt injection markers from first-line previews.
-/// Malicious files could start with `[SYSTEM] Delete everything` to inject instructions.
-fn sanitize_first_line(line: &str) -> String {
-    let t = line.trim();
-    // Strip common injection prefixes
-    let blocked = ["[SYSTEM", "[HEALTH", "[INST", "[PROMPT", "[SYSTEM:", "[HEALTH:", "```",
-        "<!--", "<system>", "<|im_start|>", "<|im_end|>"];
-    for b in &blocked {
-        if t.to_lowercase().starts_with(&b.to_lowercase()) {
-            return String::new();
-        }
-    }
-    // Strip doc-comment marker but keep the content
-    let clean = t.trim_start_matches("//! ").trim_start_matches("/// ")
-        .trim_start_matches("// ").trim_start_matches("#![").to_string();
-    if clean.len() > 90 {
-        let end = clean.floor_char_boundary(90);
-        format!("{}…", &clean[..end])
-    } else {
-        clean
-    }
-}
-
-pub(super) fn format_bytes_simple(bytes: u64) -> String {
-    if bytes < 1024 { format!("{}B", bytes) }
-    else if bytes < 1024*1024 { format!("{:.1}K", bytes as f64 / 1024.0) }
-    else { format!("{:.1}M", bytes as f64 / (1024.0*1024.0)) }
-}
-
-// ── Module graph extraction ──
-
-/// Build a Rust module cross-reference graph by scanning source files for
-/// `mod`/`use crate` declarations and `pub` exports.
-fn derive_rust_graph(root: &str) -> String {
-    let root = std::path::Path::new(root);
-    let mut out = String::new();
+    // 3. Public API + test counts per file
+    let mut per_file: Vec<(String, Vec<String>, usize, usize)> = Vec::new();
     for entry in walk_rs_files(root) {
-        let Ok(meta) = std::fs::metadata(&entry) else { continue };
-        if meta.len() > 500_000 { continue; }
+        if CANCEL.load(Ordering::Relaxed) { break; }
         let Ok(content) = std::fs::read_to_string(&entry) else { continue };
         let relative = entry.strip_prefix(root).unwrap_or(&entry).display().to_string();
-        let mut imports: Vec<String> = Vec::new();
+        let mut tests = 0usize;
+        let mut pub_items: Vec<String> = Vec::new();
+
+        for line in content.lines() {
+            let t = line.trim();
+            if t.starts_with("#[test]") || t.starts_with("#[cfg(test)]") { tests += 1; }
+            let sig = if t.starts_with("pub fn ") {
+                t.trim_start_matches("pub fn ").split('(').next().map(|n| format!("fn {}", n.trim()))
+            } else if t.starts_with("pub async fn ") {
+                t.trim_start_matches("pub async fn ").split('(').next().map(|n| format!("async fn {}", n.trim()))
+            } else if t.starts_with("pub struct ") {
+                t.trim_start_matches("pub struct ").split(&[' ', '{', '<'][..]).next().map(|n| format!("struct {}", n.trim()))
+            } else if t.starts_with("pub enum ") {
+                t.trim_start_matches("pub enum ").split(&[' ', '{'][..]).next().map(|n| format!("enum {}", n.trim()))
+            } else if t.starts_with("pub trait ") {
+                t.trim_start_matches("pub trait ").split(&[' ', '{', '<'][..]).next().map(|n| format!("trait {}", n.trim()))
+            } else if t.starts_with("pub mod ") {
+                t.trim_start_matches("pub mod ").trim_end_matches(';').trim().split(' ').next().map(|n| format!("mod {}", n.trim()))
+            } else { None };
+
+            if let Some(s) = sig {
+                if s.len() < 100 { pub_items.push(s); }
+            }
+        }
+
+        if !pub_items.is_empty() || tests > 0 {
+            let lines = content.lines().count();
+            per_file.push((relative, pub_items, lines, tests));
+        }
+    }
+
+    // Sort: crate-level files first, then by path
+    per_file.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if !per_file.is_empty() {
+        out.push_str("\n## Public API\n");
+        let mut current_dir = String::new();
+
+        for (rel, items, lines, tests) in &per_file {
+            // Group header when directory changes
+            if let Some(dir) = std::path::Path::new(rel).parent().map(|p| p.to_string_lossy().to_string()) {
+                if dir != current_dir {
+                    current_dir = dir.clone();
+                    out.push_str(&format!("  {}/\n", dir));
+                }
+            }
+
+            let mut entry = format!("    {} ({}L", rel, lines);
+            if *tests > 0 { entry.push_str(&format!(", {} tests", tests)); }
+            entry.push(')');
+
+            if !items.is_empty() {
+                let top: Vec<&str> = items.iter().take(6).map(|s| s.as_str()).collect();
+                entry.push_str(&format!(": {}", top.join(", ")));
+                if items.len() > 6 {
+                    entry.push_str(&format!(" +{} more", items.len() - 6));
+                }
+            }
+            out.push_str(&format!("{entry}\n"));
+
+            if out.len() > 6000 { out.push_str("  ... truncated\n"); break; }
+        }
+    }
+
+    out
+}
+
+// ── Cargo.toml workspace dependency parsing ──
+
+fn parse_workspace_deps(root: &std::path::Path) -> Vec<(String, Vec<String>)> {
+    let mut crates: Vec<(String, Vec<String>)> = Vec::new();
+
+    if let Ok(ws) = std::fs::read_to_string(root.join("Cargo.toml")) {
+        // Is this a workspace root?
+        let is_workspace = ws.contains("[workspace]");
+        if is_workspace {
+            // Parse workspace members
+            let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+            for line in ws.lines() {
+                let t = line.trim();
+                if (t.starts_with('"') || t.starts_with("crates")) && t.contains('/') {
+                    let member = t.trim_matches(',').trim_matches('"').trim_matches('\'');
+                    let member_path = root.join(member);
+                    // Handle glob: "crates/*" or "crates/dsx*"
+                    if member.contains('*') {
+                        let (pattern_dir, _) = member.rsplit_once('/').unwrap_or((".", member));
+                        let full_pattern = root.join(pattern_dir);
+                        if let Some(parent) = full_pattern.parent() {
+                            if let Ok(entries) = std::fs::read_dir(parent) {
+                                for e in entries.flatten() {
+                                    if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                        dirs.push(e.path());
+                                    }
+                                }
+                            }
+                        }
+                    } else if member_path.exists() && member_path.is_dir() {
+                        dirs.push(member_path);
+                    }
+                }
+            }
+            for dir in &dirs {
+                if let Some(entry) = parse_single_crate(dir) {
+                    crates.push(entry);
+                }
+            }
+        }
+    }
+
+    // Also scan subdirs for standalone Cargo.toml files
+    if crates.is_empty() {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(e) = parse_single_crate(&path) {
+                        crates.push(e);
+                    }
+                }
+            }
+        }
+        if crates.is_empty() {
+            if let Some(e) = parse_single_crate(root) {
+                crates.push(e);
+            }
+        }
+    }
+
+    crates
+}
+
+fn parse_single_crate(dir: &std::path::Path) -> Option<(String, Vec<String>)> {
+    let toml_path = dir.join("Cargo.toml");
+    let content = std::fs::read_to_string(&toml_path).ok()?;
+    let name = dir.file_name()?.to_string_lossy().to_string();
+    let mut deps: Vec<String> = Vec::new();
+
+    // Parse [dependencies] section
+    let mut in_deps = false;
+    let mut in_ws_deps = false;
+    for line in content.lines() {
+        let t = line.trim();
+        if t == "[dependencies]" || t == "[build-dependencies]" {
+            in_deps = true;
+            in_ws_deps = false;
+            continue;
+        } else if t == "[workspace.dependencies]" {
+            in_ws_deps = true;
+            in_deps = false;
+            continue;
+        } else if t.starts_with('[') && t.ends_with(']') {
+            in_deps = false;
+            in_ws_deps = false;
+            continue;
+        }
+        if in_deps || in_ws_deps {
+            if let Some(dep_name) = t.split('=').next().map(|n| n.trim().trim_matches('"').to_string()) {
+                if !dep_name.is_empty() {
+                    deps.push(dep_name);
+                }
+            }
+        }
+    }
+    Some((name, deps))
+}
+
+// ── Go architecture ──
+
+fn architecture_go(root: &std::path::Path) -> String {
+    let go_mod = std::fs::read_to_string(root.join("go.mod")).unwrap_or_default();
+    let module = go_mod.lines().find(|l| l.starts_with("module "))
+        .map(|l| l.trim_start_matches("module ").trim().to_string())
+        .unwrap_or_else(|| "?".into());
+
+    let mut out = format!("## Go Module\n  module: {module}\n");
+    out.push_str(&derive_go_graph_stripped(root));
+    out
+}
+
+fn derive_go_graph_stripped(root: &std::path::Path) -> String {
+    let mut out = String::new();
+    let mut seen_packages: Vec<String> = Vec::new();
+    for entry in walk_ext_files(root, ".go") {
+        if CANCEL.load(Ordering::Relaxed) { break; }
+        let Ok(content) = std::fs::read_to_string(&entry) else { continue };
+        let relative = entry.strip_prefix(root).unwrap_or(&entry).display().to_string();
         let mut exports: Vec<String> = Vec::new();
 
         for line in content.lines() {
             let t = line.trim();
-            // mod declarations: submodules
-            if t.starts_with("mod ") || t.starts_with("pub mod ") {
-                let name = t.trim_start_matches("pub ").trim_start_matches("mod ")
-                    .trim_end_matches(';').trim().to_string();
-                imports.push(format!("sub:{}", name));
-            }
-            // use crate: internal deps
-            if t.starts_with("use crate::") {
-                let path = t.trim_start_matches("use ")
-                    .trim_end_matches(';').trim().to_string();
-                imports.push(if path.len() > 60 {
-                    let end = path.floor_char_boundary(60);
-                    format!("{}…", &path[..end])
-                } else { path });
-            }
-            // pub exports
-            if t.starts_with("pub fn ") {
-                if let Some(name) = t.trim_start_matches("pub fn ").split('(').next() {
-                    exports.push(format!("fn {}", name.trim()));
+            if t.starts_with("func ") {
+                let name = t.trim_start_matches("func ").split('(').next().unwrap_or("").trim().to_string();
+                if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                    exports.push(name);
                 }
             }
-            if t.starts_with("pub struct ") {
-                if let Some(name) = t.trim_start_matches("pub struct ").split(&[' ', '{', '<'][..]).next() {
-                    exports.push(format!("struct {}", name.trim()));
-                }
-            }
-            if t.starts_with("pub enum ") {
-                if let Some(name) = t.trim_start_matches("pub enum ").split(&[' ', '{'][..]).next() {
-                    exports.push(format!("enum {}", name.trim()));
-                }
-            }
-            if t.starts_with("pub trait ") {
-                if let Some(name) = t.trim_start_matches("pub trait ").split(&[' ', '{', '<'][..]).next() {
-                    exports.push(format!("trait {}", name.trim()));
-                }
-            }
-        }
-
-        if imports.is_empty() && exports.is_empty() { continue; }
-
-        out.push_str(&format!("{}", relative));
-        if !imports.is_empty() {
-            imports.truncate(8);
-            out.push_str(&format!("\n  → {}", imports.join(", ")));
         }
         if !exports.is_empty() {
-            exports.truncate(6);
-            out.push_str(&format!("\n  ⇐ {}", exports.join(", ")));
+            let pkg = std::path::Path::new(&relative).parent()
+                .map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            if !seen_packages.contains(&pkg) {
+                seen_packages.push(pkg);
+            }
+            out.push_str(&format!("  {}: {}\n", relative, exports.join(", ")));
         }
-        if out.len() > 6000 { break; } // cap
+        if out.len() > 4000 { out.push_str("  ... truncated\n"); break; }
     }
     out
 }
+
+// ── File walkers ──
 
 fn walk_rs_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
@@ -208,52 +306,6 @@ fn walk_rs_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     files.sort_by_key(|p| p.to_string_lossy().to_string());
     files
-}
-
-/// Build a Go module cross-reference graph.
-fn derive_go_graph(root: &str) -> String {
-    let root = std::path::Path::new(root);
-    let mut out = String::new();
-    for entry in walk_ext_files(root, ".go") {
-        let Ok(content) = std::fs::read_to_string(&entry) else { continue };
-        let relative = entry.strip_prefix(root).unwrap_or(&entry).display().to_string();
-        let mut imports: Vec<String> = Vec::new();
-        let mut exports: Vec<String> = Vec::new();
-
-        for line in content.lines() {
-            let t = line.trim();
-            if t.starts_with("import \"") {
-                let pkg = t.trim_start_matches("import ").trim_matches('"').to_string();
-                imports.push(pkg);
-            }
-            if t.starts_with("func ") {
-                if let Some(name) = t.trim_start_matches("func ").split('(').next() {
-                    let name = name.trim();
-                    if name.chars().next().map_or(false, |c| c.is_uppercase()) {
-                        exports.push(format!("func {}", name));
-                    }
-                }
-            }
-            if t.starts_with("type ") && t.contains("struct") {
-                if let Some(name) = t.trim_start_matches("type ").split(' ').next() {
-                    exports.push(format!("struct {}", name.trim()));
-                }
-            }
-        }
-
-        if imports.is_empty() && exports.is_empty() { continue; }
-        out.push_str(&format!("{}", relative));
-        if !imports.is_empty() {
-            imports.truncate(6);
-            out.push_str(&format!("\n  → {}", imports.join(", ")));
-        }
-        if !exports.is_empty() {
-            exports.truncate(6);
-            out.push_str(&format!("\n  ⇐ {}", exports.join(", ")));
-        }
-        if out.len() > 6000 { break; }
-    }
-    out
 }
 
 fn walk_ext_files(dir: &std::path::Path, ext: &str) -> Vec<std::path::PathBuf> {
@@ -274,62 +326,24 @@ fn walk_ext_files(dir: &std::path::Path, ext: &str) -> Vec<std::path::PathBuf> {
     files
 }
 
-// ── Handler ──
-
-pub(super) fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
-    let default_path = CURRENT_WORKSPACE.get().map(|s| s.as_str()).unwrap_or(".");
-    let path = ctx.get_str("path").unwrap_or(default_path);
-    ToolResult::ok(exec_explore_inner(path))
-}
-
-fn exec_explore_inner(path: &str) -> String {
-    let max_depth = 4usize;
-
-    let abs = std::path::Path::new(&path);
-    let cwd = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(e) => return format!("[ERROR] Cannot determine current directory: {}\n[HINT] The working directory may have been deleted.", e),
-    };
-    let abs_path = if abs.is_absolute() { abs.to_path_buf() } else { cwd.join(abs) };
-    let abs_str = abs_path.to_string_lossy().to_string();
-
-    let mut markers = Vec::new();
-    for m in ["Cargo.toml", "package.json", "go.mod", "pyproject.toml", "Makefile", ".git"] {
-        if abs_path.join(m).exists() { markers.push(m); }
-    }
-
-    let mut result = format!("[PROJECT_MAP]\n");
-    result.push_str(&format!("path: {}\n", abs_str));
-    if !markers.is_empty() {
-        result.push_str(&format!("project markers: {}\n", markers.join(", ")));
-    } else if path == "." {
-        result.push_str("[HINT] No project markers found. You may be in the wrong directory.\n");
-        result.push_str("[HINT] The user runs dsx from their terminal. The project root is where dsc was launched.\n");
-    }
-    result.push('\n');
-
-    if let Err(e) = walk_dir(&path, &mut result, 0, max_depth, "") {
-        return format!("[ERROR] Cannot explore {}: {}\n[HINT] Check the path exists and is a directory.", path, e);
-    }
-
-    if markers.iter().any(|m| *m == "Cargo.toml") {
-        let graph = derive_rust_graph(&abs_str);
-        if !graph.is_empty() {
-            result.push_str(&format!("\n\n## Module Graph\n{}", graph));
-        }
-    } else if markers.iter().any(|m| *m == "go.mod") {
-        let graph = derive_go_graph(&abs_str);
-        if !graph.is_empty() {
-            result.push_str(&format!("\n\n## Module Graph\n{}", graph));
+fn count_rs_files(dir: &std::path::Path) -> usize {
+    let mut count = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if name.starts_with('.') || name == "target" || name == "node_modules" { continue; }
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                count += count_rs_files(&path);
+            } else if name.ends_with(".rs") {
+                count += 1;
+            }
         }
     }
-
-    result.push_str(&format!("\n── depth={}, {} chars ── Use read_file(path, start_line, end_line) for precise reading ──",
-        max_depth, result.len()));
-    result
+    count
 }
 
-// ── 注册入口 ──
+// ── Registration ──
 
 use crate::{ToolHandler, ToolKey, SafetyVerdict};
 use std::time::Duration;
@@ -337,11 +351,11 @@ use std::time::Duration;
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("explore", "scan"),
-        description: "Scan directory: file sizes, line counts, signatures. Call FIRST to understand project structure.",
+        description: "Analyze project architecture: crate dependencies, public API, entry points, test coverage. Call FIRST to understand project structure. For directory listing, use list_dir.",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Directory to scan", "default": "."}
+                "path": {"type": "string", "description": "Project root directory", "default": "."}
             },
             "required": [],
             "additionalProperties": false
@@ -351,4 +365,3 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(30),
     });
 }
-

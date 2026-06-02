@@ -59,58 +59,9 @@ impl<'a> ToolResultAppender<'a> {
             tracker::track_file_written(self.state, args);
             if let Some(path) = dsx_types::arg::parse_file_arg(args) {
                 self.state.re_read_required = Some(path.clone());
-                // Push diff context with timestamp: model sees edit history
-                let label = format!("file:{}", path);
-                let ctx_lines: Vec<&str> = raw.lines().filter(|l| l.starts_with("  ") || l.starts_with("+") || l.starts_with("-")).collect();
-                if !ctx_lines.is_empty() {
-                    let ts = chrono::Local::now().format("%H:%M:%S");
-                    let entry: Vec<String> = ctx_lines.iter().map(|l| format!("[{}] {}", ts, l)).collect();
-                    self.state.append_context(&label, &entry.join("\n"));
-                }
-
-                // Append edit history log for the model to see its own changes
-                let ts = chrono::Local::now().format("%H:%M:%S");
-                let tag = crate::orchestrator::learning::doc_tag(&path);
-                let summary = extract_edit_summary(raw, &path);
-
-                let reason = serde_json::from_str::<serde_json::Value>(args)
-                    .ok()
-                    .and_then(|v| v.get("reason")
-                        .and_then(|r| r.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(String::from));
-
-                let line = if let Some(r) = reason {
-                    format!("[{}] tag:{} {} — {}  ← {}\n", ts, tag, tool_name, summary, r)
-                } else {
-                    format!("[{}] tag:{} {} — {}\n", ts, tag, tool_name, summary)
-                };
-                self.state.append_context("edit:log", &line);
-            }
-        }
-
-        // Push explore results to context for stable KV cache prefix
-        if !failed && tool_name == "explore" {
-            let lines: Vec<&str> = raw.lines().filter(|l| !l.is_empty()).take(80).collect();
-            if !lines.is_empty() {
-                self.state.push_context("project:map", &lines.join("\n"));
             }
         }
 
         !failed
-    }
-}
-
-/// Extract a concise edit summary from raw tool output.
-fn extract_edit_summary(raw: &str, path: &str) -> String {
-    let first_line = raw.lines().next().unwrap_or("");
-    if raw.contains("appended") {
-        format!("{} (append)", path)
-    } else if let Some(line_info) = first_line.strip_prefix("[OK] ") {
-        // e.g. "[OK] src/main.rs:42 +10 -5" → "src/main.rs: lines 42 (+10/-5)"
-        let short = line_info.replace(path, "").trim().trim_start_matches(':').to_string();
-        format!("{} ({})", path, short)
-    } else {
-        format!("{}", path)
     }
 }

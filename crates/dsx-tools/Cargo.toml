@@ -2,7 +2,11 @@
 name = "dsx-tools"
 version.workspace = true
 edition.workspace = true
-description = "DSX tool execution server — sandboxed IPC process"
+description = "DSX tool execution — library + standalone binary"
+
+[[bin]]
+name = "dsx-tools"
+path = "src/main.rs"
 
 [dependencies]
 dsx-types = { path = "../dsx-types" }

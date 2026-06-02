@@ -53,6 +53,10 @@ pub enum ToolsToAgent {
         action: String,
         success: bool,
         content: String,
+        #[serde(default)]
+        elapsed_ms: u64,
+        #[serde(default)]
+        output_size: usize,
     },
 
     #[serde(rename = "tool_error")]

@@ -2,10 +2,11 @@ import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 're
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { T } from './i18n'
-import type { Message } from './types'
+import type { Message, DocInfo } from './types'
 import { ChatMessage } from './components/ChatMessage'
 import { InfoPanel } from './components/InfoPanel'
 import { WorkspacePanel } from './components/WorkspacePanel'
+import { StreamIndicator } from './components/StreamIndicator'
 import { ConfigWizard } from './components/ConfigWizard'
 import { SettingsDialog } from './components/SettingsDialog'
 import { AskUserDialog } from './components/AskUserDialog'
@@ -17,11 +18,22 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [streamMode, setStreamMode] = useState<'idle' | 'think' | 'answer'>('idle')
-  const streamModeRef = useRef<'idle' | 'think' | 'answer'>('idle')
-  const setStream = (mode: 'idle' | 'think' | 'answer') => {
+  const [streamMode, setStreamMode] = useState<'idle' | 'thinking' | 'tool_calling' | 'answering'>('idle')
+  const [toolNames, setToolNames] = useState<string[]>([])
+  const [thinkingSecs, setThinkingSecs] = useState(0)
+  const thinkStartRef = useRef(0)
+  const timerRef = useRef<number | undefined>(undefined)
+  const streamModeRef = useRef<'idle' | 'thinking' | 'tool_calling' | 'answering'>('idle')
+  const setStream = (mode: 'idle' | 'thinking' | 'tool_calling' | 'answering') => {
     streamModeRef.current = mode
     setStreamMode(mode)
+    if (mode === 'thinking') {
+      thinkStartRef.current = Date.now(); setThinkingSecs(0)
+      timerRef.current = window.setInterval(() => setThinkingSecs(Math.floor((Date.now() - thinkStartRef.current) / 1000)), 200)
+    } else {
+      if (timerRef.current !== undefined) { clearInterval(timerRef.current); timerRef.current = undefined }
+    }
+    if (mode === 'idle') setToolNames([])
   }
   const [sessionId, setSessionId] = useState('')
   const [tokenUsage, setTokenUsage] = useState<{ used: number; limit: number }>({ used: 0, limit: 150000 })
@@ -44,9 +56,10 @@ export default function App() {
   const refreshSessions = useCallback(() => {
     invoke<any[]>('cmd_sessions').then(setSessions).catch(() => {})
   }, [])
-  const [taskVersion, setTaskVersion] = useState(0)
-  const [documents, setDocuments] = useState<any[]>([])
+  const [documents, setDocuments] = useState<DocInfo[]>([])
   const [recentEdits, setRecentEdits] = useState<string[]>([])
+  const [taskList, setTaskList] = useState<any[]>([])
+  const [dsmlCompat, setDsmlCompat] = useState(0)
   const [configVersion, setConfigVersion] = useState(0)
   const [leftOpen, setLeftOpen] = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
@@ -83,6 +96,7 @@ export default function App() {
   const handleDeleteAllSessions = () => {
     invoke('delete_all_sessions').then(() => {
       setMessages([]); setSessionId('')
+      setDocuments([]); setRecentEdits([])
       setCacheInfo({ hit: 0, miss: 0 })
       setTokenUsage(p => ({ ...p, used: 0 }))
       invoke('start_agent').then((r: any) => {
@@ -95,7 +109,7 @@ export default function App() {
   const handleDeleteSession = (seed: string) => {
     invoke('delete_session', { seed }).then(() => {
       refreshSessions()
-      if (sessionId === seed) { setCacheInfo({ hit: 0, miss: 0 }); setTokenUsage(p => ({ ...p, used: 0 })); setMessages([]) }
+      if (sessionId === seed) { setCacheInfo({ hit: 0, miss: 0 }); setTokenUsage(p => ({ ...p, used: 0 })); setMessages([]); setDocuments([]); setRecentEdits([]) }
     }).catch(() => {})
   }
 
@@ -103,6 +117,8 @@ export default function App() {
     restartingRef.current = true
     setIsStreaming(false)
     setMessages([])
+    setDocuments([])
+    setRecentEdits([])
     streamRef.current = { content: '', reasoning: '', toolCards: [] }
     setSessionId('')
     setCacheInfo({ hit: 0, miss: 0 })
@@ -122,6 +138,8 @@ export default function App() {
   const resumeSession = (seed: string) => {
     restartingRef.current = true
     setIsStreaming(false); setMessages([])
+    setDocuments([])
+    setRecentEdits([])
     streamRef.current = { content: '', reasoning: '', toolCards: [] }
     setSessionId(seed)
     setTokenUsage(p => ({ ...p, used: 0 }))
@@ -185,12 +203,15 @@ export default function App() {
       switch (kind) {
         case 'stream_start': {
           setIsStreaming(true)
-          setStream(p.kind === 'reasoning' ? 'think' : 'answer')
+          const k = p.kind as string
+          if (k === 'thinking') setStream('thinking')
+          else if (k === 'tool_calling') { setStream('tool_calling'); if (p.tool_names) setToolNames(p.tool_names) }
+          else setStream('answering')
           break
         }
         case 'stream_delta': {
           const delta = p.delta || ''
-          if (streamModeRef.current === 'think') streamRef.current.reasoning += delta
+          if (streamModeRef.current === 'thinking') streamRef.current.reasoning += delta
           else streamRef.current.content += delta
           rerender()
           break
@@ -201,13 +222,13 @@ export default function App() {
         }
         case 'assistant_msg': {
           const { thinking, text } = p
-          // Override streaming state with final content
+          const prevCards = [...streamRef.current.toolCards]
           streamRef.current = { content: '', reasoning: '', toolCards: [] }
           pushMsg({
             role: 'assistant' as const,
             content: text || '',
             reasoning: thinking || undefined,
-            tool_cards: streamRef.current.toolCards.length > 0 ? [...streamRef.current.toolCards] : undefined
+            tool_cards: prevCards.length > 0 ? prevCards : undefined
           })
           setStream('idle')
           break
@@ -235,17 +256,17 @@ export default function App() {
               )
             }
           }))
-          if (p.name && /^task_/.test(p.name)) setTaskVersion(v => v + 1)
           rerender()
           break
         }
         case 'turn_end': {
-          // Flush any remaining streaming content
           const finalContent = streamRef.current.content
           const finalReasoning = streamRef.current.reasoning
+          const finalCards = [...streamRef.current.toolCards]
           streamRef.current = { content: '', reasoning: '', toolCards: [] }
           if (finalContent || finalReasoning) {
-            pushMsg({ role: 'assistant' as const, content: finalContent || '', reasoning: finalReasoning || undefined })
+            pushMsg({ role: 'assistant' as const, content: finalContent || '', reasoning: finalReasoning || undefined,
+              tool_cards: finalCards.length > 0 ? finalCards : undefined })
           }
           if (p.usage) {
             setTokenUsage(prev => ({ used: (p.usage.prompt_tokens || 0) + (p.usage.completion_tokens || 0), limit: prev.limit }))
@@ -260,13 +281,11 @@ export default function App() {
           fetchBalance()
           setIsStreaming(false)
           setStream('idle')
-          setTaskVersion(v => v + 1)
           rerender()
           break
         }
         case 'done': {
           setIsStreaming(false); setStream('idle'); rerender()
-          setTaskVersion(v => v + 1)
           break
         }
         case 'error': {
@@ -299,6 +318,8 @@ export default function App() {
           }
           if (p.documents) setDocuments(p.documents)
           if (p.recent_edits) setRecentEdits(p.recent_edits)
+          if (p.tasks) setTaskList(p.tasks)
+          if (p.dsml_compat_count !== undefined) setDsmlCompat(p.dsml_compat_count)
           break
         }
         case 'shutdown_ack': {
@@ -328,7 +349,7 @@ export default function App() {
     pushMsg({ role: 'user', content: text })
     addTokens(text, true)
     streamRef.current = { content: '', reasoning: '', toolCards: [] }
-    setStream('think'); setIsStreaming(true)
+    setStream('thinking'); setIsStreaming(true)
     invoke('send_message', { text }).catch(() => setIsStreaming(false))
     setTimeout(() => inputRef.current?.focus(), 50)
   }, [input, isStreaming, connected, addTokens])
@@ -367,13 +388,6 @@ export default function App() {
             </button>
             <span className={`w-2 h-2 rounded-full ${connected ? 'bg-[var(--success)]' : 'bg-[var(--warning)]'}`} />
             {connected ? T.hpConnected : T.connecting}
-            {isStreaming && (
-              <span className={`text-[14px] px-1.5 py-0.5 rounded ${
-                streamMode === 'think' ? 'text-[var(--warning)] bg-[var(--warning)]/10' : 'text-[var(--success)] bg-[var(--success)]/10'
-              }`}>
-                {streamMode === 'think' ? '🧠 思考中' : streamMode === 'answer' ? '💬 回答中' : ''}
-              </span>
-            )}
             <div className="flex-1" />
             <button onClick={() => setRightOpen(o => !o)} className="hover:text-[var(--text)] transition-colors" title={rightOpen ? '折叠侧栏' : '展开侧栏'}>
               {rightOpen ? '▶' : '◀'}
@@ -390,6 +404,8 @@ export default function App() {
             )}
           </div>
           <div className="h-7 border-b border-[var(--border)] bg-[var(--bg-secondary)] flex items-center px-4 gap-3 text-xs text-[var(--muted)]">
+            <span>📊 {tokenUsage.used.toLocaleString()} / {((tokenUsage.used / Math.max(tokenUsage.limit, 1)) * 100).toFixed(0)}%</span>
+            {dsmlCompat > 0 && <span className="text-[var(--accent)]">DSML compat: {dsmlCompat}</span>}
           </div>
           <div className="flex-1 overflow-y-auto px-6 py-4">
             {messages.length === 0 && !isStreaming && (
@@ -398,15 +414,16 @@ export default function App() {
               </div>
             )}
             {messages.map((msg, i) => <ChatMessage key={(msg as any)._id ?? i} msg={msg} />)}
-            {isStreaming && (streamRef.current.content || streamRef.current.reasoning) &&
+            {isStreaming && (streamRef.current.content || streamRef.current.reasoning || streamRef.current.toolCards.length > 0) &&
               <ChatMessage msg={{
                 role: 'assistant',
                 content: streamRef.current.content || '',
                 reasoning: streamRef.current.reasoning || undefined,
                 tool_cards: streamRef.current.toolCards.length > 0 ? streamRef.current.toolCards : undefined
               }} />}
-            {isStreaming && !streamRef.current.content && !streamRef.current.reasoning &&
-              <div className="text-center text-[var(--muted)] text-xs py-8">{T.thinking}</div>}
+            {isStreaming && !streamRef.current.content && !streamRef.current.reasoning && !streamRef.current.toolCards.length && (
+              <StreamIndicator mode={streamMode} toolNames={toolNames} secs={thinkingSecs} />
+            )}
             <div ref={chatEnd} />
           </div>
           <div className="border-t border-[var(--border)] px-4 py-1.5 bg-[var(--bg-secondary)] flex items-center gap-2 text-[14px] text-[var(--muted)]">
@@ -442,7 +459,7 @@ export default function App() {
         </div>
         <div className={`${rightOpen ? 'w-56' : 'w-0'} border-l border-[var(--border)] bg-[var(--bg-secondary)] flex-shrink-0 overflow-hidden transition-all duration-200`}>
           <div className="w-56">
-          <WorkspacePanel sessionId={sessionId} documents={documents} recentEdits={recentEdits} />
+          <WorkspacePanel documents={documents} recentEdits={recentEdits} tasks={taskList} />
           </div>
         </div>
       </div>

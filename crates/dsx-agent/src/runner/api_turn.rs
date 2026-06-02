@@ -90,18 +90,19 @@ pub(super) fn run_api_turn(
                     log::info!("dsx-agent: streaming cancelled");
                     agent.stream_cancelled = false;
                     if stream.has_text_start || stream.has_reasoning_start {
-                        let _ = agent_tx.send(Agent2Ui::StreamEnd { msg_id: msg_id.into() });
+                        let _ = agent_tx.send(Agent2Ui::StreamEnd { msg_id: msg_id.into(), is_final: false });
                     }
-                    return Err(());
                 }
 
-                if let Some(r) = &reasoning {
-                    if !r.is_empty() {
-                        if !stream.has_reasoning_start {
-                            let _ = agent_tx.send(Agent2Ui::StreamStart {
-                                msg_id: msg_id.into(),
-                                kind: StreamKind::Reasoning,
-                            });
+
+            if let Some(r) = &reasoning {
+            if !r.is_empty() {
+                if !stream.has_reasoning_start {
+                    let _ = agent_tx.send(Agent2Ui::StreamStart {
+                        msg_id: msg_id.into(),
+                        kind: StreamKind::Thinking,
+                        tool_names: Vec::new(),
+                    });
                             stream.has_reasoning_start = true;
                         }
                         let _ = agent_tx.send(Agent2Ui::StreamDelta {
@@ -116,7 +117,8 @@ pub(super) fn run_api_turn(
                     if !stream.has_text_start {
                         let _ = agent_tx.send(Agent2Ui::StreamStart {
                             msg_id: msg_id.into(),
-                            kind: StreamKind::Text,
+                            kind: StreamKind::Answering,
+                            tool_names: Vec::new(),
                         });
                         stream.has_text_start = true;
                     }
@@ -133,7 +135,7 @@ pub(super) fn run_api_turn(
                 content, tool_calls, stop_reason, reasoning_content, usage,
             } => {
                 if stream.has_text_start || stream.has_reasoning_start {
-                    let _ = agent_tx.send(Agent2Ui::StreamEnd { msg_id: msg_id.into() });
+                    let _ = agent_tx.send(Agent2Ui::StreamEnd { msg_id: msg_id.into(), is_final: true });
                 }
                 let final_content = if !stream_content.is_empty() { stream_content } else { content };
                 let final_reasoning = if !stream_reasoning.is_empty() {

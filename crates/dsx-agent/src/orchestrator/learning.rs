@@ -7,7 +7,11 @@ use crate::agent::AgentState;
 use dsx_types::Message;
 
 pub fn post_turn_maintenance(state: &mut AgentState, _final_msg: &Message) {
-    state.tool_results.clear();
+    const MAX_TOOL_HISTORY: usize = 80;
+    let excess = state.tool_results.len().saturating_sub(MAX_TOOL_HISTORY);
+    if excess > 0 {
+        state.tool_results.drain(0..excess);
+    }
 
     state.health.context_tokens = state.tokens_used();
     state.health.context_limit = state.config.context_limit;

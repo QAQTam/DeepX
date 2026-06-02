@@ -110,7 +110,6 @@ pub fn handle_user_input(
         text: text.to_string(),
     });
 
-    agent.tool_results.clear();
     agent.tool_failures = 0;
     agent.tool_calls_this_turn = 0;
     agent.files_written_this_turn.clear();
@@ -138,40 +137,41 @@ pub fn handle_user_input(
         let a_msg_id = format!("a{}-{}", turn_num, msg_seq);
         msg_seq += 1;
 
-        let (mut content, reasoning_content, tool_calls_raw, usage, stop_reason) =
+        let (content, reasoning_content, tool_calls_raw, usage, stop_reason) =
             match run_api_turn(agent, hp, agent_tx, &a_msg_id, true) {
                 Ok(v) => v,
                 Err(()) => return,
             };
 
-        content = tool_parser::strip_fenced_code(&content);
+        let stripped = tool_parser::strip_fenced_code(&content);
 
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
 
+        let mut content = content;
         if parsed.is_empty()
-            && (content.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
-                || content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls"))
+            && (stripped.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
+                || stripped.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls"))
         {
             let (cleaned, dsml_tcs) =
-                tool_parser::parse_dsml_tool_calls(&content, &agent.tool_defs);
+                tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
             content = cleaned;
             parsed = dsml_tcs;
             agent.dsml_compat_count += parsed.len() as u32;
         }
 
         if parsed.is_empty()
-            && (content.contains("<tool_use>")
-                || content.contains("<invoke ")
-                || content.contains("<tool_calls>")
-                || content.contains("<read>")
-                || content.contains("<exec>")
-                || content.contains("<write>")
-                || content.contains("<search>"))
+            && (stripped.contains("<tool_use>")
+                || stripped.contains("<invoke ")
+                || stripped.contains("<tool_calls>")
+                || stripped.contains("<read>")
+                || stripped.contains("<exec>")
+                || stripped.contains("<write>")
+                || stripped.contains("<search>"))
         {
             let tool_names: Vec<String> =
                 agent.tool_defs.iter().map(|t| t.function.name.clone()).collect();
             let (cleaned, xml_tcs) =
-                tool_parser::parse_xml_tool_calls(&content, &tool_names);
+                tool_parser::parse_xml_tool_calls(&stripped, &tool_names);
             content = cleaned;
             parsed = xml_tcs;
             agent.dsml_compat_count += parsed.len() as u32;
@@ -216,6 +216,8 @@ pub fn handle_user_input(
             agent.stream_reasoning.clear();
 
             learning::post_turn_maintenance(agent, &assistant_msg);
+
+            super::title_gen::generate_title(agent, hp);
 
             agent.health.record_turn();
             agent.health.reset_turn();
@@ -268,7 +270,19 @@ pub fn handle_user_input(
             if parsed.len() > 1 && !parsed.iter().any(|tc| tc.function.name == "ask_user") {
             use std::thread;
             let mut handles = Vec::new();
-            for tc in &parsed {
+        let tool_names: Vec<String> = parsed.iter()
+            .filter(|tc| tc.function.name != "ask_user")
+            .map(|tc| tc.function.name.clone())
+            .collect();
+        if !tool_names.is_empty() {
+            let _ = agent_tx.send(Agent2Ui::StreamStart {
+                msg_id: a_msg_id.clone(),
+                kind: dsx_proto::StreamKind::ToolCalling,
+                tool_names: tool_names.clone(),
+            });
+        }
+
+        for tc in &parsed {
                 let name = tc.function.name.clone();
                 let args = tc.function.arguments.clone();
                 let id = tc.id.clone();
@@ -339,6 +353,11 @@ pub fn handle_user_input(
             }
         }
 
+        let _ = agent_tx.send(Agent2Ui::StreamEnd {
+            msg_id: a_msg_id.clone(),
+            is_final: false,
+        });
+
         for (name, id, args, _) in results.iter() {
             if name == "ask_user" {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
@@ -391,35 +410,37 @@ pub fn handle_user_input(
 
     let a_msg_id = format!("a{}-{}", turn_num, msg_seq);
 
-    let (mut content, reasoning_content, tool_calls_raw, usage, stop_reason) =
+    let (content, reasoning_content, tool_calls_raw, usage, stop_reason) =
         match run_api_turn(agent, hp, agent_tx, &a_msg_id, false) {
             Ok(v) => v,
             Err(()) => return,
         };
 
-    content = tool_parser::strip_fenced_code(&content);
+    let stripped = tool_parser::strip_fenced_code(&content);
     let mut post_parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
-    if content.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
-        || content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls") {
+
+    let mut content = content;
+    if stripped.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
+        || stripped.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls") {
         let (cleaned, dsml_tcs) =
-            tool_parser::parse_dsml_tool_calls(&content, &agent.tool_defs);
+            tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
         content = cleaned;
         post_parsed = dsml_tcs;
         agent.dsml_compat_count += post_parsed.len() as u32;
     }
     if post_parsed.is_empty()
-        && (content.contains("<tool_use>")
-            || content.contains("<invoke ")
-            || content.contains("<tool_calls>")
-            || content.contains("<read>")
-            || content.contains("<exec>")
-            || content.contains("<write>")
-            || content.contains("<search>"))
+        && (stripped.contains("<tool_use>")
+            || stripped.contains("<invoke ")
+            || stripped.contains("<tool_calls>")
+            || stripped.contains("<read>")
+            || stripped.contains("<exec>")
+            || stripped.contains("<write>")
+            || stripped.contains("<search>"))
     {
         let tool_names: Vec<String> =
             agent.tool_defs.iter().map(|t| t.function.name.clone()).collect();
         let (cleaned, xml_tcs) =
-            tool_parser::parse_xml_tool_calls(&content, &tool_names);
+            tool_parser::parse_xml_tool_calls(&stripped, &tool_names);
         content = cleaned;
         post_parsed = xml_tcs;
         agent.dsml_compat_count += post_parsed.len() as u32;
@@ -436,6 +457,7 @@ pub fn handle_user_input(
         });
 
         learning::post_turn_maintenance(agent, &final_assistant);
+        super::title_gen::generate_title(agent, hp);
         agent.health.record_turn();
         if let Some(ref u) = usage {
             agent.session_tokens += (u.prompt_cache_miss_tokens + u.completion_tokens) as u64;
@@ -498,6 +520,8 @@ pub fn handle_user_input(
             }
         }
 
+        super::title_gen::generate_title(agent, hp);
+
         let _ = agent_tx.send(Agent2Ui::TurnEnd {
             stop_reason: Some("tool_calls".to_string()),
             usage,
@@ -509,6 +533,8 @@ pub fn handle_user_input(
     }
 
     agent.health.reset_turn();
+
+    super::title_gen::generate_title(agent, hp);
 
     let _ = agent_tx.send(Agent2Ui::TurnEnd {
         stop_reason,

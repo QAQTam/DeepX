@@ -107,7 +107,6 @@ const ChatMessage = memo(function ChatMessage({ msg }: { msg: Message }) {
             <StreamingMarkdown content={msg.content || ''} />
           )}
         </div>
-      )}
     </div>
   )
 })
@@ -156,7 +155,9 @@ function ToolCard({ tc }: { tc: any }) {
       {isAsk && <AskBody tc={tc} />}
       {isTask && <KVBody tc={tc} icon="📋" />}
       {isWeb && <WebBody tc={tc} />}
-      {isTask && <KVBody tc={tc} icon="📋" />}
+      {isMem && <MemBody tc={tc} />}
+      {isPitfall && <PitfallBody tc={tc} />}
+      {isGit && <GitBody tc={tc} />}
       {!isExec && !isEdit && !isDiff && !isReadWrite && !isExplore && !isDir && !isSearch && !isAsk && !isTask && !isWeb && !isMem && !isPitfall && !isGit && (
         <KVBody tc={tc} />
       )}

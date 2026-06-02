@@ -13,3 +13,10 @@ export interface ToolCardEntry {
   output?: string
   success?: boolean
 }
+
+export interface DocInfo {
+  tag: string
+  path: string
+  turns_since_read: number
+  is_stale: boolean
+}

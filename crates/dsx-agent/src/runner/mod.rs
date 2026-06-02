@@ -5,6 +5,7 @@ pub mod gate_bridge;
 pub mod ui_emit;
 pub mod api_turn;
 pub mod turn;
+pub mod title_gen;
 pub mod headless;
 pub use headless::run;
 
@@ -12,7 +13,7 @@ use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, HpToAgent, Ui2Agent};
+use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, TaskInfo, HpToAgent, Ui2Agent};
 
 use crate::agent::AgentState;
 use crate::orchestrator::{maybe_save_session, learning};
@@ -35,12 +36,50 @@ fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
 }
 
 fn build_recent_edits(agent: &AgentState) -> Vec<String> {
-    agent.context_messages.iter()
-        .find(|(k, _)| k == "edit:log")
-        .map(|(_, content)| {
-            content.lines().rev().take(10).map(String::from).collect()
+    agent.tool_results.iter().rev()
+        .filter(|(name, _)| matches!(name.as_str(), "write_file" | "edit_file" | "delete_file"))
+        .take(10)
+        .map(|(name, result)| {
+            let path = result.lines().nth(1).unwrap_or("?").trim();
+            format!("{}: {}", name, path)
         })
-        .unwrap_or_default()
+        .collect()
+}
+
+fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
+    if agent.session_seed.is_empty() { return Vec::new(); }
+    let sessions_dir = std::path::PathBuf::from(dsx_types::platform::sessions_dir());
+    let mut tasks = Vec::new();
+    for entry in std::fs::read_dir(&sessions_dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !dir_name.starts_with(&agent.session_seed) { continue; }
+        let task_file = path.join("tasks-mem.md");
+        if !task_file.is_file() { continue; }
+        let Ok(content) = std::fs::read_to_string(&task_file) else { continue };
+        for line in content.lines() {
+            let trimmed = line.trim_start_matches("- ");
+            let status = if trimmed.contains("[pending]") { "pending" }
+                else if trimmed.contains("[in_progress]") { "in_progress" }
+                else if trimmed.contains("[completed]") { "completed" }
+                else if trimmed.contains("[cancelled]") { "cancelled" }
+                else { continue };
+            let task_text = trimmed
+                .replacen("[pending] ", "", 1)
+                .replacen("[in_progress] ", "", 1)
+                .replacen("[completed] ", "", 1)
+                .replacen("[cancelled] ", "", 1);
+            let (subject, description) = task_text.split_once(" — ").unwrap_or((&task_text, ""));
+            tasks.push(TaskInfo {
+                subject: subject.trim().to_string(),
+                description: description.trim().to_string(),
+                status: status.to_string(),
+            });
+        }
+        break; // only first matching session dir
+    }
+    tasks
 }
 
 pub fn run_agent_loop(
@@ -55,18 +94,20 @@ pub fn run_agent_loop(
         let _: Option<HpToAgent> = dsx_proto::read_frame(hp).ok().flatten();
     }
 
-    let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
-        hp_connected: hp_conn.is_some(),
-        session_seed: agent.session_seed.clone(),
-        context_tokens: agent.token_estimate,
-        tool_calls_total: agent.tool_calls_this_turn,
-        tool_failures: agent.tool_failures as u32,
-        current_phase: "single".to_string(),
-        streaming: false,
-        dsml_compat_count: agent.dsml_compat_count,
-        documents: build_documents(&agent),
+                let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+                    hp_connected: hp_conn.is_some(),
+                    session_seed: agent.session_seed.clone(),
+                    context_tokens: agent.token_estimate,
+                    tool_calls_total: agent.tool_calls_this_turn,
+                    tool_failures: agent.tool_failures as u32,
+                    current_phase: "single".to_string(),
+                    streaming: false,
+                    dsml_compat_count: agent.dsml_compat_count,
+                    documents: build_documents(&agent),
         recent_edits: build_recent_edits(&agent),
-    });
+        tasks: build_tasks(&agent),
+        session_title: agent.session_title.clone(),
+                });
 
     if agent.session_seed.is_empty() {
         let seed = agent.resume_seed.clone();
@@ -146,7 +187,9 @@ pub fn run_agent_loop(
                     streaming: false,
                     dsml_compat_count: agent.dsml_compat_count,
                     documents: build_documents(&agent),
-                    recent_edits: build_recent_edits(&agent),
+        recent_edits: build_recent_edits(&agent),
+        tasks: build_tasks(&agent),
+        session_title: agent.session_title.clone(),
                 });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
@@ -214,7 +257,9 @@ pub fn run_agent_loop(
                     streaming: false,
                     dsml_compat_count: agent.dsml_compat_count,
                     documents: build_documents(&agent),
-                    recent_edits: build_recent_edits(&agent),
+        recent_edits: build_recent_edits(&agent),
+        tasks: build_tasks(&agent),
+        session_title: agent.session_title.clone(),
                 });
                 if cmd == "dump_context" {
                     let json = serde_json::to_string_pretty(&agent.ctx.to_vec())

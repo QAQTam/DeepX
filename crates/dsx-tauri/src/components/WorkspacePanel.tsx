@@ -1,15 +1,15 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { T } from '../i18n'
+import type { DocInfo } from '../types'
 
 interface WorkspacePanelProps {
-  sessionId: string
-  documents: any[]
+  documents: DocInfo[]
   recentEdits: string[]
+  tasks: Task[]
 }
 
 interface Task {
-  seed: string
   subject: string
   description: string
   status: string
@@ -25,17 +25,12 @@ const statusLabel: Record<string, string> = {
 const taskStatusColor = (s: string) =>
   s === 'in_progress' ? 'var(--accent)' : s === 'completed' ? 'var(--success)' : s === 'cancelled' ? 'var(--error)' : 'var(--warning)'
 
-export function WorkspacePanel({ sessionId, documents, recentEdits }: WorkspacePanelProps) {
-  const [tasks, setTasks] = useState<Task[]>([])
+export function WorkspacePanel({ documents, recentEdits, tasks }: WorkspacePanelProps) {
   const [workspacePath, setWorkspacePath] = useState<string | null>(null)
   const [dirEntries, setDirEntries] = useState<{ name: string; is_dir: boolean; size: number }[] | null>(null)
   const [showTasks, setShowTasks] = useState(true)
   const [showDocs, setShowDocs] = useState(true)
   const [showEdits, setShowEdits] = useState(true)
-
-  useEffect(() => {
-    invoke<Task[]>('list_tasks').then(t => setTasks(t || [])).catch(() => {})
-  }, [sessionId])
 
   useEffect(() => {
     invoke<string>('get_workspace').then(p => { setWorkspacePath(p); refreshDir(p) }).catch(() => {})
@@ -56,8 +51,6 @@ export function WorkspacePanel({ sessionId, documents, recentEdits }: WorkspaceP
       }
     } catch { /* dialog cancelled */ }
   }
-
-  const filteredTasks = sessionId ? tasks.filter(t => t.seed === sessionId) : tasks
 
   return (
     <div className="h-full flex flex-col text-base overflow-y-auto">
@@ -117,19 +110,30 @@ export function WorkspacePanel({ sessionId, documents, recentEdits }: WorkspaceP
       <div className="p-3 border-b border-[var(--border)]">
         <button onClick={() => setShowTasks(v => !v)}
           className="w-full flex items-center justify-between font-medium text-[var(--text-h)] text-base mb-2">
-          <span>任务</span>
+          <span>任务 ({tasks.length})</span>
           <span className="text-[14px] text-[var(--muted)]">{showTasks ? '▾' : '▸'}</span>
         </button>
         {showTasks && (
-          filteredTasks.length === 0 ? (
+          tasks.length === 0 ? (
             <div className="text-[13px] text-[var(--muted)]">暂无任务</div>
           ) : (
-            <div className="space-y-1 max-h-48 overflow-y-auto">
-              {filteredTasks.map((t, i) => (
-                <div key={i} className="px-2 py-1.5 rounded-md bg-[var(--bg-tertiary)] border border-[var(--border)]">
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-[var(--text-h)] text-[13px] truncate">{t.subject}</span>
-                    <span className="text-[13px] px-1 py-0.5 rounded font-medium shrink-0"
+            <div className="space-y-1.5 max-h-56 overflow-y-auto">
+              {tasks.map((t, i) => (
+                <div key={i} className={`px-3 py-2 rounded-lg border transition-all duration-300 ${
+                  t.status === 'in_progress' ? 'bg-[var(--accent)]/5 border-[var(--accent)]/30' :
+                  t.status === 'completed' ? 'bg-[var(--success)]/5 border-[var(--success)]/30 opacity-80' :
+                  t.status === 'cancelled' ? 'bg-[var(--error)]/5 border-[var(--error)]/20 opacity-60 line-through' :
+                  'bg-[var(--bg-tertiary)] border-[var(--border)]'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`shrink-0 text-sm ${
+                      t.status === 'in_progress' ? 'animate-spin' : ''}`}>
+                      {t.status === 'completed' ? '✓' :
+                       t.status === 'in_progress' ? '⟳' :
+                       t.status === 'cancelled' ? '✗' : '○'}
+                    </span>
+                    <span className="text-[var(--text-h)] text-[15px] font-medium truncate">{t.subject}</span>
+                    <span className="text-[13px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ml-auto"
                       style={{ color: taskStatusColor(t.status), background: `${taskStatusColor(t.status)}15` }}>
                       {statusLabel[t.status] || t.status}
                     </span>
