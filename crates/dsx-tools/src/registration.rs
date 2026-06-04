@@ -19,7 +19,6 @@ use super::file_glob;
 use super::file_diff;
 use super::task;
 use super::ask;
-use super::git;
 
 
 /// 构造并注册全部工具 handler，返回初始化后的 ToolManager。
@@ -49,9 +48,6 @@ pub fn build_tool_manager() -> ToolManager {
 
     // ── 用户交互 ──
     ask::register(&mut mgr);
-
-    // ── Git 操作 ──
-    git::register(&mut mgr);
 
     mgr
 }

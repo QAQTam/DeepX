@@ -62,17 +62,22 @@ export default function App() {
   }, [])
 
   // ── Stream mode management ──
+  const startThinkingTimer = useCallback(() => {
+    thinkStartRef.current = Date.now()
+    setThinkingSecs(0)
+    if (timerRef.current) clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => setThinkingSecs(Math.floor((Date.now() - thinkStartRef.current) / 1000)), 200)
+  }, [])
+
+  const stopThinkingTimer = useCallback(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+  }, [])
+
   const setStream = useCallback((mode: 'idle' | 'thinking' | 'tool_calling' | 'answering') => {
     setStreamMode(mode)
-    if (mode === 'thinking') {
-      thinkStartRef.current = Date.now()
-      setThinkingSecs(0)
-      timerRef.current = setInterval(() => setThinkingSecs(Math.floor((Date.now() - thinkStartRef.current) / 1000)), 200)
-    } else {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
-    }
+    if (mode !== 'thinking') stopThinkingTimer()
     if (mode === 'idle') setToolNames([])
-  }, [])
+  }, [stopThinkingTimer])
 
   // ── Rerender throttle (RAF) ──
   const rafPendingRef = useRef(false)
@@ -85,6 +90,18 @@ export default function App() {
     })
   }, [])
 
+  // ── Auto-start agent on launch ──
+  useEffect(() => {
+    if (checkDone && config && !agent.state.connected && agent.state.status === 'idle') {
+      agent.start()
+    }
+  }, [checkDone, config, agent.state.connected, agent.state.status, agent.start])
+
+  // ── Auto-scroll chat to bottom ──
+  useEffect(() => {
+    msgEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, streamMode])
+
   // ── Event handlers (supplement useAgent) ──
   useEffect(() => {
     const unlist = listen<Record<string, unknown>>('agent-event', (e) => {
@@ -92,6 +109,18 @@ export default function App() {
       if (!p || typeof p.type !== 'string') return
 
       switch (p.type) {
+        case 'stream_start': {
+          const kind = p.kind as string
+          if (kind === 'thinking') {
+            setStream('thinking')
+            startThinkingTimer()
+          } else if (kind === 'tool_calling') {
+            setStream('tool_calling')
+          } else if (kind === 'answering') {
+            setStream('answering')
+          }
+          break
+        }
         case 'assistant_msg': {
           const thinking = (p.thinking || '') as string
           const text = (p.text || '') as string
@@ -174,6 +203,14 @@ export default function App() {
           pushMsg({ role: 'assistant', content: `\u26a0 ${(p as any).message || 'Agent error'}` })
           setStream('idle')
           rerender()
+          break
+        }
+        case 'tool_notice': {
+          const level = (p as any).level as string
+          const msg = (p as any).message as string || ''
+          if (level === 'warn' || level === 'error') {
+            pushMsg({ role: 'system', content: `\u26a0\uFE0F ${msg}` })
+          }
           break
         }
       }
@@ -261,7 +298,7 @@ export default function App() {
                 cache={cacheInfo}
                 balance={balance.balance}
                 sessionId={agent.state.sessionId || ''}
-                sessions={session.sessions}
+                sessions={agent.state.sessions}
                 auditLog={auditLog}
                 toolBatch={null}
                 toolNames={toolNames}

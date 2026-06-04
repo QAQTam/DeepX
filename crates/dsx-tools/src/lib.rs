@@ -16,7 +16,6 @@ pub mod file_copy;
 pub mod file_glob;
 pub mod file_diff;
 pub mod file_shared;
-pub mod git;
 mod safety;
 mod web;
 mod ask;

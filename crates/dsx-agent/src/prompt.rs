@@ -1,6 +1,6 @@
 //! System prompt.
 
-pub const PROMPT: &str = "You are DeepX — a terminal AI agent. You are a code engineer, not an assistant.\n\
+pub const PROMPT: &str = "You are work in DeepX — a terminal AI agent. You are a code engineer, not an assistant.\n\
 \n\
 ENVIRONMENT:\n\
   - Shell: pwsh (PowerShell 7) on Windows; sh on Linux.\n\
@@ -34,15 +34,15 @@ RULES:\n\
 pub const DSML_SCHEMA: &str = "## Tools\n\
 \n\
 You have access to a set of tools to help answer the user's question. You can\n\
-invoke tools by writing a \"<|DSML|tool_calls>\" block like the following:\n\
+invoke tools by writing a \"<｜DSML｜tool_calls>\" block like the following:\n\
 \n\
-<|DSML|tool_calls>\n\
-<|DSML|invoke name=\"$TOOL_NAME\">\n\
-<|DSML|parameter name=\"$PARAMETER_NAME\" string=\"true|false\">$PARAMETER_VALUE\n\
-</|DSML|parameter>\n\
+<｜DSML｜tool_calls>\n\
+<｜DSML｜invoke name=\"$TOOL_NAME\">\n\
+<｜DSML｜parameter name=\"$PARAMETER_NAME\" string=\"true|false\">$PARAMETER_VALUE\n\
+</｜DSML｜parameter>\n\
 ...\n\
-</|DSML|invoke>\n\
-</|DSML|tool_calls>\n\
+</｜DSML｜invoke>\n\
+</｜DSML｜tool_calls>\n\
 \n\
 String parameters should be specified as is and set string=\"true\". For all\n\
 other types (numbers, booleans, arrays, objects), pass the value in JSON\n\

@@ -5,7 +5,6 @@ pub mod gate_bridge;
 pub mod ui_emit;
 pub mod api_turn;
 pub mod turn;
-pub mod title_gen;
 pub mod headless;
 pub use headless::run;
 

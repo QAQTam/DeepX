@@ -147,13 +147,24 @@ pub fn handle_user_input(
         let stripped = tool_parser::strip_fenced_code(&content);
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
         let mut content = content;
+        let mut dsml_detected = false;
+        let mut dsml_source: Vec<bool> = Vec::new();
+
         if parsed.is_empty() && tool_parser::has_dsml(&stripped)
         {
+            dsml_detected = true;
             let (cleaned, dsml_tcs) =
                 tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
-            content = cleaned;
-            parsed = dsml_tcs;
-            agent.dsml_compat_count += parsed.len() as u32;
+            if !dsml_tcs.is_empty() {
+                content = cleaned;
+                parsed = dsml_tcs;
+                dsml_source = vec![true; parsed.len()];
+            } else {
+                let _ = agent_tx.send(Agent2Ui::ToolNotice {
+                    message: "DSML detected but no valid tool calls found.".into(),
+                    level: "warn".into(),
+                });
+            }
         }
         if parsed.is_empty()
             && (stripped.contains("<tool_use>")
@@ -170,7 +181,9 @@ pub fn handle_user_input(
                 tool_parser::parse_xml_tool_calls(&stripped, &tool_names);
             content = cleaned;
             parsed = xml_tcs;
-            agent.dsml_compat_count += parsed.len() as u32;
+            if dsml_detected {
+                dsml_source = vec![false; parsed.len()];
+            }
         }
 
         let has_tools = !parsed.is_empty();
@@ -197,8 +210,6 @@ pub fn handle_user_input(
             }
 
             if content.trim().is_empty() {
-                agent.stream_content.clear();
-                agent.stream_reasoning.clear();
                 agent.turn_annotations.push(
                     "[System] You produced reasoning but no visible response. Summarize your findings now."
                         .to_string(),
@@ -206,12 +217,7 @@ pub fn handle_user_input(
                 continue;
             }
 
-            agent.stream_content.clear();
-            agent.stream_reasoning.clear();
-
             learning::post_turn_maintenance(agent, &assistant_msg);
-
-            super::title_gen::generate_title(agent, hp);
 
             agent.health.record_turn();
             agent.health.reset_turn();
@@ -334,6 +340,18 @@ pub fn handle_user_input(
             }
             emit_tool_result(agent_tx, id, tr_content, tr_success, None);
 
+            if tc_idx < dsml_source.len() && dsml_source[tc_idx] {
+                if tr_success {
+                    agent.dsml_compat_count += 1;
+                } else {
+                    let short = tr_content.chars().take(120).collect::<String>();
+                    let _ = agent_tx.send(Agent2Ui::ToolNotice {
+                        message: format!("DSML tool '{name}' failed: {short}"),
+                        level: "error".into(),
+                    });
+                }
+            }
+
             if !failed && name == "write_file" {
                 tracker::track_file_written(agent, args);
             }
@@ -406,8 +424,6 @@ pub fn handle_user_input(
     }
 
     agent.health.reset_turn();
-
-    super::title_gen::generate_title(agent, hp);
 
     let _ = agent_tx.send(Agent2Ui::TurnEnd {
         stop_reason: Some("cancelled".to_string()),

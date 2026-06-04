@@ -956,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "dsx"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "dsx-agent",
  "dsx-gate",
@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "dsx-agent"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "dsx-gate"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "anyhow",
  "dsx-proto",
@@ -995,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "dsx-proto"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "dsx-types",
  "serde",
@@ -1004,7 +1004,7 @@ dependencies = [
 
 [[package]]
 name = "dsx-tauri"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "dsx-proto",
  "dsx-types",
@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "dsx-tools"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "dsx-proto",
  "dsx-types",
@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "dsx-tui"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "dsx-types"
-version = "4.1.0"
+version = "4.2.0"
 dependencies = [
  "serde",
  "serde_json",

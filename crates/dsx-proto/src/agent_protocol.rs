@@ -184,6 +184,14 @@ pub enum Agent2Ui {
     #[serde(rename = "error")]
     Error { message: String },
 
+    /// Tool call notice — DSML/XML compatibility warnings.
+    #[serde(rename = "tool_notice")]
+    ToolNotice {
+        message: String,
+        /// "warn" or "error"
+        level: String,
+    },
+
     #[serde(rename = "balance")]
     Balance {
         is_available: bool,

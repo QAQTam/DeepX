@@ -4,7 +4,7 @@
 //! OpenAI's chat completion format. The endpoint is DeepSeek's
 //! OpenAI-compatible API at `https://api.deepseek.com/chat/completions`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use dsx_types::{ContentBlock, Message, ToolDef, UsageInfo};
@@ -144,6 +144,8 @@ pub async fn chat_stream(
     let mut text_buf = String::new();
     let mut reasoning_buf = String::new();
     let mut tool_acc: HashMap<usize, (String, String, String)> = HashMap::new();
+    let mut dsml_buf: String = String::new();
+    let mut dsml_seen: HashSet<String> = HashSet::new();
     let mut usage_info: Option<UsageInfo> = None;
     let mut stop_reason: Option<String> = None;
 
@@ -195,7 +197,31 @@ pub async fn chat_stream(
                         if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
                             let t = text.to_string();
                             text_buf.push_str(&t);
-                            let _ = tx.send(StreamEvent::ContentDelta(t)).await;
+                            let _ = tx.send(StreamEvent::ContentDelta(t.clone())).await;
+
+                            dsml_buf.push_str(&t);
+                            let mut search_from = 0usize;
+                            while let Some(start) = dsml_buf[search_from..].find("<｜DSML｜invoke name=\"") {
+                                let abs_start = search_from + start;
+                                let after_tag = abs_start + "<｜DSML｜invoke name=\"".len();
+                                if let Some(rest) = dsml_buf.get(after_tag..) {
+                                    if let Some(quote_end) = rest.find('"') {
+                                        let name = rest[..quote_end].to_string();
+                                        if dsml_seen.insert(name.clone()) {
+                                            let idx = dsml_seen.len() - 1;
+                                            let _ = tx.send(StreamEvent::ToolCallProgress {
+                                                index: idx,
+                                                id: format!("dsml_tc_{}", idx),
+                                                name,
+                                                args_so_far: String::new(),
+                                            }).await;
+                                        }
+                                        search_from = after_tag + quote_end + 1;
+                                        continue;
+                                    }
+                                }
+                                break;
+                            }
                         }
 
                         if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str()) {

@@ -13,11 +13,13 @@ use super::gate_bridge::read_hp_frame;
 struct StreamState {
     has_text_start: bool,
     has_reasoning_start: bool,
+    has_tool_call_start: bool,
+    dsml_tool_names: Vec<String>,
 }
 
 impl StreamState {
     fn new() -> Self {
-        Self { has_text_start: false, has_reasoning_start: false }
+        Self { has_text_start: false, has_reasoning_start: false, has_tool_call_start: false, dsml_tool_names: Vec::new() }
     }
 }
 
@@ -129,7 +131,21 @@ pub(super) fn run_api_turn(
                     stream_content.push_str(&delta);
                 }
             }
-            dsx_proto::HpToAgent::ToolProgress { .. } => {
+            dsx_proto::HpToAgent::ToolProgress { ref name, .. } => {
+                if !name.is_empty() {
+                    if !stream.has_tool_call_start {
+                        stream.has_tool_call_start = true;
+                        stream.dsml_tool_names.clear();
+                    }
+                    if !stream.dsml_tool_names.contains(name) {
+                        stream.dsml_tool_names.push(name.clone());
+                    }
+                    let _ = agent_tx.send(Agent2Ui::StreamStart {
+                        msg_id: msg_id.into(),
+                        kind: StreamKind::ToolCalling,
+                        tool_names: stream.dsml_tool_names.clone(),
+                    });
+                }
             }
             dsx_proto::HpToAgent::ApiResponse {
                 content, tool_calls, stop_reason, reasoning_content, usage,
@@ -143,8 +159,6 @@ pub(super) fn run_api_turn(
                 } else {
                     reasoning_content
                 };
-                agent.stream_reasoning.clear();
-                agent.stream_content.clear();
                 return Ok((
                     final_content,
                     final_reasoning,

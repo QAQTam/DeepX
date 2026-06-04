@@ -851,6 +851,11 @@ impl App {
                 self.push_msg(ChatRole::Status, &status_text);
                 self.status = status_text;
             }
+            Agent2Ui::ToolNotice { ref message, ref level } => {
+                let prefix = if level == "error" { "\u{26a0}" } else { "\u{2139}" };
+                let text = format!("{prefix} {message}");
+                self.push_msg(ChatRole::Status, &text);
+            }
             Agent2Ui::Done => {
                 self.status = self.setup.lang.t_chat_ready().to_string();
                 self.streaming = false;
