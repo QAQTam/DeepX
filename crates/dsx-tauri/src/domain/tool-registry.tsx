@@ -239,18 +239,4 @@ registerTool({
   },
 })
 
-registerTool({
-  toolName: [
-    'git_checkpoint', 'git_status', 'git_diff', 'git_log', 'git_commit',
-    'git_push', 'git_pull', 'git_fetch', 'git_branch', 'git_checkout',
-    'git_reset', 'git_stash', 'git_restore', 'git_merge', 'git_init', 'git_remote',
-  ],
-  icon: '⎇',
-  label: 'Git',
-  renderHeader: ctx => {
-    const a = parseArgs(ctx.args)
-    const action = a.action || ''
-    const name = ctx.name.replace('git_', '')
-    return <span>{action ? `${name} ${action}` : name}</span>
-  },
-})
+
