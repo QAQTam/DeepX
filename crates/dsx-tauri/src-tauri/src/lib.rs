@@ -186,6 +186,13 @@ fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) -> Join
                                 "ask_user" | "balance" | "session_restored" |
                                 "debug_snapshot" | "shutdown_ack" |
                                 "audit_record" => {
+                                    if kind == "session_restored" {
+                                        if let Some(seed) = v["seed"].as_str() {
+                                            if let Ok(mut guard) = app.state::<AgentState>().session_seed.lock() {
+                                                *guard = Some(seed.to_string());
+                                            }
+                                        }
+                                    }
                                     let _ = app.emit("agent-event", v);
                                 }
                                 _ => {}
@@ -251,6 +258,7 @@ fn scan_sessions() -> Vec<serde_json::Value> {
     let mut sessions = Vec::new();
     if !dir.is_dir() { return sessions; }
     if let Ok(entries) = std::fs::read_dir(&dir) {
+        let mut seen = std::collections::HashSet::new();
         for entry in entries.flatten() {
             let path = entry.path();
             let fname = entry.file_name().to_string_lossy().to_string();
@@ -264,7 +272,11 @@ fn scan_sessions() -> Vec<serde_json::Value> {
                                 let count = meta["messages"].as_array().map(|a| a.len()).unwrap_or(0);
                                 meta["message_count"] = serde_json::json!(count);
                             }
-                            sessions.push(meta);
+                            if let Some(seed) = meta.get("seed").and_then(|s| s.as_str()) {
+                            if seen.insert(seed.to_string()) {
+                                sessions.push(meta);
+                            }
+                        }
                         }
                     }
                 }
@@ -281,7 +293,11 @@ fn scan_sessions() -> Vec<serde_json::Value> {
                                 let count = meta["messages"].as_array().map(|a| a.len()).unwrap_or(0);
                                 meta["message_count"] = serde_json::json!(count);
                             }
-                            sessions.push(meta);
+                            if let Some(seed) = meta.get("seed").and_then(|s| s.as_str()) {
+                            if seen.insert(seed.to_string()) {
+                                sessions.push(meta);
+                            }
+                        }
                         }
                     }
                 }
@@ -325,7 +341,7 @@ fn load_session_messages(seed: String) -> Result<serde_json::Value, String> {
     let data = file_data.ok_or_else(|| format!("Session not found: {seed}"))?;
     let file: dsx_types::SessionFile = serde_json::from_str(&data)
         .map_err(|e| format!("Parse session: {e}"))?;
-    Ok(session_to_frontend(&file))
+    Ok(serde_json::json!({ "messages": session_to_frontend(&file) }))
 }
 
 fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
@@ -400,7 +416,10 @@ fn start_agent(app: AppHandle, state: tauri::State<AgentState>) -> Result<serde_
 
 fn start_agent_inner(app: &AppHandle, state: &AgentState) -> Result<serde_json::Value, String> {
     if state.stdin.lock().map_err(|e| format!("lock: {e}"))?.is_some() {
-        return Err("Agent already started".to_string());
+        // Already running — restart without a seed to create a fresh session
+        restart_agent_inner(app, state, None)?;
+        let sessions = scan_sessions();
+        return Ok(serde_json::json!({"ok": true, "sessions": sessions}));
     }
     let dsx_path = find_dsx(&app)?;
     log::info!("dsx binary: {dsx_path}");

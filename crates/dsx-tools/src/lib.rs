@@ -12,7 +12,6 @@ pub mod file_list_dir;
 pub mod file_search;
 pub mod file_delete;
 pub mod file_move;
-pub mod file_copy;
 pub mod file_glob;
 pub mod file_diff;
 pub mod file_shared;
@@ -64,7 +63,7 @@ pub fn set_workspace(path: &str) {
 
 // ── ToolKey ──
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ToolKey {
     pub name: String,
     pub action: String,

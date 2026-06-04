@@ -2,7 +2,7 @@
 // Manages agent lifecycle: start → connect → stream → done.
 // Extracts 150+ lines from App.tsx.
 
-import { useReducer, useCallback, useRef, useEffect } from 'react'
+import { useReducer, useCallback, useRef, useEffect, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { api } from '../bridge/tauri'
 import {
@@ -22,6 +22,7 @@ export interface AgentHandle {
   send: (text: string) => void
   dispatch: (action: AgentAction) => void
   isStreaming: boolean
+    statusChecked: boolean
   streamContent: string
   streamReasoning: string
   streamToolCards: ToolCardEntry[]
@@ -29,6 +30,7 @@ export interface AgentHandle {
 
 export function useAgent(): AgentHandle {
   const [state, dispatch] = useReducer(agentReducer, null, createInitialState)
+  const [statusChecked, setStatusChecked] = useState(false)
   const restartRef = useRef(0)
 
   // ── Event stream listener ──
@@ -88,7 +90,7 @@ export function useAgent(): AgentHandle {
       if (s.running) {
         dispatch({ type: 'CONNECTED', seed: s.seed || '', sessions: [] })
       }
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => setStatusChecked(true))
   }, [])
 
   // ── Commands ──
@@ -135,5 +137,6 @@ export function useAgent(): AgentHandle {
     streamContent: state.stream.content,
     streamReasoning: state.stream.reasoning,
     streamToolCards: state.stream.toolCards,
+    statusChecked,
   }
 }

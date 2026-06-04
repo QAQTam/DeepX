@@ -38,7 +38,7 @@ export function useSession(): UseSessionReturn {
 
   const loadMessages = useCallback(async (seed: string) => {
     const res = await api.loadSessionMessages(seed)
-    return res.messages
+    return Array.isArray(res) ? res : (res as any).messages ?? []
   }, [])
 
   return { sessions, loading, refresh, deleteSession, deleteAll, loadMessages }

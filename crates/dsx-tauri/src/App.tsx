@@ -23,12 +23,13 @@ export default function App() {
   const agent = useAgent()
   const session = useSession()
   const balance = useBalance()
+  const { setBalance } = balance
   const docs = useDocuments()
   const { addToast } = useToast()
 
   // ── UI state (view-only) ──
   const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState('')
+  // input is now uncontrolled via inputRef
   const [thinkingSecs, setThinkingSecs] = useState(0)
   const [tokenUsage, setTokenUsage] = useState({ used: 0, limit: 150000 })
   const [cacheInfo, setCacheInfo] = useState({ hit: 0, miss: 0 })
@@ -45,6 +46,8 @@ export default function App() {
   const msgEndRef = useRef<HTMLDivElement>(null)
   const thinkStartRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const loadMessagesRef = useRef(session.loadMessages)
+  loadMessagesRef.current = session.loadMessages
 
   // ── Derived from useAgent (single source of truth) ──
   const connected = agent.state.connected
@@ -77,12 +80,19 @@ export default function App() {
     })
   }, [])
 
+  // ── Sync context limit from loaded config ──
+  useEffect(() => {
+    if (config?.context_limit) {
+      setTokenUsage(prev => prev.limit === config.context_limit ? prev : { ...prev, limit: config.context_limit! })
+    }
+  }, [config])
+
   // ── Auto-start agent on launch ──
   useEffect(() => {
-    if (checkDone && config && !agent.state.connected && agent.state.status === 'idle') {
+    if (checkDone && config && agent.statusChecked && !agent.state.connected && agent.state.status === 'idle') {
       agent.start()
     }
-  }, [checkDone, config, agent.state.connected, agent.state.status, agent.start])
+  }, [checkDone, config, agent.statusChecked, agent.state.connected, agent.state.status, agent.start])
 
   // ── Thinking timer sync with agent stream kind ──
   useEffect(() => {
@@ -143,9 +153,9 @@ export default function App() {
                 cards.push({ id: toolId, name, args: argsDisplay, body })
                 msgs[i] = { ...msgs[i], tool_cards: cards }
                 return msgs
-              }
-            }
-            return msgs
+                  }
+                }
+                return msgs
           })
           rerender()
           break
@@ -196,11 +206,23 @@ export default function App() {
           break
         }
         case 'balance': {
-          balance.refresh((p as any).api_key || config?.api_key || '')
+          const tb = (p as any).total_balance as string
+          const cur = (p as any).currency as string
+          if (tb && cur) {
+            setBalance(`${tb} ${cur}`)
+          }
           break
         }
         case 'session_restored': {
           setTokenUsage(prev => ({ ...prev, used: (p as any).tokens_used || prev.used }))
+          // Load historical messages into chat
+          const seed = (p as any).seed as string
+          if (seed) {
+            setMessages([])
+            loadMessagesRef.current(seed).then(msgs => {
+              setMessages((msgs as Message[]) || [])
+            }).catch(() => { setMessages([]) })
+          }
           break
         }
         case 'debug_snapshot': {
@@ -208,7 +230,18 @@ export default function App() {
             documents: (p as any).documents,
             recent_edits: (p as any).recent_edits,
             tasks: (p as any).tasks,
-          })
+            })
+            // Update cache info from snapshot (real-time during tool execution)
+            const hit = (p as any).prompt_cache_hit_tokens
+            const miss = (p as any).prompt_cache_miss_tokens
+            if (typeof hit === 'number' && typeof miss === 'number') {
+              setCacheInfo({ hit, miss })
+            }
+            // Update token usage from snapshot (real-time during tool execution)
+            const ctx = (p as any).context_tokens
+            if (typeof ctx === 'number' && ctx > 0) {
+              setTokenUsage(prev => ({ ...prev, used: ctx }))
+            }
           if (typeof (p as any).dsml_compat_count === 'number') {
             setDsmlCount((p as any).dsml_compat_count as number)
           }
@@ -231,7 +264,7 @@ export default function App() {
         }
       }
     })
-    return () => { unlist.then(fn => fn()).catch(() => {}) }
+    return () => { unlist.then(fn => fn()).catch(() => { setMessages([]) }) }
   }, [config, pushMsg, addTokens, rerender, balance, docs, addToast])
 
   // ── Auto-focus ──
@@ -239,15 +272,14 @@ export default function App() {
 
   // ── Send message ──
   const send = useCallback(() => {
-    if (!input.trim() || isStreaming || !connected) return
-    const text = input.trim()
-    setInput('')
+    const text = inputRef.current?.value?.trim()
+    if (!text || isStreaming || !connected) return
+    inputRef.current.value = ''
     pushMsg({ role: 'user', content: text })
     addTokens(text)
     agent.send(text)
     setTimeout(() => inputRef.current?.focus(), 50)
-  }, [input, isStreaming, connected, pushMsg, addTokens, agent])
-
+  }, [isStreaming, connected, pushMsg, addTokens, agent])
   // ── Ask answer submit ──
   const submitAskAnswer = useCallback(() => {
     if (!askUser) return
@@ -313,7 +345,7 @@ export default function App() {
                 cache={cacheInfo}
                 balance={balance.balance}
                 sessionId={agent.state.sessionId || ''}
-                sessions={agent.state.sessions}
+                  sessions={session.sessions}
                 auditLog={auditLog}
                 toolBatch={null}
                 toolNames={streamToolNames}
@@ -354,9 +386,7 @@ export default function App() {
               <div className="flex items-end gap-2 max-w-3xl mx-auto">
                 <textarea
                   ref={inputRef}
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  onKeyDown={handleKey}
+                  defaultValue=""
                   rows={1}
                   placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
                   disabled={!connected || isStreaming}
@@ -365,7 +395,7 @@ export default function App() {
                 />
                 <button
                   onClick={send}
-                  disabled={!connected || isStreaming || !input.trim()}
+                  disabled={!connected || isStreaming}
                   className="shrink-0 w-9 h-9 rounded-xl bg-[var(--accent)] text-white flex items-center justify-center hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                   aria-label="发送"
                 >

@@ -15,6 +15,7 @@ use crate::tool_parser;
 
 use super::api_turn::run_api_turn;
 use super::ui_emit::{build_and_push_assistant, make_tool_def, emit_tool_result};
+use super::{build_documents, build_recent_edits, build_tasks, cache_tokens};
 
 /// Process a pending ask_user reply, pushing the user's text as a tool result.
 fn process_ask_user_response(agent: &mut AgentState, text: &str) -> bool {
@@ -339,6 +340,13 @@ pub fn handle_user_input(
                 appender.append(name, id, args, tr_content);
             }
             emit_tool_result(agent_tx, id, tr_content, tr_success, None);
+            // Emit audit record for InfoPanel real-time tool log
+            let summary = tr_content.lines().next().unwrap_or(tr_content);
+            let _ = agent_tx.send(Agent2Ui::AuditRecord {
+                tool_name: name.clone(),
+                result_summary: summary.chars().take(120).collect(),
+                success: tr_success,
+            });
 
             if tc_idx < dsml_source.len() && dsml_source[tc_idx] {
                 if tr_success {
@@ -356,19 +364,42 @@ pub fn handle_user_input(
                 tracker::track_file_written(agent, args);
             }
             if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                agent.touch_file(&path);
+                if matches!(name.as_str(), "write_file" | "edit_file") {
+                    agent.mark_file_written(&path);
+                } else {
+                    agent.touch_file(&path);
+                }
             }
             if name == "delete_file" {
                 if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                    agent.file_last_read.remove(&path);
+                    agent.file_read_at.remove(&path);
+                    agent.file_written_at.remove(&path);
                 }
             }
         }
 
-        let _ = agent_tx.send(Agent2Ui::StreamEnd {
-            msg_id: a_msg_id.clone(),
-            is_final: false,
-        });
+          let _ = agent_tx.send(Agent2Ui::StreamEnd {
+              msg_id: a_msg_id.clone(),
+              is_final: false,
+          });
+
+          // Emit real-time debug snapshot so tasks/docs/edits refresh during tool execution
+          let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+              hp_connected: true,
+              session_seed: agent.session_seed.clone(),
+              context_tokens: agent.token_estimate,
+              tool_calls_total: agent.tool_calls_this_turn,
+              tool_failures: agent.tool_failures as u32,
+              current_phase: "tool_batch".to_string(),
+              streaming: false,
+              dsml_compat_count: agent.dsml_compat_count,
+              documents: build_documents(agent),
+              recent_edits: build_recent_edits(agent),
+              tasks: build_tasks(agent),
+              session_title: agent.session_title.clone(),
+              prompt_cache_hit_tokens: cache_tokens(agent).0,
+              prompt_cache_miss_tokens: cache_tokens(agent).1,
+            });
 
         for (name, id, args, _) in results.iter() {
             if name == "ask_user" {

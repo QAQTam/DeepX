@@ -131,19 +131,19 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         connected: false,
       }
 
-    case 'STREAM_START':
-      return {
-        ...state,
-        status: 'streaming' as const,
-        stream: {
-          ...state.stream,
-          content: '',
-          reasoning: '',
-          kind: action.kind,
-          toolNames: action.toolNames || [],
-          final: false,
-        },
-      }
+      case 'STREAM_START':
+        return {
+          ...state,
+          status: 'streaming' as const,
+          stream: {
+            ...state.stream,
+            content: '',
+            // Preserve reasoning across phase switches
+            kind: action.kind,
+            toolNames: action.toolNames || [],
+            final: false,
+          },
+        }
 
     case 'STREAM_DELTA': {
       const stream = { ...state.stream }

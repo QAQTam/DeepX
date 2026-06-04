@@ -264,12 +264,12 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                         let _ = writer.flush();
                     }
                 }
-                StreamEvent::Error(e) => {
-                    log::error!("hp: API error — {}", e);
-                    let _ = writeln!(writer, "{}", json_response("error", &e));
-                    let _ = writer.flush();
-                    return;
-                }
+                  StreamEvent::Error(e) => {
+                      log::error!("hp: API error (non-fatal) — {}", e);
+                      let _ = writeln!(writer, "{}", json_response("error", &e));
+                      let _ = writer.flush();
+                      // Do NOT return — keep processing remaining stream events.
+                  }
             }
         }
     });

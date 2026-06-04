@@ -26,9 +26,14 @@ pub struct AgentState {
 
     // ── Explore-before-read state machine ──
     pub has_explored: bool,
-    /// Per-file turn counters since last read/edit. Keyed by file path.
-    /// Blocked at >= 7 turns without refreshing.
-    pub file_last_read: std::collections::HashMap<String, u32>,
+    /// Per-file turn NUMBER when last read (not a counter — compared against current_turn).
+    pub file_read_at: std::collections::HashMap<String, u32>,
+
+    /// Per-file turn NUMBER when last written by a tool.
+    pub file_written_at: std::collections::HashMap<String, u32>,
+
+    /// Monotonic turn counter, incremented each post_turn_maintenance.
+    pub current_turn: u32,
 
     /// After a file write/edit, forces a re-read before other tools.
     pub re_read_required: Option<String>,
@@ -85,7 +90,9 @@ impl AgentState {
             api_usage: None,
             session_tokens: 0,
             has_explored: false,
-            file_last_read: std::collections::HashMap::new(),
+            file_read_at: std::collections::HashMap::new(),
+            file_written_at: std::collections::HashMap::new(),
+            current_turn: 0,
             re_read_required: None,
             tool_results: Vec::new(),
             session_seed: String::new(),
@@ -115,21 +122,26 @@ impl AgentState {
 
     // ── Context helpers ──
 
-    /// Mark a file as just read or edited (resets stale counter).
+    /// Mark a file as just read (records current turn number).
     pub fn touch_file(&mut self, path: &str) {
-        self.file_last_read.insert(path.to_string(), 0);
+        self.file_read_at.insert(path.to_string(), self.current_turn);
     }
 
-    /// Check if a file is stale (>= 7 turns since last touch).
+    /// Mark a file as just written (records current turn number, triggers re-read).
+    pub fn mark_file_written(&mut self, path: &str) {
+        self.file_written_at.insert(path.to_string(), self.current_turn);
+        self.re_read_required = Some(path.to_string());
+    }
+
+    /// Check if a file is stale.
+    ///
+    /// A file is stale ONLY if it was written to by a tool after the last
+    /// time it was read. Pure time passing or writes to other files do NOT
+    /// make a file stale — only a direct write to that specific file.
     pub fn is_file_stale(&self, path: &str) -> bool {
-        self.file_last_read.get(path).copied().unwrap_or(10) >= 7
-    }
-
-    /// Increment all file counters at end of turn.
-    pub fn age_files(&mut self) {
-        for v in self.file_last_read.values_mut() {
-            *v = v.saturating_add(1);
-        }
+        let read_at = self.file_read_at.get(path).copied().unwrap_or(0);
+        let self_written = self.file_written_at.get(path).copied().unwrap_or(0);
+        self_written > read_at
     }
 
     /// Cache file snapshot after read. Returns true if file has changed since last cache.
@@ -217,5 +229,75 @@ impl AgentState {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn test_agent() -> AgentState {
+        AgentState::new(Config::default_for_test())
+    }
+
+    #[test]
+    fn stale_only_when_written_after_read() {
+        let mut a = test_agent();
+
+        // Simulate: read foo.rs at turn 0
+        a.touch_file("foo.rs");
+        // Simulate: read bar.rs at turn 0
+        a.touch_file("bar.rs");
+
+        a.current_turn = 5;
+        // Write bar.rs — bar.rs is now stale, foo.rs is NOT
+        a.mark_file_written("bar.rs");
+
+        assert!(!a.is_file_stale("foo.rs"), "foo.rs was never written → not stale");
+        assert!(a.is_file_stale("bar.rs"), "bar.rs was written after read → stale");
+    }
+
+    #[test]
+    fn no_writes_nothing_stale() {
+        let mut a = test_agent();
+        a.touch_file("foo.rs");
+        a.touch_file("bar.rs");
+        a.touch_file("baz.rs");
+
+        // 30 turns pass, but no writes
+        a.current_turn = 30;
+
+        assert!(!a.is_file_stale("foo.rs"));
+        assert!(!a.is_file_stale("bar.rs"));
+        assert!(!a.is_file_stale("baz.rs"));
+    }
+
+    #[test]
+    fn write_then_read_makes_not_stale() {
+        let mut a = test_agent();
+        a.current_turn = 1;
+        a.mark_file_written("foo.rs"); // written at turn 1
+        a.current_turn = 2;
+        a.touch_file("foo.rs"); // re-read at turn 2
+        assert!(!a.is_file_stale("foo.rs"), "re-read after write → not stale");
+    }
+
+    #[test]
+    fn untracked_file_not_stale() {
+        let a = test_agent();
+        assert!(!a.is_file_stale("never_seen.rs"));
+    }
+
+    #[test]
+    fn delete_file_removes_tracking() {
+        let mut a = test_agent();
+        a.touch_file("foo.rs");
+        a.mark_file_written("foo.rs");
+        assert!(a.is_file_stale("foo.rs"));
+
+        a.file_read_at.remove("foo.rs");
+        a.file_written_at.remove("foo.rs");
+        assert!(!a.is_file_stale("foo.rs"));
     }
 }

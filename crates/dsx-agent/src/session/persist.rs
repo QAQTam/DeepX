@@ -13,26 +13,12 @@ pub fn load_session(seed: &str) -> Option<SessionFile> {
 }
 
 pub fn load_session_or_live(seed: &str) -> Option<(SessionFile, bool)> {
-    let try_path = |path: &std::path::Path, is_live: bool| -> Option<(SessionFile, bool)> {
-        let data = std::fs::read_to_string(path).ok()?;
-        // Try new format first, then fall back to legacy format
-        if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
-            return Some((file, is_live));
-        }
-        // Legacy: convert old Message format (content: String, tool_calls, etc.) to new format
-        migrate_legacy_session(&data, seed).map(|f| (f, is_live))
-    };
-
-    if let Some(lp) = super::live_path(seed) {
-        if lp.exists() {
-            if let Some(result) = try_path(&lp, true) {
-                return Some(result);
-            }
-        }
+    let path = super::find_existing_session_path(seed)?;
+    let data = std::fs::read_to_string(&path).ok()?;
+    if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
+        return Some((file, false));
     }
-    let path = super::session_path(seed)?;
-    if !path.exists() { return None; }
-    try_path(&path, false)
+    migrate_legacy_session(&data, seed).map(|f| (f, false))
 }
 
 /// Migrate a legacy-format session file (old Message struct) to the new

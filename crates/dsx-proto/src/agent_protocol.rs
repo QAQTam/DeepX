@@ -227,6 +227,10 @@ pub enum Agent2Ui {
         tasks: Vec<TaskInfo>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_title: Option<String>,
+        #[serde(default)]
+        prompt_cache_hit_tokens: u32,
+        #[serde(default)]
+        prompt_cache_miss_tokens: u32,
     },
 
     #[serde(rename = "done")]
@@ -237,6 +241,13 @@ pub enum Agent2Ui {
 
     #[serde(rename = "shutdown_ack")]
     ShutdownAck,
+
+    #[serde(rename = "audit_record")]
+    AuditRecord {
+        tool_name: String,
+        result_summary: String,
+        success: bool,
+    },
 }
 
 /// Streaming block kind — used to distinguish text from thinking.

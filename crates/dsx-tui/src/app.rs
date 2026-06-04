@@ -839,8 +839,8 @@ impl App {
                 self.session_tokens = session_tokens;
                 self.context_limit = context_limit;
                 if let Some(u) = usage {
-                    self.cache_hit += u.prompt_cache_hit_tokens;
-                    self.cache_miss += u.prompt_cache_miss_tokens;
+                    self.cache_hit = u.prompt_cache_hit_tokens;
+                    self.cache_miss = u.prompt_cache_miss_tokens;
                     self.update_cache(u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens);
                 }
                 self.streaming = false;

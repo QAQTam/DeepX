@@ -29,9 +29,11 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
             }
             return;
         }
-        log::info!("dsx-agent: session {seed} not found, creating new");
+        log::info!("dsx-agent: session {seed} not found, creating new with same seed");
+        agent.session_seed = seed.to_string();
+    } else {
+        agent.session_seed = session::generate_seed();
     }
-    agent.session_seed = session::generate_seed();
     agent.session_start = session::now_epoch();
     dsx_log::set_session(&agent.session_seed);
     tools::set_current_session(&agent.session_seed);

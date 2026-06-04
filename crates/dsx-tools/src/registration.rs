@@ -14,7 +14,6 @@ use super::file_list_dir;
 use super::file_search;
 use super::file_delete;
 use super::file_move;
-use super::file_copy;
 use super::file_glob;
 use super::file_diff;
 use super::task;
@@ -39,7 +38,6 @@ pub fn build_tool_manager() -> ToolManager {
     file_search::register(&mut mgr);
     file_delete::register(&mut mgr);
     file_move::register(&mut mgr);
-    file_copy::register(&mut mgr);
     file_glob::register(&mut mgr);
     file_diff::register(&mut mgr);
 

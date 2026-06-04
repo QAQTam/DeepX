@@ -68,7 +68,7 @@ pub fn session_dir(seed: &str) -> Option<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(&base) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(seed) && entry.path().is_dir() {
+            if name.starts_with(&format!("{}-", seed)) && entry.path().is_dir() {
                 return Some(entry.path());
             }
         }
@@ -79,25 +79,47 @@ pub fn session_dir(seed: &str) -> Option<PathBuf> {
 }
 
 pub fn session_path(seed: &str) -> Option<PathBuf> {
-    if let Some(dir) = session_dir(seed) {
-        let new_path = dir.join("session.json");
-        if new_path.exists() || dir.parent().map_or(false, |p| p.exists()) {
-            return Some(new_path);
-        }
-        // Auto-migrate: move old flat file into new directory
-        let old_path = sessions_dir()?.join(format!("{}.json", seed));
-        if old_path.exists() {
+    let dir = session_dir(seed)?;
+    let new_path = dir.join("session.json");
+
+    let base = sessions_dir()?;
+    let _ = std::fs::create_dir_all(&base);
+
+    let old_path = base.join(format!("{}.json", seed));
+    if old_path.exists() {
+        if new_path.exists() {
+            let _ = std::fs::remove_file(&old_path);
+        } else {
             let _ = std::fs::create_dir_all(&dir);
             let _ = std::fs::rename(&old_path, &new_path);
-            return Some(new_path);
         }
     }
-    // Fallback: old flat path
-    sessions_dir().map(|d| d.join(format!("{}.json", seed)))
+
+    Some(new_path)
 }
 
 pub fn live_path(seed: &str) -> Option<PathBuf> {
     session_path(seed)
+}
+
+/// Find an existing session file on disk without creating new directories.
+/// Returns None if no session file exists for this seed.
+pub fn find_existing_session_path(seed: &str) -> Option<PathBuf> {
+    let base = sessions_dir()?;
+    // 1. Look for {seed}-{date}/session.json
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(&format!("{}-", seed)) && entry.path().is_dir() {
+                let p = entry.path().join("session.json");
+                if p.exists() { return Some(p); }
+            }
+        }
+    }
+    // 2. Legacy flat file {seed}.json
+    let old = base.join(format!("{}.json", seed));
+    if old.exists() { return Some(old); }
+    None
 }
 
 pub fn index_path() -> Option<PathBuf> {

@@ -1,6 +1,6 @@
 //! ToolManager: tool registration, lookup, routing, and cancellation.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -8,17 +8,17 @@ use crate::{ToolKey, ToolHandler, ToolCallCtx, CANCEL, CURRENT_SESSION, SafetyVe
 use dsx_proto::ToolsToAgent;
 
 pub struct ToolManager {
-    pub(crate) handlers: HashMap<ToolKey, ToolHandler>,
+    pub(crate) handlers: BTreeMap<ToolKey, ToolHandler>,
     allowed: Option<Vec<String>>,
-    inflight_tasks: HashMap<String, Arc<AtomicBool>>,
+    inflight_tasks: BTreeMap<String, Arc<AtomicBool>>,
 }
 
 impl ToolManager {
     pub fn new() -> Self {
         Self {
-            handlers: HashMap::new(),
+            handlers: BTreeMap::new(),
             allowed: None,
-            inflight_tasks: HashMap::new(),
+            inflight_tasks: BTreeMap::new(),
         }
     }
 

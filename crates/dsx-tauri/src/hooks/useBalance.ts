@@ -7,6 +7,7 @@ interface UseBalanceReturn {
   balance: string
   loading: boolean
   refresh: (apiKey: string) => Promise<void>
+  setBalance: (s: string) => void
 }
 
 export function useBalance(): UseBalanceReturn {
@@ -24,5 +25,5 @@ export function useBalance(): UseBalanceReturn {
     finally { setLoading(false) }
   }, [])
 
-  return { balance, loading, refresh }
+  return { balance, loading, refresh, setBalance }
 }

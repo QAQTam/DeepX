@@ -477,10 +477,10 @@ pub fn build_context(state: &mut AgentState) -> Vec<Message> {
     sys.push_str("\n\n");
     sys.push_str(crate::prompt::DSML_SCHEMA);
 
-    sys.push_str("### Available Tools\n\n");
-    for td in &state.tool_defs {
-        sys.push_str(&format!("- {}: {}\n", td.function.name, td.function.description));
-    }
+//    sys.push_str("### Available Tools\n\n");
+//    for td in &state.tool_defs {
+//        sys.push_str(&format!("- {}: {}\n", td.function.name, td.function.description));
+//    }
 
     if state.config.effort.as_deref() == Some("max") {
         sys.push('\n');

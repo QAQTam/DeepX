@@ -16,8 +16,8 @@ pub fn post_turn_maintenance(state: &mut AgentState, _final_msg: &Message) {
     state.health.context_tokens = state.tokens_used();
     state.health.context_limit = state.config.context_limit;
 
-    // Age all per-file counters
-    state.age_files();
+    // Increment monotonic turn counter (replaces age_files)
+    state.current_turn += 1;
 
     // Inject stale-document warnings into turn annotations
     document_annotations(state);
@@ -33,29 +33,33 @@ pub fn doc_tag(path: &str) -> String {
 }
 
 /// Scan tracked files and inject turnover annotations for stale or modified docs.
+/// Only flags files that are actually stale per is_file_stale() — i.e. files
+/// that were written to after they were last read, or read long ago while
+/// other writes happened. Truncates to top 5 to avoid context pollution.
 fn document_annotations(state: &mut AgentState) {
-    let mut stale: Vec<String> = Vec::new();
+    let mut stale: Vec<(String, u32)> = Vec::new();
 
-    for (path, turns) in &state.file_last_read {
-        if *turns >= 7 {
-            let tag = doc_tag(path);
-            stale.push(format!("  tag:{} {} — {} turns since last read. Stale — re-read before editing.",
-                tag, path, turns));
-        } else if *turns >= 3 {
-            let tag = doc_tag(path);
-            stale.push(format!("  tag:{} {} — {} turns since last read. Nearing stale.",
-                tag, path, turns));
+    for (path, &read_at) in &state.file_read_at {
+        if state.is_file_stale(path) {
+            stale.push((path.clone(), read_at));
         }
     }
 
-    if !stale.is_empty() {
-        stale.sort();
-        let mut msg = String::from("[system] Document status:\n");
-        for s in &stale {
-            msg.push_str(s);
-            msg.push('\n');
-        }
-        state.turn_annotations.push(msg);
+    if stale.is_empty() {
+        return;
     }
+
+    // Sort by risk: older reads first (more likely to be stale)
+    stale.sort_by_key(|(_, read_at)| *read_at);
+    stale.truncate(5);
+
+    let mut msg = String::from("[system] Document status (top 5 stale):\n");
+    for (path, read_at) in &stale {
+        let tag = doc_tag(path);
+        msg.push_str(&format!(
+            "  tag:{} {} — last read turn {}. Stale — re-read before editing.\n",
+            tag, path, read_at
+        ));
+    }
+    state.turn_annotations.push(msg);
 }
-

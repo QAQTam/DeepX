@@ -17,15 +17,15 @@ use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, TaskInfo, HpToAgent, Ui2Agen
 use crate::agent::AgentState;
 use crate::orchestrator::{maybe_save_session, learning};
 
-fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
-    let mut docs: Vec<DocInfo> = agent.file_last_read.iter()
-        .map(|(path, turns)| {
-            let is_stale = *turns >= 7;
+pub(super) fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
+    let mut docs: Vec<DocInfo> = agent.file_read_at.iter()
+        .filter(|(path, _)| agent.is_file_stale(path))
+        .map(|(path, &read_at)| {
             DocInfo {
                 tag: learning::doc_tag(path),
                 path: path.clone(),
-                turns_since_read: *turns,
-                is_stale,
+                turns_since_read: agent.current_turn.saturating_sub(read_at),
+                is_stale: true,
             }
         })
         .collect();
@@ -34,7 +34,7 @@ fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
     docs
 }
 
-fn build_recent_edits(agent: &AgentState) -> Vec<String> {
+pub(super) fn build_recent_edits(agent: &AgentState) -> Vec<String> {
     agent.tool_results.iter().rev()
         .filter(|(name, _)| matches!(name.as_str(), "write_file" | "edit_file" | "delete_file"))
         .take(10)
@@ -45,7 +45,7 @@ fn build_recent_edits(agent: &AgentState) -> Vec<String> {
         .collect()
 }
 
-fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
+pub(super) fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
     if agent.session_seed.is_empty() { return Vec::new(); }
     let sessions_dir = std::path::PathBuf::from(dsx_types::platform::sessions_dir());
     let mut tasks = Vec::new();
@@ -81,6 +81,12 @@ fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
     tasks
 }
 
+pub(super) fn cache_tokens(agent: &AgentState) -> (u32, u32) {
+    agent.api_usage.as_ref()
+        .map(|u| (u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens))
+        .unwrap_or((0, 0))
+}
+
 pub fn run_agent_loop(
     mut agent: AgentState,
     mut hp_conn: Option<BufReader<TcpStream>>,
@@ -105,8 +111,10 @@ pub fn run_agent_loop(
                     documents: build_documents(&agent),
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
-        session_title: agent.session_title.clone(),
-                });
+          session_title: agent.session_title.clone(),
+          prompt_cache_hit_tokens: cache_tokens(&agent).0,
+          prompt_cache_miss_tokens: cache_tokens(&agent).1,
+                  });
 
     if agent.session_seed.is_empty() {
         let seed = agent.resume_seed.clone();
@@ -188,8 +196,10 @@ pub fn run_agent_loop(
                     documents: build_documents(&agent),
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
-        session_title: agent.session_title.clone(),
-                });
+          session_title: agent.session_title.clone(),
+          prompt_cache_hit_tokens: cache_tokens(&agent).0,
+          prompt_cache_miss_tokens: cache_tokens(&agent).1,
+                  });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }
 
@@ -257,8 +267,10 @@ pub fn run_agent_loop(
                     documents: build_documents(&agent),
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
-        session_title: agent.session_title.clone(),
-                });
+          session_title: agent.session_title.clone(),
+          prompt_cache_hit_tokens: cache_tokens(&agent).0,
+          prompt_cache_miss_tokens: cache_tokens(&agent).1,
+                  });
                 if cmd == "dump_context" {
                     let json = serde_json::to_string_pretty(&agent.ctx.to_vec())
                         .unwrap_or_default();
