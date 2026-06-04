@@ -1,108 +1,104 @@
-# DeepX v4.0
+# DeepX v4.2
 
-基于 DeepSeek-V4 的 Windows/Android 终端 AI 编程助手，1M-token 上下文，原生 DSML 工具调用。
+DeepSeek-V4 AI 编程助手 — Tauri 桌面应用 / TUI 终端，1M-token 上下文，原生 DSML 工具调用。
 
 ## 特性
 
 - **DeepSeek V4 深度适配** — 论文原版 DSML Tool Call 格式，Think Max 推理模式
 - **1M-token 上下文** — KV cache 高效复用，跨轮推理链不中断
-- **28+ 工具** — 文件读写、命令执行、Git 操作、网页搜索/抓取、Context7 文档查询、项目探索
-- **跨平台** — Windows 原生 + Termux (Android) + Linux，纯 Rust 静态编译
-- **F10 菜单** — 实时切换模型/effort/上下文限制/语言，持久化配置
-- **TUI 界面** — ratatui 终端界面，工具调用实时展示，DSML 兼容计数
+- **Tauri 桌面应用** — React 前端，流式增量渲染，工具调用卡片，工作区面板
+- **TUI 终端** — ratatui 界面，工具调用实时展示，F10 即时设置
+- **28+ 工具** — 文件读写、Shell 命令、Git 操作、网页搜索/抓取、Context7 文档查询、项目探索
+- **跨平台** — Linux (.deb) + Windows，纯 Rust + TypeScript
 
 ## 架构
 
+```
+┌──────────────────────────────────────────────────┐
+│  Tauri GUI (React/TypeScript + Rust)              │
+│  ┌──────────┐  IPC   ┌──────────────────────────┐│
+│  │ React UI │◄──────►│ Rust backend (lib.rs)     ││
+│  │ (Vite)   │  JSON  │ spawns dsx subprocess     ││
+│  └──────────┘        └─────────┬────────────────┘│
+└────────────────────────────────┼──────────────────┘
+                                 │ stdin/stdout (JSON lines)
+┌────────────────────────────────┼──────────────────┐
+│  Agent (dsx)                   │                   │
+│  ┌─────────────────────────────▼───────────────┐  │
+│  │ Agent (编排)                                 │  │
+│  │  ↕ TCP                                       │  │
+│  │ Gate (dsx-gate) → DeepSeek API              │  │
+│  │ Tools (函数调用, 同进程)                       │  │
+│  └─────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────┘
+```
+
 | Crate | 职责 |
 |-------|------|
-| `dsx` | CLI 入口，配置向导 |
-| `dsx-agent` | Agent 核心：会话管理、编排、工具解析、上下文组装 |
-| `dsx-hp` | API 代理、流式响应解析、安全 gate |
-| `dsx-tools` | 工具执行：exec / file / web / git / explore / plan / task |
+| `dsx` | CLI 入口 + agent 子进程，配置向导 |
+| `dsx-agent` | Agent 核心：会话管理、上下文组装、工具编排、DSML 解析 |
+| `dsx-gate` | API 代理：HTTP 流式响应、KV cache 追踪、安全沙箱 |
+| `dsx-tools` | 工具执行：exec / file / web / git / explore / task / MCP |
 | `dsx-tui` | 终端界面（ratatui + crossterm） |
-| `dsx-types` | 共享类型：消息、配置、ToolCall、平台抽象 |
-| `dsx-proto` | IPC 协议：UI↔Agent↔HP↔Tools 帧定义 |
-
-### 数据流
-
-```
-TUI (ratatui)
-  ↕ mpsc channel
-Agent (编排)
-  ↕ mpsc channel
-HP (API 代理) → DeepSeek API
-Tools (函数调用, 同进程)
-```
+| `dsx-tauri` | Tauri 桌面应用（React 前端 + Rust IPC 后端） |
+| `dsx-types` | 共享类型：Message、UsageInfo、ToolCall、平台抽象 |
+| `dsx-proto` | IPC 协议：Agent2Ui / Ui2Agent / HP 帧定义 |
 
 ## 快速开始
 
-### 安装
+### 依赖
+
+- **Rust** 1.77+
+- **Node.js** 20+ / **pnpm**（仅 Tauri GUI）
+- **系统库**：`libwebkit2gtk-4.1-dev` `libgtk-3-dev` `libssl-dev`（Linux）
 
 ```bash
-# 从源码编译
+# Ubuntu/Debian
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libssl-dev libayatana-appindicator3-dev
+```
+
+### 编译运行
+
+```bash
 git clone https://github.com/QAQTam/DeepX
 cd DeepX
-cargo build --release
 
-# 或下载预编译二进制
-# https://github.com/QAQTam/DeepX/releases
+# TUI 终端模式
+cargo run -p dsx-tui
+
+# Tauri 桌面应用 (dev, 热重载)
+just tauri-dev
+
+# 打包 .deb
+just tauri-pack
 ```
+
+`just -l` 查看全部构建命令。
 
 ### 首次配置
 
-```bash
-dsx configure
-# 输入 DeepSeek API key → 选择模型 → 完成
-```
-
-或直接启动 TUI，首次运行会自动进入配置向导：
-
-```bash
-dsx-tui
-```
-
-### 环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `DEEPSEEK_API_KEY` | API 密钥 |
-| `DEEPSEEK_MODEL` | 模型名称（默认 `deepseek-v4-flash`） |
-| `DEEPSEEK_EFFORT` | 推理强度：`high` / `max` |
-| `DEEPSEEK_MAX_TOKENS` | 最大输出 token |
-
-## 使用
-
-### TUI 模式
-
-```
-dsx-tui
-```
-
-| 快捷键 | 功能 |
-|--------|------|
-| `F10` | 设置菜单（模型/effort/上下文/语言） |
-| `F12` | Debug 面板 |
-| `ESC` | 取消当前操作 |
-| `Ctrl+C` | 退出 |
-
-### Headless 模式
-
-```bash
-echo '{"type":"user_input","text":"帮我看下这个项目"}' | dsx
-```
+首次运行自动进入配置向导，或通过 TUI 的 `F10` 设置菜单。需要 DeepSeek API Key（[platform.deepseek.com](https://platform.deepseek.com)）。
 
 ## 工具列表
 
-| 分类 | 工具 | 说明 |
-|------|------|------|
-| 文件 | `read_file` `write_file` `edit_file` `glob` `grep` | 文件操作 |
-| 执行 | `exec/run` | Shell 命令 |
-| 探索 | `explore/scan` | 项目结构扫描 |
-| Git | `git/status` `git/diff` `git/log` `git/commit` | 版本控制 |
-| 网络 | `web/fetch` `web/search` `web/context7_resolve` `web/context7_query` | 网页与文档 |
-| 任务 | `task/create` `task/update` `task/list` | 任务管理 |
-| 计划 | `plan/create` `plan/update` `plan/read` | 项目规划 |
-| 交互 | `ask_user` `commit` | 用户交互 |
+| 分类 | 工具 |
+|------|------|
+| 文件 | `read_file` `write_file` `edit_file` `edit_file_diff` `delete_file` `move_file` `file_copy` `file_glob` `file_search` `file_list_dir` `diff` |
+| 执行 | `exec` / `run` — Shell 命令，自适应输出截断，支持 timeout/cwd |
+| 探索 | `explore` — 项目结构扫描 |
+| Git | `git_status` `git_diff` `git_log` `git_commit` `git_push` `git_pull` `git_checkout` `git_branch` `git_stash` `git_checkpoint` |
+| 网络 | `web_fetch` `web_search` `context7_resolve` `context7_query` |
+| 任务 | `task_create` `task_update` `task_list` |
+| 交互 | `ask_user` |
+
+## 快捷键 (TUI)
+
+| 键 | 功能 |
+|----|------|
+| `F10` | 设置菜单（模型 / effort / 上下文限制 / 语言） |
+| `F12` | Debug 面板 |
+| `ESC` | 取消当前操作 |
+| `Ctrl+C` | 退出 |
 
 ## Android (Termux)
 
@@ -110,31 +106,15 @@ echo '{"type":"user_input","text":"帮我看下这个项目"}' | dsx
 pkg install rust binutils
 git clone https://github.com/QAQTam/DeepX
 cd DeepX
-cargo build --release
+cargo build --release -p dsx-tui
 ./target/release/dsx-tui
 ```
 
-## 构建 Release
+## CLI / Headless
 
 ```bash
-cargo build --release
-# → target/release/dsx.exe     (~7 MB)
-# → target/release/dsx-tui.exe (~2 MB)
-```
-
-Release profile 已配置：LTO + strip + opt-level=z + codegen-units=1。
-
-## 开发
-
-```bash
-# 全量检查
-cargo check --workspace
-
-# 运行测试
-cargo test --lib
-
-# 发布版本
-gh release create vX.X.X target/release/dsx.exe target/release/dsx-tui.exe
+# 输入 JSON 行 → 输出 JSON 行
+echo '{"type":"user_input","text":"讲解这个项目架构"}' | dsx agent
 ```
 
 ## 许可证
