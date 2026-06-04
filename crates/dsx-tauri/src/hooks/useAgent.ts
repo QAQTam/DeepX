@@ -82,6 +82,15 @@ export function useAgent(): AgentHandle {
     }
   }, [])
 
+  // ── Check if agent already running (page refresh recovery) ──
+  useEffect(() => {
+    api.checkAgentStatus().then(s => {
+      if (s.running) {
+        dispatch({ type: 'CONNECTED', seed: s.seed || '', sessions: [] })
+      }
+    }).catch(() => {})
+  }, [])
+
   // ── Commands ──
   const start = useCallback(async () => {
     dispatch({ type: 'START_CONNECT' })

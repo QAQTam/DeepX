@@ -92,6 +92,7 @@ export const api = {
 
   // Agent lifecycle
   startAgent:      ()              => invoke<AgentStartResponse>('start_agent'),
+  checkAgentStatus: () => invoke<{ running: boolean; seed?: string }>('check_agent_status'),
   stopAgent:       ()              => invoke<void>('stop_agent'),
   resumeAgent:     (seed: string)  => invoke<void>('resume_agent', { seed }),
   cancelAgent:     ()              => invoke<void>('cancel_agent'),

@@ -17,6 +17,7 @@ struct AgentState {
     hp_child: Mutex<Option<Child>>,
     op_lock: Mutex<()>,
     config_lock: Mutex<()>,
+    session_seed: Mutex<Option<String>>,
 }
 
 fn data_dir() -> std::path::PathBuf {
@@ -401,10 +402,18 @@ fn start_agent_inner(app: &AppHandle, state: &AgentState) -> Result<serde_json::
         reader_handle,
         stderr_handle,
     });
+    *state.session_seed.lock().map_err(|e| format!("lock: {e}"))? = None;
 
     let sessions = scan_sessions();
     log::info!("agent connected");
     Ok(serde_json::json!({"ok": true, "sessions": sessions}))
+}
+
+#[tauri::command]
+fn check_agent_status(state: tauri::State<AgentState>) -> Result<serde_json::Value, String> {
+    let running = state.stdin.lock().map_err(|e| format!("lock: {e}"))?.is_some();
+    let seed = state.session_seed.lock().map_err(|e| format!("lock: {e}"))?.clone();
+    Ok(serde_json::json!({"running": running, "seed": seed}))
 }
 
 #[tauri::command]
@@ -573,6 +582,7 @@ fn restart_agent_inner(app: &AppHandle, state: &AgentState, seed: Option<&str>) 
         reader_handle,
         stderr_handle,
     });
+    *state.session_seed.lock().map_err(|e| format!("lock: {e}"))? = seed.map(|s| s.to_string());
     Ok(())
 }
 
@@ -704,12 +714,15 @@ fn stop_agent_inner(_app: &AppHandle, state: &AgentState) {
             let _ = handle.stderr_handle.join();
         }
     }
+    if let Ok(mut seed) = state.session_seed.lock() {
+        *seed = None;
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(AgentState { stdin: Mutex::new(None), process: Mutex::new(None), hp_child: Mutex::new(None), op_lock: Mutex::new(()), config_lock: Mutex::new(()) })
+        .manage(AgentState { stdin: Mutex::new(None), process: Mutex::new(None), hp_child: Mutex::new(None), op_lock: Mutex::new(()), config_lock: Mutex::new(()), session_seed: Mutex::new(None) })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(tauri_plugin_log::Builder::default()
@@ -720,7 +733,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             check_config, save_config, load_config, update_config, fetch_models,
-            start_agent, send_message, reload_agent, stop_agent, resume_agent,
+            start_agent, check_agent_status, send_message, reload_agent, stop_agent, resume_agent,
             load_session_messages,
             set_workspace, get_workspace, scan_directory,
             cancel_agent,
