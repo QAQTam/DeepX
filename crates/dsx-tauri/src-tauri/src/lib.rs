@@ -3,6 +3,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager};
+use dsx_proto::Ui2Agent;
 
 struct ProcessHandle {
     child: Child,
@@ -14,6 +15,8 @@ struct AgentState {
     stdin: Mutex<Option<Box<dyn Write + Send>>>,
     process: Mutex<Option<ProcessHandle>>,
     hp_child: Mutex<Option<Child>>,
+    op_lock: Mutex<()>,
+    config_lock: Mutex<()>,
 }
 
 fn data_dir() -> std::path::PathBuf {
@@ -85,6 +88,7 @@ fn find_dsx(app: &AppHandle) -> Result<String, String> {
 }
 
 fn ensure_hp(dsx_path: &str, state: &AgentState) -> Result<(), String> {
+    let mut guard = state.hp_child.lock().map_err(|e| format!("lock: {e}"))?;
     let port_path = dsx_types::platform::hp_port_path();
 
     if let Ok(s) = std::fs::read_to_string(&port_path) {
@@ -109,12 +113,10 @@ fn ensure_hp(dsx_path: &str, state: &AgentState) -> Result<(), String> {
             if let Ok(port) = s.trim().parse::<u16>() {
                 if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
                     log::info!("hp started on port {port}");
-                    if let Ok(mut guard) = state.hp_child.lock() {
-                        let old = guard.replace(child);
-                        if let Some(mut old_child) = old {
-                            let _ = old_child.kill();
-                            let _ = old_child.wait();
-                        }
+                    let old = guard.replace(child);
+                    if let Some(mut old_child) = old {
+                        let _ = old_child.kill();
+                        let _ = old_child.wait();
                     }
                     return Ok(());
                 }
@@ -169,7 +171,8 @@ fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) -> Join
                                 "tool_call" | "tool_result" |
                                 "turn_end" | "done" | "error" | "cancelled" |
                                 "ask_user" | "balance" | "session_restored" |
-                                "debug_snapshot" | "shutdown_ack" => {
+                                "debug_snapshot" | "shutdown_ack" |
+                                "audit_record" => {
                                     let _ = app.emit("agent-event", v);
                                 }
                                 _ => {}
@@ -216,10 +219,8 @@ fn start_stderr_reader(stderr: Box<dyn Read + Send>, app: AppHandle) -> JoinHand
 fn send_message(state: tauri::State<AgentState>, text: String) -> Result<(), String> {
     let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
     let writer = guard.as_mut().ok_or("Agent not started")?;
-    let frame = serde_json::json!({"type": "user_input", "text": text});
-    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default())
-        .map_err(|e| format!("write: {e}"))?;
-    writer.flush().map_err(|e| format!("flush: {e}"))?;
+    let frame = Ui2Agent::UserInput { text };
+    dsx_proto::write_frame(writer, &frame).map_err(|e| format!("write: {e}"))?;
     Ok(())
 }
 
@@ -227,10 +228,8 @@ fn send_message(state: tauri::State<AgentState>, text: String) -> Result<(), Str
 fn reload_agent(state: tauri::State<AgentState>) -> Result<(), String> {
     let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
     let writer = guard.as_mut().ok_or("Agent not started")?;
-    let frame = serde_json::json!({"type": "reload_config"});
-    writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default())
-        .map_err(|e| format!("write: {e}"))?;
-    writer.flush().map_err(|e| format!("flush: {e}"))?;
+    let frame = Ui2Agent::ReloadConfig;
+    dsx_proto::write_frame(writer, &frame).map_err(|e| format!("write: {e}"))?;
     Ok(())
 }
 
@@ -382,6 +381,11 @@ fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
 
 #[tauri::command]
 fn start_agent(app: AppHandle, state: tauri::State<AgentState>) -> Result<serde_json::Value, String> {
+    let _op = state.op_lock.lock().map_err(|e| format!("lock: {e}"))?;
+    start_agent_inner(&app, &state)
+}
+
+fn start_agent_inner(app: &AppHandle, state: &AgentState) -> Result<serde_json::Value, String> {
     if state.stdin.lock().map_err(|e| format!("lock: {e}"))?.is_some() {
         return Err("Agent already started".to_string());
     }
@@ -390,7 +394,7 @@ fn start_agent(app: AppHandle, state: tauri::State<AgentState>) -> Result<serde_
     ensure_hp(&dsx_path, &state)?;
     let (stdin, reader, stderr, child) = spawn_agent(&dsx_path, None)?;
     let reader_handle = start_reader(reader, app.clone());
-    let stderr_handle = start_stderr_reader(stderr, app);
+    let stderr_handle = start_stderr_reader(stderr, app.clone());
     *state.stdin.lock().map_err(|e| format!("lock: {e}"))? = Some(stdin);
     *state.process.lock().map_err(|e| format!("lock: {e}"))? = Some(ProcessHandle {
         child,
@@ -409,7 +413,8 @@ fn check_config() -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn save_config(api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, effort: String, lang: String) -> Result<(), String> {
+fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, effort: String, lang: String) -> Result<(), String> {
+    let _lock = state.config_lock.lock().map_err(|e| format!("lock: {e}"))?;
     let p = config_path();
     if let Some(dir) = p.parent() { std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?; }
     let mut old_cfg = serde_json::json!({});
@@ -419,14 +424,14 @@ fn save_config(api_key: String, base_url: String, model: String, context_limit: 
     let final_model = if model.is_empty() {
         old_cfg.get("model").and_then(|m| m.as_str()).unwrap_or("deepseek-v4-flash").to_string()
     } else { model };
-    let mut c = serde_json::json!({
-        "api_key": api_key, "base_url": base_url,
-        "model": final_model, "context_limit": context_limit, "max_tokens": max_tokens,
-        "effort": effort, "lang": lang,
-    });
-    for key in &["profiles", "active_profile", "max_tool_rounds", "context7_api_key"] {
-        if let Some(v) = old_cfg.get(*key) { c[*key] = v.clone(); }
-    }
+    let mut c = old_cfg;
+    c["api_key"] = serde_json::json!(api_key);
+    c["base_url"] = serde_json::json!(base_url);
+    c["model"] = serde_json::json!(final_model);
+    c["context_limit"] = serde_json::json!(context_limit);
+    c["max_tokens"] = serde_json::json!(max_tokens);
+    c["effort"] = serde_json::json!(effort);
+    c["lang"] = serde_json::json!(lang);
     let data = serde_json::to_string_pretty(&c).map_err(|e| format!("json: {e}"))?;
     std::fs::write(&p, data).map_err(|e| format!("write: {e}"))
 }
@@ -481,7 +486,7 @@ async fn fetch_models(api_key: String, base_url: String) -> Result<Vec<String>, 
 async fn get_balance(api_key: String) -> Result<serde_json::Value, String> {
     let key = api_key.trim().trim_matches('"');
     if key.is_empty() || key == "null" {
-        return Err("API Key 无效".to_string());
+        return Err("API key is invalid".to_string());
     }
     let base_url = std::fs::read_to_string(&config_path()).ok()
         .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
@@ -513,7 +518,8 @@ fn load_config() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn update_config(field: String, value: String) -> Result<(), String> {
+fn update_config(state: tauri::State<AgentState>, field: String, value: String) -> Result<(), String> {
+    let _lock = state.config_lock.lock().map_err(|e| format!("lock: {e}"))?;
     let p = config_path();
     let mut cfg: serde_json::Value = std::fs::read_to_string(&p).ok()
         .and_then(|d| serde_json::from_str(&d).ok()).unwrap_or(serde_json::json!({}));
@@ -535,10 +541,15 @@ fn cmd_sessions() -> Result<Vec<serde_json::Value>, String> {
 }
 
 fn restart_agent(app: &AppHandle, state: &AgentState, seed: Option<&str>) -> Result<(), String> {
+    let _op = state.op_lock.lock().map_err(|e| format!("lock: {e}"))?;
+    restart_agent_inner(app, state, seed)
+}
+
+fn restart_agent_inner(app: &AppHandle, state: &AgentState, seed: Option<&str>) -> Result<(), String> {
     if let Ok(mut guard) = state.stdin.lock() {
         if let Some(writer) = guard.as_mut() {
-            let frame = serde_json::json!({"type": "shutdown"});
-            let _ = writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default());
+            let frame = Ui2Agent::Shutdown;
+            let _ = dsx_proto::write_frame(writer, &frame);
             let _ = writer.flush();
         }
         *guard = None;
@@ -620,12 +631,9 @@ fn scan_directory(path: String) -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn cancel_agent(state: tauri::State<AgentState>) -> Result<(), String> {
     let mut guard = state.stdin.lock().map_err(|e| format!("lock: {e}"))?;
-    if let Some(writer) = guard.as_mut() {
-        let frame = serde_json::json!({"type": "cancel"});
-        writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default())
-            .map_err(|e| format!("write: {e}"))?;
-        writer.flush().map_err(|e| format!("flush: {e}"))?;
-    }
+    let writer = guard.as_mut().ok_or("Agent not started")?;
+    let frame = Ui2Agent::Cancel;
+    dsx_proto::write_frame(writer, &frame).map_err(|e| format!("write: {e}"))?;
     Ok(())
 }
 
@@ -635,7 +643,14 @@ fn delete_session(seed: String) -> Result<(), String> {
     if !dir.is_dir() { return Ok(()); }
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("read_dir: {e}"))?.flatten() {
         let fname = entry.file_name().to_string_lossy().to_string();
-        if fname.starts_with(&seed) {
+        let is_match = if entry.path().is_dir() {
+            // New format: sessions/{seed}-{date}/
+            fname.starts_with(&format!("{}-", seed))
+        } else {
+            // Old format: sessions/{seed}.json or sessions/{seed}.live.json
+            fname == format!("{seed}.json") || fname == format!("{seed}.live.json")
+        };
+        if is_match {
             if entry.path().is_dir() {
                 std::fs::remove_dir_all(&entry.path()).map_err(|e| format!("delete_dir: {e}"))?;
             } else {
@@ -648,6 +663,7 @@ fn delete_session(seed: String) -> Result<(), String> {
 
 #[tauri::command]
 fn delete_all_sessions(app: AppHandle, state: tauri::State<AgentState>) -> Result<(), String> {
+    let _op = state.op_lock.lock().map_err(|e| format!("lock: {e}"))?;
     let dir = data_dir().join("sessions");
     if !dir.is_dir() { return Ok(()); }
     stop_agent_inner(&app, &state);
@@ -663,7 +679,7 @@ fn delete_all_sessions(app: AppHandle, state: tauri::State<AgentState>) -> Resul
             errors.push(format!("{}: {e}", path.display()));
         }
     }
-    restart_agent(&app, &state, None)?;
+    restart_agent_inner(&app, &state, None)?;
     if errors.is_empty() {
         Ok(())
     } else {
@@ -674,8 +690,8 @@ fn delete_all_sessions(app: AppHandle, state: tauri::State<AgentState>) -> Resul
 fn stop_agent_inner(_app: &AppHandle, state: &AgentState) {
     if let Ok(mut guard) = state.stdin.lock() {
         if let Some(writer) = guard.as_mut() {
-            let frame = serde_json::json!({"type": "shutdown"});
-            let _ = writeln!(writer, "{}", serde_json::to_string(&frame).unwrap_or_default());
+            let frame = Ui2Agent::Shutdown;
+            let _ = dsx_proto::write_frame(writer, &frame);
             let _ = writer.flush();
         }
         *guard = None;
@@ -690,51 +706,10 @@ fn stop_agent_inner(_app: &AppHandle, state: &AgentState) {
     }
 }
 
-#[tauri::command]
-fn list_tasks() -> Result<Vec<serde_json::Value>, String> {
-    let sessions_dir = dsx_types::platform::sessions_dir();
-    if !sessions_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut tasks: Vec<serde_json::Value> = Vec::new();
-    for entry in std::fs::read_dir(&sessions_dir).map_err(|e| format!("read_dir: {e}"))?.flatten() {
-        let path = entry.path();
-        if !path.is_dir() { continue; }
-        let task_file = path.join("tasks-mem.md");
-        if !task_file.is_file() { continue; }
-        let content = match std::fs::read_to_string(&task_file) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let seed = path.file_name().and_then(|s| s.to_str()).unwrap_or("").split('-').next().unwrap_or("");
-        for line in content.lines() {
-            let trimmed = line.trim_start_matches("- ");
-            let status = if trimmed.contains("[pending]") { "pending" }
-                else if trimmed.contains("[in_progress]") { "in_progress" }
-                else if trimmed.contains("[completed]") { "completed" }
-                else if trimmed.contains("[cancelled]") { "cancelled" }
-                else { continue };
-            let task_text = trimmed
-                .replacen("[pending] ", "", 1)
-                .replacen("[in_progress] ", "", 1)
-                .replacen("[completed] ", "", 1)
-                .replacen("[cancelled] ", "", 1);
-            let (subject, description) = task_text.split_once(" — ").unwrap_or((&task_text, ""));
-            tasks.push(serde_json::json!({
-                "seed": seed,
-                "subject": subject.trim(),
-                "description": description.trim(),
-                "status": status,
-            }));
-        }
-    }
-    Ok(tasks)
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(AgentState { stdin: Mutex::new(None), process: Mutex::new(None), hp_child: Mutex::new(None) })
+        .manage(AgentState { stdin: Mutex::new(None), process: Mutex::new(None), hp_child: Mutex::new(None), op_lock: Mutex::new(()), config_lock: Mutex::new(()) })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(tauri_plugin_log::Builder::default()
@@ -750,7 +725,7 @@ pub fn run() {
             set_workspace, get_workspace, scan_directory,
             cancel_agent,
             cmd_sessions, delete_session, delete_all_sessions,
-            list_tasks, get_balance,
+            get_balance,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

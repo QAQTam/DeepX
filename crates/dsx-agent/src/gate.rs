@@ -32,8 +32,6 @@ pub fn connect() -> Option<TcpStream> {
         }
     };
 
-    // Set timeouts so stalled HP connections don't hang the agent forever.
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
 
     let pid = std::process::id();
@@ -68,7 +66,6 @@ pub fn try_reconnect() -> Option<TcpStream> {
 
     if let Some(p) = port {
         if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{p}")) {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
             let reg = AgentToHp::Register {
                 kind: "Agent".into(),
@@ -94,7 +91,6 @@ pub fn try_reconnect() -> Option<TcpStream> {
             if let Ok(s) = std::fs::read_to_string(&port_path) {
                 if let Ok(p) = s.trim().parse::<u16>() {
                     if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{p}")) {
-                        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
                         let reg = AgentToHp::Register {
                             kind: "Agent".into(),

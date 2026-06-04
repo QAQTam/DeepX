@@ -121,10 +121,11 @@ pub fn handle_user_input(
     crate::skills::auto_activate(agent, text);
 
     let mut ipc_broken = false;
-    let mut max_rounds_exhausted = false;
     let mut msg_seq = 0u64;
+    let mut round = 0u32;
 
-    for _round in 0..agent.max_tool_rounds {
+    loop {
+        round += 1;
         if ipc_broken {
             break;
         }
@@ -144,13 +145,9 @@ pub fn handle_user_input(
             };
 
         let stripped = tool_parser::strip_fenced_code(&content);
-
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
-
         let mut content = content;
-        if parsed.is_empty()
-            && (stripped.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
-                || stripped.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls"))
+        if parsed.is_empty() && tool_parser::has_dsml(&stripped)
         {
             let (cleaned, dsml_tcs) =
                 tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
@@ -158,7 +155,6 @@ pub fn handle_user_input(
             parsed = dsml_tcs;
             agent.dsml_compat_count += parsed.len() as u32;
         }
-
         if parsed.is_empty()
             && (stripped.contains("<tool_use>")
                 || stripped.contains("<invoke ")
@@ -196,9 +192,7 @@ pub fn handle_user_input(
 
         if !has_tools {
             if stop_reason.as_deref() == Some("length") {
-                agent.stream_content.clear();
-                agent.stream_reasoning.clear();
-                log::info!("turn: stop_reason=length at r={}, nudging model to continue", _round);
+                log::info!("turn: stop_reason=length at r={}, nudging model to continue", round);
                 continue;
             }
 
@@ -394,137 +388,16 @@ pub fn handle_user_input(
             );
             agent.tool_failures = 0;
         }
-        max_rounds_exhausted = true;
     }
 
     if agent.pending_ask_user.is_some() {
         return;
     }
 
-    if max_rounds_exhausted {
-        agent.turn_annotations.push(format!(
-            "[System] Max tool rounds ({}) reached. Respond with what you have.",
-            agent.max_tool_rounds
-        ));
-    }
-
-    let a_msg_id = format!("a{}-{}", turn_num, msg_seq);
-
-    let (content, reasoning_content, tool_calls_raw, usage, stop_reason) =
-        match run_api_turn(agent, hp, agent_tx, &a_msg_id, false) {
-            Ok(v) => v,
-            Err(()) => return,
-        };
-
-    let stripped = tool_parser::strip_fenced_code(&content);
-    let mut post_parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
-
-    let mut content = content;
-    if stripped.contains("\u{ff5c}DSML\u{ff5c}tool_calls")
-        || stripped.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}tool_calls") {
-        let (cleaned, dsml_tcs) =
-            tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
-        content = cleaned;
-        post_parsed = dsml_tcs;
-        agent.dsml_compat_count += post_parsed.len() as u32;
-    }
-    if post_parsed.is_empty()
-        && (stripped.contains("<tool_use>")
-            || stripped.contains("<invoke ")
-            || stripped.contains("<tool_calls>")
-            || stripped.contains("<read>")
-            || stripped.contains("<exec>")
-            || stripped.contains("<write>")
-            || stripped.contains("<search>"))
-    {
-        let tool_names: Vec<String> =
-            agent.tool_defs.iter().map(|t| t.function.name.clone()).collect();
-        let (cleaned, xml_tcs) =
-            tool_parser::parse_xml_tool_calls(&stripped, &tool_names);
-        content = cleaned;
-        post_parsed = xml_tcs;
-        agent.dsml_compat_count += post_parsed.len() as u32;
-    }
-
-    if post_parsed.is_empty() {
-        let final_assistant = build_and_push_assistant(agent, &content, &reasoning_content, &post_parsed);
-
-        let _ = agent_tx.send(Agent2Ui::AssistantMsg {
-            id: a_msg_id.clone(),
-            thinking: reasoning_content.clone()
-                .filter(|r| !r.is_empty()),
-            text: content.clone(),
-        });
-
-        learning::post_turn_maintenance(agent, &final_assistant);
-        super::title_gen::generate_title(agent, hp);
-        agent.health.record_turn();
-        if let Some(ref u) = usage {
-            agent.session_tokens += (u.prompt_cache_miss_tokens + u.completion_tokens) as u64;
-            agent.token_estimate = u.prompt_tokens;
-        }
-    } else {
-        let _ = build_and_push_assistant(agent, &content, &reasoning_content, &post_parsed);
-
-        let _ = agent_tx.send(Agent2Ui::AssistantMsg {
-            id: a_msg_id.clone(),
-            thinking: reasoning_content.clone()
-                .filter(|r| !r.is_empty()),
-            text: content.clone(),
-        });
-
-        for tc in &post_parsed {
-            let tool_def = make_tool_def(&tc.id, &tc.function.name, &tc.function.arguments);
-            let _ = agent_tx.send(Agent2Ui::ToolCall {
-                msg_id: a_msg_id.clone(),
-                tool: tool_def,
-            });
-        }
-
-        let results: Vec<(String, String, String, String)> = {
-            use std::thread;
-            let mut handles = Vec::new();
-            for tc in &post_parsed {
-                let name = tc.function.name.clone();
-                let args = tc.function.arguments.clone();
-                let id = tc.id.clone();
-                handles.push(thread::spawn(move || {
-                    let result =
-                        crate::tools::execute_tool_with_id(&name, "", &args, &id);
-                    (name, id, args, result)
-                }));
-            }
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        };
-
-        for (name, id, args, tr_content) in &results {
-            let tr_success = !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
-            let failed = !tr_success;
-            agent.health.record_tool_call();
-            if failed { agent.tool_failures += 1; }
-
-            let mut appender = ToolResultAppender::new(agent);
-            appender.append(name, id, args, tr_content);
-            emit_tool_result(agent_tx, id, tr_content, tr_success, None);
-
-            if !failed && name == "write_file" {
-                tracker::track_file_written(agent, args);
-            }
-            if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                agent.touch_file(&path);
-            }
-            if name == "delete_file" {
-                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                    agent.file_last_read.remove(&path);
-                }
-            }
-        }
-
-        super::title_gen::generate_title(agent, hp);
-
+    if ipc_broken {
         let _ = agent_tx.send(Agent2Ui::TurnEnd {
-            stop_reason: Some("tool_calls".to_string()),
-            usage,
+            stop_reason: Some("error".to_string()),
+            usage: None,
             context_tokens: agent.token_estimate,
             context_limit: agent.config.context_limit,
             session_tokens: agent.session_tokens,
@@ -537,8 +410,8 @@ pub fn handle_user_input(
     super::title_gen::generate_title(agent, hp);
 
     let _ = agent_tx.send(Agent2Ui::TurnEnd {
-        stop_reason,
-        usage,
+        stop_reason: Some("cancelled".to_string()),
+        usage: None,
         context_tokens: agent.token_estimate,
         context_limit: agent.config.context_limit,
         session_tokens: agent.session_tokens,

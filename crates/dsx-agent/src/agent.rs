@@ -64,12 +64,6 @@ pub struct AgentState {
     /// rendered into the system prompt tail, then cleared after build_context().
     pub turn_annotations: Vec<String>,
 
-    // ── Tool round limits ──
-    pub max_tool_rounds: u32,
-
-    // ── Streaming state ──
-    pub stream_content: String,
-    pub stream_reasoning: String,
     pub stream_cancelled: bool,
 
     // ── File hash cache ──
@@ -83,8 +77,6 @@ impl AgentState {
         let prompt = config::system_prompt();
         let mut ctx = ContextAssembler::new();
         ctx.push_system(Message::system(&prompt));
-
-        let max_tool_rounds = config.max_tool_rounds.unwrap_or(10);
 
         let state = Self {
             ctx,
@@ -108,9 +100,6 @@ impl AgentState {
             health: DsAgentsHealthPlatform::new(),
             files_written_this_turn: Vec::new(),
             turn_annotations: Vec::new(),
-            stream_content: String::new(),
-            stream_reasoning: String::new(),
-            max_tool_rounds,
             stream_cancelled: false,
             file_cache: std::collections::HashMap::new(),
         };

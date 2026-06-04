@@ -1,110 +1,164 @@
+// ── InfoPanel ──
+// Left sidebar: context usage, KV cache, balance, tool calls, audit log, sessions.
+
 import { useState } from 'react'
-import { T } from '../i18n'
+import { tt } from '../i18n'
+import { Button, Badge, Card, EmptyState } from './shared'
+import { getAllToolLabels } from '../domain/tool-registry'
 
 interface InfoPanelProps {
   tokens: { used: number; limit: number }
   cache: { hit: number; miss: number }
   balance: string
   sessionId: string
-  sessions: any[]
+  sessions: SessionMeta[]
+  auditLog: unknown[]
+  toolBatch: { names: string[]; startMs: number } | null
+  toolNames: string[]
   onSettings: () => void
   onNewSession: () => void
   onResumeSession: (seed: string) => void
   onDeleteAllSessions: () => void
   onDeleteSession: (seed: string) => void
+  onRefreshBalance: () => void
 }
 
-export function InfoPanel({
-  tokens, cache, balance,
-  onSettings, onNewSession, onResumeSession,
-  sessionId, sessions,
-  onDeleteAllSessions, onDeleteSession,
-}: InfoPanelProps) {
-  const pct = tokens.limit > 0 ? tokens.used / tokens.limit : 0
-  const bar = pct > 0.65 ? 'var(--error)' : pct > 0.4 ? 'var(--warning)' : 'var(--accent)'
-  const [showHistory, setShowHistory] = useState(false)
+interface SessionMeta {
+  seed: string
+  date?: string
+  model?: string
+  message_count?: number
+}
 
-  const fmtDate = (ts: number) => {
-    const d = new Date(ts * 1000)
-    return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
-  }
+const toolLabels = getAllToolLabels()
+
+export function InfoPanel({
+  tokens, cache, balance, sessionId, sessions,
+  toolBatch, toolNames, auditLog,
+  onSettings, onNewSession,
+  onResumeSession, onDeleteAllSessions, onDeleteSession, onRefreshBalance,
+}: InfoPanelProps) {
+  const [showHistory, setShowHistory] = useState(true)
+  const usagePct = tokens.limit > 0 ? Math.min(100, (tokens.used / tokens.limit) * 100) : 0
+  const cacheTotal = cache.hit + cache.miss
+  const cacheHitPct = cacheTotal > 0 ? (cache.hit / cacheTotal) * 100 : 0
+  const usageColor = usagePct > 80 ? 'var(--error)' : usagePct > 60 ? 'var(--warning)' : 'var(--success)'
 
   return (
-    <div className="h-full flex flex-col text-sm">
-      <div className="p-3 border-b border-[var(--border)]">
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-[var(--text-h)] uppercase tracking-wide">{tt('info.title')}</span>
+        <Button variant="ghost" size="sm" onClick={onSettings} aria-label={tt('common.settings')}>
+          ⚙
+        </Button>
+      </div>
+
+      {/* Context usage */}
+      <Card padding="sm">
+        <div className="text-xs text-[var(--muted)] mb-1.5">{tt('info.usage')}</div>
+        <div className="flex items-center justify-between text-xs text-[var(--text-h)] font-mono mb-1">
+          <span>{tokens.used.toLocaleString()}</span>
+          <span>{tokens.limit.toLocaleString()}</span>
+        </div>
+        <div className="h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
+          <div className="h-full rounded-full transition-all duration-300" style={{ width: `${usagePct}%`, backgroundColor: usageColor }} />
+        </div>
+      </Card>
+
+      {/* KV Cache */}
+      <Card padding="sm">
+        <div className="text-xs text-[var(--muted)] mb-1.5">{tt('info.kvCache')}</div>
+        <div className="flex gap-2 text-xs font-mono text-[var(--text-h)]">
+          <Badge variant="success">{tt('info.hit')} {cache.hit.toLocaleString()}</Badge>
+          <Badge variant="default">{tt('info.miss')} {cache.miss.toLocaleString()}</Badge>
+        </div>
+        {cacheTotal > 0 && (
+          <div className="mt-1.5 h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden flex">
+            <div className="h-full bg-[var(--success)]" style={{ width: `${cacheHitPct}%` }} />
+            <div className="h-full bg-[var(--text)]/20" style={{ width: `${100 - cacheHitPct}%` }} />
+          </div>
+        )}
+      </Card>
+
+      {/* Balance */}
+      <Card padding="sm">
         <div className="flex items-center justify-between mb-1">
-          <div className="font-bold text-[var(--text-h)] text-sm">DSX</div>
-          <div className="flex gap-1">
-            <button onClick={onNewSession} className="text-[var(--muted)] hover:text-[var(--accent)] text-[13px] px-1" title="新对话">＋</button>
-            <button onClick={onSettings} className="text-[var(--muted)] hover:text-[var(--text-h)] px-1">⚙</button>
-          </div>
+          <span className="text-xs text-[var(--muted)]">{tt('info.balance')}</span>
+          <Button variant="ghost" size="sm" onClick={onRefreshBalance} aria-label={tt('common.refresh')}>
+            ↻
+          </Button>
         </div>
-        <div className="text-[14px] font-mono text-[var(--muted)] truncate" title={sessionId}>{sessionId ? `#${sessionId.slice(0, 8)}` : '---'}</div>
-      </div>
+        <div className="text-xs font-mono text-[var(--text-h)]">{balance || tt('info.noBalance')}</div>
+      </Card>
 
-      <div className="p-3 space-y-3">
-        <div>
-          <div className="text-[var(--muted)] mb-1">{T.context}</div>
-          <div className="h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
-            <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct * 100, 100)}%`, background: bar }} />
+      {/* Active tool calls */}
+      {(toolBatch || toolNames.length > 0) && (
+        <Card padding="sm">
+          <div className="text-xs text-[var(--muted)] mb-1.5">{tt('info.toolCallTitle')}</div>
+          <div className="flex flex-wrap gap-1">
+            {toolNames.map((n, i) => (
+              <Badge key={i} variant="accent">{toolLabels[n] || n}</Badge>
+            ))}
           </div>
-          <div className="text-[14px] text-[var(--muted)] mt-1">{tokens.used.toLocaleString()} / {tokens.limit.toLocaleString()}</div>
-        </div>
-        {cache.hit + cache.miss > 0 && (
-          <div>
-            <div className="text-[var(--muted)] mb-1">KV Cache</div>
-            <div className="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
-              <div className="h-full rounded-full bg-[var(--success)] transition-all"
-                style={{ width: `${cache.hit + cache.miss > 0 ? (cache.hit / (cache.hit + cache.miss)) * 100 : 0}%` }} />
-            </div>
-            <div className="text-[14px] text-[var(--muted)] mt-0.5">
-              {cache.hit + cache.miss > 0
-                ? `${Math.round((cache.hit / (cache.hit + cache.miss)) * 100)}% hit · ${(cache.hit / 1000).toFixed(1)}K / ${((cache.hit + cache.miss) / 1000).toFixed(1)}K`
-                : '—'}
-            </div>
-          </div>
-        )}
-        {balance && (
-          <div className="text-[14px]">
-            <span className="text-[var(--muted)]">余额: </span>
-            <span className="text-[var(--text-h)] font-medium">{balance}</span>
-          </div>
-        )}
-      </div>
-
-      {sessions.length > 0 && (
-        <div className="border-t border-[var(--border)] flex-1 overflow-hidden flex flex-col">
-          <button onClick={() => setShowHistory(!showHistory)}
-            className="flex items-center justify-between px-3 py-2 text-[13px] text-[var(--muted)] hover:text-[var(--text-h)] hover:bg-[var(--bg-hover)]">
-            <span>历史对话 ({sessions.length})</span>
-            <span className="flex items-center gap-2">
-              <span onClick={(e) => { e.stopPropagation(); if (confirm(`删除全部 ${sessions.length} 个会话？`)) onDeleteAllSessions() }}
-                className="text-[14px] text-[var(--error)] hover:text-[var(--error)] hover:brightness-110" title="删除全部">
-                全部清除
-              </span>
-              <span>{showHistory ? '▾' : '▸'}</span>
-            </span>
-          </button>
-          {showHistory && (
-            <div className="flex-1 overflow-y-auto px-2 space-y-0.5 pb-2">
-              {sessions.map((s, i) => (
-                <div key={i} onClick={() => onResumeSession(s.seed)} className="px-2 py-1.5 rounded-md hover:bg-[var(--bg-hover)] cursor-pointer text-[13px] flex items-start gap-1">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[var(--text)] truncate">{s.last_summary || `对话 ${s.seed?.slice(0, 8) || ''}`}</div>
-                    <div className="text-[14px] text-[var(--muted)]">
-                      {s.model || '?'} · {fmtDate(s.updated_at || 0)} · {s.message_count || s.messages?.length || 0}条
-                    </div>
-                  </div>
-                  <button onClick={(e) => { e.stopPropagation(); if (confirm('删除此会话？')) onDeleteSession(s.seed) }}
-                    className="ml-auto text-[var(--muted)] hover:text-[var(--error)] text-[14px] shrink-0">
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        </Card>
       )}
+
+      {/* Session history */}
+      <Card padding="sm">
+        <button onClick={() => setShowHistory(h => !h)} className="w-full flex items-center justify-between text-xs text-[var(--muted)]">
+          <span>{tt('info.history')} ({sessions.length})</span>
+          <span className="text-[10px]">{showHistory ? '▾' : '▸'}</span>
+        </button>
+        {showHistory && (
+          <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
+            {sessions.length === 0 ? (
+              <EmptyState icon="💬" title={tt('info.noHistory')} />
+            ) : (
+              sessions.map((s, i) => (
+                <div key={s.seed || i} className={`flex items-center justify-between px-2 py-1 rounded-md text-xs ${s.seed === sessionId ? 'bg-[var(--accent-light)]' : 'hover:bg-[var(--bg-tertiary)]'}`}>
+                  <button onClick={() => onResumeSession(s.seed)} className="flex-1 text-left truncate">
+                    <span className="text-[var(--text-h)]">{s.seed.slice(0, 10)}</span>
+                    {s.date && <span className="text-[var(--muted)] ml-1">{s.date}</span>}
+                    {s.message_count && <span className="text-[var(--muted)] ml-1">{s.message_count} {tt('info.messages')}</span>}
+                  </button>
+                  <Button variant="ghost" size="sm" onClick={() => onDeleteSession(s.seed)} aria-label={tt('common.delete')}>
+                    ×
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Audit Log */}
+      {auditLog.length > 0 && (
+        <Card padding="sm">
+          <div className="text-xs text-[var(--muted)] mb-1">{tt('info.auditLog')}</div>
+          <div className="space-y-0.5 max-h-32 overflow-y-auto">
+            {auditLog.slice().reverse().map((r: any, i: number) => (
+              <div key={i} className="text-xs font-mono truncate">
+                <span className={r.success ? 'text-[var(--success)]' : 'text-[var(--error)]'}>
+                  {r.success ? '✓' : '✗'}
+                </span>
+                <span className="text-[var(--text-h)] ml-1">{r.name}</span>
+                {r.args && <span className="text-[var(--muted)] ml-1">{r.args.slice(0, 60)}</span>}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        <Button variant="secondary" size="sm" onClick={onNewSession} className="flex-1">
+          {tt('chat.newSession')}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onDeleteAllSessions} className="text-[var(--error)]">
+          {tt('common.delete')}
+        </Button>
+      </div>
     </div>
   )
 }

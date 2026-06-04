@@ -65,7 +65,15 @@ pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: 
     };
     let effective_action = if action.is_empty() { name } else { action };
 
-    // Check cancel before proceeding
+    let source = if call_id.starts_with("dsml_tc_") {
+        "DSML"
+    } else if call_id.starts_with("xml_tc_") {
+        "XML"
+    } else {
+        "native"
+    };
+    log::info!("tool [{source}] call: {name} (id={call_id})");
+
     if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
         return "[CANCELLED]".to_string();
     }

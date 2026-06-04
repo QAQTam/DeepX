@@ -1,6 +1,11 @@
-import { useState, useEffect } from 'react'
-import { invoke } from '@tauri-apps/api/core'
-import { T } from '../i18n'
+// ── SettingsDialog ──
+// Full settings: API Key, model, context limit, max tokens, effort, language, theme.
+
+import { useState, useEffect, type ChangeEvent } from 'react'
+import { api, type ConfigData } from '../bridge/tauri'
+import { tt, setLang } from '../i18n'
+import { Button, Input, Select } from './shared'
+import { useTheme, type Theme } from './shared/ThemeProvider'
 
 interface SettingsDialogProps {
   onClose: () => void
@@ -15,135 +20,163 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const [contextLimit, setContextLimit] = useState(1000000)
   const [maxTokens, setMaxTokens] = useState(16384)
   const [effort, setEffort] = useState('high')
-  const [lang, setLang] = useState('zh')
+  const [lang, setLangState] = useState('zh')
   const [saving, setSaving] = useState(false)
-
-  const baseUrl = 'https://api.deepseek.com'
+  const { theme, setTheme } = useTheme()
 
   useEffect(() => {
-    invoke<any>('load_config').then(cfg => {
+    api.loadConfig().then((cfg: ConfigData) => {
       if (cfg.api_key && cfg.api_key !== 'null') setApiKey(cfg.api_key)
       if (cfg.model) setModel(cfg.model)
       if (cfg.context_limit) setContextLimit(cfg.context_limit)
       if (cfg.max_tokens) setMaxTokens(cfg.max_tokens)
       if (cfg.effort) setEffort(cfg.effort)
-      if (cfg.lang) setLang(cfg.lang)
+      if (cfg.lang) setLangState(cfg.lang)
       let cached = cfg.cached_models
       if (typeof cached === 'string') try { cached = JSON.parse(cached) } catch { /* ignore */ }
       if (Array.isArray(cached)) setModels(cached)
-      else setModels([])
     }).catch(() => {})
   }, [])
 
-  const fetchModels = () => {
-    setFetching(true); setFetchError('')
-    invoke<string[]>('fetch_models', { apiKey, baseUrl }).then(list => {
+  const fetchModels = async () => {
+    setFetching(true)
+    setFetchError('')
+    try {
+      const list = await api.fetchModels(apiKey, 'https://api.deepseek.com')
       setModels(list)
-      setModel('')
-      invoke('update_config', { field: 'cached_models', value: JSON.stringify(list.slice(0, 5)) }).catch(() => {})
-    }).catch(e => { setFetchError(String(e)); setModels([]) }).finally(() => setFetching(false))
+      if (list.length > 0 && !list.includes(model)) setModel(list[0])
+      await api.updateConfig('cached_models', JSON.stringify(list.slice(0, 5)))
+    } catch (e: any) {
+      setFetchError(String(e))
+    } finally {
+      setFetching(false)
+    }
   }
 
-  const save = () => {
+  const save = async () => {
     setSaving(true)
-    invoke('save_config', { apiKey, baseUrl, model, contextLimit, maxTokens, effort, lang }).then(() => {
-      invoke('reload_agent').catch(() => {})
+    try {
+      await api.saveConfig({
+        apiKey, baseUrl: 'https://api.deepseek.com', model,
+        contextLimit, maxTokens, effort, lang,
+      })
+      setLang(lang)
+      await api.reloadAgent()
       onClose()
-    }).catch(() => {
-      invoke('update_config', { field: 'api_key', value: apiKey })
-      invoke('update_config', { field: 'base_url', value: baseUrl })
-      invoke('update_config', { field: 'model', value: model })
-      invoke('update_config', { field: 'context_limit', value: String(contextLimit) })
-      invoke('update_config', { field: 'max_tokens', value: String(maxTokens) })
-      invoke('update_config', { field: 'lang', value: lang })
-      invoke('update_config', { field: 'effort', value: effort })
-      invoke('reload_agent').catch(() => {})
-      onClose()
-    })
+    } catch (e: any) {
+      setFetchError(String(e))
+      setSaving(false)
+    }
   }
+
+  const modelOptions = models.length > 0
+    ? models.map(m => ({ value: m, label: m }))
+    : [{ value: model, label: model }]
 
   return (
-    <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-50">
-      <div className="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-lg w-full mx-4 shadow-md">
-        <div className="text-sm font-bold text-[var(--text-h)] mb-4">{T.settings}</div>
-
-        <div className="mb-3">
-          <label className="block text-xs text-[var(--muted)] mb-1">API Key</label>
-          <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-            placeholder="输入 DeepSeek API Key"
-            className="w-full bg-[var(--bg-tertiary)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-xs text-[var(--text-h)] font-mono outline-none focus:border-[var(--accent)]" />
+    <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-50" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-md w-full mx-4 shadow-lg max-h-[90vh] overflow-y-auto transition-theme">
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-base font-bold text-[var(--text-h)]">{tt('settings.title')}</h2>
+          <Button variant="ghost" size="sm" onClick={onClose}>✕</Button>
         </div>
 
-        <div className="mb-3">
-          <label className="block text-xs text-[var(--muted)] mb-1">Base URL</label>
-          <input type="text" value={baseUrl} readOnly
-            className="w-full bg-[var(--bg-tertiary)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-xs text-[var(--muted)] font-mono outline-none cursor-not-allowed" />
-        </div>
+        <div className="space-y-4">
+          {/* API Key */}
+          <Input
+            type="password"
+            label={tt('settings.apiKey')}
+            placeholder={tt('settings.apiKeyPlaceholder')}
+            hint={tt('settings.apiKeyHint')}
+            value={apiKey}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setApiKey(e.target.value)}
+          />
 
-        <div className="mb-3">
-          <label className="block text-xs text-[var(--muted)] mb-1">Model</label>
-          <div className="flex gap-2">
-            {models.length > 0 ? (
-              <select value={model} onChange={e => setModel(e.target.value)}
-                className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-xs text-[var(--text-h)] font-mono outline-none focus:border-[var(--accent)]">
-                {models.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-            ) : (
-              <input type="text" value={model} onChange={e => setModel(e.target.value)}
-                className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-xs text-[var(--text-h)] font-mono outline-none focus:border-[var(--accent)]" />
-            )}
-            <button onClick={fetchModels} disabled={fetching || !apiKey}
-              className="bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-h)] rounded-lg px-3 py-1.5 text-xs hover:brightness-95 disabled:opacity-40 transition-colors shrink-0">
-              {fetching ? '...' : '获取'}
-            </button>
-          </div>
-          {fetchError && <div className="text-[10px] text-[var(--error)] mt-1">{fetchError}</div>}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <div>
-            <label className="block text-xs text-[var(--muted)] mb-1">Context Limit</label>
-            <input type="number" value={contextLimit} onChange={e => setContextLimit(Number(e.target.value))}
-              className="w-full bg-[var(--bg-tertiary)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-xs text-[var(--text-h)] font-mono outline-none focus:border-[var(--accent)]" />
-          </div>
-          <div>
-            <label className="block text-xs text-[var(--muted)] mb-1">Max Tokens</label>
-            <input type="number" value={maxTokens} onChange={e => setMaxTokens(Number(e.target.value))}
-              className="w-full bg-[var(--bg-tertiary)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-xs text-[var(--text-h)] font-mono outline-none focus:border-[var(--accent)]" />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div>
-            <label className="block text-xs text-[var(--muted)] mb-1">思考强度</label>
-            <div className="flex gap-1">
-              {['high', 'max'].map(e => (
-                <button key={e} onClick={() => setEffort(e)}
-                  className={`flex-1 rounded-lg py-1.5 text-xs border transition-all ${effort === e ? 'bg-[var(--accent-light)] border-[var(--accent)] text-[var(--accent)] font-medium' : 'bg-[var(--bg-tertiary)] border-[var(--border)] text-[var(--text)]'}`}>
-                  {e === 'high' ? '高' : '最高'}
-                </button>
-              ))}
+          {/* Model */}
+          <div className="flex flex-col gap-1">
+            <Select
+              label={tt('settings.model')}
+              value={model}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => setModel(e.target.value)}
+              options={modelOptions}
+            />
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={fetchModels} loading={fetching}>
+                {fetching ? tt('settings.fetchingModels') : tt('settings.fetchModels')}
+              </Button>
+              {fetchError && <span className="text-xs text-[var(--error)]">{fetchError}</span>}
             </div>
           </div>
-          <div>
-            <label className="block text-xs text-[var(--muted)] mb-1">{T.language}</label>
-            <div className="flex gap-1">
-              {['zh', 'en'].map(l => (
-                <button key={l} onClick={() => setLang(l)}
-                  className={`flex-1 rounded-lg py-1.5 text-xs border transition-all ${lang === l ? 'bg-[var(--accent-light)] border-[var(--accent)] text-[var(--accent)] font-medium' : 'bg-[var(--bg-tertiary)] border-[var(--border)] text-[var(--text)]'}`}>
-                  {l === 'zh' ? '中文' : 'English'}
-                </button>
-              ))}
-            </div>
-          </div>
+
+          {/* Context Limit */}
+          <Select
+            label={tt('settings.contextLimit')}
+            value={String(contextLimit)}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setContextLimit(Number(e.target.value))}
+            options={[
+              { value: '131072', label: '128K' },
+              { value: '262144', label: '256K' },
+              { value: '524288', label: '512K' },
+              { value: '1000000', label: '1M' },
+            ]}
+          />
+
+          {/* Max Tokens */}
+          <Select
+            label={tt('settings.maxTokens')}
+            value={String(maxTokens)}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setMaxTokens(Number(e.target.value))}
+            options={[
+              { value: '4096', label: '4K' },
+              { value: '8192', label: '8K' },
+              { value: '16384', label: '16K' },
+              { value: '32768', label: '32K' },
+            ]}
+          />
+
+          {/* Effort */}
+          <Select
+            label={tt('settings.effort')}
+            value={effort}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setEffort(e.target.value)}
+            options={[
+              { value: 'high', label: tt('settings.effortHigh') },
+              { value: 'max', label: tt('settings.effortMax') },
+            ]}
+          />
+
+          {/* Language */}
+          <Select
+            label={tt('settings.lang')}
+            value={lang}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setLangState(e.target.value)}
+            options={[
+              { value: 'zh', label: tt('settings.langZh') },
+              { value: 'en', label: tt('settings.langEn') },
+            ]}
+          />
+
+          {/* Theme */}
+          <Select
+            label={tt('settings.themeLabel')}
+            value={theme}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setTheme(e.target.value as Theme)}
+            options={[
+              { value: 'system', label: tt('settings.themeSystem') },
+              { value: 'light', label: tt('settings.themeLight') },
+              { value: 'dark', label: tt('settings.themeDark') },
+            ]}
+          />
         </div>
 
-        <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 bg-[var(--bg-tertiary)] text-[var(--text-h)] rounded-lg py-2 text-sm hover:brightness-95">{T.cancel}</button>
-          <button onClick={save} disabled={saving}
-            className="flex-1 bg-[var(--accent)] text-white rounded-lg py-2 text-sm font-medium hover:brightness-110 disabled:opacity-40">
-            {saving ? '保存中...' : T.save}
-          </button>
+        {/* Actions */}
+        <div className="flex gap-3 mt-6">
+          <Button variant="secondary" onClick={onClose} className="flex-1">
+            {tt('common.cancel')}
+          </Button>
+          <Button variant="primary" onClick={save} loading={saving} className="flex-1">
+            {saving ? tt('settings.saving') : tt('common.save')}
+          </Button>
         </div>
       </div>
     </div>

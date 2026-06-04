@@ -1,5 +1,13 @@
 use dsx_types::{ToolCall, FunctionCall, ToolDef};
 
+pub fn has_dsml(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    lower.contains("dsml")
+        && (lower.contains("invoke")
+            || lower.contains("tool_calls")
+            || lower.contains("parameter"))
+}
+
 /// Strip markdown code fences from content so tool call examples
 /// inside ``` blocks are not accidentally parsed as real tool calls.
 pub fn strip_fenced_code(content: &str) -> String {
@@ -121,13 +129,15 @@ fn parse_tool_use_block(s: &str) -> Option<(String, String, &str)> {
     let after_ns = &block[ns + n_open.len()..];
     let ne = after_ns.find(n_close)?;
     let name = after_ns[..ne].trim().to_string();
+    if name.is_empty() { return None; }
     let args_text = after_ns[ne + n_close.len()..].trim().to_string();
     Some((name, args_text, rest))
 }
 
 fn parse_invoke_block(s: &str) -> Option<(String, String, &str)> {
     let s = s.strip_prefix("<invoke ")?;
-    let name = extract_attr_value(s, "name")?;
+    let name = extract_attr_value(s, "name")?.trim().to_string();
+    if name.is_empty() { return None; }
     let close_tag = s.find('>')?;
     let after_open = &s[close_tag + 1..];
     let end_tag = "</invoke>";
@@ -142,7 +152,7 @@ fn parse_invoke_block(s: &str) -> Option<(String, String, &str)> {
     loop {
         let Some(p) = rem.find(param_tag) else { break };
         let after_p = &rem[p + param_tag.len()..];
-        let param_name = extract_attr_value(after_p, "name")?;
+        let param_name = extract_attr_value(after_p, "name")?.trim().to_string();
         let str_attr = extract_attr_value(after_p, "string").unwrap_or_default();
         let Some(gt) = after_p.find('>') else { break };
         let content_start = &after_p[gt + 1..];
@@ -203,6 +213,16 @@ fn normalize_args(args_text: &str) -> String {
 /// Format: <\u{ff5c}DSML\u{ff5c}tool_calls>...<｜DSML｜invoke name="fn">...</｜DSML｜invoke>...
 /// Caller MUST strip markdown code fences before passing content.
 pub fn parse_dsml_tool_calls(content: &str, tool_defs: &[ToolDef]) -> (String, Vec<ToolCall>) {
+    let owned;
+    let content = {
+        let s = content
+            .replace("|DSML|", "\u{ff5c}DSML\u{ff5c}")
+            .replace("|DSML", "\u{ff5c}DSML")
+            .replace("DSML|", "DSML\u{ff5c}");
+        owned = s;
+        owned.as_str()
+    };
+
     // Normalize double-bar variant ￌￌDSMLￌￌ → ￌDSMLￌ
     let normalized;
     let content = if content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}") {
@@ -253,6 +273,8 @@ pub fn parse_dsml_tool_calls(content: &str, tool_defs: &[ToolDef]) -> (String, V
             let Some(inv_pos) = bq.find(&invoke_tag) else { break };
             let after_inv = &bq[inv_pos + invoke_tag.len()..];
             let name = extract_attr_value(after_inv, "name").unwrap_or_default();
+            let name = name.trim().to_string();
+            if name.is_empty() { break; }
 
             let Some(inv_end) = after_inv.find(&invoke_close) else { break };
             let body = &after_inv[..inv_end];
@@ -346,7 +368,7 @@ fn extract_dsml_params_typed(
     loop {
         let Some(p) = rem.find(param_tag) else { break };
         let after = &rem[p + param_tag.len()..];
-        let name = extract_attr_value(after, "name").unwrap_or_default();
+        let name = extract_attr_value(after, "name").unwrap_or_default().trim().to_string();
         let str_attr = extract_attr_value(after, "string").unwrap_or_default();
 
         let Some(gte) = after.find('>') else { break };
@@ -458,6 +480,78 @@ mod tests {
         assert_eq!(tcs.len(), 1, "Expected 1 real tool call, got {}: {:?}", tcs.len(), tcs);
         let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
         assert_eq!(args["path"], "real.rs");
+    }
+
+    #[test]
+    fn test_has_dsml_detection() {
+        assert!(has_dsml("use <|DSML|invoke name=\"read\">"));
+        assert!(has_dsml("use <\u{ff5c}DSML\u{ff5c}tool_calls>"));
+        assert!(has_dsml("DSML invoke read_file"));
+        assert!(has_dsml("dsml tool_calls"));
+        assert!(has_dsml("dsml parameter path"));
+
+        assert!(!has_dsml("plain text without markers"));
+        assert!(!has_dsml(""));
+        assert!(!has_dsml("dsml only"));
+        assert!(!has_dsml("just invoke tool_calls parameter"));
+    }
+
+    #[test]
+    fn test_halfwidth_dsml_parsing() {
+        let content = "I'll read the file.\n\n<|DSML|tool_calls>\n<|DSML|invoke name=\"read_file\">\n<|DSML|parameter name=\"path\" string=\"true\">/tmp/test.txt\n</|DSML|parameter>\n<|DSML|parameter name=\"start_line\" string=\"false\">1\n</|DSML|parameter>\n</|DSML|invoke>\n</|DSML|tool_calls>";
+
+        assert!(has_dsml(content), "Fuzzy detection should catch halfwidth DSML");
+
+        let tool_defs: Vec<ToolDef> = vec![ToolDef {
+            call_type: "function".into(),
+            function: ToolFunction {
+                name: "read_file".into(),
+                description: "Read file".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "start_line": { "type": "integer" }
+                    }
+                }),
+            },
+        }];
+
+        let (cleaned, tcs) = parse_dsml_tool_calls(content, &tool_defs);
+        assert_eq!(tcs.len(), 1, "Expected 1 tool call, got {}: {:?}", tcs.len(), tcs);
+        assert_eq!(tcs[0].function.name, "read_file");
+        let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
+        assert_eq!(args["path"], "/tmp/test.txt");
+        assert_eq!(args["start_line"], 1);
+        assert!(!cleaned.contains("DSML"), "Cleaned content should not contain DSML tags");
+    }
+
+    #[test]
+    fn test_mixed_pipe_dsml_parsing() {
+        let content = "Text.\n<|DSML|tool_calls>\n<\u{ff5c}DSML\u{ff5c}invoke name=\"exec\">\n<|DSML|parameter name=\"command\" string=\"true\">ls\n</|DSML|parameter>\n</\u{ff5c}DSML\u{ff5c}invoke>\n</|DSML|tool_calls>";
+
+        assert!(has_dsml(content));
+
+        let tool_defs: Vec<ToolDef> = vec![ToolDef {
+            call_type: "function".into(),
+            function: ToolFunction {
+                name: "exec".into(),
+                description: "Execute command".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" }
+                    }
+                }),
+            },
+        }];
+
+        let (cleaned, tcs) = parse_dsml_tool_calls(content, &tool_defs);
+        assert_eq!(tcs.len(), 1, "Expected 1 tool call, got {}: {:?}", tcs.len(), tcs);
+        assert_eq!(tcs[0].function.name, "exec");
+        let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
+        assert_eq!(args["command"], "ls");
+        assert!(!cleaned.contains("DSML"));
     }
 }
 

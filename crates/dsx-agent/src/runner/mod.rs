@@ -227,7 +227,6 @@ pub fn run_agent_loop(
                     agent.config.effort = cfg.effort;
                     agent.config.max_tokens = cfg.max_tokens;
                     agent.config.context_limit = cfg.context_limit;
-                    agent.config.max_tool_rounds = cfg.max_tool_rounds;
                     agent.config.lang = cfg.lang;
                     agent.health.context_limit = cfg.context_limit;
                     if let Some(ref key) = cfg.context7_api_key {
