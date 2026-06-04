@@ -72,12 +72,13 @@ tauri-build:
 
 # Build Tauri .deb package (release)
 # Copies dsx → resources/ so Tauri bundler embeds the correct binary.
+# Uses `pnpm tauri build` (not cargo build) to trigger .deb bundling.
 tauri-pack:
     cargo build --release -p dsx
     cp target/release/dsx crates/dsx-tauri/src-tauri/resources/dsx
-    cd crates/dsx-tauri && pnpm build
-    cargo build --release -p dsx-tauri
-    @echo "→ deb: crates/dsx-tauri/src-tauri/target/release/bundle/deb/"
+    cd crates/dsx-tauri && pnpm tauri build
+    @deb=$(find crates/dsx-tauri/src-tauri/target/release/bundle/deb -name "*.deb" 2>/dev/null | head -1); \
+    if [ -n "$$deb" ]; then echo "→ $$deb"; else echo "✗ .deb not found — check build errors above"; fi
 
 # ─── Pack ───────────────────────────────────────────────
 
