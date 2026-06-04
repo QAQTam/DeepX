@@ -50,7 +50,7 @@ export function useAgent(): AgentHandle {
           dispatch({ type: 'STREAM_START', kind: (p.kind as any) || 'answering', toolNames: (p.tool_names as string[]) || [] })
           break
         case 'stream_delta':
-          dispatch({ type: 'STREAM_DELTA', delta: p.delta as string, kind: (p.kind as any) || 'content' })
+          dispatch({ type: 'STREAM_DELTA', delta: p.delta as string })
           break
         case 'stream_end':
           dispatch({ type: 'STREAM_END', isFinal: !!p.is_final })

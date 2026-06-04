@@ -39,7 +39,19 @@ fn find_dsx(app: &AppHandle) -> Result<String, String> {
         if p.exists() { Some(p.to_string_lossy().to_string()) } else { None }
     };
 
-    // 1) Tauri resource dir
+    // ── debug/dev: prefer target/ over stale resources/ copy ──
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(cwd) = std::env::current_dir() {
+            for ancestor in cwd.ancestors().take(8) {
+                for sub in &["debug", "release"] {
+                    if let Some(p) = check(ancestor.join("target").join(sub).join(name)) { return Ok(p); }
+                }
+            }
+        }
+    }
+
+    // 1) Tauri resource dir (serves release .deb packaging)
     if let Ok(d) = app.path().resource_dir() {
         if let Some(p) = check(d.join(name)) { return Ok(p); }
     }
@@ -63,11 +75,11 @@ fn find_dsx(app: &AppHandle) -> Result<String, String> {
         if let Some(p) = check(dir.join("resources").join(name)) { return Ok(p); }
     }
 
-    // 4) cwd and ancestors (debug/dev)
+    // 4) cwd + ancestors (non-debug fallback)
     if let Ok(cwd) = std::env::current_dir() {
         if let Some(p) = check(cwd.join(name)) { return Ok(p); }
         if let Some(p) = check(cwd.join("resources").join(name)) { return Ok(p); }
-        #[cfg(debug_assertions)]
+        #[cfg(not(debug_assertions))]
         for ancestor in cwd.ancestors().take(8) {
             for sub in &["debug", "release"] {
                 if let Some(p) = check(ancestor.join("target").join(sub).join(name)) { return Ok(p); }

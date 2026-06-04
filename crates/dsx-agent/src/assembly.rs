@@ -446,135 +446,15 @@ impl ContextAssembler {
     // ── Build: conversation messages ──
 
     /// Return conversation messages (user/assistant/tool), system messages stripped.
-    /// Old tool results (before the last user message) are smart-compressed:
-    ///   Collapse: exec exit-code, cargo-check pass, write_file confirm
-    ///   Summary: read_file → path+lines, diff → what changed
-    ///   Keep: explore, errors, unresolved content
+    /// Tool results are kept verbatim to preserve KV cache prefix stability across turns.
     pub fn build(&self) -> Vec<Message> {
         let mut msgs = self.to_vec();
         msgs.retain(|m| m.role != "system");
-
-        let last_user_idx = msgs.iter().rposition(|m| {
-            m.role == "user" && m.name.is_none()
-        });
-
-        if let Some(idx) = last_user_idx {
-            for msg in msgs.iter_mut().take(idx) {
-                if msg.role != "tool" { continue; }
-                for block in &mut msg.content {
-                    if let dsx_types::ContentBlock::ToolResult { ref mut content, .. } = block {
-                        *content = compact_tool_result(content);
-                    }
-                }
-            }
-        }
-
         msgs
     }
 }
 
-/// Truncate read_file output by file boundary: keep complete `[OK]` blocks
-/// without cutting in the middle of file contents.
-fn truncate_by_file_blocks(raw: &str) -> String {
-    const MAX_CHARS: usize = 4000;
-    if raw.len() <= MAX_CHARS { return raw.to_string(); }
 
-    let mut blocks: Vec<String> = Vec::new();
-    let mut current_block = String::new();
-    for line in raw.lines() {
-        if line.starts_with("[OK]") && !current_block.is_empty() {
-            blocks.push(std::mem::take(&mut current_block));
-        }
-        current_block.push_str(line);
-        current_block.push('\n');
-    }
-    if !current_block.is_empty() {
-        blocks.push(current_block);
-    }
-
-    let mut kept = String::new();
-    for (i, block) in blocks.iter().enumerate() {
-        if kept.len() + block.len() > MAX_CHARS && !kept.is_empty() {
-            kept.push_str(&format!(
-                "\n...[truncated: {} files kept, {} file(s) omitted, {} total chars]\n",
-                i, blocks.len() - i, raw.len()
-            ));
-            break;
-        }
-        kept.push_str(block);
-    }
-    // Ensure first line (tool_name:) is always included
-    if !kept.starts_with("read_file:") {
-        kept.insert_str(0, "read_file:\n");
-    }
-    kept
-}
-
-/// Smart-compress a tool result.
-/// Collapse: shell success / cargo check passes / write confirms.
-/// Summary: read_file/diff retain path + key info.
-/// Keep: explore, errors, unresolved bugs.
-fn compact_tool_result(raw: &str) -> String {
-    let tool_name = raw.lines().next().unwrap_or("tool").trim_end_matches(':');
-    let body = raw.lines().skip(1).collect::<Vec<_>>().join("\n").trim().to_string();
-
-    let is_err = raw.contains("[ERROR]") || raw.contains("[FAIL]") || raw.contains("[CANCELLED]");
-    let is_warn = raw.contains("[PARTIAL]") || raw.contains("[WARN]");
-
-    // ── Keep: read_file (file-boundary truncation) ──
-    if tool_name == "read_file" {
-        return truncate_by_file_blocks(raw);
-    }
-
-    // ── Keep: explore, errors, warnings ──
-    if tool_name == "explore" || is_err || is_warn {
-        if raw.len() <= 3000 { return raw.to_string(); }
-        let prefix: String = raw.lines().take(40).collect::<Vec<_>>().join("\n");
-        return format!("{}...\n[{}: truncated to {} lines, {} total chars]\n",
-            prefix, tool_name, 40, raw.len());
-    }
-
-    // ── Collapse: shell success / cargo check ──
-    if tool_name == "exec" {
-        let cmd = body.lines().next().unwrap_or("?").trim().chars().take(60).collect::<String>();
-        if raw.contains("cargo check") && raw.contains("[OK]") {
-            return format!("exec: cargo check → passed");
-        }
-        let code = if raw.contains("exit=0") || raw.contains("exit: 0") { "ok" }
-            else if raw.contains("[OK]") { "ok" }
-            else if is_err { "FAIL" }
-            else { "ran" };
-        return format!("exec: {} → {}", cmd, code);
-    }
-
-    // ── Collapse: write_file / edit_file confirmations ──
-    if tool_name == "write_file" || tool_name == "edit_file" {
-        let first = body.lines().next().unwrap_or("").trim();
-        if first.contains("[OK]") {
-            let path = first.trim_start_matches("[OK] ").trim();
-            let filename = path.rsplit(&['/', '\\']).next().unwrap_or(path);
-            return format!("{}: {} ✓", tool_name, filename);
-        }
-        return format!("{}: {}", tool_name, first);
-    }
-
-    // ── Summary: diff → what changed ──
-    if tool_name == "diff" {
-        let lines = body.lines().count();
-        return format!("diff: {} lines changed", lines);
-    }
-
-    // ── Summary: search / glob / list_dir ──
-    if matches!(tool_name, "search" | "glob" | "list_dir" | "grep") {
-        let count = body.lines().count();
-        let first = body.lines().next().unwrap_or("?").trim().chars().take(60).collect::<String>();
-        return format!("{}: {} ({} lines)", tool_name, first, count);
-    }
-
-    // ── Default: first line only ──
-    let first = body.lines().next().unwrap_or("?").trim().chars().take(80).collect::<String>();
-    format!("{}: {}", tool_name, first)
-}
 
 // ── build_context ──
 

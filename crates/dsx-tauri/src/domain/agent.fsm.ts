@@ -51,7 +51,7 @@ export type AgentAction =
   | { type: 'AGENT_CLOSED' }
   | { type: 'ERROR'; message: string }
   | { type: 'STREAM_START'; kind: StreamKind; toolNames?: string[] }
-  | { type: 'STREAM_DELTA'; delta: string; kind: 'thinking' | 'content' }
+  | { type: 'STREAM_DELTA'; delta: string; kind?: 'thinking' | 'content' }
   | { type: 'STREAM_END'; isFinal: boolean }
   | { type: 'FLUSH_STREAM' }
   | { type: 'CANCEL' }
@@ -147,7 +147,8 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
 
     case 'STREAM_DELTA': {
       const stream = { ...state.stream }
-      if (action.kind === 'thinking') {
+      const kind = action.kind ?? (state.stream.kind === 'thinking' ? 'thinking' : 'content')
+      if (kind === 'thinking') {
         stream.reasoning += action.delta
       } else {
         stream.content += action.delta

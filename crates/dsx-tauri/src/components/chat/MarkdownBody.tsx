@@ -35,7 +35,7 @@ export function MarkdownBody({ content }: MarkdownBodyProps) {
                     {tt('common.copy')}
                   </button>
                 </div>
-                <pre className="!m-0 p-3 text-xs font-mono bg-[#0d1117] text-[#e6edf3] overflow-x-auto">
+                <pre className="!m-0 p-3 text-xs font-mono bg-[var(--bg-tertiary)] text-[var(--text)] overflow-x-auto">
                   <code className={className} {...props}>{children}</code>
                 </pre>
               </div>

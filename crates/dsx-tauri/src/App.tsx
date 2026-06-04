@@ -1,4 +1,4 @@
-// ── App Shell (< 100 lines) ──
+// ── App Shell ──
 // State management delegated to hooks. View composition only.
 
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent as ReactKeyboard } from 'react'
@@ -12,6 +12,10 @@ import { StreamIndicator } from './components/StreamIndicator'
 import { ConfigWizard } from './components/ConfigWizard'
 import { SettingsDialog } from './components/SettingsDialog'
 import { AskUserDialog } from './components/AskUserDialog'
+import { ReasoningBlock } from './components/chat/ReasoningBlock'
+import { MarkdownBody } from './components/chat/MarkdownBody'
+import { useToast } from './components/shared'
+import { tt } from './i18n'
 
 export default function App() {
   // ── Hooks ──
@@ -20,12 +24,11 @@ export default function App() {
   const session = useSession()
   const balance = useBalance()
   const docs = useDocuments()
+  const { addToast } = useToast()
 
   // ── UI state (view-only) ──
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
-  const [streamMode, setStreamMode] = useState<'idle' | 'thinking' | 'tool_calling' | 'answering'>('idle')
-  const [toolNames, setToolNames] = useState<string[]>([])
   const [thinkingSecs, setThinkingSecs] = useState(0)
   const [tokenUsage, setTokenUsage] = useState({ used: 0, limit: 150000 })
   const [cacheInfo, setCacheInfo] = useState({ hit: 0, miss: 0 })
@@ -43,9 +46,11 @@ export default function App() {
   const thinkStartRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // ── Derived ──
+  // ── Derived from useAgent (single source of truth) ──
   const connected = agent.state.connected
   const isStreaming = agent.isStreaming
+  const streamMode: 'idle' | 'thinking' | 'tool_calling' | 'answering' = agent.state.stream.kind || 'idle'
+  const streamToolNames = agent.state.stream.toolNames
 
   // ── Helper: push message ──
   const pushMsg = useCallback((msg: Message) => {
@@ -60,24 +65,6 @@ export default function App() {
       used: Math.min(prev.used + count, prev.limit),
     }))
   }, [])
-
-  // ── Stream mode management ──
-  const startThinkingTimer = useCallback(() => {
-    thinkStartRef.current = Date.now()
-    setThinkingSecs(0)
-    if (timerRef.current) clearInterval(timerRef.current)
-    timerRef.current = setInterval(() => setThinkingSecs(Math.floor((Date.now() - thinkStartRef.current) / 1000)), 200)
-  }, [])
-
-  const stopThinkingTimer = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
-  }, [])
-
-  const setStream = useCallback((mode: 'idle' | 'thinking' | 'tool_calling' | 'answering') => {
-    setStreamMode(mode)
-    if (mode !== 'thinking') stopThinkingTimer()
-    if (mode === 'idle') setToolNames([])
-  }, [stopThinkingTimer])
 
   // ── Rerender throttle (RAF) ──
   const rafPendingRef = useRef(false)
@@ -97,37 +84,43 @@ export default function App() {
     }
   }, [checkDone, config, agent.state.connected, agent.state.status, agent.start])
 
+  // ── Thinking timer sync with agent stream kind ──
+  useEffect(() => {
+    if (agent.state.stream.kind !== 'thinking') return
+    thinkStartRef.current = Date.now()
+    timerRef.current = setInterval(() => {
+      setThinkingSecs(Math.floor((Date.now() - thinkStartRef.current) / 1000))
+    }, 200)
+    return () => {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      setThinkingSecs(0)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent.state.stream.kind])
+
+  // ── Refresh session list on connect ──
+  useEffect(() => {
+    if (connected) session.refresh()
+  }, [connected])
+
   // ── Auto-scroll chat to bottom ──
   useEffect(() => {
     msgEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamMode])
 
-  // ── Event handlers (supplement useAgent) ──
+  // ── Event handlers (non-streaming events — streaming handled by useAgent FSM) ──
   useEffect(() => {
     const unlist = listen<Record<string, unknown>>('agent-event', (e) => {
       const p = e.payload
       if (!p || typeof p.type !== 'string') return
 
       switch (p.type) {
-        case 'stream_start': {
-          const kind = p.kind as string
-          if (kind === 'thinking') {
-            setStream('thinking')
-            startThinkingTimer()
-          } else if (kind === 'tool_calling') {
-            setStream('tool_calling')
-          } else if (kind === 'answering') {
-            setStream('answering')
-          }
-          break
-        }
         case 'assistant_msg': {
           const thinking = (p.thinking || '') as string
           const text = (p.text || '') as string
           const content = thinking ? `\n<reasoning>${thinking}</reasoning>\n${text}` : text
           pushMsg({ role: 'assistant', content })
           addTokens(content)
-          setStream('idle')
           rerender()
           break
         }
@@ -138,13 +131,42 @@ export default function App() {
         }
         case 'tool_call': {
           const tool = ((p as any).tool || p) as any
-          const name = tool.name as string || 'unknown'
-          setToolNames(prev => prev.includes(name) ? prev : [...prev, name])
-          setStream('tool_calling')
+          const toolId = (tool.id as string) || `tc-${Date.now()}`
+          const name = (tool.name as string) || 'unknown'
+          const argsDisplay = (tool.args_display as string) || ''
+          const body = tool.body
+          setMessages(prev => {
+            const msgs = [...prev]
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === 'assistant') {
+                const cards = [...(msgs[i].tool_cards || [])]
+                cards.push({ id: toolId, name, args: argsDisplay, body })
+                msgs[i] = { ...msgs[i], tool_cards: cards }
+                return msgs
+              }
+            }
+            return msgs
+          })
           rerender()
           break
         }
         case 'tool_result': {
+          const toolId = (p.tool_id as string) || ''
+          const output = (p.output as string) || ''
+          const success = p.success as boolean | undefined
+          setMessages(prev => {
+            const msgs = [...prev]
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === 'assistant' && msgs[i].tool_cards) {
+                const cards = msgs[i].tool_cards!.map(tc =>
+                  tc.id === toolId ? { ...tc, output, success } : tc
+                )
+                msgs[i] = { ...msgs[i], tool_cards: cards }
+                return msgs
+              }
+            }
+            return msgs
+          })
           rerender()
           break
         }
@@ -157,16 +179,9 @@ export default function App() {
             }))
             setCacheInfo({ hit: u.prompt_cache_hit_tokens || 0, miss: u.prompt_cache_miss_tokens || 0 })
           }
-          setStream('idle')
           rerender()
           break
         }
-        case 'done':
-          setStream('idle')
-          break
-        case 'cancelled':
-          setStream('idle')
-          break
         case 'audit_record': {
           setAuditLog(prev => [...prev, {
             name: (p as any).tool_name as string || '?',
@@ -200,8 +215,9 @@ export default function App() {
           break
         }
         case 'error': {
-          pushMsg({ role: 'assistant', content: `\u26a0 ${(p as any).message || 'Agent error'}` })
-          setStream('idle')
+          const msg = (p as any).message as string || 'Agent error'
+          addToast(msg, 'error')
+          pushMsg({ role: 'assistant', content: `\u26a0 ${msg}` })
           rerender()
           break
         }
@@ -216,7 +232,7 @@ export default function App() {
       }
     })
     return () => { unlist.then(fn => fn()).catch(() => {}) }
-  }, [config, pushMsg, addTokens, setStream, rerender, balance, docs])
+  }, [config, pushMsg, addTokens, rerender, balance, docs, addToast])
 
   // ── Auto-focus ──
   useEffect(() => { if (connected) inputRef.current?.focus() }, [connected])
@@ -228,10 +244,9 @@ export default function App() {
     setInput('')
     pushMsg({ role: 'user', content: text })
     addTokens(text)
-    setStream('thinking')
     agent.send(text)
     setTimeout(() => inputRef.current?.focus(), 50)
-  }, [input, isStreaming, connected, pushMsg, addTokens, setStream, agent])
+  }, [input, isStreaming, connected, pushMsg, addTokens, agent])
 
   // ── Ask answer submit ──
   const submitAskAnswer = useCallback(() => {
@@ -252,7 +267,7 @@ export default function App() {
             <path d="M18 4h8l-6 14 6 14h-8l-6-14 6-14z" fill="currentColor"/>
           </svg>
         </div>
-        <div className="text-sm text-[var(--muted)]">加载中...</div>
+        <div className="text-sm text-[var(--muted)]">{tt('common.loading')}</div>
       </div>
     </div>
   )
@@ -301,7 +316,7 @@ export default function App() {
                 sessions={agent.state.sessions}
                 auditLog={auditLog}
                 toolBatch={null}
-                toolNames={toolNames}
+                toolNames={streamToolNames}
                 onSettings={() => setShowSettings(true)}
                 onNewSession={agent.start}
                 onResumeSession={seed => agent.resume(seed)}
@@ -318,7 +333,19 @@ export default function App() {
               {messages.map((msg, i) => (
                 <ChatMessage key={i} msg={msg} />
               ))}
-              <StreamIndicator mode={streamMode} toolNames={toolNames} secs={thinkingSecs} />
+              {isStreaming && (agent.streamReasoning || agent.streamContent) && (
+                <div className="mb-4 anim-msg-in">
+                  {agent.streamReasoning && (
+                    <ReasoningBlock content={agent.streamReasoning} />
+                  )}
+                  {agent.streamContent && (
+                    <div className="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-sm leading-relaxed shadow-sm">
+                      <MarkdownBody content={agent.streamContent} />
+                    </div>
+                  )}
+                </div>
+              )}
+              <StreamIndicator mode={streamMode} toolNames={streamToolNames} secs={thinkingSecs} />
               <div ref={msgEndRef} />
             </div>
 

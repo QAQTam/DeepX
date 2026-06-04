@@ -13,7 +13,7 @@ export function StreamIndicator({ mode, toolNames, secs }: StreamIndicatorProps)
   if (mode === 'idle') return null
 
   return (
-    <div className="flex items-start gap-3 mb-4 pl-2">
+    <div className="flex items-start gap-3 mb-4 pl-2 anim-fade-in">
       {/* Avatar dot */}
       <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5
         ${mode === 'thinking' ? 'bg-[var(--warning)]/15'
