@@ -4,6 +4,10 @@ fn main() {
     Err(_) => { tauri_build::build(); return; }
   };
   let profile = std::env::var("PROFILE").unwrap_or_default();
+  if profile != "release" {
+    tauri_build::build();
+    return;
+  }
   let m = std::path::Path::new(&manifest);
   let ws_root = match m.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
     Some(r) => r,
