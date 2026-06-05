@@ -1,20 +1,20 @@
-// ── useBalance Hook ──
+// ── useBalance Hook (SolidJS) ──
 
-import { useState, useCallback } from 'react'
+import { createSignal } from 'solid-js'
 import { api } from '../bridge/tauri'
 
 interface UseBalanceReturn {
-  balance: string
-  loading: boolean
+  readonly balance: string
+  readonly loading: boolean
   refresh: (apiKey: string) => Promise<void>
   setBalance: (s: string) => void
 }
 
 export function useBalance(): UseBalanceReturn {
-  const [balance, setBalance] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [_balance, setBalance] = createSignal('')
+  const [_loading, setLoading] = createSignal(false)
 
-  const refresh = useCallback(async (apiKey: string) => {
+  const refresh = async (apiKey: string) => {
     if (!apiKey) return
     setLoading(true)
     try {
@@ -23,7 +23,11 @@ export function useBalance(): UseBalanceReturn {
       if (info) setBalance(`${info.total_balance} ${info.currency}`)
     } catch { /* noop */ }
     finally { setLoading(false) }
-  }, [])
+  }
 
-  return { balance, loading, refresh, setBalance }
+  return {
+    get balance() { return _balance() },
+    get loading() { return _loading() },
+    refresh, setBalance,
+  }
 }

@@ -1,7 +1,7 @@
-// ── useDocuments Hook ──
+// ── useDocuments Hook (SolidJS) ──
 // Document tracking + recent edits from debug_snapshot events.
 
-import { useState, useCallback } from 'react'
+import { createSignal } from 'solid-js'
 import type { DocInfo } from '../types'
 
 interface Task {
@@ -11,19 +11,19 @@ interface Task {
 }
 
 interface UseDocumentsReturn {
-  documents: DocInfo[]
-  recentEdits: string[]
-  tasks: Task[]
+  readonly documents: DocInfo[]
+  readonly recentEdits: string[]
+  readonly tasks: Task[]
   updateFromSnapshot: (payload: { documents?: DocInfo[]; recent_edits?: string[]; tasks?: Task[] }) => void
   clear: () => void
 }
 
 export function useDocuments(): UseDocumentsReturn {
-  const [documents, setDocuments] = useState<DocInfo[]>([])
-  const [recentEdits, setRecentEdits] = useState<string[]>([])
-  const [tasks, setTasks] = useState<Task[]>([])
+  const [_documents, setDocuments] = createSignal<DocInfo[]>([])
+  const [_recentEdits, setRecentEdits] = createSignal<string[]>([])
+  const [_tasks, setTasks] = createSignal<Task[]>([])
 
-  const updateFromSnapshot = useCallback((payload: {
+  const updateFromSnapshot = (payload: {
     documents?: DocInfo[]
     recent_edits?: string[]
     tasks?: Task[]
@@ -31,13 +31,18 @@ export function useDocuments(): UseDocumentsReturn {
     if (payload.documents) setDocuments(payload.documents)
     if (payload.recent_edits) setRecentEdits(payload.recent_edits)
     if (payload.tasks) setTasks(payload.tasks)
-  }, [])
+  }
 
-  const clear = useCallback(() => {
+  const clear = () => {
     setDocuments([])
     setRecentEdits([])
     setTasks([])
-  }, [])
+  }
 
-  return { documents, recentEdits, tasks, updateFromSnapshot, clear }
+  return {
+    get documents() { return _documents() },
+    get recentEdits() { return _recentEdits() },
+    get tasks() { return _tasks() },
+    updateFromSnapshot, clear,
+  }
 }

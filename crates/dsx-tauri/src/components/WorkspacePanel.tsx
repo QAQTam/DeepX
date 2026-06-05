@@ -1,7 +1,7 @@
 // ── WorkspacePanel ──
 // Right sidebar: workspace directory browser, document tracking, recent edits, tasks.
 
-import { useState, useEffect } from 'react'
+import { createSignal, onMount } from 'solid-js'
 import { invoke } from '@tauri-apps/api/core'
 import type { DocInfo } from '../types'
 import { tt } from '../i18n'
@@ -29,16 +29,16 @@ const statusLabel: Record<string, string> = {
 const statusColor = (s: string) =>
   s === 'in_progress' ? 'accent' : s === 'completed' ? 'success' : s === 'cancelled' ? 'error' : 'warning'
 
-export function WorkspacePanel({ documents, recentEdits, tasks }: WorkspacePanelProps) {
-  const [workspacePath, setWorkspacePath] = useState<string | null>(null)
-  const [dirEntries, setDirEntries] = useState<{ name: string; is_dir: boolean; size: number }[] | null>(null)
-  const [showTasks, setShowTasks] = useState(true)
-  const [showDocs, setShowDocs] = useState(true)
-  const [showEdits, setShowEdits] = useState(true)
+export function WorkspacePanel(props: WorkspacePanelProps) {
+  const [workspacePath, setWorkspacePath] = createSignal<string | null>(null)
+  const [dirEntries, setDirEntries] = createSignal<{ name: string; is_dir: boolean; size: number }[] | null>(null)
+  const [showTasks, setShowTasks] = createSignal(true)
+  const [showDocs, setShowDocs] = createSignal(true)
+  const [showEdits, setShowEdits] = createSignal(true)
 
-  useEffect(() => {
+  onMount(() => {
     invoke<string>('get_workspace').then(p => { setWorkspacePath(p); refreshDir(p) }).catch(() => {})
-  }, [])
+  })
 
   const refreshDir = (path: string) => {
     invoke<any>('scan_directory', { path }).then(r => setDirEntries(r.entries)).catch(() => setDirEntries(null))
@@ -48,131 +48,112 @@ export function WorkspacePanel({ documents, recentEdits, tasks }: WorkspacePanel
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({ directory: true, multiple: false, title: tt('workspace.selectFolder') })
-      if (selected && typeof selected === 'string') {
-        setWorkspacePath(selected)
-        invoke('set_workspace', { path: selected }).catch(() => {})
-        refreshDir(selected)
+      if (selected) {
+        await invoke('set_workspace', { path: selected })
+        setWorkspacePath(selected as string)
+        refreshDir(selected as string)
       }
-    } catch { /* user cancelled */ }
+    } catch { /* ignore */ }
   }
 
   return (
-    <div className="p-3 space-y-3">
+    <div class="space-y-3">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-[var(--text-h)] uppercase tracking-wide">{tt('workspace.title')}</span>
-        <Button variant="ghost" size="sm" onClick={pickFolder} aria-label={tt('workspace.selectFolder')}>
-          📂
-        </Button>
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-semibold text-[var(--text-h)]">{tt('workspace.title')}</h2>
+        <Button variant="ghost" size="sm" onClick={pickFolder}>{tt('workspace.select')}</Button>
       </div>
 
-      {workspacePath ? (
-        <>
-          {/* Directory browser */}
-          <Card padding="sm">
-            <div className="text-xs text-[var(--muted)] mb-1 truncate font-mono" title={workspacePath}>
-              {workspacePath.split(/[/\\]/).pop() || workspacePath}
-            </div>
-            {dirEntries && dirEntries.length > 0 ? (
-              <div className="max-h-32 overflow-y-auto space-y-0.5">
-                {dirEntries.slice(0, 30).map((e, i) => (
-                  <div key={i} className="flex items-center gap-1.5 text-xs text-[var(--text)] truncate">
-                    <span className="text-[10px] shrink-0">{e.is_dir ? '📁' : '·'}</span>
-                    <span className="truncate">{e.name}</span>
-                    {!e.is_dir && e.size > 0 && (
-                      <span className="text-[var(--muted)] text-[10px] shrink-0">{formatSize(e.size)}</span>
-                    )}
-                  </div>
-                ))}
-                {dirEntries.length > 30 && <div className="text-[10px] text-[var(--muted)]">+{dirEntries.length - 30} more</div>}
-              </div>
-            ) : dirEntries ? (
-              <EmptyState icon="📂" title={tt('workspace.directoryEmpty')} />
-            ) : null}
-          </Card>
+      {/* Current path */}
+      <div class="text-xs text-[var(--muted)] font-mono truncate">
+        {workspacePath() || tt('workspace.noFolder')}
+      </div>
 
-          {/* Tasks */}
-          <Card padding="sm">
-            <button onClick={() => setShowTasks(o => !o)} className="w-full flex items-center justify-between text-xs text-[var(--muted)]">
-              <span>{tt('workspace.tasks')} ({tasks.length})</span>
-              <span className="text-[10px]">{showTasks ? '▾' : '▸'}</span>
-            </button>
-            {showTasks && (
-              <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
-                {tasks.length === 0 ? (
-                  <EmptyState icon="📋" title={tt('workspace.noTasks')} />
-                ) : (
-                  tasks.map((t, i) => (
-                    <div key={i} className="flex items-start gap-1.5 text-xs">
-                      <span className="text-[10px] mt-0.5 shrink-0">{t.status === 'in_progress' ? '◉' : t.status === 'completed' ? '✓' : '○'}</span>
-                      <div className="min-w-0">
-                        <div className="text-[var(--text-h)] truncate">{t.subject}</div>
-                        <Badge variant={statusColor(t.status)}>{tt(statusLabel[t.status] || t.status)}</Badge>
-                      </div>
-                    </div>
-                  ))
-                )}
+      {/* Directory tree */}
+      {dirEntries() && dirEntries()!.length > 0 && (
+        <Card padding="sm">
+          <div class="max-h-48 overflow-y-auto space-y-0.5 text-xs font-mono">
+            {dirEntries()!.map(e => (
+              <div class="flex items-center gap-1.5 text-[var(--text)]">
+                <span class="text-[var(--muted)]">{e.is_dir ? '📁' : '📄'}</span>
+                <span class="truncate flex-1">{e.name}</span>
+                {!e.is_dir && <span class="text-[var(--muted)] shrink-0">{formatSize(e.size)}</span>}
               </div>
-            )}
-          </Card>
-
-          {/* Document tracking */}
-          <Card padding="sm">
-            <button onClick={() => setShowDocs(o => !o)} className="w-full flex items-center justify-between text-xs text-[var(--muted)]">
-              <span>{tt('workspace.documents')} ({documents.length})</span>
-              <span className="text-[10px]">{showDocs ? '▾' : '▸'}</span>
-            </button>
-            {showDocs && (
-              <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
-                {documents.length === 0 ? (
-                  <EmptyState icon="📄" title={tt('workspace.noDocuments')} />
-                ) : (
-                  documents.map((d, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs">
-                      <span className={`truncate flex-1 ${d.is_stale ? 'text-[var(--error)]' : 'text-[var(--text)]'}`}>
-                        {d.tag ? `${d.tag} ` : ''}{d.path.split(/[/\\]/).pop() || d.path}
-                      </span>
-                      {d.turns_since_read > 0 && (
-                        <span className="text-[var(--muted)] text-[10px] ml-1 shrink-0">
-                          -{d.turns_since_read}
-                        </span>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </Card>
-
-          {/* Recent edits */}
-          <Card padding="sm">
-            <button onClick={() => setShowEdits(o => !o)} className="w-full flex items-center justify-between text-xs text-[var(--muted)]">
-              <span>{tt('workspace.recentEdits')} ({recentEdits.length})</span>
-              <span className="text-[10px]">{showEdits ? '▾' : '▸'}</span>
-            </button>
-            {showEdits && (
-              <div className="mt-2 space-y-0.5 max-h-32 overflow-y-auto">
-                {recentEdits.length === 0 ? (
-                  <EmptyState icon="✏️" title={tt('workspace.noEdits')} />
-                ) : (
-                  recentEdits.map((p, i) => (
-                    <div key={i} className="text-xs text-[var(--text)] font-mono truncate">
-                      {p.split(/[/\\]/).pop() || p}
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </Card>
-        </>
-      ) : (
-        <EmptyState
-          icon="📂"
-          title={tt('workspace.noProject')}
-          description={tt('workspace.selectFolder')}
-          action={{ label: tt('workspace.selectFolder'), onClick: pickFolder }}
-        />
+            ))}
+          </div>
+        </Card>
       )}
+
+      {/* Tasks */}
+      <Card padding="sm">
+        <button
+          onClick={() => setShowTasks(s => !s)}
+          class="w-full flex items-center justify-between text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+        >
+          <span>{tt('workspace.tasks')} ({props.tasks.length})</span>
+          <span class="text-[10px]">{showTasks() ? '▾' : '▸'}</span>
+        </button>
+        {showTasks() && (
+          <div class="mt-2 space-y-1 max-h-48 overflow-y-auto">
+            {props.tasks.length === 0 ? (
+              <EmptyState title={tt('workspace.noTasks')} />
+            ) : (
+              props.tasks.map(t => (
+                <div class="flex items-center gap-1.5 text-xs">
+                  <Badge variant={statusColor(t.status)}>{tt(statusLabel[t.status] || t.status)}</Badge>
+                  <span class="text-[var(--text)] truncate">{t.subject}</span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Documents */}
+      <Card padding="sm">
+        <button
+          onClick={() => setShowDocs(s => !s)}
+          class="w-full flex items-center justify-between text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+        >
+          <span>{tt('workspace.documents')} ({props.documents.length})</span>
+          <span class="text-[10px]">{showDocs() ? '▾' : '▸'}</span>
+        </button>
+        {showDocs() && (
+          <div class="mt-2 space-y-0.5 max-h-48 overflow-y-auto text-xs font-mono">
+            {props.documents.length === 0 ? (
+              <EmptyState title={tt('workspace.noDocuments')} />
+            ) : (
+              props.documents.map(d => (
+                <div class="text-[var(--text)] truncate">
+                  <span class="text-[var(--muted)]">{d.path}</span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Recent Edits */}
+      <Card padding="sm">
+        <button
+          onClick={() => setShowEdits(s => !s)}
+          class="w-full flex items-center justify-between text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+        >
+          <span>{tt('workspace.recentEdits')} ({props.recentEdits.length})</span>
+          <span class="text-[10px]">{showEdits() ? '▾' : '▸'}</span>
+        </button>
+        {showEdits() && (
+          <div class="mt-2 space-y-0.5 max-h-48 overflow-y-auto text-xs font-mono">
+            {props.recentEdits.length === 0 ? (
+              <EmptyState title={tt('workspace.noEdits')} />
+            ) : (
+              props.recentEdits.map(f => (
+                <div class="text-[var(--text)] truncate">{f}</div>
+              ))
+            )}
+          </div>
+        )}
+      </Card>
     </div>
   )
 }

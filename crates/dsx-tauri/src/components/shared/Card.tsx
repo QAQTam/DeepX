@@ -1,18 +1,18 @@
 // ── Card ──
 
-import type { ReactNode, HTMLAttributes } from 'react'
+import type { JSX } from 'solid-js'
 
-interface CardProps extends HTMLAttributes<HTMLDivElement> {
+interface CardProps extends JSX.HTMLAttributes<HTMLDivElement> {
   padding?: 'none' | 'sm' | 'md'
-  children: ReactNode
+  children: JSX.Element
 }
 
 const paddingClass = { none: '', sm: 'p-3', md: 'p-4' } as const
 
-export function Card({ padding = 'md', children, className = '', ...rest }: CardProps) {
+export function Card({ padding = 'md', children, class: className = '', ...rest }: CardProps) {
   return (
     <div
-      className={`bg-[var(--bg-secondary)] border border-[var(--border-light)] rounded-xl ${paddingClass[padding]} ${className}`}
+      class={`bg-[var(--bg-secondary)] border border-[var(--border-light)] rounded-xl ${paddingClass[padding]} ${className}`}
       {...rest}
     >
       {children}

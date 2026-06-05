@@ -1,10 +1,10 @@
-//! Turn processing: user input → tool-calling loop → UI events → session save.
+//! Turn processing (v5): user input → tool-calling loop → round-based UI events → session save.
 
 use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::Agent2Ui;
+use dsx_proto::{Agent2Ui, ToolCallDef, ToolResultDef, TurnData, RoundData};
 use dsx_types::{ContentBlock, ToolCall};
 
 use crate::agent::{AgentState, ToolResultAppender};
@@ -14,7 +14,7 @@ use crate::session;
 use crate::tool_parser;
 
 use super::api_turn::run_api_turn;
-use super::ui_emit::{build_and_push_assistant, make_tool_def, emit_tool_result};
+use super::ui_emit::{build_and_push_assistant, make_tool_def, make_tool_result};
 use super::{build_documents, build_recent_edits, build_tasks, cache_tokens};
 
 /// Process a pending ask_user reply, pushing the user's text as a tool result.
@@ -49,33 +49,17 @@ fn push_user_message_with_repair(agent: &mut AgentState, text: &str) -> bool {
 /// Initialize the session on the first user message.
 fn init_session_on_first_message(
     agent: &mut AgentState,
-    _text: &str,
     agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
     if agent.session_seed.is_empty() {
         let seed = agent.resume_seed.clone();
         super::lifecycle::init_session(agent, seed.as_deref());
         if seed.is_some() {
-            let msg_count = agent.ctx.message_count();
-            let summary = agent
-                .ctx
-                .turns()
-                .last()
-                .and_then(|t| t.steps.last())
-                .and_then(|s| {
-                    s.assistant.content.iter().find_map(|b| {
-                        if let ContentBlock::Text { text } = b {
-                            Some(text.chars().take(100).collect::<String>())
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .unwrap_or_default();
+            // Build TurnData from existing context for SessionRestored
+            let turns = build_turns_from_context(agent);
             let _ = agent_tx.send(Agent2Ui::SessionRestored {
                 seed: agent.session_seed.clone(),
-                message_count: msg_count as u64,
-                summary,
+                turns,
                 tokens_used: agent.token_estimate,
                 cache_hit_pct: 0.0,
             });
@@ -83,21 +67,99 @@ fn init_session_on_first_message(
     }
 }
 
+/// Reconstruct TurnData from the existing context (for session resume).
+pub(super) fn build_turns_from_context(agent: &AgentState) -> Vec<TurnData> {
+    let mut turns = Vec::new();
+    for (ti, turn) in agent.ctx.turns().iter().enumerate() {
+        let mut rounds = Vec::new();
+        let mut round_num = 0u32;
+        for step in &turn.steps {
+            let thinking = step.assistant.content.iter().find_map(|b| {
+                if let ContentBlock::Reasoning { reasoning } = b {
+                    Some(reasoning.clone())
+                } else {
+                    None
+                }
+            });
+            let answer = step.assistant.content.iter().find_map(|b| {
+                if let ContentBlock::Text { text } = b {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            });
+            let tool_calls: Vec<ToolCallDef> = step.assistant.content.iter().filter_map(|b| {
+                if let ContentBlock::ToolUse { id, name, input } = b {
+                    Some(ToolCallDef {
+                        id: id.clone(),
+                        name: name.clone(),
+                        args_display: name.clone(),
+                        args_json: input.to_string(),
+                    })
+                } else {
+                    None
+                }
+            }).collect();
+            let tool_results: Vec<ToolResultDef> = step.tool_results.iter().filter_map(|tr| {
+                tr.content.iter().find_map(|b| {
+                    if let ContentBlock::ToolResult { content, .. } = b {
+                        Some(ToolResultDef {
+                            tool_call_id: String::new(),
+                            output: content.clone(),
+                            success: true,
+                            file: None,
+                        })
+                    } else {
+                        None
+                    }
+                })
+            }).collect();
+
+            rounds.push(RoundData {
+                round_num,
+                thinking,
+                answer,
+                tool_calls,
+                tool_results,
+            });
+            round_num += 1;
+        }
+        if !rounds.is_empty() {
+            // Get user text from the turn's user message
+            let user_text = turn.user.content.iter().find_map(|b| {
+                if let ContentBlock::Text { text } = b {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            }).unwrap_or_default();
+            turns.push(TurnData {
+                turn_id: format!("t{}", ti + 1),
+                user_text,
+                rounds,
+            });
+        }
+    }
+    turns
+}
+
 /// Handle a user input message with full module integration.
-/// Emits structured Agent2Ui events in guaranteed order:
-///   UserMsg → (AssistantMsg | ToolCall | ToolResult)* → TurnEnd
+/// Emits round-based Agent2Ui events in guaranteed order:
+///   TurnStart → (RoundDelta* → RoundComplete → ToolResults)* → TurnEnd
 pub fn handle_user_input(
     agent: &mut AgentState,
     text: &str,
     hp: &mut BufReader<TcpStream>,
     agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
-    if !process_ask_user_response(agent, text) {
+    let is_ask_reply = process_ask_user_response(agent, text);
+
+    if !is_ask_reply {
         if text.is_empty() {
             return;
         }
 
-        init_session_on_first_message(agent, text, agent_tx);
+        init_session_on_first_message(agent, agent_tx);
 
         if !push_user_message_with_repair(agent, text) {
             return;
@@ -105,28 +167,27 @@ pub fn handle_user_input(
     }
 
     let turn_num = agent.health.turn.to_string();
-    let user_msg_id = format!("u{}", turn_num);
-    let _ = agent_tx.send(Agent2Ui::UserMsg {
-        id: user_msg_id.clone(),
-        text: text.to_string(),
-    });
+    let turn_id = format!("t{}", turn_num);
+
+    // Only send TurnStart for new turns (not ask_user replies)
+    if !is_ask_reply {
+        let _ = agent_tx.send(Agent2Ui::TurnStart {
+            turn_id: turn_id.clone(),
+            user_text: text.to_string(),
+        });
+    }
 
     agent.tool_failures = 0;
     agent.tool_calls_this_turn = 0;
     agent.files_written_this_turn.clear();
 
-    // Inject current task progress into context (Layer 3 tail)
     agent.refresh_progress_context();
-
-    // Auto-detect and activate matching skills
     crate::skills::auto_activate(agent, text);
 
     let mut ipc_broken = false;
-    let mut msg_seq = 0u64;
-    let mut round = 0u32;
+    let mut round_num = 0u32;
 
     loop {
-        round += 1;
         if ipc_broken {
             break;
         }
@@ -136,11 +197,8 @@ pub fn handle_user_input(
             break;
         }
 
-        let a_msg_id = format!("a{}-{}", turn_num, msg_seq);
-        msg_seq += 1;
-
         let (content, reasoning_content, tool_calls_raw, usage, stop_reason) =
-            match run_api_turn(agent, hp, agent_tx, &a_msg_id, true) {
+            match run_api_turn(agent, hp, agent_tx, &turn_id, round_num, true) {
                 Ok(v) => v,
                 Err(()) => return,
             };
@@ -151,8 +209,7 @@ pub fn handle_user_input(
         let mut dsml_detected = false;
         let mut dsml_source: Vec<bool> = Vec::new();
 
-        if parsed.is_empty() && tool_parser::has_dsml(&stripped)
-        {
+        if parsed.is_empty() && tool_parser::has_dsml(&stripped) {
             dsml_detected = true;
             let (cleaned, dsml_tcs) =
                 tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
@@ -197,16 +254,26 @@ pub fn handle_user_input(
 
         let assistant_msg = build_and_push_assistant(agent, &content, &reasoning_content, &parsed);
 
-        let _ = agent_tx.send(Agent2Ui::AssistantMsg {
-            id: a_msg_id.clone(),
-            thinking: reasoning_content.clone()
-                .filter(|r| !r.is_empty()),
-            text: content.clone(),
+        // Build tool call defs for RoundComplete
+        let tool_call_defs: Vec<ToolCallDef> = parsed.iter()
+            .filter(|tc| tc.function.name != "ask_user")
+            .map(|tc| make_tool_def(&tc.id, &tc.function.name, &tc.function.arguments))
+            .collect();
+
+        // Send RoundComplete
+        let _ = agent_tx.send(Agent2Ui::RoundComplete {
+            turn_id: turn_id.clone(),
+            round_num,
+            thinking: reasoning_content.clone().filter(|r| !r.is_empty()),
+            answer: if has_tools { None } else { Some(content.clone()) },
+            tool_calls: tool_call_defs.clone(),
+            is_final: !has_tools,
         });
 
         if !has_tools {
             if stop_reason.as_deref() == Some("length") {
-                log::info!("turn: stop_reason=length at r={}, nudging model to continue", round);
+                log::info!("turn: stop_reason=length at r={}, nudging model to continue", round_num);
+                round_num += 1;
                 continue;
             }
 
@@ -215,6 +282,7 @@ pub fn handle_user_input(
                     "[System] You produced reasoning but no visible response. Summarize your findings now."
                         .to_string(),
                 );
+                round_num += 1;
                 continue;
             }
 
@@ -231,6 +299,7 @@ pub fn handle_user_input(
             );
 
             let _ = agent_tx.send(Agent2Ui::TurnEnd {
+                turn_id: turn_id.clone(),
                 stop_reason,
                 usage,
                 context_tokens: agent.token_estimate,
@@ -258,49 +327,31 @@ pub fn handle_user_input(
             }
         }
 
-        for tc in &parsed {
-            if tc.function.name == "ask_user" { continue; }
-            let tool_def = make_tool_def(&tc.id, &tc.function.name, &tc.function.arguments);
-            let _ = agent_tx.send(Agent2Ui::ToolCall {
-                msg_id: a_msg_id.clone(),
-                tool: tool_def,
-            });
-        }
-
+        // Execute tools and collect results
         let results: Vec<(String, String, String, String)> =
             if parsed.len() > 1 && !parsed.iter().any(|tc| tc.function.name == "ask_user") {
-            use std::thread;
-            let mut handles = Vec::new();
-        let tool_names: Vec<String> = parsed.iter()
-            .filter(|tc| tc.function.name != "ask_user")
-            .map(|tc| tc.function.name.clone())
-            .collect();
-        if !tool_names.is_empty() {
-            let _ = agent_tx.send(Agent2Ui::StreamStart {
-                msg_id: a_msg_id.clone(),
-                kind: dsx_proto::StreamKind::ToolCalling,
-                tool_names: tool_names.clone(),
-            });
-        }
-
-        for tc in &parsed {
-                let name = tc.function.name.clone();
-                let args = tc.function.arguments.clone();
-                let id = tc.id.clone();
-                handles.push(thread::spawn(move || {
+                use std::thread;
+                let mut handles = Vec::new();
+                for tc in &parsed {
+                    let name = tc.function.name.clone();
+                    let args = tc.function.arguments.clone();
+                    let id = tc.id.clone();
+                    handles.push(thread::spawn(move || {
+                        let result =
+                            crate::tools::execute_tool_with_id(&name, "", &args, &id);
+                        (name, id, args, result)
+                    }));
+                }
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            } else {
+                parsed.iter().map(|tc| {
                     let result =
-                        crate::tools::execute_tool_with_id(&name, "", &args, &id);
-                    (name, id, args, result)
-                }));
-            }
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        } else {
-            parsed.iter().map(|tc| {
-                let result =
-                    crate::tools::execute_tool_with_id(&tc.function.name, "", &tc.function.arguments, &tc.id);
-                (tc.function.name.clone(), tc.id.clone(), tc.function.arguments.clone(), result)
-            }).collect()
-        };
+                        crate::tools::execute_tool_with_id(&tc.function.name, "", &tc.function.arguments, &tc.id);
+                    (tc.function.name.clone(), tc.id.clone(), tc.function.arguments.clone(), result)
+                }).collect()
+            };
+
+        let mut tool_result_defs: Vec<ToolResultDef> = Vec::new();
 
         for (tc_idx, (name, id, args, tr_content)) in results.iter().enumerate() {
             if dsx_tools::CANCEL.compare_exchange(
@@ -312,12 +363,12 @@ pub fn handle_user_input(
                 let msg = "[CANCELLED] Tool execution cancelled by user.";
                 let mut appender = ToolResultAppender::new(agent);
                 appender.append(name, id, args, msg);
-                emit_tool_result(agent_tx, id, msg, false, None);
+                tool_result_defs.push(make_tool_result(id, msg, false, None));
                 for remaining_idx in tc_idx + 1..results.len() {
                     let (rn, ri, ra, _) = &results[remaining_idx];
                     let mut appender = ToolResultAppender::new(agent);
                     appender.append(rn, ri, ra, msg);
-                    emit_tool_result(agent_tx, ri, msg, false, None);
+                    tool_result_defs.push(make_tool_result(ri, msg, false, None));
                 }
                 break;
             }
@@ -339,7 +390,8 @@ pub fn handle_user_input(
                 let mut appender = ToolResultAppender::new(agent);
                 appender.append(name, id, args, tr_content);
             }
-            emit_tool_result(agent_tx, id, tr_content, tr_success, None);
+            tool_result_defs.push(make_tool_result(id, tr_content, tr_success, None));
+
             // Emit audit record for InfoPanel real-time tool log
             let summary = tr_content.lines().next().unwrap_or(tr_content);
             let _ = agent_tx.send(Agent2Ui::AuditRecord {
@@ -378,29 +430,34 @@ pub fn handle_user_input(
             }
         }
 
-          let _ = agent_tx.send(Agent2Ui::StreamEnd {
-              msg_id: a_msg_id.clone(),
-              is_final: false,
-          });
-
-          // Emit real-time debug snapshot so tasks/docs/edits refresh during tool execution
-          let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
-              hp_connected: true,
-              session_seed: agent.session_seed.clone(),
-              context_tokens: agent.token_estimate,
-              tool_calls_total: agent.tool_calls_this_turn,
-              tool_failures: agent.tool_failures as u32,
-              current_phase: "tool_batch".to_string(),
-              streaming: false,
-              dsml_compat_count: agent.dsml_compat_count,
-              documents: build_documents(agent),
-              recent_edits: build_recent_edits(agent),
-              tasks: build_tasks(agent),
-              session_title: agent.session_title.clone(),
-              prompt_cache_hit_tokens: cache_tokens(agent).0,
-              prompt_cache_miss_tokens: cache_tokens(agent).1,
+        // Send collected tool results
+        if !tool_result_defs.is_empty() {
+            let _ = agent_tx.send(Agent2Ui::ToolResults {
+                turn_id: turn_id.clone(),
+                round_num,
+                results: tool_result_defs,
             });
+        }
 
+        // Emit real-time debug snapshot
+        let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+            hp_connected: true,
+            session_seed: agent.session_seed.clone(),
+            context_tokens: agent.token_estimate,
+            tool_calls_total: agent.tool_calls_this_turn,
+            tool_failures: agent.tool_failures as u32,
+            current_phase: "tool_batch".to_string(),
+            streaming: false,
+            dsml_compat_count: agent.dsml_compat_count,
+            documents: build_documents(agent),
+            recent_edits: build_recent_edits(agent),
+            tasks: build_tasks(agent),
+            session_title: agent.session_title.clone(),
+            prompt_cache_hit_tokens: cache_tokens(agent).0,
+            prompt_cache_miss_tokens: cache_tokens(agent).1,
+        });
+
+        // Check for ask_user
         for (name, id, args, _) in results.iter() {
             if name == "ask_user" {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
@@ -437,6 +494,8 @@ pub fn handle_user_input(
             );
             agent.tool_failures = 0;
         }
+
+        round_num += 1;
     }
 
     if agent.pending_ask_user.is_some() {
@@ -445,6 +504,7 @@ pub fn handle_user_input(
 
     if ipc_broken {
         let _ = agent_tx.send(Agent2Ui::TurnEnd {
+            turn_id: turn_id.clone(),
             stop_reason: Some("error".to_string()),
             usage: None,
             context_tokens: agent.token_estimate,
@@ -457,6 +517,7 @@ pub fn handle_user_input(
     agent.health.reset_turn();
 
     let _ = agent_tx.send(Agent2Ui::TurnEnd {
+        turn_id: turn_id.clone(),
         stop_reason: Some("cancelled".to_string()),
         usage: None,
         context_tokens: agent.token_estimate,

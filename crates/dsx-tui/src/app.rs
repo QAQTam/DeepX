@@ -1,4 +1,4 @@
-use dsx_proto::{Agent2Ui, DocInfo};
+use dsx_proto::{Agent2Ui, DocInfo, RoundDeltaKind, TurnData};
 use dsx_types::{ConfigStore, PersistentConfig, SessionMeta, SessionFile, ContentBlock};
 use ratatui::text::{Line, Span};
 use ratatui::style::{Color, Style};
@@ -227,6 +227,7 @@ pub struct App {
     pub setup: SetupState,
     pub messages: Vec<ChatMessage>,
     pub input: String,
+    pub cursor: usize,
     pub status: String,
     pub context_tokens: u32,
     pub session_tokens: u64,
@@ -245,7 +246,6 @@ pub struct App {
     pub show_debug: bool,
     pub show_tasks: bool,
     pub show_context: bool,
-    pub show_thinking: bool,
     pub debug: DebugState,
     pub ask: Option<AskState>,
     pub balance: String,
@@ -253,7 +253,12 @@ pub struct App {
     pub validating: bool,
     pub busy: bool,
     streaming_rendered_len: usize,
+    draft_round_msg_idx: Option<usize>,
+    pending_tail_lines: usize,
     pub last_render: std::time::Instant,
+    pub cached_line_count: usize,
+    pub line_count_msg_len: usize,
+    pub line_count_width: u16,
     md_renderer: Option<MarkdownRenderer>,
 }
 
@@ -269,6 +274,16 @@ pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
     pub lines: Vec<ratatui::text::Line<'static>>,
+    pub tool_status: ToolStatus,
+    pub tool_id: String,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum ToolStatus {
+    None,
+    Pending,
+    Success,
+    Failed,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -591,6 +606,48 @@ impl MenuState {
     }
 }
 
+// ── Tool display helpers ──
+
+fn tool_icon(name: &str) -> &'static str {
+    match name {
+        "read_file" | "file_read" => "📖",
+        "write_file" | "file_write" => "📝",
+        "edit_file" | "edit_file_diff" => "✏️",
+        "file_delete" | "delete_file" => "🗑",
+        "file_move" | "move_file" => "📦",
+        "file_diff" | "diff" => "🔍",
+        "file_glob" | "glob" => "🌐",
+        "file_list_dir" | "list_dir" => "📂",
+        "file_search" | "search" | "grep" => "🔎",
+        "exec" => "⚡",
+        "web_fetch" => "🌍",
+        "web_search" => "🔗",
+        "explore" => "🧭",
+        "task_create" | "task_update" => "📋",
+        "ask_user" => "❓",
+        _ => "🔧",
+    }
+}
+
+fn format_tool_label(name: &str, args_display: &str) -> String {
+    let icon = tool_icon(name);
+    match name {
+        "exec" => format!("{} exec: {}", icon, args_display),
+        _ => format!("{} {} {}", icon, name, args_display),
+    }
+}
+
+fn format_tool_result_summary(output: &str, success: bool) -> String {
+    if !success {
+        let first_line = output.lines().next().unwrap_or("failed");
+        return format!(" → ✗ {}", first_line.chars().take(80).collect::<String>());
+    }
+    let first_line = output.lines().next().unwrap_or("done");
+    let summary: String = first_line.chars().take(80).collect();
+    format!(" → {}", summary)
+}
+
+
 impl App {
     pub fn new(_need_setup: bool) -> Self {
         Self {
@@ -598,6 +655,7 @@ impl App {
             setup: SetupState::new(),
             messages: Vec::new(),
             input: String::new(),
+            cursor: 0,
             status: String::new(), // will be set after setup knows lang
             context_tokens: 0,
             session_tokens: 0,
@@ -610,7 +668,12 @@ impl App {
             streaming: false,
             scroll_offset: 0,
             streaming_rendered_len: 0,
+            draft_round_msg_idx: None,
+            pending_tail_lines: 0,
             last_render: std::time::Instant::now(),
+            cached_line_count: 0,
+            line_count_msg_len: 0,
+            line_count_width: 0,
             md_renderer: None,
             frame_count: 0,
             sessions: Vec::new(),
@@ -619,7 +682,6 @@ impl App {
             show_debug: false,
             show_tasks: false,
             show_context: false,
-            show_thinking: true,
             debug: DebugState {
                 hp_connected: false,
                 session_seed: String::new(),
@@ -709,39 +771,88 @@ impl App {
         }
         self.streaming_rendered_len = content.len();
         self.md_renderer = None;
-        self.messages.push(ChatMessage { role, content, lines });
+        self.messages.push(ChatMessage { role, content, lines, tool_status: ToolStatus::None, tool_id: String::new() });
     }
 
     /// Push a message placeholder for streaming — rendering is deferred to append_last().
     fn push_streaming_msg(&mut self, role: ChatRole, content: &str) {
         self.streaming_rendered_len = 0;
-        self.messages.push(ChatMessage { role, content: content.to_string(), lines: Vec::new() });
+        self.messages.push(ChatMessage { role, content: content.to_string(), lines: Vec::new(), tool_status: ToolStatus::None, tool_id: String::new() });
     }
 
     fn append_last(&mut self, content: &str) {
         if let Some(last) = self.messages.last_mut() {
             last.content.push_str(content);
             let renderer = self.md_renderer.get_or_insert_with(MarkdownRenderer::new);
-            // Push only *complete* lines through the renderer — incomplete tail
-            // stays in content until the next delta or finalize.
-            let full = &last.content[self.streaming_rendered_len..];
+            let start = self.streaming_rendered_len.min(last.content.len());
+            let full = &last.content[start..];
             let mut processed = 0;
+
+            // Remove previous pending tail (incomplete line rendered as raw text)
+            for _ in 0..self.pending_tail_lines {
+                last.lines.pop();
+            }
+            self.pending_tail_lines = 0;
+
+            // Push complete lines through markdown
             while let Some(nl) = full[processed..].find('\n') {
                 let line = &full[processed..processed + nl];
                 for l in renderer.push_line(line) {
                     last.lines.push(l);
                 }
-                processed += nl + 1; // consume the line + newline
+                processed += nl + 1;
             }
             self.streaming_rendered_len += processed;
+
+            // Render remaining incomplete tail as raw text for character-by-character streaming
+            let remaining = &full[processed..];
+            if !remaining.is_empty() {
+                let prefix = if last.lines.is_empty() { "" } else { "" };
+                last.lines.push(ratatui::text::Line::from(
+                    ratatui::text::Span::raw(format!("{}{}", prefix, remaining))
+                ));
+                self.pending_tail_lines = 1;
+            }
         }
+    }
+
+    /// Push a tool message with status tracking.
+    fn push_tool_msg(&mut self, tool_id: &str, label: &str, status: ToolStatus) {
+        self.finalize_last_message();
+        let content = label.to_string();
+        let mut renderer = MarkdownRenderer::new();
+        let mut lines = Vec::new();
+        for line in content.lines() {
+            for l in renderer.push_line(line) {
+                lines.push(l);
+            }
+        }
+        for l in renderer.flush() {
+            lines.push(l);
+        }
+        self.messages.push(ChatMessage {
+            role: ChatRole::Tool,
+            content,
+            lines,
+            tool_status: status,
+            tool_id: tool_id.to_string(),
+        });
     }
 
     /// Flush the incremental renderer and write remaining lines to the last message.
     fn finalize_last_message(&mut self) {
+        // Remove pending tail (raw streaming preview) before full markdown render
+        if let Some(last) = self.messages.last_mut() {
+            for _ in 0..self.pending_tail_lines {
+                last.lines.pop();
+            }
+        }
+        self.pending_tail_lines = 0;
+
         if let Some(mut renderer) = self.md_renderer.take() {
             if let Some(last) = self.messages.last_mut() {
-                let remaining = last.content[self.streaming_rendered_len..].to_string();
+                let start = self.streaming_rendered_len.min(last.content.len());
+                let remaining = last.content[start..].to_string();
                 if !remaining.is_empty() {
                     for l in renderer.push_line(&remaining) {
                         last.lines.push(l);
@@ -769,72 +880,15 @@ impl App {
 
     pub fn handle_frame(&mut self, frame: Agent2Ui) {
         match frame {
-            Agent2Ui::StreamStart { msg_id: _, kind, .. } => {
-                self.debug.streaming = true;
-                self.streaming = true;
-                let role = match kind {
-                    dsx_proto::StreamKind::Thinking => ChatRole::Thinking,
-                    dsx_proto::StreamKind::Answering => ChatRole::Assistant,
-                    dsx_proto::StreamKind::ToolCalling => ChatRole::Assistant,
-                };
-                self.switch_block(if matches!(kind, dsx_proto::StreamKind::Thinking) { BlockType::Thinking } else { BlockType::Text });
-                self.push_streaming_msg(role, "");
-            }
-            Agent2Ui::StreamDelta { msg_id: _, delta } => {
-                if self.streaming {
-                    self.append_last(&delta);
-                } else {
-                    self.push_streaming_msg(ChatRole::Assistant, &delta);
-                    self.streaming = true;
-                }
-            }
-            Agent2Ui::StreamEnd { .. } => {
-                // Streaming block ended — AssistantMsg will follow with final content.
-                // No action needed here.
-            }
-            Agent2Ui::AssistantMsg { id: _, thinking, text } => {
-                // Override streaming state with final content
+            Agent2Ui::TurnStart { turn_id: _, user_text } => {
                 self.streaming = false;
-                if let Some(ref t) = thinking {
-                    if !t.is_empty() {
-                        self.push_msg(ChatRole::Thinking, t);
-                    }
-                }
-                if !text.is_empty() {
-                    self.push_msg(ChatRole::Assistant, &text);
-                }
-                self.status = self.setup.lang.t_chat_ready().to_string();
+                self.debug.streaming = false;
+                self.block = BlockType::None;
+                self.push_msg(ChatRole::Divider, "");
+                self.push_msg(ChatRole::User, &user_text);
+                self.scroll_offset = 0;
             }
-            Agent2Ui::UserMsg { id: _, text } => {
-                self.push_msg(ChatRole::User, &text);
-            }
-            Agent2Ui::ToolCall { msg_id: _, tool } => {
-                self.debug.tool_calls_total += 1;
-                self.switch_block(BlockType::Tool);
-                let label = format!("{} {}", tool.name, tool.args_display);
-                self.push_streaming_msg(ChatRole::Tool, &label);
-                self.streaming = false;
-            }
-            Agent2Ui::ToolResult { tool_id: _, output, success, .. } => {
-                if !success { self.debug.tool_failures += 1; }
-                // Find the tool card we created and update it
-                if let Some(last) = self.messages.last_mut() {
-                    if last.role == ChatRole::Tool {
-                        let lang = self.setup.lang;
-                        let trunc_note = {
-                            let char_count = output.chars().count();
-                            if char_count > 200 {
-                                lang.t_tool_truncated(char_count - 200)
-                            } else { String::new() }
-                        };
-                        last.content.push_str(&format!("\n{}", &output[..output.len().min(500)]));
-                        if !trunc_note.is_empty() {
-                            last.content.push_str(&format!("\n{}", trunc_note));
-                        }
-                    }
-                }
-            }
-            Agent2Ui::TurnEnd { stop_reason: _, usage, context_tokens, context_limit, session_tokens } => {
+            Agent2Ui::TurnEnd { turn_id: _, stop_reason: _, usage, context_tokens, context_limit, session_tokens } => {
                 self.context_tokens = context_tokens;
                 self.session_tokens = session_tokens;
                 self.context_limit = context_limit;
@@ -844,7 +898,88 @@ impl App {
                     self.update_cache(u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens);
                 }
                 self.streaming = false;
+                self.debug.streaming = false;
+                self.block = BlockType::None;
+                self.busy = false;
+                self.scroll_offset = 0;
                 self.status = self.setup.lang.t_chat_ready().to_string();
+            }
+            Agent2Ui::RoundDelta { turn_id: _, round_num: _, kind, delta } => {
+                self.debug.streaming = true;
+                if !self.streaming {
+                    let role = match kind {
+                        RoundDeltaKind::Thinking => ChatRole::Thinking,
+                        RoundDeltaKind::Answering => ChatRole::Assistant,
+                        RoundDeltaKind::ToolCalling => ChatRole::Assistant,
+                    };
+                    self.streaming = true;
+                    self.draft_round_msg_idx = Some(self.messages.len());
+                    self.push_streaming_msg(role, "");
+                }
+                self.append_last(&delta);
+            }
+            Agent2Ui::RoundComplete { turn_id: _, round_num: _, thinking, answer, tool_calls, is_final } => {
+                if let Some(idx) = self.draft_round_msg_idx.take() {
+                    if idx < self.messages.len() {
+                        self.messages.truncate(idx);
+                    }
+                }
+                self.streaming = false;
+                self.streaming_rendered_len = 0;
+                self.md_renderer = None;
+                self.pending_tail_lines = 0;
+                self.debug.streaming = false;
+                if let Some(ref t) = thinking {
+                    if !t.is_empty() {
+                        self.push_msg(ChatRole::Thinking, t);
+                    }
+                }
+                if let Some(ref a) = answer {
+                    if !a.is_empty() {
+                        self.push_msg(ChatRole::Assistant, a);
+                    }
+                }
+                for tc in &tool_calls {
+                    self.debug.tool_calls_total += 1;
+                    let label = format_tool_label(&tc.name, &tc.args_display);
+                    self.push_tool_msg(&tc.id, &label, ToolStatus::Pending);
+                }
+                if is_final {
+                    self.status = self.setup.lang.t_chat_ready().to_string();
+                    self.busy = false;
+                    self.scroll_offset = 0;
+                }
+            }
+            Agent2Ui::ToolResults { turn_id: _, round_num: _, results } => {
+                for r in &results {
+                    if !r.success { self.debug.tool_failures += 1; }
+                    if let Some(msg) = self.messages.iter_mut().rev()
+                        .find(|m| m.role == ChatRole::Tool && m.tool_id == r.tool_call_id)
+                    {
+                        let summary = format_tool_result_summary(&r.output, r.success);
+                        msg.content = format!("{} {}", msg.content, summary);
+                        msg.tool_status = if r.success { ToolStatus::Success } else { ToolStatus::Failed };
+                        let mut renderer = MarkdownRenderer::new();
+                        let mut new_lines = Vec::new();
+                        for line in msg.content.lines() {
+                            for l in renderer.push_line(line) {
+                                new_lines.push(l);
+                            }
+                        }
+                        for l in renderer.flush() {
+                            new_lines.push(l);
+                        }
+                        msg.lines = new_lines;
+                    }
+                }
+            }
+            Agent2Ui::SessionRestored { seed, turns, tokens_used, .. } => {
+                self.status = self.setup.lang.t_session_restored(&seed, turns.len() as u64, tokens_used);
+                self.debug.session_seed = seed.clone();
+                self.debug.context_tokens = tokens_used;
+                self.session_tokens = tokens_used as u64;
+                self.scroll_offset = 0;
+                self.load_turns(&turns);
             }
             Agent2Ui::Error { message } => {
                 let status_text = format!("{}: {}", self.setup.lang.t_chat_error(), message);
@@ -873,14 +1008,6 @@ impl App {
                 self.busy = false;
                 self.scroll_offset = 0;
                 self.finalize_last_message();
-            }
-            Agent2Ui::SessionRestored { seed, message_count, tokens_used, .. } => {
-                self.status = self.setup.lang.t_session_restored(&seed, message_count, tokens_used);
-                self.debug.session_seed = seed.clone();
-                self.debug.context_tokens = tokens_used;
-                self.session_tokens = tokens_used as u64;
-                self.scroll_offset = 0;
-                self.load_messages_from_session(&seed);
             }
             Agent2Ui::DebugSnapshot { hp_connected, session_seed, context_tokens,
                 tool_calls_total, tool_failures, current_phase: _, streaming, dsml_compat_count, documents, .. } => {
@@ -920,26 +1047,30 @@ impl App {
         }
     }
 
-    fn load_messages_from_session(&mut self, seed: &str) {
-        use std::fs;
-        let dir = dsx_types::platform::data_dir().join("sessions");
-        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if !path.is_dir() { continue; }
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with(seed) { continue; }
-            let session_path = path.join("session.json");
-            if let Ok(data) = fs::read_to_string(&session_path) {
-                if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
-                    self.push_messages_from_file(&file);
-                    return;
+    fn load_turns(&mut self, turns: &[TurnData]) {
+        for turn in turns {
+            self.push_msg(ChatRole::Divider, "");
+            self.push_msg(ChatRole::User, &turn.user_text);
+            for round in &turn.rounds {
+                if let Some(ref t) = round.thinking {
+                    if !t.is_empty() {
+                        self.push_msg(ChatRole::Thinking, t);
+                    }
                 }
-            }
-        }
-        let flat = dir.join(format!("{}.json", seed));
-        if let Ok(data) = fs::read_to_string(&flat) {
-            if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
-                self.push_messages_from_file(&file);
+                if let Some(ref a) = round.answer {
+                    if !a.is_empty() {
+                        self.push_msg(ChatRole::Assistant, a);
+                    }
+                }
+                for tc in &round.tool_calls {
+                    let label = format_tool_label(&tc.name, &tc.args_display);
+                    let mut status = ToolStatus::Success;
+                    // Check if there's a matching result
+                    if let Some(tr) = round.tool_results.iter().find(|r| r.tool_call_id == tc.id) {
+                        if !tr.success { status = ToolStatus::Failed; }
+                    }
+                    self.push_tool_msg(&tc.id, &label, status);
+                }
             }
         }
     }
@@ -986,6 +1117,8 @@ impl App {
                                 role: ChatRole::Tool,
                                 content: label,
                                 lines,
+                                tool_status: ToolStatus::Success,
+                                tool_id: String::new(),
                             });
                         } else {
                             let short: String = content.chars().take(200).collect();

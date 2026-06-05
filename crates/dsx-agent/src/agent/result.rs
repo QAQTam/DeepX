@@ -38,8 +38,10 @@ impl<'a> ToolResultAppender<'a> {
         // to prevent LLM context bloat regardless of per-tool limits.
         const MAX_TOOL_RESULT_CHARS: usize = 50_000;
         let truncated = if raw.len() > MAX_TOOL_RESULT_CHARS {
-            let mut t = raw[..MAX_TOOL_RESULT_CHARS].to_string();
-            t.push_str(&format!("\n...[TRUNCATED: {} total chars, showing first {MAX_TOOL_RESULT_CHARS}]", raw.len()));
+            let end = raw.floor_char_boundary(MAX_TOOL_RESULT_CHARS);
+            let mut t = raw[..end].to_string();
+            let total_chars = raw.chars().count();
+            t.push_str(&format!("\n...[TRUNCATED: {total_chars} total chars, showing first {MAX_TOOL_RESULT_CHARS}]"));
             t
         } else {
             raw.to_string()

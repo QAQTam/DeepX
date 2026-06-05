@@ -1,7 +1,7 @@
 // ── ReasoningBlock ──
 // Collapsible reasoning/thinking chain display.
 
-import { useState, useRef, useEffect } from 'react'
+import { createSignal, onMount } from 'solid-js'
 import { tt } from '../../i18n'
 
 interface ReasoningBlockProps {
@@ -9,29 +9,29 @@ interface ReasoningBlockProps {
 }
 
 export function ReasoningBlock({ content }: ReasoningBlockProps) {
-  const [open, setOpen] = useState(true)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = createSignal(true)
+  let bottomRef!: HTMLDivElement
 
-  useEffect(() => {
-    if (open) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  onMount(() => {
+    if (open()) {
+      bottomRef?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [content, open])
+  })
 
   if (!content.trim()) return null
 
   return (
-    <div className="my-1">
+    <div class="my-1">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
-        aria-expanded={open}
+        class="flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+        aria-expanded={open()}
       >
-        <span className="text-[10px]">{open ? '\u25BE' : '\u25B8'}</span>
-        <span>{open ? tt('chat.reasoningHide') : tt('chat.reasoningShow')}</span>
+        <span class="text-[10px]">{open() ? '\u25BE' : '\u25B8'}</span>
+        <span>{open() ? tt('chat.reasoningHide') : tt('chat.reasoningShow')}</span>
       </button>
-      {open && (
-        <div className="mt-2 p-3 bg-[var(--bg-tertiary)] rounded-lg text-xs text-[var(--text)] whitespace-pre-wrap border border-[var(--border-light)] max-h-64 overflow-y-auto font-mono leading-relaxed">
+      {open() && (
+        <div class="mt-2 p-3 bg-[var(--bg-tertiary)] rounded-lg text-xs text-[var(--text)] whitespace-pre-wrap border border-[var(--border-light)] max-h-64 overflow-y-auto font-mono leading-relaxed">
           {content}
           <div ref={bottomRef} />
         </div>

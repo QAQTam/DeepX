@@ -1,8 +1,6 @@
-//! UI helpers: assistant message building, tool display formatting, event emission.
+//! UI helpers: assistant message building, tool display formatting (v5).
 
-use std::sync::mpsc;
-
-use dsx_proto::{Agent2Ui, UiToolDef};
+use dsx_proto::ToolCallDef;
 use dsx_types::{ContentBlock, Message, ToolCall};
 
 use crate::agent::AgentState;
@@ -124,24 +122,28 @@ pub fn format_tool_display(name: &str, args: &str) -> (String, Option<serde_json
     (display, body)
 }
 
-/// Build a `UiToolDef` from tool name and args.
-pub fn make_tool_def(id: &str, name: &str, args: &str) -> UiToolDef {
-    let (display, body) = format_tool_display(name, args);
-    UiToolDef { id: id.to_string(), name: name.to_string(), args_display: display, body }
+/// Build a `ToolCallDef` from tool name and args.
+pub fn make_tool_def(id: &str, name: &str, args: &str) -> ToolCallDef {
+    let (display, _body) = format_tool_display(name, args);
+    ToolCallDef {
+        id: id.to_string(),
+        name: name.to_string(),
+        args_display: display,
+        args_json: args.to_string(),
+    }
 }
 
-/// Emit tool results to the UI channel.
-pub fn emit_tool_result(
-    tx: &mpsc::Sender<Agent2Ui>,
+/// Build a `ToolResultDef` from tool execution output.
+pub fn make_tool_result(
     tool_id: &str,
     output: &str,
     success: bool,
     file: Option<dsx_proto::FileSnapshotInfo>,
-) {
-    let _ = tx.send(Agent2Ui::ToolResult {
-        tool_id: tool_id.to_string(),
+) -> dsx_proto::ToolResultDef {
+    dsx_proto::ToolResultDef {
+        tool_call_id: tool_id.to_string(),
         output: output.to_string(),
         success,
         file,
-    });
+    }
 }

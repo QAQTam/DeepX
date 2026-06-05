@@ -179,13 +179,12 @@ fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) -> Join
                         Ok(v) => {
                             let kind = v["type"].as_str().unwrap_or("");
                             match kind {
-                                "stream_start" | "stream_delta" | "stream_end" |
-                                "assistant_msg" | "user_msg" |
-                                "tool_call" | "tool_result" |
-                                "turn_end" | "done" | "error" | "cancelled" |
+                                "turn_start" | "turn_end" |
+                                "round_delta" | "round_complete" | "tool_results" |
+                                "done" | "error" | "cancelled" |
                                 "ask_user" | "balance" | "session_restored" |
                                 "debug_snapshot" | "shutdown_ack" |
-                                "audit_record" => {
+                                "audit_record" | "tool_notice" => {
                                     if kind == "session_restored" {
                                         if let Some(seed) = v["seed"].as_str() {
                                             if let Ok(mut guard) = app.state::<AgentState>().session_seed.lock() {

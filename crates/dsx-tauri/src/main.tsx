@@ -1,5 +1,4 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
+import { render } from 'solid-js/web'
 import './index.css'
 import App from './App.tsx'
 import { registerBundle } from './i18n'
@@ -10,12 +9,10 @@ import { ThemeProvider, ToastProvider } from './components/shared'
 registerBundle('zh', zh as any)
 registerBundle('en', en as any)
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ThemeProvider>
-      <ToastProvider>
-        <App />
-      </ToastProvider>
-    </ThemeProvider>
-  </StrictMode>,
-)
+render(() => (
+  <ThemeProvider>
+    <ToastProvider>
+      <App />
+    </ToastProvider>
+  </ThemeProvider>
+), document.getElementById('root')!)

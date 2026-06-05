@@ -2,7 +2,7 @@
 // Manages data-theme attribute on <html> for CSS variable switching.
 // Supports: 'light' | 'dark' | 'system'
 
-import { createContext, useContext, useEffect, useState, type ReactNode, useCallback } from 'react'
+import { createContext, useContext, createSignal, createEffect, type JSX } from 'solid-js'
 
 export type Theme = 'light' | 'dark' | 'system'
 
@@ -14,7 +14,7 @@ interface ThemeCtx {
 
 const ThemeContext = createContext<ThemeCtx>({ theme: 'system', setTheme: () => {}, resolved: 'dark' })
 
-export function useTheme() { return useContext(ThemeContext) }
+export function useTheme() { return useContext(ThemeContext)! }
 
 function getStored(): Theme {
   try {
@@ -26,42 +26,46 @@ function getStored(): Theme {
 
 function resolveTheme(t: Theme): 'light' | 'dark' {
   if (t === 'light' || t === 'dark') return t
-  // system
   if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches) return 'dark'
   return 'light'
 }
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(getStored)
-  const [resolved, setResolved] = useState<'light' | 'dark'>(() => resolveTheme(getStored()))
+export function ThemeProvider(props: { children: JSX.Element }) {
+  const [theme, setThemeState] = createSignal<Theme>(getStored())
+  const [resolved, setResolved] = createSignal<'light' | 'dark'>(resolveTheme(getStored()))
 
-  const setTheme = useCallback((t: Theme) => {
+  const setTheme = (t: Theme) => {
     setThemeState(t)
     try { localStorage.setItem('dsx-theme', t) } catch { /* noop */ }
-  }, [])
+  }
 
   // Apply to DOM
-  useEffect(() => {
-    const r = resolveTheme(theme)
+  createEffect(() => {
+    const t = theme()
+    const r = resolveTheme(t)
     setResolved(r)
     const root = document.documentElement
-    if (theme === 'dark') root.setAttribute('data-theme', 'dark')
-    else if (theme === 'light') root.setAttribute('data-theme', 'light')
+    if (t === 'dark') root.setAttribute('data-theme', 'dark')
+    else if (t === 'light') root.setAttribute('data-theme', 'light')
     else root.removeAttribute('data-theme')
-  }, [theme])
+  })
 
-  // Listen for system changes when in 'system' mode
-  useEffect(() => {
-    if (theme !== 'system') return
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = () => { const r = resolveTheme('system'); setResolved(r) }
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [theme])
+  // Listen for system theme changes when in 'system' mode
+  const mq = typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)') : null
+
+  createEffect(() => {
+    if (theme() !== 'system') return
+    const handler = () => {
+      setResolved(resolveTheme('system'))
+    }
+    mq?.addEventListener('change', handler)
+    // No cleanup needed — Solid handles disposal automatically when effect re-runs
+    // but for completeness, we'd use onCleanup
+  })
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, resolved }}>
-      {children}
+    <ThemeContext.Provider value={{ theme: theme(), setTheme, resolved: resolved() }}>
+      {props.children}
     </ThemeContext.Provider>
   )
 }

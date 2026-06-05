@@ -1,10 +1,10 @@
-//! API turn execution: SSE streaming from gate → typed UI events.
+//! API turn execution: SSE streaming from gate → typed UI events (v5).
 
 use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, Agent2Ui, StreamKind};
+use dsx_proto::{self, AgentToHp, Agent2Ui, RoundDeltaKind};
 
 use crate::agent::AgentState;
 
@@ -24,13 +24,13 @@ impl StreamState {
 }
 
 /// Run one API turn: build context → send ApiChat → read HP stream → emit
-/// StreamStart/StreamDelta/StreamEnd events during streaming, return complete
-/// response data to the caller.
+/// RoundDelta events during streaming, return complete response data.
 pub(super) fn run_api_turn(
     agent: &mut AgentState,
     hp: &mut BufReader<TcpStream>,
     agent_tx: &mpsc::Sender<Agent2Ui>,
-    msg_id: &str,
+    turn_id: &str,
+    round_num: u32,
     allow_tools: bool,
 ) -> Result<
     (
@@ -91,24 +91,19 @@ pub(super) fn run_api_turn(
                 {
                     log::info!("dsx-agent: streaming cancelled");
                     agent.stream_cancelled = false;
-                    if stream.has_text_start || stream.has_reasoning_start {
-                        let _ = agent_tx.send(Agent2Ui::StreamEnd { msg_id: msg_id.into(), is_final: false });
-                    }
+                    // Don't send RoundDelta for cancelled stream — caller handles TurnEnd
+                    break;
                 }
 
-
-            if let Some(r) = &reasoning {
-            if !r.is_empty() {
-                if !stream.has_reasoning_start {
-                    let _ = agent_tx.send(Agent2Ui::StreamStart {
-                        msg_id: msg_id.into(),
-                        kind: StreamKind::Thinking,
-                        tool_names: Vec::new(),
-                    });
+                if let Some(r) = &reasoning {
+                    if !r.is_empty() {
+                        if !stream.has_reasoning_start {
                             stream.has_reasoning_start = true;
                         }
-                        let _ = agent_tx.send(Agent2Ui::StreamDelta {
-                            msg_id: msg_id.into(),
+                        let _ = agent_tx.send(Agent2Ui::RoundDelta {
+                            turn_id: turn_id.into(),
+                            round_num,
+                            kind: RoundDeltaKind::Thinking,
                             delta: r.clone(),
                         });
                         stream_reasoning.push_str(r);
@@ -117,15 +112,12 @@ pub(super) fn run_api_turn(
 
                 if !delta.is_empty() {
                     if !stream.has_text_start {
-                        let _ = agent_tx.send(Agent2Ui::StreamStart {
-                            msg_id: msg_id.into(),
-                            kind: StreamKind::Answering,
-                            tool_names: Vec::new(),
-                        });
                         stream.has_text_start = true;
                     }
-                    let _ = agent_tx.send(Agent2Ui::StreamDelta {
-                        msg_id: msg_id.into(),
+                    let _ = agent_tx.send(Agent2Ui::RoundDelta {
+                        turn_id: turn_id.into(),
+                        round_num,
+                        kind: RoundDeltaKind::Answering,
                         delta: delta.clone(),
                     });
                     stream_content.push_str(&delta);
@@ -139,20 +131,18 @@ pub(super) fn run_api_turn(
                     }
                     if !stream.dsml_tool_names.contains(name) {
                         stream.dsml_tool_names.push(name.clone());
+                        let _ = agent_tx.send(Agent2Ui::RoundDelta {
+                            turn_id: turn_id.into(),
+                            round_num,
+                            kind: RoundDeltaKind::ToolCalling,
+                            delta: name.clone(),
+                        });
                     }
-                    let _ = agent_tx.send(Agent2Ui::StreamStart {
-                        msg_id: msg_id.into(),
-                        kind: StreamKind::ToolCalling,
-                        tool_names: stream.dsml_tool_names.clone(),
-                    });
                 }
             }
             dsx_proto::HpToAgent::ApiResponse {
                 content, tool_calls, stop_reason, reasoning_content, usage,
             } => {
-                if stream.has_text_start || stream.has_reasoning_start {
-                    let _ = agent_tx.send(Agent2Ui::StreamEnd { msg_id: msg_id.into(), is_final: true });
-                }
                 let final_content = if !stream_content.is_empty() { stream_content } else { content };
                 let final_reasoning = if !stream_reasoning.is_empty() {
                     Some(stream_reasoning)
@@ -177,4 +167,7 @@ pub(super) fn run_api_turn(
             _ => {}
         }
     }
+
+    // If we broke out of the loop (cancelled), return empty
+    Ok((String::new(), None, serde_json::Value::Null, None, Some("cancelled".into())))
 }

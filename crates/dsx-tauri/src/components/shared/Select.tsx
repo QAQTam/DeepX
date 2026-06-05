@@ -1,29 +1,35 @@
 // ── Select ──
 
-import { type SelectHTMLAttributes, useId } from 'react'
+import type { JSX } from 'solid-js'
+import { For } from 'solid-js'
 
-interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+let _selectId = 0
+function nextSelectId(prefix = 'select') {
+  return `${prefix}-${++_selectId}`
+}
+
+interface SelectProps extends JSX.SelectHTMLAttributes<HTMLSelectElement> {
   label?: string
   options: { value: string; label: string }[]
 }
 
-export function Select({ label, options, className = '', id, ...rest }: SelectProps) {
-  const generatedId = useId()
-  const selectId = id || generatedId
+export function Select(props: SelectProps) {
+  const id = () => props.id || nextSelectId()
   return (
-    <div className="flex flex-col gap-1">
-      {label && (
-        <label htmlFor={selectId} className="text-sm font-medium text-[var(--text-h)]">{label}</label>
+    <div class="flex flex-col gap-1">
+      {props.label && (
+        <label for={id()} class="text-sm font-medium text-[var(--text-h)]">{props.label}</label>
       )}
-      <select id={selectId}
-        className={`bg-[var(--bg-primary)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm
+      <select
+        {...props}
+        id={id()}
+        class={`bg-[var(--bg-primary)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm
           text-[var(--text-h)] outline-none transition-colors
-          focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/20 ${className}`}
-        {...rest}
+          focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/20 ${props.class || ''}`}
       >
-        {options.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
+        <For each={props.options}>
+          {o => <option value={o.value}>{o.label}</option>}
+        </For>
       </select>
     </div>
   )

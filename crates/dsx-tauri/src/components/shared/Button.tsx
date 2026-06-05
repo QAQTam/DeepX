@@ -2,18 +2,18 @@
 // Variants: primary | secondary | ghost | danger
 // Sizes: sm | md | lg
 
-import { type ButtonHTMLAttributes, type ReactNode } from 'react'
+import type { JSX } from 'solid-js'
 import { Spinner } from './Spinner'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type Size = 'sm' | 'md' | 'lg'
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant
   size?: Size
   loading?: boolean
-  icon?: ReactNode
-  children?: ReactNode
+  icon?: JSX.Element
+  children?: JSX.Element
 }
 
 const variantClass: Record<Variant, string> = {
@@ -31,11 +31,11 @@ const sizeClass: Record<Size, string> = {
 
 export function Button({
   variant = 'secondary', size = 'md', loading, icon, children,
-  disabled, className = '', ...rest
+  disabled, class: className = '', ...rest
 }: ButtonProps) {
   return (
     <button
-      className={`inline-flex items-center justify-center font-medium transition-colors
+      class={`inline-flex items-center justify-center font-medium transition-colors
         disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-[var(--accent)]
         ${variantClass[variant]} ${sizeClass[size]} ${className}`}
       disabled={disabled || loading}

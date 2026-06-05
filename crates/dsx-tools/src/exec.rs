@@ -207,18 +207,19 @@ pub(super) fn compress_lines(lines: &[&str]) -> String {
 fn same_prefix(a: &str, b: &str) -> bool {
     let a_trim = a.trim_start();
     let b_trim = b.trim_start();
-    if a_trim.len() < 10 || b_trim.len() < 10 { return false; }
-    let len = 40.min(a_trim.len()).min(b_trim.len());
-    match (a_trim.get(..len), b_trim.get(..len)) {
-        (Some(a_pref), Some(b_pref)) => a_pref == b_pref,
-        _ => false,
-    }
+    let a_chars = a_trim.chars().count();
+    let b_chars = b_trim.chars().count();
+    if a_chars < 10 || b_chars < 10 { return false; }
+    let len = 40.min(a_chars).min(b_chars);
+    let a_pref: String = a_trim.chars().take(len).collect();
+    let b_pref: String = b_trim.chars().take(len).collect();
+    a_pref == b_pref
 }
 
 fn common_prefix(lines: &[&str]) -> String {
     if lines.is_empty() { return String::new(); }
     let first = lines[0].trim_start();
-    let mut prefix_len = first.len().min(60);
+    let mut prefix_len = first.chars().count().min(60);
     for &l in &lines[1..] {
         let trimmed = l.trim_start();
         for (i, (a, b)) in first.chars().zip(trimmed.chars()).enumerate() {

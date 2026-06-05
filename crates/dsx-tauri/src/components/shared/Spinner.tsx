@@ -12,7 +12,7 @@ export function Spinner({ size = 'md', className = '' }: SpinnerProps) {
     <span
       aria-label="Loading"
       role="status"
-      className={`${sizeMap[size]} border-2 border-current border-r-transparent rounded-full inline-block anim-spin-slow ${className}`}
+      class={`${sizeMap[size]} border-2 border-current border-r-transparent rounded-full inline-block anim-spin-slow ${className}`}
     />
   )
 }

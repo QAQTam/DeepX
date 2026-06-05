@@ -1,7 +1,7 @@
 // ── AskUserDialog ──
 // Modal shown when the agent needs user input.
 
-import { useRef, useEffect, type ChangeEvent, type KeyboardEvent } from 'react'
+import { onMount } from 'solid-js'
 import { tt } from '../i18n'
 import { Button, Input } from './shared'
 
@@ -14,50 +14,44 @@ interface AskUserDialogProps {
 }
 
 export function AskUserDialog({ question, options, answer, setAnswer, onSubmit }: AskUserDialogProps) {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => () => clearTimeout(timerRef.current ?? undefined), [])
+  let timerRef: ReturnType<typeof setTimeout> | null = null
+  onMount(() => () => { if (timerRef) clearTimeout(timerRef) })
 
   return (
-    <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label={tt('chat.toolCalling')}>
-      <div className="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-md w-full mx-4 shadow-md transition-theme">
-        <div className="text-sm font-bold text-[var(--text-h)] mb-1">需要确认</div>
-        <div className="text-xs text-[var(--text)] mb-4 whitespace-pre-wrap">{question}</div>
+    <div class="absolute inset-0 bg-black/30 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label={tt('chat.toolCalling')}>
+      <div class="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-md w-full mx-4 shadow-md transition-theme">
+        <div class="text-sm font-bold text-[var(--text-h)] mb-1">${tt('askUser.title')}</div>
+        <div class="text-xs text-[var(--text)] mb-4 whitespace-pre-wrap">{question}</div>
 
         {options && options.length > 0 ? (
-          <div className="flex flex-wrap gap-2 mb-4">
-            {options.map((opt, i) => (
+          <div class="flex flex-wrap gap-2 mb-4">
+            {options.map((opt) => (
               <Button
-                key={i}
                 variant="secondary"
                 size="sm"
-                onClick={() => { setAnswer(opt); timerRef.current = setTimeout(onSubmit, 100) }}
+                onClick={() => { setAnswer(opt); timerRef = setTimeout(onSubmit, 100) }}
               >
                 {opt}
               </Button>
             ))}
           </div>
         ) : (
-          <div className="mb-4">
+          <div class="mb-4">
             <Input
               type="text"
               value={answer}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setAnswer(e.target.value)}
-              onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') onSubmit() }}
-              placeholder="输入回答..."
-              autoFocus
+              onInput={(e) => setAnswer(e.currentTarget.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') onSubmit() }}
+              placeholder={tt("askUser.placeholder")}
+              autofocus
             />
           </div>
         )}
 
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => { setAnswer(''); onSubmit() }} className="flex-1">
-            {tt('common.skip')}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={onSubmit}
+        <div class="flex gap-2 justify-end">
+          <Button variant="secondary" size="sm" onClick={onSubmit}
             disabled={!answer.trim() && (!options || options.length === 0)}
-            className="flex-1"
+            class="flex-1"
           >
             {tt('common.confirm')}
           </Button>

@@ -1,41 +1,45 @@
 // ── Input ──
 // Standard text/password input with label + error support.
 
-import { type InputHTMLAttributes, useId } from 'react'
+import type { JSX } from 'solid-js'
 
-interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
+let _inputId = 0
+function nextId(prefix = 'input') {
+  return `${prefix}-${++_inputId}`
+}
+
+interface InputProps extends JSX.InputHTMLAttributes<HTMLInputElement> {
   label?: string
   hint?: string
   error?: string
 }
 
-export function Input({ label, hint, error, className = '', id, ...rest }: InputProps) {
-  const generatedId = useId()
-  const inputId = id || generatedId
+export function Input(props: InputProps) {
+  const id = () => props.id || nextId()
   return (
-    <div className="flex flex-col gap-1">
-      {label && (
-        <label htmlFor={inputId} className="text-sm font-medium text-[var(--text-h)]">
-          {label}
+    <div class="flex flex-col gap-1">
+      {props.label && (
+        <label for={id()} class="text-sm font-medium text-[var(--text-h)]">
+          {props.label}
         </label>
       )}
       <input
-        id={inputId}
-        className={`bg-[var(--bg-primary)] border rounded-lg px-3 py-2 text-sm text-[var(--text-h)]
+        {...props}
+        id={id()}
+        class={`bg-[var(--bg-primary)] border rounded-lg px-3 py-2 text-sm text-[var(--text-h)]
           outline-none transition-colors font-mono
           placeholder:text-[var(--muted)]
           focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/20
-          ${error ? 'border-[var(--error)]' : 'border-[var(--border)]'}
-          ${className}`}
-        aria-invalid={!!error}
-        aria-describedby={error ? `${inputId}-error` : hint ? `${inputId}-hint` : undefined}
-        {...rest}
+          ${props.error ? 'border-[var(--error)]' : 'border-[var(--border)]'}
+          ${props.class || ''}`}
+        aria-invalid={!!props.error}
+        aria-describedby={props.error ? `${id()}-error` : props.hint ? `${id()}-hint` : undefined}
       />
-      {hint && !error && (
-        <p id={`${inputId}-hint`} className="text-xs text-[var(--muted)]">{hint}</p>
+      {props.hint && !props.error && (
+        <p id={`${id()}-hint`} class="text-xs text-[var(--muted)]">{props.hint}</p>
       )}
-      {error && (
-        <p id={`${inputId}-error`} className="text-xs text-[var(--error)]" role="alert">{error}</p>
+      {props.error && (
+        <p id={`${id()}-error`} class="text-xs text-[var(--error)]" role="alert">{props.error}</p>
       )}
     </div>
   )

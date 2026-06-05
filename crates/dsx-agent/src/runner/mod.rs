@@ -12,7 +12,7 @@ use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, TaskInfo, HpToAgent, Ui2Agent};
+use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, TaskInfo, HpToAgent, ToolResultDef, Ui2Agent};
 
 use crate::agent::AgentState;
 use crate::orchestrator::{maybe_save_session, learning};
@@ -120,21 +120,10 @@ pub fn run_agent_loop(
         let seed = agent.resume_seed.clone();
         lifecycle::init_session(&mut agent, seed.as_deref());
         if agent.resume_seed.is_some() {
-            let msg_count = agent.ctx.message_count();
-            let summary = agent.ctx.turns().last()
-                .and_then(|t| t.steps.last())
-                .and_then(|s| {
-                    s.assistant.content.iter().find_map(|b| {
-                        if let dsx_types::ContentBlock::Text { text } = b {
-                            Some(text.chars().take(100).collect::<String>())
-                        } else { None }
-                    })
-                })
-                .unwrap_or_default();
+            let turns = crate::runner::turn::build_turns_from_context(&agent);
             let _ = agent_tx.send(Agent2Ui::SessionRestored {
                 seed: agent.session_seed.clone(),
-                message_count: msg_count as u64,
-                summary,
+                turns,
                 tokens_used: agent.token_estimate,
                 cache_hit_pct: 0.0,
             });
@@ -212,11 +201,15 @@ pub fn run_agent_loop(
                 let args_str = args.to_string();
                 let content = crate::tools::execute_tool_with_id(&name, &action, &args_str, &id);
                 let success = !content.starts_with("[ERROR]") && !content.starts_with("[FAIL]");
-                let _ = agent_tx.send(Agent2Ui::ToolResult {
-                    tool_id: id.clone(),
-                    output: content,
-                    success,
-                    file: None,
+                let _ = agent_tx.send(Agent2Ui::ToolResults {
+                    turn_id: "headless".into(),
+                    round_num: 0,
+                    results: vec![dsx_proto::ToolResultDef {
+                        tool_call_id: id.clone(),
+                        output: content,
+                        success,
+                        file: None,
+                    }],
                 });
                 let _ = agent_tx.send(Agent2Ui::Done);
             }

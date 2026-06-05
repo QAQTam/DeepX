@@ -1,25 +1,25 @@
-// ── useConfig Hook ──
+// ── useConfig Hook (SolidJS) ──
 // Configuration load/save + model fetching.
 
-import { useState, useCallback, useEffect } from 'react'
+import { createSignal, onMount } from 'solid-js'
 import { api, type ConfigData, type ConfigInput } from '../bridge/tauri'
 
 interface UseConfigReturn {
-  config: ConfigData | null
-  loading: boolean
+  readonly config: ConfigData | null
+  readonly loading: boolean
   load: () => Promise<void>
   save: (input: ConfigInput) => Promise<void>
   update: (field: string, value: string) => Promise<void>
   fetchModels: (apiKey: string, baseUrl: string) => Promise<string[]>
-  checkDone: boolean
+  readonly checkDone: boolean
 }
 
 export function useConfig(): UseConfigReturn {
-  const [config, setConfig] = useState<ConfigData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [checkDone, setCheckDone] = useState(false)
+  const [_config, setConfig] = createSignal<ConfigData | null>(null)
+  const [_loading, setLoading] = createSignal(true)
+  const [_checkDone, setCheckDone] = createSignal(false)
 
-  const load = useCallback(async () => {
+  const load = async () => {
     try {
       setLoading(true)
       const ok = await api.checkConfig()
@@ -33,27 +33,28 @@ export function useConfig(): UseConfigReturn {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }
 
-  const save = useCallback(async (input: ConfigInput) => {
+  const save = async (input: ConfigInput) => {
     await api.saveConfig(input)
     const cfg = await api.loadConfig()
     setConfig(cfg)
-  }, [])
+  }
 
-  const update = useCallback(async (field: string, value: string) => {
+  const update = async (field: string, value: string) => {
     await api.updateConfig(field, value)
-  }, [])
+  }
 
-  const fetchModels = useCallback(async (apiKey: string, baseUrl: string): Promise<string[]> => {
-    try {
-      return await api.fetchModels(apiKey, baseUrl)
-    } catch (e) {
-      throw e
-    }
-  }, [])
+  const fetchModels = async (apiKey: string, baseUrl: string): Promise<string[]> => {
+    return await api.fetchModels(apiKey, baseUrl)
+  }
 
-  useEffect(() => { load() }, [load])
+  onMount(() => { load() })
 
-  return { config, loading, load, save, update, fetchModels, checkDone }
+  return {
+    get config() { return _config() },
+    get loading() { return _loading() },
+    load, save, update, fetchModels,
+    get checkDone() { return _checkDone() },
+  }
 }

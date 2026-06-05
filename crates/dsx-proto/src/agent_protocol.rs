@@ -1,12 +1,15 @@
 //! UI ↔ Agent frame definitions (channel-based, mpsc in-process).
 //!
-//! v4.1: Backend-owned message structure. Agent emits Typed messages
-//! with pre-rendered content and explicit boundaries. Frontend only
-//! routes by type — no state machine required.
+//! v5: Round-based protocol. Each API call is a Round with optional
+//! streaming preview. No duplication between streaming and final content.
+//! Frontend appends blocks in order — no state machine required.
 
 use serde::{Deserialize, Serialize};
 
-/// UI → Agent frames (unchanged from v4.0).
+// ═══════════════════════════════════════════════════════════════════════════
+// UI → Agent (unchanged from v4)
+// ═══════════════════════════════════════════════════════════════════════════
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[non_exhaustive]
@@ -35,22 +38,32 @@ pub enum Ui2Agent {
     DebugCommand { cmd: String },
 }
 
-// ── Shared types ──
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared types
+// ═══════════════════════════════════════════════════════════════════════════
 
-/// Tool call definition used in both `AssistantMsg.tool_calls` and
-/// `ToolCall` events. Carries a display-ready args summary and an
-/// optional structured body for rich rendering (diff, exec command).
+/// Tool call definition sent in RoundComplete.tool_calls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UiToolDef {
+pub struct ToolCallDef {
     pub id: String,
     pub name: String,
+    /// Human-readable args summary (e.g. "foo.rs", "search pattern")
     pub args_display: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<serde_json::Value>,
+    /// Raw JSON arguments string
+    pub args_json: String,
 }
 
-/// File metadata snapshot carried by ToolResult when the tool
-/// operated on a file. Frontend uses this for rich rendering.
+/// Tool execution result sent in ToolResults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResultDef {
+    pub tool_call_id: String,
+    pub output: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<FileSnapshotInfo>,
+}
+
+/// File metadata snapshot for rich rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSnapshotInfo {
     pub path: String,
@@ -64,7 +77,7 @@ pub struct FileSnapshotInfo {
     pub tag: Option<String>,
 }
 
-/// Document tracking entry — shows what files are in context and their state.
+/// Document tracking entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocInfo {
     pub tag: String,
@@ -80,88 +93,45 @@ pub struct TaskInfo {
     pub status: String,
 }
 
-/// Agent → UI frames. Backend owns all message structure; frontend
-/// receives pre-rendered, role-annotated blocks in guaranteed order.
+/// One round of a turn (one API call).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoundData {
+    pub round_num: u32,
+    pub thinking: Option<String>,
+    pub answer: Option<String>,
+    pub tool_calls: Vec<ToolCallDef>,
+    pub tool_results: Vec<ToolResultDef>,
+}
+
+/// One full turn (user message + all rounds).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnData {
+    pub turn_id: String,
+    pub user_text: String,
+    pub rounds: Vec<RoundData>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Agent → UI (v5 — round-based)
+// ═══════════════════════════════════════════════════════════════════════════
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[non_exhaustive]
 pub enum Agent2Ui {
-    // ── Structured messages ──
-
-    /// A complete assistant message (one API call result).
-    /// Sent AFTER all streaming has finished for this message.
-    /// Tool calls that belong to this message arrive as separate
-    /// `ToolCall` events immediately after this message.
-    #[serde(rename = "assistant_msg")]
-    AssistantMsg {
-        id: String,
-        /// Full thinking content (accumulated from all reasoning deltas).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        thinking: Option<String>,
-        /// Full text content (accumulated from all text deltas).
-        text: String,
-    },
-
-    /// A user input message (sent at the start of each turn).
-    #[serde(rename = "user_msg")]
-    UserMsg {
-        id: String,
-        text: String,
-    },
-
-    // ── Tool execution ──
-
-    /// A tool was invoked by the model. UI should render a tool card
-    /// under the parent `msg_id`.
-    #[serde(rename = "tool_call")]
-    ToolCall {
-        /// Parent assistant message ID
-        msg_id: String,
-        /// Tool def with display args and optional body
-        #[serde(flatten)]
-        tool: UiToolDef,
-    },
-
-    /// A tool execution completed. UI should update the tool card
-    /// with the result.
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        tool_id: String,
-        output: String,
-        success: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        file: Option<FileSnapshotInfo>,
-    },
-
-    // ── Streaming / animation ──
-
-    #[serde(rename = "stream_start")]
-    StreamStart {
-        msg_id: String,
-        kind: StreamKind,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        tool_names: Vec<String>,
-    },
-
-    #[serde(rename = "stream_delta")]
-    StreamDelta {
-        msg_id: String,
-        delta: String,
-    },
-
-    #[serde(rename = "stream_end")]
-    StreamEnd {
-        msg_id: String,
-        #[serde(default)]
-        is_final: bool,
-    },
-
     // ── Turn lifecycle ──
 
-    /// End of the current turn. All tool calls have been resolved.
-    /// Agent is ready for next user input.
+    /// A new turn starts. Frontend creates a user message + turn container.
+    #[serde(rename = "turn_start")]
+    TurnStart {
+        turn_id: String,
+        user_text: String,
+    },
+
+    /// Turn complete. All rounds and tool results have been sent.
     #[serde(rename = "turn_end")]
     TurnEnd {
+        turn_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         stop_reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -169,6 +139,59 @@ pub enum Agent2Ui {
         context_tokens: u32,
         context_limit: u32,
         session_tokens: u64,
+    },
+
+    // ── Streaming preview (optional, additive) ──
+
+    /// Live typing preview for the current round.
+    /// Frontend shows this as a draft; RoundComplete replaces it.
+    #[serde(rename = "round_delta")]
+    RoundDelta {
+        turn_id: String,
+        round_num: u32,
+        kind: RoundDeltaKind,
+        delta: String,
+    },
+
+    // ── Round complete (authoritative) ──
+
+    /// One API call finished. Contains everything the model produced.
+    /// Frontend replaces any draft from RoundDelta with this content.
+    #[serde(rename = "round_complete")]
+    RoundComplete {
+        turn_id: String,
+        round_num: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thinking: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        answer: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<ToolCallDef>,
+        /// true = this is the final round of the turn
+        is_final: bool,
+    },
+
+    // ── Tool execution results ──
+
+    /// Results from executing the tool calls in a RoundComplete.
+    /// Sent after each tool finishes, before the next round or TurnEnd.
+    #[serde(rename = "tool_results")]
+    ToolResults {
+        turn_id: String,
+        round_num: u32,
+        results: Vec<ToolResultDef>,
+    },
+
+    // ── Session restore ──
+
+    /// Full session history sent on resume.
+    #[serde(rename = "session_restored")]
+    SessionRestored {
+        seed: String,
+        turns: Vec<TurnData>,
+        tokens_used: u32,
+        #[serde(default)]
+        cache_hit_pct: f64,
     },
 
     // ── System events ──
@@ -184,7 +207,6 @@ pub enum Agent2Ui {
     #[serde(rename = "error")]
     Error { message: String },
 
-    /// Tool call notice — DSML/XML compatibility warnings.
     #[serde(rename = "tool_notice")]
     ToolNotice {
         message: String,
@@ -197,15 +219,6 @@ pub enum Agent2Ui {
         is_available: bool,
         total_balance: String,
         currency: String,
-    },
-
-    #[serde(rename = "session_restored")]
-    SessionRestored {
-        seed: String,
-        message_count: u64,
-        summary: String,
-        tokens_used: u32,
-        cache_hit_pct: f64,
     },
 
     #[serde(rename = "debug_snapshot")]
@@ -250,13 +263,13 @@ pub enum Agent2Ui {
     },
 }
 
-/// Streaming block kind — used to distinguish text from thinking.
+/// Streaming block kind for RoundDelta.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum StreamKind {
+pub enum RoundDeltaKind {
     /// Model is reasoning (thinking phase).
     Thinking,
-    /// Agent is executing tool calls — tool names follow in the StreamStart.
+    /// Agent is executing tool calls — tool names follow.
     ToolCalling,
     /// Model is generating the visible answer.
     Answering,

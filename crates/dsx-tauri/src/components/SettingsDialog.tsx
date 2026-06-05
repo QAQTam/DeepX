@@ -1,7 +1,7 @@
 // ── SettingsDialog ──
 // Full settings: API Key, model, context limit, max tokens, effort, language, theme.
 
-import { useState, useEffect, type ChangeEvent } from 'react'
+import { createSignal, onMount } from 'solid-js'
 import { api, type ConfigData } from '../bridge/tauri'
 import { tt, setLang } from '../i18n'
 import { Button, Input, Select } from './shared'
@@ -11,20 +11,20 @@ interface SettingsDialogProps {
   onClose: () => void
 }
 
-export function SettingsDialog({ onClose }: SettingsDialogProps) {
-  const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('deepseek-v4-flash')
-  const [models, setModels] = useState<string[]>([])
-  const [fetching, setFetching] = useState(false)
-  const [fetchError, setFetchError] = useState('')
-  const [contextLimit, setContextLimit] = useState(1000000)
-  const [maxTokens, setMaxTokens] = useState(16384)
-  const [effort, setEffort] = useState('high')
-  const [lang, setLangState] = useState('zh')
-  const [saving, setSaving] = useState(false)
+export function SettingsDialog(props: SettingsDialogProps) {
+  const [apiKey, setApiKey] = createSignal('')
+  const [model, setModel] = createSignal('deepseek-v4-flash')
+  const [models, setModels] = createSignal<string[]>([])
+  const [fetching, setFetching] = createSignal(false)
+  const [fetchError, setFetchError] = createSignal('')
+  const [contextLimit, setContextLimit] = createSignal(1000000)
+  const [maxTokens, setMaxTokens] = createSignal(16384)
+  const [effort, setEffort] = createSignal('high')
+  const [lang, setLangState] = createSignal('zh')
+  const [saving, setSaving] = createSignal(false)
   const { theme, setTheme } = useTheme()
 
-  useEffect(() => {
+  onMount(() => {
     api.loadConfig().then((cfg: ConfigData) => {
       if (cfg.api_key && cfg.api_key !== 'null') setApiKey(cfg.api_key)
       if (cfg.model) setModel(cfg.model)
@@ -36,15 +36,15 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
       if (typeof cached === 'string') try { cached = JSON.parse(cached) } catch { /* ignore */ }
       if (Array.isArray(cached)) setModels(cached)
     }).catch(() => {})
-  }, [])
+  })
 
   const fetchModels = async () => {
     setFetching(true)
     setFetchError('')
     try {
-      const list = await api.fetchModels(apiKey, 'https://api.deepseek.com')
+      const list = await api.fetchModels(apiKey(), 'https://api.deepseek.com')
       setModels(list)
-      if (list.length > 0 && !list.includes(model)) setModel(list[0])
+      if (list.length > 0 && !list.includes(model())) setModel(list[0])
       await api.updateConfig('cached_models', JSON.stringify(list.slice(0, 5)))
     } catch (e: any) {
       setFetchError(String(e))
@@ -57,125 +57,104 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     setSaving(true)
     try {
       await api.saveConfig({
-        apiKey, baseUrl: 'https://api.deepseek.com', model,
-        contextLimit, maxTokens, effort, lang,
+        apiKey: apiKey(), baseUrl: 'https://api.deepseek.com', model: model(),
+        contextLimit: contextLimit(), maxTokens: maxTokens(), effort: effort(), lang: lang(),
       })
-      setLang(lang)
-      await api.reloadAgent()
-      onClose()
-    } catch (e: any) {
-      setFetchError(String(e))
-      setSaving(false)
-    }
+      setLang(lang())
+      props.onClose()
+    } catch { /* ignore */ }
+    finally { setSaving(false) }
   }
 
-  const modelOptions = models.length > 0
-    ? models.map(m => ({ value: m, label: m }))
-    : [{ value: model, label: model }]
-
   return (
-    <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-50" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-md w-full mx-4 shadow-lg max-h-[90vh] overflow-y-auto transition-theme">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-bold text-[var(--text-h)]">{tt('settings.title')}</h2>
-          <Button variant="ghost" size="sm" onClick={onClose}>✕</Button>
-        </div>
+    <div class="absolute inset-0 bg-black/30 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label={tt('settings.title')}>
+      <div class="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-md w-full mx-4 shadow-md transition-theme max-h-[90vh] overflow-y-auto">
+        <div class="text-lg font-bold text-[var(--text-h)] mb-4">{tt('settings.title')}</div>
 
-        <div className="space-y-4">
+        <div class="space-y-4">
           {/* API Key */}
-          <Input
-            type="password"
-            label={tt('settings.apiKey')}
-            placeholder={tt('settings.apiKeyPlaceholder')}
-            hint={tt('settings.apiKeyHint')}
-            value={apiKey}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setApiKey(e.target.value)}
-          />
-
-          {/* Model */}
-          <div className="flex flex-col gap-1">
-            <Select
-              label={tt('settings.model')}
-              value={model}
-              onChange={(e: ChangeEvent<HTMLSelectElement>) => setModel(e.target.value)}
-              options={modelOptions}
+          <div>
+            <Input
+              label={tt('settings.apiKey')}
+              type="password"
+              value={apiKey()}
+              onInput={(e) => setApiKey(e.currentTarget.value)}
+              placeholder="sk-..."
             />
-            <div className="flex items-center gap-2">
-              <Button variant="secondary" size="sm" onClick={fetchModels} loading={fetching}>
-                {fetching ? tt('settings.fetchingModels') : tt('settings.fetchModels')}
+            <div class="flex items-center gap-2 mt-1">
+              <Button variant="secondary" size="sm" onClick={fetchModels} loading={fetching()}>
+                {tt('settings.fetchModels')}
               </Button>
-              {fetchError && <span className="text-xs text-[var(--error)]">{fetchError}</span>}
+              {fetchError() && <span class="text-xs text-[var(--error)]">{fetchError()}</span>}
             </div>
           </div>
 
-          {/* Context Limit */}
+          {/* Model */}
           <Select
+            label={tt('settings.model')}
+            options={models().map(m => ({ value: m, label: m }))}
+            value={model()}
+            onChange={(e) => setModel(e.currentTarget.value)}
+          />
+
+          {/* Context Limit */}
+          <Input
             label={tt('settings.contextLimit')}
-            value={String(contextLimit)}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => setContextLimit(Number(e.target.value))}
-            options={[
-              { value: '131072', label: '128K' },
-              { value: '262144', label: '256K' },
-              { value: '524288', label: '512K' },
-              { value: '1000000', label: '1M' },
-            ]}
+            type="number"
+            value={String(contextLimit())}
+            onInput={(e) => setContextLimit(Number(e.currentTarget.value))}
           />
 
           {/* Max Tokens */}
-          <Select
+          <Input
             label={tt('settings.maxTokens')}
-            value={String(maxTokens)}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => setMaxTokens(Number(e.target.value))}
-            options={[
-              { value: '4096', label: '4K' },
-              { value: '8192', label: '8K' },
-              { value: '16384', label: '16K' },
-              { value: '32768', label: '32K' },
-            ]}
+            type="number"
+            value={String(maxTokens())}
+            onInput={(e) => setMaxTokens(Number(e.currentTarget.value))}
           />
 
           {/* Effort */}
           <Select
             label={tt('settings.effort')}
-            value={effort}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => setEffort(e.target.value)}
             options={[
+              { value: 'low', label: tt('settings.effortLow') },
+              { value: 'medium', label: tt('settings.effortMedium') },
               { value: 'high', label: tt('settings.effortHigh') },
-              { value: 'max', label: tt('settings.effortMax') },
             ]}
+            value={effort()}
+            onChange={(e) => setEffort(e.currentTarget.value)}
           />
 
           {/* Language */}
           <Select
-            label={tt('settings.lang')}
-            value={lang}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => setLangState(e.target.value)}
+            label={tt('settings.language')}
             options={[
-              { value: 'zh', label: tt('settings.langZh') },
-              { value: 'en', label: tt('settings.langEn') },
+              { value: 'zh', label: '中文' },
+              { value: 'en', label: 'English' },
             ]}
+            value={lang()}
+            onChange={(e) => setLangState(e.currentTarget.value)}
           />
 
           {/* Theme */}
           <Select
-            label={tt('settings.themeLabel')}
-            value={theme}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => setTheme(e.target.value as Theme)}
+            label={tt('settings.theme')}
             options={[
               { value: 'system', label: tt('settings.themeSystem') },
-              { value: 'light', label: tt('settings.themeLight') },
               { value: 'dark', label: tt('settings.themeDark') },
+              { value: 'light', label: tt('settings.themeLight') },
             ]}
+            value={theme}
+            onChange={(e) => setTheme(e.currentTarget.value as Theme)}
           />
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-3 mt-6">
-          <Button variant="secondary" onClick={onClose} className="flex-1">
+        <div class="flex gap-2 mt-6">
+          <Button variant="secondary" onClick={props.onClose} class="flex-1">
             {tt('common.cancel')}
           </Button>
-          <Button variant="primary" onClick={save} loading={saving} className="flex-1">
-            {saving ? tt('settings.saving') : tt('common.save')}
+          <Button variant="primary" onClick={save} loading={saving()} class="flex-1">
+            {saving() ? tt('settings.saving') : tt('common.save')}
           </Button>
         </div>
       </div>

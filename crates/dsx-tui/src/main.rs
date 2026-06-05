@@ -267,43 +267,7 @@ fn run_chat(
 ) -> std::io::Result<()> {
     let mut agent_dead = false;
     loop {
-        // 1. Drain all pending agent frames — then draw immediately
-        loop {
-            match agent_rx.try_recv() {
-                Ok(frame) => app.handle_frame(frame),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    if !agent_dead {
-                        agent_dead = true;
-                        let l = app.setup.lang;
-                        app.push_msg(app::ChatRole::Status,
-                            if l.as_str() == "zh" { "Agent 进程已断开，请按 F3 退出" }
-                            else { "Agent disconnected — press F3 to quit" });
-                        app.status = if l.as_str() == "zh" { "Agent 已断开" } else { "Agent disconnected" }.into();
-                        app.streaming = false;
-                    }
-                    break;
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-            }
-        }
-
-        if agent_dead && app.should_quit { return Ok(()); }
-
-        // 2. Render — rate‑limited to 30 fps during streaming to avoid CPU melt
-        let now = std::time::Instant::now();
-        let should_render = !app.streaming || now.duration_since(app.last_render).as_millis() >= 33;
-        if should_render {
-            terminal.draw(|frame| {
-                ui::render_chat(frame, app);
-                if app.ask.is_some() { ui::render_ask(frame, app); }
-            })?;
-            app.last_render = now;
-        }
-        app.tick();
-
-        if app.should_quit { return Ok(()); }
-
-        // 3. Handle keyboard (non-blocking)
+        // 1. Handle keyboard first — input appears on same-frame render
         if event::poll(std::time::Duration::ZERO)? {
             let key = if let Event::Key(k) = event::read()? { k } else { continue };
             if key.kind != KeyEventKind::Press { continue; }
@@ -354,11 +318,7 @@ fn run_chat(
                 (KeyModifiers::NONE, KeyCode::F(8)) => {
                     app.show_context = !app.show_context;
                 }
-                (KeyModifiers::NONE, KeyCode::F(6)) => {
-                    app.show_thinking = !app.show_thinking;
-                }
                 (KeyModifiers::CONTROL, KeyCode::Char('c'))
-                | (KeyModifiers::NONE, KeyCode::Char('q'))
                 | (_, KeyCode::F(3)) => return Ok(()),
                 (_, KeyCode::Esc) => {
                     if !agent_dead {
@@ -367,29 +327,58 @@ fn run_chat(
                     app.status = app.setup.lang.t_chat_cancelled().to_string();
                 }
                 (KeyModifiers::CONTROL, KeyCode::Enter) => {
-                    app.input.push('\n');
+                    app.input.insert(app.cursor, '\n');
+                    app.cursor += 1;
                 }
                 (_, KeyCode::Enter) => {
                     if agent_dead || app.busy { continue; }
                     let text = app.input.drain(..).collect::<String>();
+                    app.cursor = 0;
                     if !text.trim().is_empty() {
-                        app.messages.push(app::ChatMessage {
-                            role: app::ChatRole::User,
-                            content: text.clone(),
-                            lines: text.lines().map(|l| ratatui::text::Line::from(l.to_string())).collect(),
-                        });
                         app.status = app.setup.lang.t_chat_thinking().to_string();
                         app.busy = true;
                         send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
                     }
                 }
                 (_, KeyCode::Backspace) => {
-                    // Remove last grapheme cluster (supports emoji, CJK)
-                    if let Some((idx, _)) = app.input.char_indices().rev().next() {
-                        app.input.truncate(idx);
+                    if app.cursor > 0 {
+                        if let Some((idx, _)) = app.input[..app.cursor].char_indices().rev().next() {
+                            app.input.remove(idx);
+                            app.cursor = idx;
+                        }
                     }
                 }
-                (_, KeyCode::Char(c)) => { app.input.push(c); }
+                (_, KeyCode::Delete) => {
+                    if app.cursor < app.input.len() {
+                        if let Some((_, c)) = app.input[app.cursor..].char_indices().next() {
+                            app.input.remove(app.cursor);
+                        }
+                    }
+                }
+                (_, KeyCode::Left) => {
+                    if app.cursor > 0 {
+                        if let Some((idx, _)) = app.input[..app.cursor].char_indices().rev().next() {
+                            app.cursor = idx;
+                        } else {
+                            app.cursor = 0;
+                        }
+                    }
+                }
+                (_, KeyCode::Right) => {
+                    if app.cursor < app.input.len() {
+                        if let Some((idx, _)) = app.input[app.cursor..].char_indices().nth(1) {
+                            app.cursor = app.cursor + idx;
+                        } else {
+                            app.cursor = app.input.len();
+                        }
+                    }
+                }
+                (_, KeyCode::Home) => { app.cursor = 0; }
+                (_, KeyCode::End) => { app.cursor = app.input.len(); }
+                (_, KeyCode::Char(c)) => {
+                    app.input.insert(app.cursor, c);
+                    app.cursor += c.len_utf8();
+                }
                 (_, KeyCode::Up) | (_, KeyCode::PageUp) => {
                     let n = if key.code == KeyCode::PageUp { 10 } else { 1 };
                     app.scroll_offset = app.scroll_offset.saturating_add(n);
@@ -403,9 +392,44 @@ fn run_chat(
         } else if !app.streaming && !agent_dead {
             std::thread::sleep(std::time::Duration::from_millis(16));
         } else {
-            // Micro-sleep during streaming to avoid 100% CPU
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
+
+        // 2. Drain agent frames
+        loop {
+            match agent_rx.try_recv() {
+                Ok(frame) => app.handle_frame(frame),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    if !agent_dead {
+                        agent_dead = true;
+                        let l = app.setup.lang;
+                        app.push_msg(app::ChatRole::Status,
+                            if l.as_str() == "zh" { "Agent 进程已断开，请按 F3 退出" }
+                            else { "Agent disconnected — press F3 to quit" });
+                        app.status = if l.as_str() == "zh" { "Agent 已断开" } else { "Agent disconnected" }.into();
+                        app.streaming = false;
+                    }
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+            }
+        }
+
+        if agent_dead && app.should_quit { return Ok(()); }
+
+        // 3. Render
+        let now = std::time::Instant::now();
+        let should_render = !app.streaming || now.duration_since(app.last_render).as_millis() >= 33;
+        if should_render {
+            terminal.draw(|frame| {
+                ui::render_chat(frame, app);
+                if app.ask.is_some() { ui::render_ask(frame, app); }
+            })?;
+            app.last_render = now;
+        }
+        app.tick();
+
+        if app.should_quit { return Ok(()); }
     }
 }
 

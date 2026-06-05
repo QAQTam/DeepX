@@ -1,146 +1,159 @@
-// ── Agent Event Types (14 union types) ──
+// ── Agent Event Types v5 (round-based protocol) ──
 
-export type StreamKind = 'thinking' | 'tool_calling' | 'answering'
+// ── Core data structures ──
 
-export interface StreamStartPayload {
-  type: 'stream_start'
-  kind: StreamKind
-  tool_names?: string[]
-}
-
-export interface StreamDeltaPayload {
-  type: 'stream_delta'
-  delta: string
-  kind?: 'thinking' | 'content'
-}
-
-export interface StreamEndPayload {
-  type: 'stream_end'
-  is_final: boolean
-}
-
-export interface UsageUpdatePayload {
-  type: 'usage_update'
-  prompt_tokens?: number
-  context_limit?: number
-  cache_hit_tokens?: number
-  cache_miss_tokens?: number
-}
-
-export interface AssistantMsgPayload {
-  type: 'assistant_msg'
-  thinking?: string
-  text: string
-}
-
-export interface ToolCallPayload {
-  type: 'tool_call'
-  tool?: { id: string; name: string; args_display?: string; body?: unknown }
-  id?: string
-  name?: string
-  args_display?: string
-  body?: unknown
-}
-
-export interface UserMsgPayload {
-  type: 'user_msg'
+export interface ToolCallDef {
   id: string
-  text: string
+  name: string
+  args_display: string
+  args_json: string
 }
 
-export interface ToolResultPayload {
-  type: 'tool_result'
-  tool_id: string
+export interface ToolResultDef {
+  tool_call_id: string
   output: string
-  success?: boolean
+  success: boolean
+}
+
+export interface RoundData {
+  round_num: number
+  thinking: string | null
+  answer: string | null
+  tool_calls: ToolCallDef[]
+  tool_results: ToolResultDef[]
+}
+
+export interface TurnData {
+  turn_id: string
+  user_text: string
+  rounds: RoundData[]
+}
+
+// ── Event payloads ──
+
+export type RoundDeltaKind = 'thinking' | 'tool_calling' | 'answering'
+
+export interface TurnStartPayload {
+  type: 'turn_start'
+  turn_id: string
+  user_text: string
 }
 
 export interface TurnEndPayload {
   type: 'turn_end'
+  turn_id: string
+  stop_reason?: string
   usage?: {
     prompt_tokens: number
-    prompt_cache_hit_tokens?: number
-    prompt_cache_miss_tokens?: number
+    completion_tokens: number
+    total_tokens: number
+    prompt_cache_hit_tokens: number
+    prompt_cache_miss_tokens: number
+    reasoning_tokens: number
   }
-  context_limit?: number
-  stop_reason?: string
+  context_tokens: number
+  context_limit: number
+  session_tokens: number
 }
 
-export interface DonePayload {
-  type: 'done'
+export interface RoundDeltaPayload {
+  type: 'round_delta'
+  turn_id: string
+  round_num: number
+  kind: RoundDeltaKind
+  delta: string
 }
 
-export interface ErrorPayload {
-  type: 'error'
-  message?: string
+export interface RoundCompletePayload {
+  type: 'round_complete'
+  turn_id: string
+  round_num: number
+  thinking?: string
+  answer?: string
+  tool_calls?: ToolCallDef[]
+  is_final: boolean
 }
 
-export interface CancelledPayload {
-  type: 'cancelled'
-}
-
-export interface AskUserPayload {
-  type: 'ask_user'
-  question: string
-  options?: string[]
-}
-
-export interface BalancePayload {
-  type: 'balance'
-  total_balance: string
-  currency: string
+export interface ToolResultsPayload {
+  type: 'tool_results'
+  turn_id: string
+  round_num: number
+  results: ToolResultDef[]
 }
 
 export interface SessionRestoredPayload {
   type: 'session_restored'
   seed: string
-  tokens_used?: number
-  cache_hit_pct?: number
+  turns: TurnData[]
+  tokens_used: number
+  cache_hit_pct: number
+}
+
+export interface AskUserPayload {
+  type: 'ask_user'
+  id: string
+  question: string
+  options?: string[]
+}
+
+export interface ErrorPayload {
+  type: 'error'
+  message: string
+}
+
+export interface BalancePayload {
+  type: 'balance'
+  is_available: boolean
+  total_balance: string
+  currency: string
 }
 
 export interface DebugSnapshotPayload {
   type: 'debug_snapshot'
-  context_tokens?: number
-  context_limit?: number
-  documents?: Array<{ tag: string; path: string; turns_since_read: number; is_stale: boolean }>
+  hp_connected: boolean
+  session_seed: string
+  context_tokens: number
+  tool_calls_total: number
+  tool_failures: number
+  current_phase: string
+  streaming: boolean
+  dsml_compat_count: number
+  documents?: { tag: string; path: string; turns_since_read: number; is_stale: boolean }[]
   recent_edits?: string[]
-  tasks?: Array<{ subject: string; description: string; status: string }>
-  dsml_compat_count?: number
+  tasks?: { subject: string; description: string; status: string }[]
+  session_title?: string
+  prompt_cache_hit_tokens: number
+  prompt_cache_miss_tokens: number
 }
 
 export interface AuditRecordPayload {
   type: 'audit_record'
-  [key: string]: unknown
+  tool_name: string
+  result_summary: string
+  success: boolean
 }
 
-export interface ShutdownAckPayload {
-  type: 'shutdown_ack'
+export interface ToolNoticePayload {
+  type: 'tool_notice'
+  message: string
+  level: string
 }
 
-/** Discriminated union of all agent events */
+// ── Union type ──
+
 export type AgentEvent =
-  | StreamStartPayload
-  | StreamDeltaPayload
-  | StreamEndPayload
-  | UsageUpdatePayload
-  | AssistantMsgPayload
-  | ToolCallPayload
-  | UserMsgPayload
-  | ToolResultPayload
+  | TurnStartPayload
   | TurnEndPayload
-  | DonePayload
-  | ErrorPayload
-  | CancelledPayload
-  | AskUserPayload
-  | BalancePayload
+  | RoundDeltaPayload
+  | RoundCompletePayload
+  | ToolResultsPayload
   | SessionRestoredPayload
+  | AskUserPayload
+  | ErrorPayload
+  | BalancePayload
   | DebugSnapshotPayload
   | AuditRecordPayload
-  | ShutdownAckPayload
-
-export const STOP_REASON_LABELS: Record<string, string> = {
-  length: 'stopLength',
-  content_filter: 'stopContentFilter',
-  insufficient_system_resource: 'stopResource',
-  error: 'stopError',
-} as const
+  | ToolNoticePayload
+  | { type: 'done' }
+  | { type: 'cancelled' }
+  | { type: 'shutdown_ack' }

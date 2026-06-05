@@ -1,22 +1,13 @@
-// ── Agent Finite State Machine ──
-// Pure functions, zero React dependency. Fully testable.
+// ── Agent FSM v5 (round-based) ──
+// Pure functions for managing agent state.
 
-import type { StreamKind } from '../types/agent'
+import type { TurnData, RoundData, ToolCallDef, ToolResultDef } from '../types/agent'
 
 // ── States ──
 
 export type AgentStatus = 'idle' | 'connecting' | 'ready' | 'streaming' | 'error'
 
-export interface StreamState {
-  content: string
-  reasoning: string
-  toolCards: ToolCardEntry[]
-  kind: StreamKind | null
-  toolNames: string[]
-  final: boolean
-}
-
-export interface ToolCardEntry {
+export interface TourCardEntry {
   id?: string
   name: string
   args: string
@@ -29,9 +20,10 @@ export interface AgentState {
   status: AgentStatus
   sessionId: string | null
   error: string | null
-  stream: StreamState
+  turns: TurnData[]
   sessions: SessionMeta[]
   connected: boolean
+  streaming: boolean
 }
 
 export interface SessionMeta {
@@ -50,12 +42,12 @@ export type AgentAction =
   | { type: 'SHUTDOWN_ACK' }
   | { type: 'AGENT_CLOSED' }
   | { type: 'ERROR'; message: string }
-  | { type: 'STREAM_START'; kind: StreamKind; toolNames?: string[] }
-  | { type: 'STREAM_DELTA'; delta: string; kind?: 'thinking' | 'content' }
-  | { type: 'STREAM_END'; isFinal: boolean }
-  | { type: 'FLUSH_STREAM' }
+  | { type: 'TURN_START'; turn_id: string; user_text: string }
+  | { type: 'ROUND_COMPLETE'; turn_id: string; round_num: number; thinking?: string; answer?: string; tool_calls?: ToolCallDef[]; is_final: boolean }
+  | { type: 'TOOL_RESULTS'; turn_id: string; round_num: number; results: ToolResultDef[] }
+  | { type: 'TURN_END'; turn_id: string; usage?: unknown; context_tokens?: number; context_limit?: number; session_tokens?: number }
   | { type: 'CANCEL' }
-  | { type: 'RESTORE_SESSION'; seed: string }
+  | { type: 'RESTORE_SESSION'; seed: string; turns: TurnData[] }
 
 // ── Initial state ──
 
@@ -64,16 +56,10 @@ export function createInitialState(): AgentState {
     status: 'idle',
     sessionId: null,
     error: null,
-    stream: {
-      content: '',
-      reasoning: '',
-      toolCards: [],
-      kind: null,
-      toolNames: [],
-      final: false,
-    },
+    turns: [],
     sessions: [],
     connected: false,
+    streaming: false,
   }
 }
 
@@ -86,7 +72,7 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         ...state,
         status: 'connecting',
         error: null,
-        stream: createInitialState().stream,
+        turns: [],
       }
 
     case 'CONNECTED':
@@ -104,7 +90,6 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         ...state,
         status: 'idle',
         connected: false,
-        stream: createInitialState().stream,
         sessionId: null,
       }
 
@@ -113,7 +98,6 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         ...state,
         status: 'idle',
         connected: false,
-        stream: createInitialState().stream,
       }
 
     case 'AGENT_CLOSED':
@@ -131,56 +115,75 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         connected: false,
       }
 
-      case 'STREAM_START':
-        return {
-          ...state,
-          status: 'streaming' as const,
-          stream: {
-            ...state.stream,
-            content: '',
-            // Preserve reasoning across phase switches
-            kind: action.kind,
-            toolNames: action.toolNames || [],
-            final: false,
-          },
-        }
-
-    case 'STREAM_DELTA': {
-      const stream = { ...state.stream }
-      const kind = action.kind ?? (state.stream.kind === 'thinking' ? 'thinking' : 'content')
-      if (kind === 'thinking') {
-        stream.reasoning += action.delta
-      } else {
-        stream.content += action.delta
+    case 'TURN_START': {
+      const newTurn: TurnData = {
+        turn_id: action.turn_id,
+        user_text: action.user_text,
+        rounds: [],
       }
-      return { ...state, stream }
+      return {
+        ...state,
+        status: 'streaming',
+        streaming: true,
+        turns: [...state.turns, newTurn],
+      }
     }
 
-    case 'STREAM_END':
-      return {
-        ...state,
-        stream: { ...state.stream, final: action.isFinal },
-        status: !action.isFinal ? state.status : 'ready',
+    case 'ROUND_COMPLETE': {
+      const turns = [...state.turns]
+      const turnIdx = turns.findIndex(t => t.turn_id === action.turn_id)
+      if (turnIdx < 0) return state
+      const turn = { ...turns[turnIdx] }
+      const newRound: RoundData = {
+        round_num: action.round_num,
+        thinking: action.thinking || null,
+        answer: action.answer || null,
+        tool_calls: action.tool_calls || [],
+        tool_results: [],
       }
-
-    case 'FLUSH_STREAM':
+      turn.rounds = [...turn.rounds, newRound]
+      turns[turnIdx] = turn
       return {
         ...state,
-        status: 'ready' as const,
-        stream: createInitialState().stream,
+        turns,
+        streaming: !action.is_final,
+        status: action.is_final ? 'ready' : 'streaming',
+      }
+    }
+
+    case 'TOOL_RESULTS': {
+      const turns = [...state.turns]
+      const turnIdx = turns.findIndex(t => t.turn_id === action.turn_id)
+      if (turnIdx < 0) return state
+      const turn = { ...turns[turnIdx] }
+      const roundIdx = turn.rounds.length - 1 // last round
+      if (roundIdx < 0) return state
+      const round = { ...turn.rounds[roundIdx] }
+      round.tool_results = action.results
+      turn.rounds = [...turn.rounds.slice(0, roundIdx), round, ...turn.rounds.slice(roundIdx + 1)]
+      turns[turnIdx] = turn
+      return { ...state, turns }
+    }
+
+    case 'TURN_END':
+      return {
+        ...state,
+        streaming: false,
+        status: 'ready',
       }
 
     case 'CANCEL':
       return {
         ...state,
         status: 'ready',
-        stream: createInitialState().stream,
+        streaming: false,
       }
 
     case 'RESTORE_SESSION':
       return {
         ...state,
         sessionId: action.seed,
+        turns: action.turns,
       }
 
     default:

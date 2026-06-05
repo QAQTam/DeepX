@@ -2,7 +2,8 @@
 // Each tool registers its rendering strategy once.
 // ToolCard.tsx dispatches by tool name through this registry.
 
-import type { ReactNode } from 'react'
+import type { JSX } from 'solid-js'
+import { tt } from '../i18n'
 
 export interface ToolCardContext {
   id: string
@@ -17,8 +18,8 @@ export interface ToolRenderer {
   toolName: string | string[]  // single or aliases
   icon: string
   label: string
-  renderHeader: (ctx: ToolCardContext) => ReactNode
-  renderResult?: (output: string) => ReactNode  // optional custom result renderer
+  renderHeader: (ctx: ToolCardContext) => JSX.Element
+  renderResult?: (output: string) => JSX.Element  // optional custom result renderer
 }
 
 const registry = new Map<string, ToolRenderer>()
@@ -96,7 +97,7 @@ registerTool({
 registerTool({
   toolName: ['delete_file', 'file_delete'],
   icon: '🗑',
-  label: '删除',
+  label: tt('tools.delete_file'),
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
     return <span>{sp(a.path || '')}</span>
@@ -116,7 +117,7 @@ registerTool({
 registerTool({
   toolName: 'file_copy',
   icon: '📋',
-  label: '复制',
+  label: tt('tools.copy_file'),
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
     return <span>{sp(a.path || '')} → {sp(a.dest || '')}</span>
@@ -131,9 +132,9 @@ registerTool({
     const a = parseArgs(ctx.args)
     const cwd = a.cwd
     return (
-      <div className="font-mono text-xs">
-        {cwd && <span className="text-[var(--muted)]">{sp(cwd)}</span>}
-        {a.command && <span className="ml-1">{a.command.slice(0, 80)}</span>}
+      <div class="font-mono text-xs">
+        {cwd && <span class="text-[var(--muted)]">{sp(cwd)}</span>}
+        {a.command && <span class="ml-1">{a.command.slice(0, 80)}</span>}
       </div>
     )
   },
@@ -162,10 +163,10 @@ registerTool({
 registerTool({
   toolName: 'file_search',
   icon: '🔎',
-  label: '搜索内容',
+  label: tt('tools.file_search'),
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
-    return <span className="font-mono">{a.pattern || ''}</span>
+    return <span class="font-mono">{a.pattern || ''}</span>
   },
 })
 
@@ -175,7 +176,7 @@ registerTool({
   label: '查找文件',
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
-    return <span className="font-mono">{a.pattern || ''}</span>
+    return <span class="font-mono">{a.pattern || ''}</span>
   },
 })
 
@@ -205,7 +206,7 @@ registerTool({
   label: '网页',
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
-    return <span className="truncate max-w-[200px]">{a.url || a.query || ''}</span>
+    return <span class="truncate max-w-[200px]">{a.url || a.query || ''}</span>
   },
 })
 
@@ -238,5 +239,3 @@ registerTool({
     return <span>{a.question?.slice(0, 60) || ''}</span>
   },
 })
-
-

@@ -176,7 +176,8 @@ fn audit_args_summary(_tool: &str, args: &serde_json::Value) -> String {
     }
     let s = parts.join(", ");
     if s.len() > 80 {
-        format!("{}…", &s[..77])
+        let end = s.floor_char_boundary(77);
+        format!("{}…", &s[..end])
     } else {
         s
     }

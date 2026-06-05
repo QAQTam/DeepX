@@ -1,12 +1,12 @@
-// ── useSession Hook ──
+// ── useSession Hook (SolidJS) ──
 // Session list, delete, resume.
 
-import { useState, useCallback } from 'react'
+import { createSignal } from 'solid-js'
 import { api, type SessionInfo } from '../bridge/tauri'
 
 interface UseSessionReturn {
-  sessions: SessionInfo[]
-  loading: boolean
+  readonly sessions: SessionInfo[]
+  readonly loading: boolean
   refresh: () => Promise<void>
   deleteSession: (seed: string) => Promise<void>
   deleteAll: () => Promise<void>
@@ -14,32 +14,36 @@ interface UseSessionReturn {
 }
 
 export function useSession(): UseSessionReturn {
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
-  const [loading, setLoading] = useState(false)
+  const [_sessions, setSessions] = createSignal<SessionInfo[]>([])
+  const [_loading, setLoading] = createSignal(false)
 
-  const refresh = useCallback(async () => {
+  const refresh = async () => {
     setLoading(true)
     try {
       const list = await api.cmdSessions()
       setSessions(list)
     } catch { /* ignore */ }
     finally { setLoading(false) }
-  }, [])
+  }
 
-  const deleteSession = useCallback(async (seed: string) => {
+  const deleteSession = async (seed: string) => {
     await api.deleteSession(seed)
     await refresh()
-  }, [refresh])
+  }
 
-  const deleteAll = useCallback(async () => {
+  const deleteAll = async () => {
     await api.deleteAllSessions()
     setSessions([])
-  }, [])
+  }
 
-  const loadMessages = useCallback(async (seed: string) => {
+  const loadMessages = async (seed: string) => {
     const res = await api.loadSessionMessages(seed)
     return Array.isArray(res) ? res : (res as any).messages ?? []
-  }, [])
+  }
 
-  return { sessions, loading, refresh, deleteSession, deleteAll, loadMessages }
+  return {
+    get sessions() { return _sessions() },
+    get loading() { return _loading() },
+    refresh, deleteSession, deleteAll, loadMessages,
+  }
 }

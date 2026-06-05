@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
-use crate::app::{App, ChatRole};
+use crate::app::{App, ChatRole, ToolStatus};
 use crate::i18n::Lang;
 use unicode_width::UnicodeWidthStr;
 
@@ -321,7 +321,13 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
         let style = if selected { Style::new().fg(ACCENT).bold() } else { Style::new().fg(DIM) };
 
         let ts = format_ts(s.updated_at);
-        let summary: String = s.last_summary.chars().take(30).collect();
+        let summary: String = {
+            let mut width = 0u16;
+            s.last_summary.chars().take_while(|c| {
+                width += cjk_width(&c.to_string());
+                width <= 55
+            }).collect()
+        };
         lines.push(Line::from(vec![
             Span::raw(format!("  {mark} ")),
             Span::styled(&s.seed, Style::new().fg(Color::Yellow).bold()),
@@ -364,19 +370,14 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
 
 // ── Chat interface ──
 
-pub fn render_chat(frame: &mut Frame, app: &App) {
+pub fn render_chat(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let l = app.setup.lang;
     let input_lines = app.input.chars().filter(|&c| c == '\n').count() + 1;
     let input_height = (input_lines as u16 + 2).min(8).max(3);
 
-    let thinking_msgs: Vec<_> = app.messages.iter()
-        .filter(|m| m.role == ChatRole::Thinking)
-        .collect();
-    let think_h = if !app.show_thinking || thinking_msgs.is_empty() { 0 } else { 5 };
-    let [header_area, think_area, body, input_area] = Layout::vertical([
+    let [header_area, body, input_area] = Layout::vertical([
         Constraint::Length(2),
-        Constraint::Length(think_h),
         Constraint::Fill(1),
         Constraint::Length(input_height),
     ]).spacing(1).areas(area);
@@ -406,12 +407,7 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
             Style::new().fg(Color::Yellow)),
         Span::raw(" | "),
         Span::styled(&status_text, Style::new().fg(if app.streaming { Color::Yellow } else { Color::Green })),
-        if !app.show_thinking && !thinking_msgs.is_empty() {
-            Span::raw(" | ")
-        } else { Span::raw("") },
-        if !app.show_thinking && !thinking_msgs.is_empty() {
-            Span::styled("Think hidden (F6)", Style::new().fg(DIM))
-        } else { Span::raw("") },
+        Span::raw(""), Span::raw(""),
     ]);
     frame.render_widget(h1, header_line1);
 
@@ -437,26 +433,10 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     }
     frame.render_widget(Line::from(h2_spans), header_line2);
 
-    // ── Thinking window ──
-    if think_h > 0 {
-        let last_think = thinking_msgs.last().unwrap();
-        let think_block = Block::new()
-            .borders(Borders::ALL)
-            .border_style(Style::new().fg(Color::Rgb(80, 80, 100)))
-            .title(l.t_chat_think_title());
-        let think_para = Paragraph::new(last_think.content.as_str())
-            .block(think_block)
-            .style(Style::new().fg(Color::Rgb(140, 140, 150)).italic())
-            .wrap(ratatui::widgets::Wrap { trim: false })
-            .scroll((0, 0));
-        frame.render_widget(think_para, think_area);
-    }
-
     let mut text_lines: Vec<Line> = Vec::with_capacity(app.messages.len() * 4);
     let mut prev_role: Option<ChatRole> = None;
     for msg in &app.messages {
-        // Skip thinking messages — rendered in separate window
-        if msg.role == ChatRole::Thinking { continue; }
+        // Thinking: rendered inline (v5 — per-round)
 
         // Role separator: dim line between different non-divider roles
         if let Some(pr) = prev_role {
@@ -493,26 +473,19 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
             }
             ChatRole::Thinking => {
                 let dim = Color::Rgb(140, 140, 150);
-                let prefix = Span::styled(format!("{}> ", l.t_chat_think()), Style::new().fg(dim).bold());
+                let prefix = Span::styled(format!("{} ", l.t_chat_think()), Style::new().fg(dim).italic());
                 if msg.lines.is_empty() {
-                    text_lines.push(Line::from(vec![prefix, Span::styled(
-                        &msg.content, Style::new().fg(dim).italic(),
-                    )]));
+                    text_lines.push(Line::from(vec![prefix, Span::styled(&msg.content, Style::new().fg(dim).italic())]));
                 } else {
-                    let mut first_rendered = false;
-                    for line in msg.lines.iter() {
-                        // Skip empty lines for compact thinking display
+                    for (i, line) in msg.lines.iter().enumerate() {
                         if line.spans.is_empty() || line.spans.iter().all(|s| s.content.trim().is_empty()) {
                             continue;
                         }
-                        let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
-                        if !first_rendered {
+                        let mut spans: Vec<Span> = line.spans.iter().map(|s| {
+                            Span::styled(s.content.clone(), s.style.italic())
+                        }).collect();
+                        if i == 0 {
                             spans.insert(0, prefix.clone());
-                            first_rendered = true;
-                        } else {
-                            // Indent continuation lines with same width as prefix
-                            let indent = Span::styled(" ".repeat(prefix.width()), Style::new());
-                            spans.insert(0, indent);
                         }
                         text_lines.push(Line::from(spans));
                     }
@@ -546,41 +519,66 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
                 }
             }
             ChatRole::Tool => {
-                for line in &msg.lines {
-                    text_lines.push(line.clone());
+                // Prefix: spinner for pending, ✓ for success, ✗ for failed
+                let prefix = match msg.tool_status {
+                    ToolStatus::Pending if app.busy => Span::styled(
+                        format!("{} ", app.spinner()),
+                        Style::new().fg(Color::Yellow),
+                    ),
+                    ToolStatus::Pending => Span::styled("○ ", Style::new().fg(Color::Gray)),
+                    ToolStatus::Success => Span::styled("✓ ", Style::new().fg(Color::Green)),
+                    ToolStatus::Failed => Span::styled("✗ ", Style::new().fg(Color::Red)),
+                    ToolStatus::None => Span::raw(""),
+                };
+                if msg.lines.is_empty() {
+                    text_lines.push(Line::from(vec![prefix, Span::raw(&msg.content)]));
+                } else {
+                    for (i, line) in msg.lines.iter().enumerate() {
+                        let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
+                        if i == 0 {
+                            spans.insert(0, prefix.clone());
+                        }
+                        text_lines.push(Line::from(spans));
+                    }
                 }
             }
         }
     }
-
-    let body_width = body.width.saturating_sub(1) as usize; // −1 for scrollbar column
-    let content_height = body.height as usize;
-
-    // Count visual rows after word-boundary wrapping (matches ratatui's WordWrapper)
-    let mut wrapped_lines = 0usize;
-    for line in &text_lines {
-        if line.width() <= body_width {
-            wrapped_lines += 1;
-        } else {
-            let line_text: String = line.spans.iter().flat_map(|s| s.content.chars()).collect();
-            wrapped_lines += count_wrap_rows(&line_text, body_width);
-        }
-    }
-    let max_scroll = wrapped_lines.saturating_sub(content_height);
-    let offset = if app.streaming { 0 } else { app.scroll_offset.min(max_scroll) };
-    let scroll = max_scroll.saturating_sub(offset) as u16;
 
     let [body_content, scrollbar_area] = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(1),
     ]).areas(body);
 
-    let paragraph = Paragraph::new(text_lines)
-        .wrap(ratatui::widgets::Wrap { trim: false })
-        .scroll((scroll, 0));
-    frame.render_widget(paragraph, body_content);
+    let content_height = body_content.height as usize;
 
-    let mut scrollbar_state = ScrollbarState::new(wrapped_lines)
+    // Build paragraph first so we can query ratatui's exact line count.
+    // Cache result — line_count() is expensive, only recompute when messages change.
+    let paragraph = Paragraph::new(text_lines)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    let total_wrapped = if app.line_count_msg_len != app.messages.len()
+        || app.line_count_width != body_content.width
+    {
+        let count = paragraph.line_count(body_content.width) as usize;
+        app.cached_line_count = count;
+        app.line_count_msg_len = app.messages.len();
+        app.line_count_width = body_content.width;
+        count
+    } else {
+        app.cached_line_count
+    };
+    let max_scroll = total_wrapped.saturating_sub(content_height);
+    let at_bottom = app.streaming || app.scroll_offset == 0;
+    let scroll = if at_bottom {
+        max_scroll.min(u16::MAX as usize) as u16
+    } else {
+        let offset = app.scroll_offset.min(max_scroll);
+        (max_scroll - offset).min(u16::MAX as usize) as u16
+    };
+
+    frame.render_widget(paragraph.scroll((scroll, 0)), body_content);
+
+    let mut scrollbar_state = ScrollbarState::new(total_wrapped.max(1))
         .position(scroll as usize)
         .viewport_content_length(content_height);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -598,13 +596,18 @@ pub fn render_chat(frame: &mut Frame, app: &App) {
     };
     frame.render_widget(Paragraph::new(input_text).block(input_block), input_area);
 
-    // Cursor: position on the last line
-    let cursor_line = input_lines.saturating_sub(1);
-    let last_line = app.input.lines().last().unwrap_or("");
-    let cursor_col = cjk_width(last_line).min(input_area.width.saturating_sub(3)) as u16;
+    // Cursor: position based on actual cursor byte offset
+    let cursor_byte = app.cursor.min(app.input.len());
+    let pre_cursor = &app.input[..cursor_byte];
+    let cursor_line = pre_cursor.chars().filter(|&c| c == '\n').count();
+    let last_line_start = pre_cursor.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let cursor_col = cjk_width(&app.input[last_line_start..cursor_byte]).min(input_area.width.saturating_sub(3)) as u16;
+    let input_top = input_area.y + 1;
+    // Ensure cursor line doesn't exceed input area height
+    let cursor_row = input_top + cursor_line.min(input_area.height.saturating_sub(3) as usize) as u16;
     frame.set_cursor_position((
         (input_area.x + 1 + cursor_col).min(area.width.saturating_sub(1)),
-        input_area.y + 1 + cursor_line as u16,
+        cursor_row,
     ));
 
     // Debug overlay
@@ -974,9 +977,9 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
     // Cursor for editing
     if menu.editing {
         let val_len = if menu.edit_buf.is_empty() {
-            menu.items.get(menu.selected).map_or(0, |i| i.value.len())
+            menu.items.get(menu.selected).map_or(0, |i| cjk_width(&i.value))
         } else {
-            menu.edit_buf.len()
+            cjk_width(&menu.edit_buf)
         };
         let cursor_x = list_area.x + 25 + val_len.min(30) as u16;
         let row = (menu.selected.saturating_sub(scroll) + 1) as u16;
@@ -1002,12 +1005,24 @@ fn count_wrap_rows(text: &str, width: usize) -> usize {
             continue;
         }
         let word_w = unicode_width::UnicodeWidthStr::width(trimmed);
+        // Long word that exceeds line width: break into multiple rows
+        if word_w > width {
+            if line_used > 0 {
+                rows += 1; // move to next line first
+                line_used = 0;
+            }
+            // Each full-width chunk is one row, plus partial remainder
+            rows += word_w / width;
+            line_used = word_w % width;
+            if line_used > 0 {
+                // remainder starts new line
+            }
+            continue;
+        }
         let sep = if line_used == 0 { 0 } else { 1 };
         if line_used + sep + word_w > width {
-            if line_used > 0 || word_w <= width {
-                rows += 1;
-            }
-            line_used = if word_w > width { 0 } else { word_w };
+            rows += 1;
+            line_used = word_w;
         } else {
             line_used += sep + word_w;
         }

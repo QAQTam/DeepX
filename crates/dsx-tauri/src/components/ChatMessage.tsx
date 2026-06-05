@@ -9,6 +9,6 @@ interface ChatMessageProps {
   msg: Message
 }
 
-export function ChatMessage({ msg }: ChatMessageProps) {
-  return <MessageItem msg={msg} />
+export function ChatMessage(props: ChatMessageProps) {
+  return <MessageItem msg={props.msg} />
 }

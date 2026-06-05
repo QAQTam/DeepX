@@ -1,13 +1,13 @@
 // ── Badge ──
 
-import type { ReactNode } from 'react'
+import type { JSX } from 'solid-js'
 
 type BadgeVariant = 'default' | 'accent' | 'success' | 'warning' | 'error'
 
 interface BadgeProps {
   variant?: BadgeVariant
-  children: ReactNode
-  className?: string
+  children: JSX.Element
+  class?: string
 }
 
 const color: Record<BadgeVariant, string> = {
@@ -18,9 +18,9 @@ const color: Record<BadgeVariant, string> = {
   error:   'bg-[var(--error)]/10 text-[var(--error)]',
 }
 
-export function Badge({ variant = 'default', children, className = '' }: BadgeProps) {
+export function Badge({ variant = 'default', children, class: className = '' }: BadgeProps) {
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-xs font-medium ${color[variant]} ${className}`}>
+    <span class={`inline-flex items-center px-1.5 py-0.5 rounded-md text-xs font-medium ${color[variant]} ${className}`}>
       {children}
     </span>
   )
