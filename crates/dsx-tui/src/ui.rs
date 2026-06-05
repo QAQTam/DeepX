@@ -466,52 +466,52 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
                 text_lines.push(Line::from(Span::styled(&msg.content, Style::new().fg(Color::Red))));
             }
             ChatRole::User => {
+                let bg = Color::Rgb(55, 55, 65);
                 text_lines.push(Line::from(vec![
-                    Span::styled(format!("{}> ", l.t_chat_you()), Style::new().fg(Color::Green).bold()),
-                    Span::raw(&msg.content),
+                    Span::styled(format!("  {}", &msg.content), Style::new().fg(Color::White).bg(bg)),
                 ]).alignment(Alignment::Right));
             }
             ChatRole::Thinking => {
                 let dim = Color::Rgb(140, 140, 150);
-                let prefix = Span::styled(format!("{} ", l.t_chat_think()), Style::new().fg(dim).italic());
                 if msg.lines.is_empty() {
-                    text_lines.push(Line::from(vec![prefix, Span::styled(&msg.content, Style::new().fg(dim).italic())]));
+                    text_lines.push(Line::from(vec![
+                        Span::styled(format!("  {}", &msg.content), Style::new().fg(dim).italic()),
+                    ]));
                 } else {
-                    for (i, line) in msg.lines.iter().enumerate() {
+                    for line in msg.lines.iter() {
                         if line.spans.is_empty() || line.spans.iter().all(|s| s.content.trim().is_empty()) {
                             continue;
                         }
                         let mut spans: Vec<Span> = line.spans.iter().map(|s| {
                             Span::styled(s.content.clone(), s.style.italic())
                         }).collect();
-                        if i == 0 {
-                            spans.insert(0, prefix.clone());
+                        if spans.first().map_or(true, |s| !s.content.starts_with("  ")) {
+                            spans.insert(0, Span::raw("  "));
                         }
                         text_lines.push(Line::from(spans));
                     }
                 }
             }
             ChatRole::Assistant => {
-                let prefix = Span::styled("DeepX> ", Style::new().fg(Color::White).bold());
                 if msg.lines.is_empty() {
-                    text_lines.push(Line::from(vec![prefix, Span::raw(&msg.content)]));
+                    text_lines.push(Line::from(vec![
+                        Span::styled(format!("  {}", &msg.content), Style::new().fg(Color::White)),
+                    ]));
                 } else {
                     let first_char = msg.lines[0].spans.first()
                         .and_then(|s| s.content.chars().next());
                     let is_table = first_char.map_or(false, |c| {
                         c == '│' || c == '├' || c == '└' || c == '┌' || c == '┐' || c == '┘'
                     });
-
                     if is_table {
-                        text_lines.push(Line::from(prefix.clone()));
                         for line in &msg.lines {
                             text_lines.push(line.clone());
                         }
                     } else {
-                        for (i, line) in msg.lines.iter().enumerate() {
+                        for line in msg.lines.iter() {
                             let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
-                            if i == 0 {
-                                spans.insert(0, prefix.clone());
+                            if spans.first().map_or(true, |s| !s.content.starts_with("  ")) {
+                                spans.insert(0, Span::raw("  "));
                             }
                             text_lines.push(Line::from(spans));
                         }

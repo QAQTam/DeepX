@@ -17,6 +17,7 @@ use dsx_proto::AgentToHp;
 
 static HP_CONFIG: OnceLock<Provider> = OnceLock::new();
 static HP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 // ── Main ──
 
@@ -34,7 +35,12 @@ fn load_hp_config() -> Provider {
 pub fn run() {
     let hp_cfg = load_hp_config();
     let _ = HP_CONFIG.set(hp_cfg);
-    let _ = HP_RUNTIME.set(tokio::runtime::Runtime::new().expect("create tokio runtime"));
+    let _ = HP_RUNTIME.set(
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create tokio runtime")
+    );
     if HP_CONFIG.get().map_or(true, |c| c.api_key.is_empty()) {
         eprintln!("dsx-gate: WARNING — no API key configured, run 'dsx config' to set up");
     } else {
@@ -187,6 +193,16 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
 
     let provider_cfg = Provider::new(&config.base_url, &api_key);
 
+    // Reusable HTTP client — avoids building a new one per request
+    let http_client = HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .pool_max_idle_per_host(0)
+            .build()
+            .expect("build reqwest client")
+    });
+
     rt.block_on(async {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
 
@@ -196,10 +212,11 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         let gw = provider_cfg;
         let effort_o = effort.clone();
         let tx_err = tx.clone();
+        let client = http_client.clone();
         tokio::spawn(async move {
             let uid = user_id.clone();
             let result = crate::openai_api::chat_stream(
-                &gw, &model_o, sys, msgs, tools, max_tokens, effort_o, uid, tx,
+                &gw, &model_o, sys, msgs, tools, max_tokens, effort_o, uid, &client, tx,
             ).await;
             if let Err(e) = result {
                 eprintln!("dsx-gate: gateway error: {e:?}");

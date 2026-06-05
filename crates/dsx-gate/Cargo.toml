@@ -7,7 +7,7 @@ description = "DSX API proxy gateway — holds API keys, streams LLM responses, 
 [dependencies]
 dsx-types = { path = "../dsx-types" }
 dsx-proto = { path = "../dsx-proto" }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

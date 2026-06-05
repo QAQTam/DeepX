@@ -56,6 +56,7 @@ pub async fn chat_stream(
     max_tokens: u32,
     effort: Option<String>,
     user_id: Option<String>,
+    client: &reqwest::Client,
     tx: mpsc::Sender<StreamEvent>,
 ) -> anyhow::Result<()> {
     let api_msgs = convert_messages(messages, system);
@@ -97,12 +98,6 @@ pub async fn chat_stream(
     let url = build_chat_url(&provider.base_url);
 
     dump_api_request(user_id.as_deref(), &body);
-
-    let client = HttpClient::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(120))
-        .pool_max_idle_per_host(0)
-        .build()?;
 
     let resp = client
         .post(&url)
