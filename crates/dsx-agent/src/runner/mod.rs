@@ -100,8 +100,6 @@ pub fn run_agent_loop(
     tui_rx: mpsc::Receiver<Ui2Agent>,
     agent_tx: mpsc::Sender<Agent2Ui>,
 ) {
-    crate::skills::init();
-
     if let Some(ref mut hp) = hp_conn {
         let _: Option<HpToAgent> = dsx_proto::read_frame(hp).ok().flatten();
     }

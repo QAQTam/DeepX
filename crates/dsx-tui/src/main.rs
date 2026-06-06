@@ -11,7 +11,6 @@ mod ui;
 
 use app::{App, Screen};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::ExecutableCommand;
 use crossterm::event::EnableBracketedPaste;
 use dsx_proto::Agent2Ui;
 use dsx_types::{ConfigStore, SessionMeta};
@@ -268,11 +267,28 @@ fn run_chat(
     agent_rx: &mpsc::Receiver<Agent2Ui>,
     send: impl Fn(&mut ChildStdin, &dsx_proto::Ui2Agent),
 ) -> std::io::Result<()> {
+    use std::time::{Duration, Instant};
     let mut agent_dead = false;
+
+    // ── Event loop: poll keyboard with timeout, drain agent frames, render ──
+    // Avoids spin-wait: poll timeout scales with streaming urgency.
+    // Keyboard events are checked at ~30Hz idle, ~15Hz while streaming.
+    // Agent frames arrive via mpsc and are drained non-blocking each iteration.
     loop {
-        // 1. Handle keyboard first — input appears on same-frame render
-        if event::poll(std::time::Duration::ZERO)? {
+        // 1. Keyboard: poll with timeout (streaming → faster poll for snappy cancel)
+        let poll_timeout = if app.streaming {
+            Duration::from_millis(66) // ~15 Hz — enough for cancel responsiveness
+        } else if agent_dead {
+            Duration::from_millis(200)
+        } else {
+            Duration::from_millis(100) // ~10 Hz idle — terminals don't need more
+        };
+
+        if event::poll(poll_timeout)? {
             match event::read()? {
+                Event::Resize(_, _) => {
+                    // ratatui Terminal auto-resizes on next draw — nothing to do here
+                }
                 Event::Paste(data) => {
                     let text = data.trim_end_matches(|c: char| c == '\n' || c == '\r');
                     app.input.insert_str(app.cursor, text);
@@ -310,8 +326,25 @@ fn run_chat(
                 continue;
             }
 
+            // Help overlay
+            if app.show_help {
+                match (key.modifiers, key.code) {
+                    (_, KeyCode::Char('?')) | (_, KeyCode::Esc) => { app.show_help = false; }
+                    _ => {}
+                }
+                continue;
+            }
+
             // Normal chat keys
             match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Char('?')) => {
+                    app.show_help = !app.show_help;
+                    app.scroll_offset = 0;
+                }
+                (KeyModifiers::NONE, KeyCode::F(6)) => {
+                    app.show_thinking = !app.show_thinking;
+                    app.scroll_offset = 0;
+                }
                 (_, KeyCode::F(10)) => {
                     if agent_dead { continue; }
                     let menu = crate::app::MenuState::new(app);
@@ -343,7 +376,17 @@ fn run_chat(
                     if agent_dead || app.busy { continue; }
                     let text = app.input.drain(..).collect::<String>();
                     app.cursor = 0;
+                    app.history_idx = None;
+                    app.draft_input.clear();
                     if !text.trim().is_empty() {
+                        // Dedup: don't push identical consecutive entries
+                        if app.input_history.last().map_or(true, |last| last != &text) {
+                            app.input_history.push(text.clone());
+                        }
+                        // Cap history to 200 entries
+                        if app.input_history.len() > 200 {
+                            app.input_history.remove(0);
+                        }
                         app.status = app.setup.lang.t_chat_thinking().to_string();
                         app.busy = true;
                         send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
@@ -359,7 +402,7 @@ fn run_chat(
                 }
                 (_, KeyCode::Delete) => {
                     if app.cursor < app.input.len() {
-                        if let Some((_, c)) = app.input[app.cursor..].char_indices().next() {
+                        if let Some((_, _)) = app.input[app.cursor..].char_indices().next() {
                             app.input.remove(app.cursor);
                         }
                     }
@@ -385,29 +428,66 @@ fn run_chat(
                 (_, KeyCode::Home) => { app.cursor = 0; }
                 (_, KeyCode::End) => { app.cursor = app.input.len(); }
                 (_, KeyCode::Char(c)) => {
+                    // Typing exits history browse mode
+                    if app.history_idx.is_some() {
+                        app.history_idx = None;
+                        app.draft_input.clear();
+                    }
                     app.input.insert(app.cursor, c);
                     app.cursor += c.len_utf8();
                 }
-                (_, KeyCode::Up) | (_, KeyCode::PageUp) => {
-                    let n = if key.code == KeyCode::PageUp { 10 } else { 1 };
-                    app.scroll_offset = app.scroll_offset.saturating_add(n);
+                (_, KeyCode::Up) => {
+                    // If cursor is on the first line of input, browse history
+                    let cursor_line = app.input[..app.cursor].chars().filter(|&c| c == '\n').count();
+                    if cursor_line == 0 && !app.input_history.is_empty() {
+                        if app.history_idx.is_none() {
+                            app.draft_input = app.input.clone();
+                            app.history_idx = Some(app.input_history.len() - 1);
+                        } else if let Some(idx) = app.history_idx {
+                            if idx > 0 { app.history_idx = Some(idx - 1); }
+                        }
+                        if let Some(idx) = app.history_idx {
+                            app.input = app.input_history[idx].clone();
+                            app.cursor = app.input.len();
+                            app.cached_input_len = 0; // invalidate cache
+                        }
+                    } else {
+                        app.scroll_offset = app.scroll_offset.saturating_add(1);
+                    }
                 }
-                (_, KeyCode::Down) | (_, KeyCode::PageDown) => {
-                    let n = if key.code == KeyCode::PageDown { 10 } else { 1 };
-                    app.scroll_offset = app.scroll_offset.saturating_sub(n);
+                (_, KeyCode::PageUp) => {
+                    app.scroll_offset = app.scroll_offset.saturating_add(10);
+                }
+                (_, KeyCode::Down) => {
+                    if app.history_idx.is_some() {
+                        if let Some(idx) = app.history_idx {
+                            if idx + 1 < app.input_history.len() {
+                                app.history_idx = Some(idx + 1);
+                                app.input = app.input_history[idx + 1].clone();
+                            } else {
+                                // Past the last history entry — restore draft
+                                app.history_idx = None;
+                                app.input = app.draft_input.clone();
+                                app.draft_input.clear();
+                            }
+                            app.cursor = app.input.len();
+                            app.cached_input_len = 0;
+                        }
+                    } else {
+                        app.scroll_offset = app.scroll_offset.saturating_sub(1);
+                    }
+                }
+                (_, KeyCode::PageDown) => {
+                    app.scroll_offset = app.scroll_offset.saturating_sub(10);
                 }
                 _ => {}
             }
             } // Event::Key
             _ => {}
             } // match event
-        } else if !app.streaming && !agent_dead {
-            std::thread::sleep(std::time::Duration::from_millis(16));
-        } else {
-            std::thread::sleep(std::time::Duration::from_millis(2));
         }
 
-        // 2. Drain agent frames
+        // 2. Drain agent frames (non-blocking)
         loop {
             match agent_rx.try_recv() {
                 Ok(frame) => app.handle_frame(frame),
@@ -429,13 +509,18 @@ fn run_chat(
 
         if agent_dead && app.should_quit { return Ok(()); }
 
-        // 3. Render
-        let now = std::time::Instant::now();
-        let should_render = !app.streaming || now.duration_since(app.last_render).as_millis() >= 33;
-        if should_render {
+        // 3. Render (ratatui internally diffs — cheap when nothing changed)
+        let now = Instant::now();
+        let render_interval = if app.streaming {
+            Duration::from_millis(33) // ~30 FPS streaming
+        } else {
+            Duration::from_millis(100) // ~10 FPS idle — terminals are low-bandwidth
+        };
+        if now.duration_since(app.last_render) >= render_interval {
             terminal.draw(|frame| {
                 ui::render_chat(frame, app);
                 if app.ask.is_some() { ui::render_ask(frame, app); }
+                if app.show_help { ui::render_help(frame, app); }
             })?;
             app.last_render = now;
         }

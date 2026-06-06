@@ -38,6 +38,12 @@ pub struct MarkdownRenderer {
     code_lines: Vec<String>,
     code_lang: String,
     table_rows: Vec<Vec<String>>,
+    /// True when a separator row (`|---|`) has been seen after the first
+    /// data row — confirms this is a real table, not accidental pipe chars.
+    table_confirmed: bool,
+    /// The first tentative pipe line, saved in case it turns out NOT to be a table.
+    /// Only used when table_rows has 1 entry and table_confirmed is false.
+    tentative_first: Option<String>,
 }
 
 impl MarkdownRenderer {
@@ -47,6 +53,8 @@ impl MarkdownRenderer {
             code_lines: Vec::new(),
             code_lang: String::new(),
             table_rows: Vec::new(),
+            table_confirmed: false,
+            tentative_first: None,
         }
     }
 
@@ -120,6 +128,20 @@ impl MarkdownRenderer {
             ])];
         }
 
+        // Task list (must check before unordered list)
+        if let Some(text) = trimmed.strip_prefix("- [x] ").or_else(|| trimmed.strip_prefix("- [X] ")) {
+            return vec![Line::from(vec![
+                Span::styled("  ☑ ", Style::new().fg(Color::Rgb(100, 200, 120))),
+                Span::styled(text.to_string(), Style::new().fg(Color::Rgb(160, 180, 160))),
+            ])];
+        }
+        if let Some(text) = trimmed.strip_prefix("- [ ] ") {
+            return vec![Line::from(vec![
+                Span::styled("  ☐ ", Style::new().fg(Color::Rgb(140, 150, 160))),
+                Span::styled(text.to_string(), Style::new().fg(Color::Rgb(180, 190, 200))),
+            ])];
+        }
+
         // Unordered list
         if let Some(text) = trimmed.strip_prefix("- ")
             .or_else(|| trimmed.strip_prefix("* "))
@@ -142,20 +164,39 @@ impl MarkdownRenderer {
             ))];
         }
 
-        // Inline table (pipe syntax)
-        if trimmed.starts_with('|') && trimmed.ends_with('|') {
+        // Inline table (pipe syntax) — two-line lookahead to avoid false positives
+        if trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.matches('|').count() >= 2 {
             let cells = parse_table_row(trimmed);
             let is_sep = cells.iter().all(|c| c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' '));
             if is_sep {
-                // Skipping separator — widths will be calculated from data rows
+                if !self.table_rows.is_empty() {
+                    // Separator after data row → table confirmed
+                    self.table_confirmed = true;
+                }
+                // Always discard separator rows — widths are computed from data
                 return Vec::new();
+            }
+            // Save the raw first line in case this turns out not to be a table
+            if self.table_rows.is_empty() && !self.table_confirmed {
+                self.tentative_first = Some(line.to_string());
             }
             self.table_rows.push(cells);
             return Vec::new();
         }
 
-        // Non-table line: flush buffered table first
-        let mut out = self.flush_table();
+        // Non-table line: flush buffered table (if confirmed) or roll back
+        let mut out = if self.table_confirmed || self.table_rows.len() >= 2 {
+            self.flush_table()
+        } else if self.table_rows.len() == 1 {
+            // Single pipe line without separator — false positive.  Render as plain text.
+            let fallback = self.tentative_first.take().unwrap_or_default();
+            self.table_rows.clear();
+            self.table_confirmed = false;
+            vec![format_inline(&fallback)]
+        } else {
+            Vec::new()
+        };
+
         // Plain paragraph
         out.push(format_inline(trimmed));
         out
@@ -166,6 +207,8 @@ impl MarkdownRenderer {
     fn flush_table(&mut self) -> Vec<Line<'static>> {
         if self.table_rows.is_empty() { return Vec::new(); }
         let rows = std::mem::take(&mut self.table_rows);
+        self.table_confirmed = false;
+        self.tentative_first = None;
         let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
         let mut widths = vec![0usize; cols];
         for row in &rows {
@@ -176,12 +219,17 @@ impl MarkdownRenderer {
             }
         }
         let mut out = Vec::new();
-        // Separator line
-        out.push(render_table_separator(&widths));
-        for row in &rows {
+        out.push(render_table_top_separator(&widths));
+        // Header row (first data row)
+        if let Some(header) = rows.first() {
+            out.push(render_table_row(header, &widths));
+            out.push(render_table_mid_separator(&widths));
+        }
+        // Body rows
+        for row in rows.iter().skip(1) {
             out.push(render_table_row(row, &widths));
         }
-        out.push(render_table_separator(&widths));
+        out.push(render_table_bottom_separator(&widths));
         out
     }
 
@@ -303,21 +351,51 @@ fn parse_table_row(line: &str) -> Vec<String> {
         .collect()
 }
 
-fn render_table_separator(col_widths: &[usize]) -> Line<'static> {
-    let total: usize = col_widths.iter().map(|w| w + 3).sum::<usize>() + 1;
-    let line: String = "─".repeat(total);
-    Line::from(Span::styled(line, Style::new().fg(Color::Rgb(80, 85, 95))))
+fn table_style() -> Style {
+    Style::new().fg(Color::Rgb(80, 85, 95))
+}
+
+/// Build a separator line from ratatui's built-in box-drawing symbol set.
+fn render_table_sep(col_widths: &[usize], left: &str, mid: &str, right: &str) -> Line<'static> {
+    let s = table_style();
+    let line = ratatui::symbols::line::NORMAL;
+    let mut spans = vec![Span::styled(left.to_string(), s)];
+    for (i, w) in col_widths.iter().enumerate() {
+        spans.push(Span::styled(line.horizontal.repeat(w + 2), s));
+        if i + 1 < col_widths.len() {
+            spans.push(Span::styled(mid.to_string(), s));
+        }
+    }
+    spans.push(Span::styled(right.to_string(), s));
+    Line::from(spans)
+}
+
+fn render_table_top_separator(col_widths: &[usize]) -> Line<'static> {
+    let s = ratatui::symbols::line::NORMAL;
+    render_table_sep(col_widths, s.top_left, s.horizontal_down, s.top_right)
+}
+
+fn render_table_mid_separator(col_widths: &[usize]) -> Line<'static> {
+    let s = ratatui::symbols::line::NORMAL;
+    render_table_sep(col_widths, s.vertical_right, s.cross, s.vertical_left)
+}
+
+fn render_table_bottom_separator(col_widths: &[usize]) -> Line<'static> {
+    let s = ratatui::symbols::line::NORMAL;
+    render_table_sep(col_widths, s.bottom_left, s.horizontal_up, s.bottom_right)
 }
 
 fn render_table_row(cells: &[String], col_widths: &[usize]) -> Line<'static> {
-    let mut spans = vec![Span::styled("│ ".to_string(), Style::new().fg(Color::Rgb(140, 145, 155)))];
+    let v = ratatui::symbols::line::NORMAL.vertical;
+    let border_style = Style::new().fg(Color::Rgb(140, 145, 155));
+    let cell_style = Style::new().fg(Color::Rgb(200, 200, 210));
+    let mut spans = vec![Span::styled(format!("{v} "), border_style)];
     for (i, cell) in cells.iter().enumerate() {
         let w = col_widths.get(i).copied().unwrap_or(8);
         let cw = cell.width();
         let pad = " ".repeat(w.saturating_sub(cw));
-        let padded = format!("{cell}{pad} ");
-        spans.push(Span::styled(padded, Style::new().fg(Color::Rgb(200, 200, 210))));
-        spans.push(Span::styled("│ ".to_string(), Style::new().fg(Color::Rgb(140, 145, 155))));
+        spans.push(Span::styled(format!("{cell}{pad} "), cell_style));
+        spans.push(Span::styled(format!("{v} "), border_style));
     }
     Line::from(spans)
 }
@@ -375,6 +453,12 @@ fn format_inline(text: &str) -> Line<'static> {
     let mut remaining = text.to_string();
 
     while !remaining.is_empty() {
+        // Links MUST be extracted before ** and * so that [**bold**](url)
+        // renders as a styled link, not orphan brackets.
+        if let Some(rest) = try_extract_link(&remaining, &mut spans) {
+            remaining = rest;
+            continue;
+        }
         if let Some(rest) = try_extract(&remaining, "**", &mut spans, true) {
             remaining = rest;
             continue;
@@ -388,10 +472,6 @@ fn format_inline(text: &str) -> Line<'static> {
             continue;
         }
         if let Some(rest) = try_extract_code(&remaining, &mut spans) {
-            remaining = rest;
-            continue;
-        }
-        if let Some(rest) = try_extract_link(&remaining, &mut spans) {
             remaining = rest;
             continue;
         }

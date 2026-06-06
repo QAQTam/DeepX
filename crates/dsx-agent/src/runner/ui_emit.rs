@@ -35,11 +35,9 @@ pub fn build_and_push_assistant(
         });
     }
 
-    if blocks.is_empty() {
-        blocks.push(ContentBlock::Text {
-            text: "[Empty response]".to_string(),
-        });
-    }
+    // If the model produced only tool calls with no text, the assistant
+    // message is empty — this is normal and the context assembler handles it.
+    // The UI layer renders tool calls without needing a dummy text block.
     let assistant_msg = Message {
         role: "assistant".into(),
         name: None,

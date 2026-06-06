@@ -132,7 +132,6 @@ impl AgentState {
             sys.push_str(&crate::config::system_prompt());
             sys.push_str("\n\n");
             sys.push_str(crate::prompt::DSML_SCHEMA);
-            sys.push_str(&crate::skills::skills_prompt_section());
 
             messages = vec![Message::system(&sys)];
         }

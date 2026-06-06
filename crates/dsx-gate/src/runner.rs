@@ -225,31 +225,71 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
 
         let mut full_content = String::new();
         let mut reasoning = String::new();
+        // Line-buffered forwarding: aggregate token-level SSE deltas into
+        // complete lines before sending.  This eliminates the fragile
+        // character-by-character draft management on the TUI side while
+        // keeping sub-100ms latency (lines flush on every \n boundary).
+        let mut content_line_buf = String::new();
+        let mut reasoning_line_buf = String::new();
+
+        /// Drain complete lines from `buf` and write them as frames.
+        /// `is_reasoning`: true → write to `reasoning` field (and empty `delta`).
+        ///                 false → write to `delta` field.
+        fn flush_lines(buf: &mut String, is_reasoning: bool, writer: &mut impl Write) {
+            while let Some(nl) = buf.find('\n') {
+                let line: String = buf.drain(..=nl).collect();
+                let frame = if is_reasoning {
+                    serde_json::json!({
+                        "type": "content_delta",
+                        "delta": "",
+                        "reasoning": line,
+                    })
+                } else {
+                    serde_json::json!({
+                        "type": "content_delta",
+                        "delta": line,
+                    })
+                };
+                if let Ok(s) = serde_json::to_string(&frame) {
+                    let _ = writeln!(writer, "{s}");
+                    let _ = writer.flush();
+                }
+            }
+        }
+
+        /// Flush any remaining incomplete line in `buf`.
+        fn flush_remainder(buf: &mut String, is_reasoning: bool, writer: &mut impl Write) {
+            if buf.is_empty() { return; }
+            let tail: String = buf.drain(..).collect();
+            let frame = if is_reasoning {
+                serde_json::json!({
+                    "type": "content_delta",
+                    "delta": "",
+                    "reasoning": tail,
+                })
+            } else {
+                serde_json::json!({
+                    "type": "content_delta",
+                    "delta": tail,
+                })
+            };
+            if let Ok(s) = serde_json::to_string(&frame) {
+                let _ = writeln!(writer, "{s}");
+                let _ = writer.flush();
+            }
+        }
+
         while let Some(event) = rx.recv().await {
             match event {
                 StreamEvent::ContentDelta(delta) => {
                     full_content.push_str(&delta);
-
-                    let frame = serde_json::json!({
-                        "type": "content_delta",
-                        "delta": delta,
-                    });
-                    if let Ok(s) = serde_json::to_string(&frame) {
-                        let _ = writeln!(writer, "{s}");
-                        let _ = writer.flush();
-                    }
+                    content_line_buf.push_str(&delta);
+                    flush_lines(&mut content_line_buf, false, writer);
                 }
                 StreamEvent::ReasoningDelta(delta) => {
                     reasoning.push_str(&delta);
-                    let frame = serde_json::json!({
-                        "type": "content_delta",
-                        "delta": "",
-                        "reasoning": delta,
-                    });
-                    if let Ok(s) = serde_json::to_string(&frame) {
-                        let _ = writeln!(writer, "{s}");
-                        let _ = writer.flush();
-                    }
+                    reasoning_line_buf.push_str(&delta);
+                    flush_lines(&mut reasoning_line_buf, true, writer);
                 }
                 StreamEvent::ToolCallProgress { ref id, ref name, ref args_so_far, .. } => {
                     let frame = serde_json::json!({
@@ -265,6 +305,9 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
                     }
                 }
                 StreamEvent::Done { raw_message, stop_reason: sr, usage } => {
+                    // Flush any remaining incomplete lines before the final response
+                    flush_remainder(&mut reasoning_line_buf, true, writer);
+                    flush_remainder(&mut content_line_buf, false, writer);
                     build_final_response(raw_message, sr, usage, &mut full_content, &mut reasoning, writer);
                     return;
                 }

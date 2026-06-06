@@ -12,8 +12,6 @@ pub fn run() {
 
     crate::dsx_log::init();
 
-    crate::skills::init();
-
     let config = crate::config::Config::load().unwrap_or_default();
     eprintln!(
         "dsx-agent: model={} effort={:?} context_limit={}",

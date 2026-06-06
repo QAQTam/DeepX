@@ -373,6 +373,24 @@ pub fn render_sessions(frame: &mut Frame, app: &App) {
 pub fn render_chat(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let l = app.setup.lang;
+
+    // Minimum terminal size guard — below 60×10 the layout is unreadable
+    if area.width < 60 || area.height < 10 {
+        let msg = if l.as_str() == "zh" {
+            "终端窗口太小 (最小 60×10) — 请调整窗口大小"
+        } else {
+            "Terminal too small (min 60×10) — please resize"
+        };
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(msg)
+                .centered()
+                .style(Style::new().fg(Color::Red).bg(BG)),
+            area,
+        );
+        return;
+    }
+
     let input_lines = app.input.chars().filter(|&c| c == '\n').count() + 1;
     let input_height = (input_lines as u16 + 2).min(12).max(3);
 
@@ -389,6 +407,9 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
 
     let status_text = if app.streaming {
         format!("{} {}", app.spinner(), &app.status)
+    } else if app.busy {
+        // Waiting for model to start streaming — show animated pulse dots
+        format!("{} {}", app.pulse(), &app.status)
     } else {
         app.status.clone()
     };
@@ -473,7 +494,21 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
             }
             ChatRole::Thinking => {
                 let dim = Color::Rgb(140, 140, 150);
-                if msg.lines.is_empty() {
+                if !app.show_thinking {
+                    // Collapsed: summary line with token estimate and expand hint
+                    let char_count = msg.content.chars().count();
+                    let summary: String = msg.content
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("")
+                        .chars().take(80).collect();
+                    let hint = if app.setup.lang.as_str() == "zh" {
+                        format!("  💭 {}…  ({} 字符, F6 展开)", summary, char_count)
+                    } else {
+                        format!("  💭 {}…  ({} chars, F6 expand)", summary, char_count)
+                    };
+                    text_lines.push(Line::from(Span::styled(hint, Style::new().fg(Color::Rgb(100, 110, 120)).italic())));
+                } else if msg.lines.is_empty() {
                     text_lines.push(Line::from(vec![
                         Span::styled(format!("  {}", &msg.content), Style::new().fg(dim).italic()),
                     ]));
@@ -493,9 +528,20 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
                 }
             }
             ChatRole::Assistant => {
+                // New-message pulse: brief accent-left-border on recently added content
+                let msg_age = app.last_msg_time.elapsed().as_secs_f64();
+                let is_fresh = msg_age < 1.5 && msg.lines.iter().any(|l|
+                    l.spans.iter().any(|s| !s.content.trim().is_empty())
+                );
                 if msg.lines.is_empty() {
+                    let pulse_marker = if is_fresh {
+                        Span::styled("▎", Style::new().fg(Color::Rgb(100, 200, 255)).bold())
+                    } else {
+                        Span::raw("  ")
+                    };
                     text_lines.push(Line::from(vec![
-                        Span::styled(format!("  {}", &msg.content), Style::new().fg(Color::White)),
+                        pulse_marker,
+                        Span::styled(format!("{}", &msg.content), Style::new().fg(Color::White)),
                     ]));
                 } else {
                     let first_char = msg.lines[0].spans.first()
@@ -508,10 +554,14 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
                             text_lines.push(line.clone());
                         }
                     } else {
-                        for line in msg.lines.iter() {
+                        for (li, line) in msg.lines.iter().enumerate() {
                             let mut spans: Vec<Span> = line.spans.iter().map(|s| s.clone()).collect();
                             if spans.first().map_or(true, |s| !s.content.starts_with("  ")) {
-                                spans.insert(0, Span::raw("  "));
+                                if li == 0 && is_fresh {
+                                    spans.insert(0, Span::styled("▎", Style::new().fg(Color::Rgb(100, 200, 255)).bold()));
+                                } else {
+                                    spans.insert(0, Span::raw("  "));
+                                }
                             }
                             text_lines.push(Line::from(spans));
                         }
@@ -520,6 +570,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
             }
             ChatRole::Tool => {
                 // Prefix: spinner for pending, ✓ for success, ✗ for failed
+                // Pending tools show elapsed time from batch start
                 let prefix = match msg.tool_status {
                     ToolStatus::Pending if app.busy => Span::styled(
                         format!("{} ", app.spinner()),
@@ -539,6 +590,48 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
                             spans.insert(0, prefix.clone());
                         }
                         text_lines.push(Line::from(spans));
+                    }
+                }
+                // Elapsed time badge on pending tools
+                if msg.tool_status == ToolStatus::Pending {
+                    if let Some(start) = app.tool_batch_start {
+                        let elapsed = start.elapsed();
+                        let elapsed_str = format!(" {:.1}s", elapsed.as_secs_f64());
+                        if let Some(last_line) = text_lines.last_mut() {
+                            last_line.spans.push(Span::styled(
+                                elapsed_str,
+                                Style::new().fg(Color::Rgb(180, 160, 100)).bold(),
+                            ));
+                        }
+                    }
+                }
+
+                // Gauge after the LAST pending tool in the batch
+                if msg.tool_status == ToolStatus::Pending
+                    && app.tool_batch_total > 1
+                    && app.tool_batch_done < app.tool_batch_total
+                {
+                    // Check if this is the last pending tool message
+                    let pending_after: usize = app.messages.iter()
+                        .skip_while(|m| !std::ptr::eq(*m, msg))
+                        .filter(|m| m.role == ChatRole::Tool && m.tool_status == ToolStatus::Pending)
+                        .count();
+                    if pending_after <= 1 {
+                        let done = app.tool_batch_done as usize;
+                        let total = app.tool_batch_total as usize;
+                        let bar_w = 30usize;
+                        let filled = if total > 0 { bar_w * done / total } else { 0 };
+                        let gauge_str = format!(
+                            "  ╰─[{}{}] {}/{}",
+                            "█".repeat(filled),
+                            "░".repeat(bar_w - filled),
+                            done,
+                            total,
+                        );
+                        text_lines.push(Line::from(Span::styled(
+                            gauge_str,
+                            Style::new().fg(Color::Rgb(120, 140, 160)),
+                        )));
                     }
                 }
             }
@@ -586,9 +679,28 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         .track_symbol(Some("│"));
     frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
 
+    // ── Input block with line/char counter ──
+    let line_count = app.input.chars().filter(|&c| c == '\n').count() + 1;
+    let char_count = app.input.chars().count();
+    let mut input_title = l.t_chat_input_title().to_string();
+    if char_count > 0 {
+        let counter = if app.setup.lang.as_str() == "zh" {
+            format!(" {}行 {}字 |", line_count, char_count)
+        } else {
+            format!(" {}L {}C |", line_count, char_count)
+        };
+        input_title = format!("{}{}", counter, input_title);
+    }
+    // Slightly accent border when multi-line or browsing history
+    let border_color = if line_count > 1 || app.history_idx.is_some() {
+        Color::Rgb(80, 130, 180)
+    } else {
+        Color::Rgb(60, 60, 60)
+    };
     let input_block = Block::new()
         .borders(Borders::ALL)
-        .title(l.t_chat_input_title());
+        .border_style(Style::new().fg(border_color))
+        .title(input_title);
     let input_text: Vec<Line> = if app.input.is_empty() {
         vec![Line::from(Span::styled(l.t_chat_input_placeholder(), Style::new().fg(Color::DarkGray)))]
     } else if app.cached_input_len != app.input.len() {
@@ -599,7 +711,22 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
     } else {
         app.cached_input_lines.clone()
     };
-    frame.render_widget(Paragraph::new(input_text).block(input_block), input_area);
+    // History indicator
+    if app.history_idx.is_some() && !app.input_history.is_empty() {
+        let history_line = if app.setup.lang.as_str() == "zh" {
+            format!("  ↑ 历史记录 ({}/{})", app.history_idx.unwrap_or(0) + 1, app.input_history.len())
+        } else {
+            format!("  ↑ history ({}/{})", app.history_idx.unwrap_or(0) + 1, app.input_history.len())
+        };
+        let mut lines_with_hint = vec![Line::from(Span::styled(
+            history_line,
+            Style::new().fg(Color::Rgb(120, 140, 160)).italic(),
+        ))];
+        lines_with_hint.extend(input_text.clone());
+        frame.render_widget(Paragraph::new(lines_with_hint).block(input_block), input_area);
+    } else {
+        frame.render_widget(Paragraph::new(input_text).block(input_block), input_area);
+    }
 
     // Cursor: position based on actual cursor byte offset
     let cursor_byte = app.cursor.min(app.input.len());
@@ -834,6 +961,66 @@ pub fn render_ask(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+// ── Help overlay ──
+
+pub fn render_help(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let l = app.setup.lang;
+    let is_zh = l.as_str() == "zh";
+
+    let popup = centered_rect(50, 18, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Color::Rgb(100, 200, 255)))
+        .title(if is_zh { " 快捷键 (?/Esc 关闭) " } else { " Keybindings (?/Esc close) " })
+        .style(Style::new().bg(Color::Rgb(18, 22, 26)));
+    let inner = block.inner(popup);
+    frame.render_widget(&block, popup);
+
+    let bindings: &[(&str, &str, &str)] = &[
+        ("Enter", "send message", "发送消息"),
+        ("Ctrl+Enter", "newline", "换行"),
+        ("Esc", "cancel / close", "取消 / 关闭"),
+        ("F6", "toggle thinking", "折叠思考链"),
+        ("F10", "settings menu", "设置菜单"),
+        ("F12", "debug panel", "调试面板"),
+        ("F9", "task panel", "任务面板"),
+        ("F8", "context window", "上下文窗口"),
+        ("?", "this help", "帮助"),
+        ("↑↓ / PgUp PgDn", "scroll", "滚动"),
+        ("Ctrl+C / F3", "quit", "退出"),
+    ];
+
+    let max_label_w = bindings.iter().map(|(k, _, _)| k.len()).max().unwrap_or(8) + 2;
+    let lines: Vec<Line> = std::iter::once(Line::from(""))
+        .chain(bindings.iter().map(|(key, en, zh)| {
+            let desc = if is_zh { zh } else { en };
+            let key_style = Style::new().fg(Color::Rgb(100, 200, 255)).bold();
+            let desc_style = Style::new().fg(Color::Rgb(180, 190, 200));
+            let padding = " ".repeat(max_label_w.saturating_sub(key.len()));
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{key}{padding}"), key_style),
+                Span::styled(desc.to_string(), desc_style),
+            ])
+        }))
+        .collect();
+
+    let footer = if is_zh {
+        "  ? 或 Esc 关闭此窗口"
+    } else {
+        "  Press ? or Esc to close"
+    };
+    let lines: Vec<Line> = lines.into_iter()
+        .chain(std::iter::once(Line::from(Span::styled(footer, Style::new().fg(Color::Gray)))))
+        .collect();
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 // ── Menu screen ──
 
 pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
@@ -993,44 +1180,3 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
     }
 }
 
-/// Count visual rows after word-boundary wrapping, matching ratatui's WordWrapper.
-fn count_wrap_rows(text: &str, width: usize) -> usize {
-    if width == 0 || text.is_empty() {
-        return 1;
-    }
-    let total_w = unicode_width::UnicodeWidthStr::width(text);
-    if total_w <= width {
-        return 1;
-    }
-    let mut rows = 1usize;
-    let mut line_used = 0usize;
-    for word in text.split_inclusive(char::is_whitespace) {
-        let trimmed = word.trim_end();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let word_w = unicode_width::UnicodeWidthStr::width(trimmed);
-        // Long word that exceeds line width: break into multiple rows
-        if word_w > width {
-            if line_used > 0 {
-                rows += 1; // move to next line first
-                line_used = 0;
-            }
-            // Each full-width chunk is one row, plus partial remainder
-            rows += word_w / width;
-            line_used = word_w % width;
-            if line_used > 0 {
-                // remainder starts new line
-            }
-            continue;
-        }
-        let sep = if line_used == 0 { 0 } else { 1 };
-        if line_used + sep + word_w > width {
-            rows += 1;
-            line_used = word_w;
-        } else {
-            line_used += sep + word_w;
-        }
-    }
-    rows
-}

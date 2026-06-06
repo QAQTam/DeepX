@@ -265,18 +265,6 @@ impl Lang {
 
     // ── Chat header ──
 
-    // ── Chat roles ──
-
-    pub fn t_chat_you(&self) -> &str {
-        match self { Lang::En => "You", Lang::Zh => "你" }
-    }
-    pub fn t_chat_think(&self) -> &str {
-        match self { Lang::En => "Think", Lang::Zh => "思考" }
-    }
-    pub fn t_chat_think_title(&self) -> &str {
-        match self { Lang::En => " Thinking (F6 toggle) ", Lang::Zh => " 思考链 (F6 切换) " }
-    }
-
     // ── Chat status ──
 
     pub fn t_chat_ready(&self) -> &str {
@@ -424,69 +412,4 @@ impl Lang {
         }
     }
 
-    // ── Tool call status labels ──
-
-    pub fn t_tool_exploring(&self) -> &str {
-        match self { Lang::En => "Exploring", Lang::Zh => "正在探索" }
-    }
-    pub fn t_tool_reading(&self) -> &str {
-        match self { Lang::En => "Reading", Lang::Zh => "正在读取" }
-    }
-    pub fn t_tool_writing(&self) -> &str {
-        match self { Lang::En => "Writing", Lang::Zh => "正在写入" }
-    }
-    pub fn t_tool_searching(&self) -> &str {
-        match self { Lang::En => "Searching", Lang::Zh => "正在搜索" }
-    }
-    pub fn t_tool_executing(&self) -> &str {
-        match self { Lang::En => "Executing", Lang::Zh => "正在执行" }
-    }
-    pub fn t_tool_deleting(&self) -> &str {
-        match self { Lang::En => "Deleting", Lang::Zh => "正在删除" }
-    }
-    pub fn t_tool_moving(&self) -> &str {
-        match self { Lang::En => "Moving", Lang::Zh => "正在移动" }
-    }
-    pub fn t_tool_copying(&self) -> &str {
-        match self { Lang::En => "Copying", Lang::Zh => "正在复制" }
-    }
-    pub fn t_tool_listing(&self) -> &str {
-        match self { Lang::En => "Listing", Lang::Zh => "正在列出" }
-    }
-    pub fn t_tool_diffing(&self) -> &str {
-        match self { Lang::En => "Diffing", Lang::Zh => "正在对比" }
-    }
-    pub fn t_tool_committing(&self) -> &str {
-        match self { Lang::En => "Committing", Lang::Zh => "正在提交" }
-    }
-    pub fn t_tool_git(&self) -> &str {
-        match self { Lang::En => "Git", Lang::Zh => "Git" }
-    }
-    pub fn t_tool_creating(&self) -> &str {
-        match self { Lang::En => "Creating", Lang::Zh => "正在创建" }
-    }
-    pub fn t_tool_updating(&self) -> &str {
-        match self { Lang::En => "Updating", Lang::Zh => "正在更新" }
-    }
-    pub fn t_tool_resolving(&self) -> &str {
-        match self { Lang::En => "Resolving", Lang::Zh => "正在解析" }
-    }
-    pub fn t_tool_querying(&self) -> &str {
-        match self { Lang::En => "Querying", Lang::Zh => "正在查询" }
-    }
-    pub fn t_tool_asking(&self) -> &str {
-        match self { Lang::En => "Asking", Lang::Zh => "正在询问" }
-    }
-    pub fn t_tool_truncated(&self, extra: usize) -> String {
-        match self {
-            Lang::En => format!("  ... (+{} chars)", extra),
-            Lang::Zh => format!("  ... (+{} 字符)", extra),
-        }
-    }
-    pub fn t_tool_lines_total(&self, total: usize, shown: usize) -> String {
-        match self {
-            Lang::En => format!("  ... {} lines total (showing first {})", total, shown),
-            Lang::Zh => format!("  ... 共 {} 行 (显示前 {})", total, shown),
-        }
-    }
 }

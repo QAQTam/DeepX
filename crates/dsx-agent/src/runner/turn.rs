@@ -165,7 +165,6 @@ pub fn handle_user_input(
     agent.files.files_written_this_turn.clear();
 
     agent.refresh_progress_context();
-    crate::skills::auto_activate(agent, text);
 
     let mut ipc_broken = false;
     let mut round_num = 0u32;
@@ -254,6 +253,20 @@ pub fn handle_user_input(
         });
 
         if !has_tools {
+            // Cancel / stop_reason="cancelled": user interrupted — exit cleanly, don't loop.
+            if stop_reason.as_deref() == Some("cancelled") {
+                log::info!("turn: cancelled at r={}, exiting turn", round_num);
+                emit(&agent_tx, Agent2Ui::TurnEnd {
+                    turn_id: turn_id.clone(),
+                    stop_reason,
+                    usage,
+                    context_tokens: agent.token_estimate,
+                    context_limit: agent.config.context_limit,
+                    session_tokens: agent.session.tokens,
+                });
+                return;
+            }
+
             if stop_reason.as_deref() == Some("length") {
                 log::info!("turn: stop_reason=length at r={}, nudging model to continue", round_num);
                 round_num += 1;
