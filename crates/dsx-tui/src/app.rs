@@ -238,6 +238,7 @@ pub struct App {
     pub context_limit: u32,
     pub should_quit: bool,
     pub streaming: bool,
+    streaming_kind: ChatRole,
     pub scroll_offset: usize,
     pub frame_count: u64,
     pub sessions: Vec<SessionMeta>,
@@ -669,6 +670,7 @@ impl App {
             context_limit: 1_000_000,
             should_quit: false,
             streaming: false,
+            streaming_kind: ChatRole::Assistant,
             scroll_offset: 0,
             streaming_rendered_len: 0,
             draft_round_msg_idx: None,
@@ -920,15 +922,24 @@ impl App {
             }
             Agent2Ui::RoundDelta { turn_id: _, round_num: _, kind, delta } => {
                 self.debug.streaming = true;
+                let new_role = match kind {
+                    RoundDeltaKind::Thinking => ChatRole::Thinking,
+                    RoundDeltaKind::Answering => ChatRole::Assistant,
+                    RoundDeltaKind::ToolCalling => ChatRole::Assistant,
+                };
+                // When kind switches (thinking→answering), finalize old draft and start new
+                if self.streaming && self.streaming_kind != new_role {
+                    self.finalize_last_message();
+                    self.streaming_rendered_len = 0;
+                    self.md_renderer = None;
+                    self.pending_tail_lines = 0;
+                    self.streaming = false;
+                }
+                self.streaming_kind = new_role;
                 if !self.streaming {
-                    let role = match kind {
-                        RoundDeltaKind::Thinking => ChatRole::Thinking,
-                        RoundDeltaKind::Answering => ChatRole::Assistant,
-                        RoundDeltaKind::ToolCalling => ChatRole::Assistant,
-                    };
                     self.streaming = true;
                     self.draft_round_msg_idx = Some(self.messages.len());
-                    self.push_streaming_msg(role, "");
+                    self.push_streaming_msg(new_role, "");
                 }
                 self.append_last(&delta);
             }
