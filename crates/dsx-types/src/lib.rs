@@ -12,7 +12,7 @@ pub mod state;
 pub mod config;
 pub mod session;
 pub mod api_types;
-
+pub mod anthropic;
 
 // Unified arg parsing (shared across dsx-agent, dsx-tools)
 pub mod arg;
@@ -34,6 +34,14 @@ pub use api_types::UsageInfo;
 // ── Unified arg parsers ──
 pub use arg::{
     parse_arg, parse_arg_or, parse_opt, parse_opt_u64, tool_action, parse_file_arg, parse_cmd_arg,
+};
+
+// ── Anthropic API types ──
+pub use anthropic::{
+    AnthropicCacheControl, AnthropicContent, AnthropicContentBlockStart,
+    AnthropicDelta, AnthropicEventMessage, AnthropicMessage, AnthropicMessageDelta,
+    AnthropicRequest, AnthropicStreamEvent, AnthropicSystemBlock,
+    AnthropicThinking, AnthropicTool, AnthropicUsage, OutputConfig,
 };
 
 // ── Shared utilities ──

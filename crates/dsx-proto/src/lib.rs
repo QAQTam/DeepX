@@ -21,12 +21,10 @@ use std::fmt;
 // ── Submodule declarations ──────────────────────────────────────────────
 
 mod agent_protocol;
-mod hp;
 
 // ── Re-exports ──────────────────────────────────────────────────────────
 
 pub use agent_protocol::{Agent2Ui, DocInfo, FileSnapshotInfo, RoundData, RoundDeltaKind, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent};
-pub use hp::{AgentToHp, HpToAgent};
 
 // ── InterruptRequest (tool → agent interrupt flow) ──────────────────────
 

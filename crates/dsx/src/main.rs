@@ -1,21 +1,34 @@
-//! DSX — umbrella binary. All roles in one binary.
+//! DSX — single binary for all roles.
+//!
+//! Usage:
+//!   dsx              → Tauri GUI (default, double-click)
+//!   dsx --tui         → Terminal UI
+//!   dsx --agent       → Headless agent (stdin/stdout JSON-LP)
+//!   dsx config|init   → Setup wizard
 
 fn main() {
-    let _ = std::env::set_var("DSX_SINGLE_BINARY", "1");
-
-    let role = std::env::args().nth(1).unwrap_or_default();
-    match role.as_str() {
-        "gate" => dsx_gate::runner::run(),
-        "agent" => dsx_agent::runner::run(),
-        "config" | "init" => run_config(),
-        _ => {
-            // Default: headless agent (stdin/stdout JSON-LP)
+    let arg = std::env::args().nth(1).unwrap_or_default();
+    match arg.as_str() {
+        "--tui" => {
+            if let Err(e) = dsx_tui::run_tui() {
+                eprintln!("dsx-tui: {e}");
+                std::process::exit(1);
+            }
+        }
+        "--agent" => {
             dsx_agent::runner::run();
+        }
+        "config" | "init" => {
+            run_config();
+        }
+        _ => {
+            // Default: Tauri GUI (handles its own arg parsing)
+            dsx_tauri_lib::run();
         }
     }
 }
 
-/// Interactive setup wizard: writes ~/.dsx/config.json
+/// Interactive setup wizard: writes ~/.config/dsx/config.toml
 fn run_config() {
     use std::io::Write;
 

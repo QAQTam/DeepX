@@ -15,6 +15,10 @@ pub fn load_session(seed: &str) -> Option<SessionFile> {
 pub fn load_session_or_live(seed: &str) -> Option<(SessionFile, bool)> {
     let path = super::find_existing_session_path(seed)?;
     let data = std::fs::read_to_string(&path).ok()?;
+    if let Ok(file) = toml::from_str::<SessionFile>(&data) {
+        return Some((file, false));
+    }
+    // Fallback: try legacy JSON
     if let Ok(file) = serde_json::from_str::<SessionFile>(&data) {
         return Some((file, false));
     }
@@ -133,8 +137,8 @@ pub fn save_session(
         last_summary,
     };
 
-    let serialized = serde_json::to_string_pretty(&file).unwrap_or_default();
-    let tmp_path = sfile_path.with_extension("json.tmp");
+    let serialized = toml::to_string_pretty(&file).unwrap_or_default();
+    let tmp_path = sfile_path.with_extension("toml.tmp");
     let _ = std::fs::write(&tmp_path, &serialized);
     let _ = std::fs::rename(&tmp_path, &sfile_path);
     update_index_entry(&file);
@@ -155,14 +159,17 @@ fn save_index(metas: &[SessionMeta]) {
     let Some(path) = super::index_path() else { return };
     let Some(parent) = path.parent() else { return };
     let _ = std::fs::create_dir_all(parent);
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(metas).unwrap_or_default());
+    let _ = std::fs::write(&path, toml::to_string_pretty(metas).unwrap_or_default());
 }
 
 pub fn load_index() -> Vec<SessionMeta> {
     let Some(path) = super::index_path() else { return vec![] };
     if !path.exists() { return vec![]; }
     let Ok(data) = std::fs::read_to_string(&path) else { return vec![] };
-    serde_json::from_str::<Vec<SessionMeta>>(&data).unwrap_or_default()
+    toml::from_str::<Vec<SessionMeta>>(&data).unwrap_or_else(|_| {
+        // Fallback: try legacy JSON index
+        serde_json::from_str::<Vec<SessionMeta>>(&data).unwrap_or_default()
+    })
 }
 
 pub(super) fn update_index_entry(file: &SessionFile) {

@@ -42,7 +42,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) {
         &agent.session.seed,
         &agent.ctx.to_vec(),
         &agent.config.model,
-        agent.config.effort.as_deref(),
+        Some(&agent.config.reasoning_effort),
     );
     log::info!("dsx-agent: new session {}", agent.session.seed);
 }

@@ -15,7 +15,7 @@ pub fn run() {
     let config = crate::config::Config::load().unwrap_or_default();
     eprintln!(
         "dsx-agent: model={} effort={:?} context_limit={}",
-        config.model, config.effort, config.context_limit
+        config.model, config.reasoning_effort, config.context_limit
     );
 
     let args: Vec<String> = std::env::args().collect();
@@ -27,19 +27,8 @@ pub fn run() {
         eprintln!("dsx-agent: resume request for session {seed}");
     }
 
-    let mcp_configs = config.mcp_servers.clone();
-    let mut agent = AgentState::new(config);
+    let mut agent = AgentState::init("pipe");
     agent.session.resume_seed = resume_seed;
-
-    let hp_conn = crate::gate::try_reconnect().map(BufReader::new);
-
-    crate::tools::init_tools("pipe", &mcp_configs);
-    if let Some(ref key) = agent.config.context7_api_key {
-        if !key.is_empty() {
-            crate::tools::set_context7_key(key);
-        }
-    }
-    agent.tool_defs = crate::tools::all_tools();
     eprintln!("dsx-agent: tools → {}", agent.tool_defs.len());
 
     let lives = crate::session::find_live_sessions();
@@ -81,10 +70,9 @@ pub fn run() {
         }
     });
 
-    super::run_agent_loop(agent, hp_conn, tui_rx, agent_tx);
+    super::run_agent_loop(agent, tui_rx, agent_tx);
 
     crate::tools::shutdown_tools();
-    crate::gate::kill_hp_daemon();
     drop(stdin_handle);
     drop(stdout_handle);
 }

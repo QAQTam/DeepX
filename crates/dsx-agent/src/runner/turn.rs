@@ -1,7 +1,5 @@
 //! Turn processing (v5): user input → tool-calling loop → round-based UI events → session save.
 
-use std::io::BufReader;
-use std::net::TcpStream;
 use std::sync::mpsc;
 
 use dsx_proto::{Agent2Ui, ToolCallDef, ToolResultDef, TurnData, RoundData};
@@ -134,7 +132,6 @@ pub(super) fn build_turns_from_context(agent: &AgentState) -> Vec<TurnData> {
 pub fn handle_user_input(
     agent: &mut AgentState,
     text: &str,
-    hp: &mut BufReader<TcpStream>,
     agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
     let is_ask_reply = process_ask_user_response(agent, text);
@@ -180,7 +177,7 @@ pub fn handle_user_input(
         }
 
         let (content, reasoning_content, tool_calls_raw, usage, stop_reason) =
-            match run_api_turn(agent, hp, agent_tx, &turn_id, round_num, true) {
+            match run_api_turn(agent, agent_tx, &turn_id, round_num, true) {
                 Ok(v) => v,
                 Err(()) => return,
             };
@@ -509,6 +506,6 @@ fn save_snapshot(agent: &AgentState) {
         &agent.session.seed,
         &agent.ctx.to_vec(),
         &agent.config.model,
-        agent.config.effort.as_deref(),
+        Some(&agent.config.reasoning_effort),
     );
 }

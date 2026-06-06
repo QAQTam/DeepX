@@ -1,72 +1,25 @@
-//! Native OpenAI Chat Completions API streaming client.
-//!
-//! Messages and tools are converted from internal ContentBlock format to
-//! OpenAI's chat completion format. The endpoint is DeepSeek's
-//! OpenAI-compatible API at `https://api.deepseek.com/chat/completions`.
+//! OpenAI Chat Completions API streaming client — sync (ureq).
 
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::time::Duration;
 
 use dsx_types::{ContentBlock, Message, ToolDef, UsageInfo};
-use futures_util::StreamExt;
-use reqwest::Client as HttpClient;
-use tokio::sync::mpsc;
 
-/// Send a StreamEvent, logging if the receiver has been dropped.
-async fn emit(tx: &mpsc::Sender<StreamEvent>, event: StreamEvent) {
-    if let Err(e) = tx.send(event).await {
-        log::warn!("dsx-gate: failed to send stream event: {e}");
-    }
-}
+use super::types::{ProviderConfig, StreamEvent};
 
-#[derive(Debug, Clone)]
-pub struct Provider {
-    pub base_url: String,
-    pub api_key: String,
-}
-
-impl Provider {
-    pub fn new(base_url: &str, api_key: &str) -> Self {
-        Self { base_url: base_url.to_string(), api_key: api_key.to_string() }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum StreamEvent {
-    ContentDelta(String),
-    ReasoningDelta(String),
-    ToolCallProgress {
-        index: usize,
-        id: String,
-        name: String,
-        args_so_far: String,
-    },
-    Done {
-        raw_message: Message,
-        usage: Option<UsageInfo>,
-        stop_reason: Option<String>,
-    },
-    Balance {
-        is_available: bool,
-        total_balance: String,
-        currency: String,
-    },
-    Error(String),
-}
-
-pub async fn chat_stream(
-    provider: &Provider,
+/// Send a chat completion request and stream SSE events via `on_event`.
+pub fn chat_stream_openai(
+    provider: &ProviderConfig,
     model: &str,
-    system: Option<String>,
     messages: Vec<Message>,
     tools: Option<Vec<ToolDef>>,
     max_tokens: u32,
     effort: Option<String>,
     user_id: Option<String>,
-    client: &reqwest::Client,
-    tx: mpsc::Sender<StreamEvent>,
+    on_event: &mut dyn FnMut(StreamEvent),
 ) -> anyhow::Result<()> {
-    let api_msgs = convert_messages(messages, system);
+    let api_msgs = convert_messages(messages, None);
 
     let openai_tools: Option<Vec<serde_json::Value>> = tools.map(|tds| {
         tds.into_iter()
@@ -83,85 +36,81 @@ pub async fn chat_stream(
             .collect()
     });
 
-    let mut body = serde_json::Map::new();
-    body.insert("model".into(), serde_json::json!(model));
-    body.insert("messages".into(), serde_json::Value::Array(api_msgs));
-    body.insert("stream".into(), serde_json::json!(true));
-    body.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
-    body.insert("max_tokens".into(), serde_json::json!(max_tokens));
+    let mut body_map = serde_json::Map::new();
+    body_map.insert("model".into(), serde_json::json!(model));
+    body_map.insert("messages".into(), serde_json::Value::Array(api_msgs));
+    body_map.insert("stream".into(), serde_json::json!(true));
+    body_map.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
+    body_map.insert("max_tokens".into(), serde_json::json!(max_tokens));
 
-    if let Some(e) = effort {
-        body.insert("reasoning_effort".into(), serde_json::json!(e));
+    if let Some(ref e) = effort {
+        body_map.insert("reasoning_effort".into(), serde_json::json!(e));
     }
-    if let Some(t) = openai_tools {
-        body.insert("tools".into(), serde_json::Value::Array(t));
+    if let Some(ref t) = openai_tools {
+        body_map.insert("tools".into(), serde_json::Value::Array(t.clone()));
     }
     if let Some(ref uid) = user_id {
-        body.insert("user_id".into(), serde_json::json!(uid));
+        body_map.insert("user_id".into(), serde_json::json!(uid));
     }
 
-    let body = serde_json::Value::Object(body);
-
+    let body = serde_json::Value::Object(body_map);
     let url = build_chat_url(&provider.base_url);
 
     dump_api_request(user_id.as_deref(), &body);
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", provider.api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
+    // Send request
+    let resp = ureq::post(&url)
+        .set("Authorization", &format!("Bearer {}", provider.api_key))
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(120))
+        .send_json(&body);
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        dump_api_error(user_id.as_deref(), status.as_u16(), &text);
-        let code_desc = deepseek_error_description(status.as_u16());
-        let msg = format!("OpenAI API HTTP {} ({})", status, code_desc);
-        emit(&tx, StreamEvent::Error(format!("{}: {}", msg, text))).await;
-        return Err(anyhow::anyhow!("{}", msg));
-    }
-
-    let api_key_for_balance = provider.api_key.clone();
-    let tx_balance = tx.clone();
-    tokio::spawn(async move {
-        match query_balance(&api_key_for_balance).await {
-            Some(info) => {
-                emit(&tx_balance, StreamEvent::Balance {
-                    is_available: info.is_available,
-                    total_balance: info.total_balance,
-                    currency: info.currency,
-                }).await;
-            }
-            None => {
-                emit(&tx_balance, StreamEvent::Error("Balance query failed".into())).await;
-            }
+    let resp = match resp {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, resp)) => {
+            let text = resp.into_string().unwrap_or_default();
+            dump_api_error(user_id.as_deref(), code as u16, &text);
+            let code_desc = deepseek_error_description(code as u16);
+            let msg = format!("OpenAI API HTTP {} ({})", code, code_desc);
+            on_event(StreamEvent::Error(format!("{}: {}", msg, text)));
+            return Err(anyhow::anyhow!("{}", msg));
         }
-    });
+        Err(ureq::Error::Transport(e)) => {
+            let msg = format!("HTTP transport error: {e}");
+            on_event(StreamEvent::Error(msg.clone()));
+            return Err(anyhow::anyhow!("{}", msg));
+        }
+    };
 
-    let mut byte_stream = resp.bytes_stream();
+    // Balance query (non-blocking best-effort; run after stream or asynchronously)
+    // We query it after the stream to avoid blocking the first token.
+    let mut balance_queried = false;
+
+    let mut reader = resp.into_reader();
     let mut sse_buf = String::new();
+    let mut byte_buf = [0u8; 4096];
+
     let mut text_buf = String::new();
     let mut reasoning_buf = String::new();
     let mut tool_acc: HashMap<usize, (String, String, String)> = HashMap::new();
-    let mut dsml_buf: String = String::new();
+    let mut dsml_buf = String::new();
     let mut dsml_seen: HashSet<String> = HashSet::new();
     let mut usage_info: Option<UsageInfo> = None;
     let mut stop_reason: Option<String> = None;
 
     loop {
-        let chunk = match byte_stream.next().await {
-            Some(Ok(c)) => c,
-            Some(Err(e)) => {
-                log::warn!("SSE stream I/O error: {e}; emitting partial done with accumulated content");
-                stop_reason = Some("connection_lost".to_string());
-                break;
-            }
-            None => break,
-        };
-        sse_buf.push_str(&String::from_utf8_lossy(&chunk));
+        let n = reader.read(&mut byte_buf).map_err(|e| {
+            let msg = format!("SSE read error: {e}");
+            on_event(StreamEvent::Error(msg.clone()));
+            anyhow::anyhow!("{}", msg)
+        })?;
+
+        if n == 0 {
+            // EOF — stream ended without Done
+            break;
+        }
+
+        sse_buf.push_str(&String::from_utf8_lossy(&byte_buf[..n]));
 
         while let Some(pos) = sse_buf.find("\n\n") {
             let raw = sse_buf[..pos].to_string();
@@ -186,6 +135,7 @@ pub async fn chat_stream(
                 }
             };
 
+            // Parse choices
             if let Some(choices) = ev.get("choices").and_then(|c| c.as_array()) {
                 if let Some(choice) = choices.first() {
                     let finish = choice.get("finish_reason").and_then(|v| v.as_str());
@@ -196,11 +146,13 @@ pub async fn chat_stream(
                     }
 
                     if let Some(delta) = choice.get("delta") {
+                        // Text content
                         if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
                             let t = text.to_string();
                             text_buf.push_str(&t);
-                            emit(&tx, StreamEvent::ContentDelta(t.clone())).await;
+                            on_event(StreamEvent::ContentDelta(t.clone()));
 
+                            // DSML tool call detection in content stream
                             dsml_buf.push_str(&t);
                             let mut search_from = 0usize;
                             while let Some(start) = dsml_buf[search_from..].find("<｜DSML｜invoke name=\"") {
@@ -211,12 +163,12 @@ pub async fn chat_stream(
                                         let name = rest[..quote_end].to_string();
                                         if dsml_seen.insert(name.clone()) {
                                             let idx = dsml_seen.len() - 1;
-                                            emit(&tx, StreamEvent::ToolCallProgress {
+                                            on_event(StreamEvent::ToolCallProgress {
                                                 index: idx,
                                                 id: format!("dsml_tc_{}", idx),
                                                 name,
                                                 args_so_far: String::new(),
-                                            }).await;
+                                            });
                                         }
                                         search_from = after_tag + quote_end + 1;
                                         continue;
@@ -226,12 +178,14 @@ pub async fn chat_stream(
                             }
                         }
 
+                        // Reasoning content
                         if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
                             let r = rc.to_string();
                             reasoning_buf.push_str(&r);
-                            emit(&tx, StreamEvent::ReasoningDelta(r)).await;
+                            on_event(StreamEvent::ReasoningDelta(r));
                         }
 
+                        // Tool calls (native OpenAI format)
                         if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
                             for tc in tcs {
                                 let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -249,12 +203,12 @@ pub async fn chat_stream(
                                     .and_then(|v| v.as_str())
                                 {
                                     entry.2.push_str(args);
-                                    emit(&tx, StreamEvent::ToolCallProgress {
+                                    on_event(StreamEvent::ToolCallProgress {
                                         index: idx,
                                         id: entry.0.clone(),
                                         name: entry.1.clone(),
                                         args_so_far: entry.2.clone(),
-                                    }).await;
+                                    });
                                 }
                             }
                         }
@@ -262,6 +216,7 @@ pub async fn chat_stream(
                 }
             }
 
+            // Usage info (may appear in any chunk)
             if let Some(u) = ev.get("usage") {
                 let pt = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let ct = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -281,8 +236,21 @@ pub async fn chat_stream(
                 });
             }
         }
+
+        // Query balance lazily after first chunk arrives
+        if !balance_queried {
+            balance_queried = true;
+            if let Some(info) = query_balance(&provider.api_key) {
+                on_event(StreamEvent::Balance {
+                    is_available: info.is_available,
+                    total_balance: info.total_balance,
+                    currency: info.currency,
+                });
+            }
+        }
     }
 
+    // Build final message from accumulated content
     let mut blocks: Vec<ContentBlock> = Vec::new();
 
     if !reasoning_buf.is_empty() {
@@ -300,7 +268,8 @@ pub async fn chat_stream(
         .collect();
     sorted.sort_by_key(|(idx, _, _, _)| *idx);
     for (_idx, id, name, args_json) in sorted {
-        let input: serde_json::Value = serde_json::from_str(&args_json).unwrap_or(serde_json::Value::Null);
+        let input: serde_json::Value =
+            serde_json::from_str(&args_json).unwrap_or(serde_json::Value::Null);
         blocks.push(ContentBlock::ToolUse { id, name, input });
     }
 
@@ -310,9 +279,12 @@ pub async fn chat_stream(
         content: blocks,
     };
 
-    emit(&tx, StreamEvent::Done { raw_message, usage: usage_info, stop_reason }).await;
+    on_event(StreamEvent::Done { raw_message, usage: usage_info, stop_reason });
+
     Ok(())
 }
+
+// ── Message conversion ──
 
 fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde_json::Value> {
     let mut out: Vec<serde_json::Value> = Vec::new();
@@ -341,9 +313,8 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
             "user" => {
                 let mut text = String::new();
                 for block in &msg.content {
-                    match block {
-                        ContentBlock::Text { text: t } => text.push_str(t),
-                        _ => {}
+                    if let ContentBlock::Text { text: t } = block {
+                        text.push_str(t);
                     }
                 }
                 let mut obj = serde_json::json!({"role": "user", "content": text});
@@ -407,6 +378,8 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
     out
 }
 
+// ── URL builder ──
+
 fn build_chat_url(base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
     if base.ends_with("/v1/chat/completions") || base.ends_with("/chat/completions") {
@@ -416,6 +389,54 @@ fn build_chat_url(base_url: &str) -> String {
     } else {
         format!("{}/v1/chat/completions", base)
     }
+}
+
+// ── Balance query ──
+
+pub fn query_balance(api_key: &str) -> Option<dsx_types::BalanceInfo> {
+    let resp = ureq::get("https://api.deepseek.com/user/balance")
+        .set("Authorization", &format!("Bearer {}", api_key))
+        .timeout(Duration::from_secs(10))
+        .call()
+        .ok()?;
+
+    let body: serde_json::Value = resp.into_json().ok()?;
+    let is_available = body.get("is_available").and_then(|v| v.as_bool()).unwrap_or(false);
+    let infos = body.get("balance_infos").and_then(|v| v.as_array())?;
+    let first = infos.first()?;
+    let currency = first.get("currency").and_then(|v| v.as_str()).unwrap_or("CNY").to_string();
+    let total_balance = first.get("total_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
+
+    Some(dsx_types::BalanceInfo {
+        is_available,
+        currency,
+        total_balance,
+        granted_balance: first.get("granted_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+        topped_up_balance: first.get("topped_up_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+    })
+}
+
+// ── Error descriptions ──
+
+fn deepseek_error_description(status: u16) -> &'static str {
+    match status {
+        400 => "Bad Request — 格式错误",
+        401 => "Unauthorized — API key 无效",
+        402 => "Payment Required — 余额不足",
+        422 => "Unprocessable — 参数错误",
+        429 => "Rate Limit — 请求速率超限",
+        500 => "Internal Error — 服务器故障",
+        503 => "Service Unavailable — 服务器繁忙",
+        _ => "Unknown",
+    }
+}
+
+// ── Debug logging ──
+
+fn log_dir() -> std::path::PathBuf {
+    let mut p = dsx_types::platform::data_dir();
+    p.push("logs");
+    p
 }
 
 fn dump_api_request(user_id: Option<&str>, body: &serde_json::Value) {
@@ -456,50 +477,4 @@ fn dump_api_error(user_id: Option<&str>, status: u16, text: &str) {
     if let Ok(json) = serde_json::to_string_pretty(&entries) {
         let _ = std::fs::write(&path, json);
     }
-}
-
-fn log_dir() -> std::path::PathBuf {
-    let mut p = dsx_types::platform::data_dir();
-    p.push("logs");
-    p
-}
-
-fn deepseek_error_description(status: u16) -> &'static str {
-    match status {
-        400 => "Bad Request — 格式错误",
-        401 => "Unauthorized — API key 无效",
-        402 => "Payment Required — 余额不足",
-        422 => "Unprocessable — 参数错误",
-        429 => "Rate Limit — 请求速率超限",
-        500 => "Internal Error — 服务器故障",
-        503 => "Service Unavailable — 服务器繁忙",
-        _ => "Unknown",
-    }
-}
-
-pub async fn query_balance(api_key: &str) -> Option<dsx_types::BalanceInfo> {
-    let client = HttpClient::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(10))
-        .build().ok()?;
-
-    let resp = client
-        .get("https://api.deepseek.com/user/balance")
-        .header("Authorization", &format!("Bearer {}", api_key))
-        .send().await.ok()?;
-
-    let body: serde_json::Value = resp.json().await.ok()?;
-    let is_available = body.get("is_available").and_then(|v| v.as_bool()).unwrap_or(false);
-    let infos = body.get("balance_infos").and_then(|v| v.as_array())?;
-    let first = infos.first()?;
-    let currency = first.get("currency").and_then(|v| v.as_str()).unwrap_or("CNY").to_string();
-    let total_balance = first.get("total_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
-
-    Some(dsx_types::BalanceInfo {
-        is_available,
-        currency,
-        total_balance,
-        granted_balance: first.get("granted_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-        topped_up_balance: first.get("topped_up_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-    })
 }

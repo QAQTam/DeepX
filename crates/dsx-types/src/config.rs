@@ -6,6 +6,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PersistentConfig {
+    /// Provider preset: "deepseek-openai" | "deepseek-anthropic" | "custom"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -16,10 +19,12 @@ pub struct PersistentConfig {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u32>,
+    /// Protocol: "openai" or "anthropic"
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<bool>,
+    pub protocol: Option<String>,
+    /// Reasoning effort: "high" or "max". Thinking is always enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
+    pub reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profiles: Option<HashMap<String, ProfileConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,6 +36,9 @@ pub struct PersistentConfig {
     pub lang: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context7_api_key: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<serde_json::Value>,
 }
 
 // ── Profile / Preferences ──
@@ -70,18 +78,18 @@ impl ConfigStore {
 
     pub fn load(&self) -> Option<PersistentConfig> {
         let data = std::fs::read_to_string(&self.path).ok()?;
-        serde_json::from_str(&data).ok()
+        toml::from_str(&data).ok()
     }
 
     pub fn save(&self, config: &PersistentConfig) -> bool {
-        let content = match serde_json::to_string_pretty(config) {
+        let content = match toml::to_string_pretty(config) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("ConfigStore: serialization failed: {e}");
                 return false;
             }
         };
-        let tmp = self.path.with_extension("json.tmp");
+        let tmp = self.path.with_extension("toml.tmp");
         if let Some(parent) = self.path.parent() {
             drop(std::fs::create_dir_all(parent));
         }
@@ -91,13 +99,15 @@ impl ConfigStore {
 
     pub fn load_api_key(&self) -> Option<String> {
         let data = std::fs::read_to_string(&self.path).ok()?;
-        let v: serde_json::Value = serde_json::from_str(&data).ok()?;
+        let v: toml::Value = toml::from_str(&data).ok()?;
         v.get("api_key").and_then(|k| k.as_str()).map(String::from)
     }
 
     pub fn load_value(&self) -> Option<serde_json::Value> {
         let data = std::fs::read_to_string(&self.path).ok()?;
-        serde_json::from_str(&data).ok()
+        let tv: toml::Value = toml::from_str(&data).ok()?;
+        // Convert toml::Value → serde_json::Value for backward compat
+        serde_json::to_value(&tv).ok()
     }
 }
 

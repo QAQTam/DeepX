@@ -27,7 +27,7 @@ pub fn data_dir() -> PathBuf {
 
 /// DSX config file path.
 pub fn config_path() -> PathBuf {
-    data_dir().join("config.json")
+    data_dir().join("config.toml")
 }
 
 /// DSX HP port file path.

@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::{ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict};
 
 /// Configuration for one MCP server.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct McpServerConfig {
     pub command: String,
     pub args: Vec<String>,

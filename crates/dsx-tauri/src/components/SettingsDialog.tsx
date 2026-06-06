@@ -13,28 +13,36 @@ interface SettingsDialogProps {
 
 export function SettingsDialog(props: SettingsDialogProps) {
   const [apiKey, setApiKey] = createSignal('')
+  const [baseUrl, setBaseUrl] = createSignal('https://api.deepseek.com')
   const [model, setModel] = createSignal('deepseek-v4-flash')
   const [models, setModels] = createSignal<string[]>([])
   const [fetching, setFetching] = createSignal(false)
   const [fetchError, setFetchError] = createSignal('')
   const [contextLimit, setContextLimit] = createSignal(1000000)
   const [maxTokens, setMaxTokens] = createSignal(16384)
-  const [effort, setEffort] = createSignal('high')
+  const [maxToolRounds, setMaxToolRounds] = createSignal(10)
+  const [providerId, setProviderId] = createSignal('deepseek-openai')
+  const [protocol, setProtocol] = createSignal('openai')
+  const [isCustom, setIsCustom] = createSignal(false)
+  const [reasoningEffort, setReasoningEffort] = createSignal('high')
   const [lang, setLangState] = createSignal('zh')
+  const [context7Key, setContext7Key] = createSignal('')
   const [saving, setSaving] = createSignal(false)
   const { theme, setTheme } = useTheme()
 
   onMount(() => {
     api.loadConfig().then((cfg: ConfigData) => {
       if (cfg.api_key && cfg.api_key !== 'null') setApiKey(cfg.api_key)
+      if (cfg.base_url) setBaseUrl(cfg.base_url)
       if (cfg.model) setModel(cfg.model)
       if (cfg.context_limit) setContextLimit(cfg.context_limit)
       if (cfg.max_tokens) setMaxTokens(cfg.max_tokens)
-      if (cfg.effort) setEffort(cfg.effort)
+      if (cfg.max_tool_rounds) setMaxToolRounds(cfg.max_tool_rounds)
+      if (cfg.provider_id) { setProviderId(cfg.provider_id); setIsCustom(cfg.provider_id === 'custom'); }
+      if (cfg.protocol) setProtocol(cfg.protocol)
+      if (cfg.reasoning_effort) setReasoningEffort(cfg.reasoning_effort)
       if (cfg.lang) setLangState(cfg.lang)
-      let cached = cfg.cached_models
-      if (typeof cached === 'string') try { cached = JSON.parse(cached) } catch { /* ignore */ }
-      if (Array.isArray(cached)) setModels(cached)
+      if (cfg.context7_api_key) setContext7Key(cfg.context7_api_key)
     }).catch(() => {})
   })
 
@@ -42,10 +50,9 @@ export function SettingsDialog(props: SettingsDialogProps) {
     setFetching(true)
     setFetchError('')
     try {
-      const list = await api.fetchModels(apiKey(), 'https://api.deepseek.com')
+      const list = await api.fetchModels(apiKey(), baseUrl())
       setModels(list)
       if (list.length > 0 && !list.includes(model())) setModel(list[0])
-      await api.updateConfig('cached_models', JSON.stringify(list.slice(0, 5)))
     } catch (e: any) {
       setFetchError(String(e))
     } finally {
@@ -57,8 +64,9 @@ export function SettingsDialog(props: SettingsDialogProps) {
     setSaving(true)
     try {
       await api.saveConfig({
-        apiKey: apiKey(), baseUrl: 'https://api.deepseek.com', model: model(),
-        contextLimit: contextLimit(), maxTokens: maxTokens(), effort: effort(), lang: lang(),
+        apiKey: apiKey(), baseUrl: baseUrl(), model: model(),
+        contextLimit: contextLimit(), maxTokens: maxTokens(), maxToolRounds: maxToolRounds(),
+        providerId: providerId(), protocol: protocol(), reasoningEffort: reasoningEffort(), lang: lang(), context7ApiKey: context7Key(),
       })
       setLang(lang())
       props.onClose()
@@ -89,6 +97,14 @@ export function SettingsDialog(props: SettingsDialogProps) {
             </div>
           </div>
 
+          {/* Base URL */}
+          <Input
+            label={tt('settings.baseUrl')}
+            value={baseUrl()}
+            onInput={(e) => setBaseUrl(e.currentTarget.value)}
+            placeholder="https://api.deepseek.com"
+          />
+
           {/* Model */}
           <Select
             label={tt('settings.model')}
@@ -113,16 +129,47 @@ export function SettingsDialog(props: SettingsDialogProps) {
             onInput={(e) => setMaxTokens(Number(e.currentTarget.value))}
           />
 
-          {/* Effort */}
+          {/* Max Tool Rounds */}
+          <Input
+            label={tt('settings.maxToolRounds')}
+            type="number"
+            value={String(maxToolRounds())}
+            onInput={(e) => setMaxToolRounds(Number(e.currentTarget.value))}
+          />
+
+          {/* Protocol */}
           <Select
-            label={tt('settings.effort')}
+            label={tt('settings.protocol')}
             options={[
-              { value: 'low', label: tt('settings.effortLow') },
-              { value: 'medium', label: tt('settings.effortMedium') },
-              { value: 'high', label: tt('settings.effortHigh') },
+              { value: 'openai', label: 'OpenAI / DeepSeek' },
+              { value: 'anthropic', label: 'Anthropic' },
             ]}
-            value={effort()}
-            onChange={(e) => setEffort(e.currentTarget.value)}
+            value={protocol()}
+            onChange={(e) => setProtocol(e.currentTarget.value)}
+          />
+
+          {/* Thinking Effort */}
+          <Select
+            label={tt('settings.thinkingEffort')}
+            options={[
+              { value: 'no', label: 'No' },
+              { value: 'low', label: 'Low' },
+              { value: 'medium', label: 'Medium' },
+              { value: 'high', label: 'High' },
+              { value: 'xhigh', label: 'X-High' },
+              { value: 'max', label: 'Max' },
+            ]}
+            value={thinkingEffort()}
+            onChange={(e) => setReasoningEffort(e.currentTarget.value)}
+          />
+
+          {/* Context7 API Key */}
+          <Input
+            label={tt('settings.context7Key')}
+            type="password"
+            value={context7Key()}
+            onInput={(e) => setContext7Key(e.currentTarget.value)}
+            placeholder="c7-..."
           />
 
           {/* Language */}

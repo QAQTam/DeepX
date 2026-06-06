@@ -76,6 +76,22 @@ impl AgentState {
         state
     }
 
+    /// Full initialization: load config, init tools, context7, tool defs.
+    /// `caller` is a label for the tools subsystem ("tui", "tauri", "pipe").
+    pub fn init(caller: &str) -> Self {
+        let config = crate::config::Config::load().unwrap_or_default();
+        let mcp_configs = config.mcp_servers.clone();
+        crate::tools::init_tools(caller, &mcp_configs);
+        if let Some(ref key) = config.context7_api_key {
+            if !key.is_empty() {
+                crate::tools::set_context7_key(key);
+            }
+        }
+        let mut agent = Self::new(config);
+        agent.tool_defs = crate::tools::all_tools();
+        agent
+    }
+
     // ── Token helpers ──
 
     pub fn tokens_used(&self) -> u32 {
@@ -124,7 +140,7 @@ impl AgentState {
         } else {
             let mut sys = String::new();
 
-            if self.config.effort.as_deref() == Some("max") {
+            if self.config.reasoning_effort == "max" {
                 sys.push_str(crate::prompt::THINK_MAX);
                 sys.push('\n');
             }
@@ -179,7 +195,7 @@ impl AgentState {
                 &self.session.seed,
                 &msgs,
                 &self.config.model,
-                self.config.effort.as_deref(),
+                Some(&self.config.reasoning_effort),
             );
         }
     }

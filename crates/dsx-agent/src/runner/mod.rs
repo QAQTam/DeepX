@@ -1,18 +1,15 @@
 //! dsx-agent runner — main event loop and headless adapter.
 
 pub mod lifecycle;
-pub mod gate_bridge;
 pub mod ui_emit;
 pub mod api_turn;
 pub mod turn;
 pub mod headless;
 pub use headless::run;
 
-use std::io::BufReader;
-use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, TaskInfo, HpToAgent, Ui2Agent};
+use dsx_proto::{self, Agent2Ui, DocInfo, TaskInfo, Ui2Agent};
 
 use crate::agent::AgentState;
 use crate::orchestrator::learning;
@@ -96,30 +93,25 @@ pub(super) fn cache_tokens(agent: &AgentState) -> (u32, u32) {
 
 pub fn run_agent_loop(
     mut agent: AgentState,
-    mut hp_conn: Option<BufReader<TcpStream>>,
     tui_rx: mpsc::Receiver<Ui2Agent>,
     agent_tx: mpsc::Sender<Agent2Ui>,
 ) {
-    if let Some(ref mut hp) = hp_conn {
-        let _: Option<HpToAgent> = dsx_proto::read_frame(hp).ok().flatten();
-    }
-
-                emit(&agent_tx, Agent2Ui::DebugSnapshot {
-                    hp_connected: hp_conn.is_some(),
-                    session_seed: agent.session.seed.clone(),
-                    context_tokens: agent.token_estimate,
-                    tool_calls_total: agent.turn.tool_calls_this_turn,
-                    tool_failures: agent.turn.tool_failures as u32,
-                    current_phase: "single".to_string(),
-                    streaming: false,
-                    dsml_compat_count: agent.dsml_compat_count,
-                    documents: build_documents(&agent),
+    emit(&agent_tx, Agent2Ui::DebugSnapshot {
+        hp_connected: true,
+        session_seed: agent.session.seed.clone(),
+        context_tokens: agent.token_estimate,
+        tool_calls_total: agent.turn.tool_calls_this_turn,
+        tool_failures: agent.turn.tool_failures as u32,
+        current_phase: "single".to_string(),
+        streaming: false,
+        dsml_compat_count: agent.dsml_compat_count,
+        documents: build_documents(&agent),
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
-          session_title: agent.session.title.clone(),
-          prompt_cache_hit_tokens: cache_tokens(&agent).0,
-          prompt_cache_miss_tokens: cache_tokens(&agent).1,
-                  });
+        session_title: agent.session.title.clone(),
+        prompt_cache_hit_tokens: cache_tokens(&agent).0,
+        prompt_cache_miss_tokens: cache_tokens(&agent).1,
+    });
 
     if agent.session.seed.is_empty() {
         let seed = agent.session.resume_seed.clone();
@@ -148,38 +140,12 @@ pub fn run_agent_loop(
 
         match frame {
             Ui2Agent::UserInput { text } => {
-                let hp_failed = if let Some(ref mut hp) = hp_conn {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                        || turn::handle_user_input(&mut agent, &text, hp, &agent_tx),
-                    ));
-                    result.is_err()
-                } else {
-                    true
-                };
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || turn::handle_user_input(&mut agent, &text, &agent_tx),
+                ));
 
-                if hp_failed {
-                    log::warn!("dsx-agent: gate failed, reconnecting...");
-                    emit(&agent_tx, Agent2Ui::Error {
-                        message: "gate disconnected. Attempting reconnect...".into(),
-                    });
-                    if let Some(stream) = crate::gate::try_reconnect() {
-                        let reader = BufReader::new(stream);
-                        hp_conn = Some(reader);
-                        log::info!("dsx-agent: gate reconnected, retry input");
-                        if let Some(ref mut hp) = hp_conn {
-                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                || turn::handle_user_input(&mut agent, &text, hp, &agent_tx),
-                            ));
-                        }
-                    } else {
-                        log::error!("dsx-agent: gate reconnect failed");
-                        emit(&agent_tx, Agent2Ui::Error {
-                            message: "gate disconnected. Please try again.".into(),
-                        });
-                    }
-                }
                 emit(&agent_tx, Agent2Ui::DebugSnapshot {
-                    hp_connected: hp_conn.is_some(),
+                    hp_connected: true,
                     session_seed: agent.session.seed.clone(),
                     context_tokens: agent.token_estimate,
                     tool_calls_total: agent.turn.tool_calls_this_turn,
@@ -188,12 +154,12 @@ pub fn run_agent_loop(
                     streaming: false,
                     dsml_compat_count: agent.dsml_compat_count,
                     documents: build_documents(&agent),
-        recent_edits: build_recent_edits(&agent),
-        tasks: build_tasks(&agent),
-          session_title: agent.session.title.clone(),
-          prompt_cache_hit_tokens: cache_tokens(&agent).0,
-          prompt_cache_miss_tokens: cache_tokens(&agent).1,
-                  });
+                    recent_edits: build_recent_edits(&agent),
+                    tasks: build_tasks(&agent),
+                    session_title: agent.session.title.clone(),
+                    prompt_cache_hit_tokens: cache_tokens(&agent).0,
+                    prompt_cache_miss_tokens: cache_tokens(&agent).1,
+                });
                 emit(&agent_tx, Agent2Ui::Done);
             }
 
@@ -231,7 +197,9 @@ pub fn run_agent_loop(
                 if let Ok(cfg) = crate::config::Config::load() {
                     agent.config.api_key = cfg.api_key;
                     agent.config.model = cfg.model;
-                    agent.config.effort = cfg.effort;
+                    agent.config.base_url = cfg.base_url;
+                    agent.config.protocol = cfg.protocol;
+                    agent.config.reasoning_effort = cfg.reasoning_effort;
                     agent.config.max_tokens = cfg.max_tokens;
                     agent.config.context_limit = cfg.context_limit;
                     agent.config.lang = cfg.lang;
@@ -253,7 +221,7 @@ pub fn run_agent_loop(
 
             Ui2Agent::DebugCommand { cmd } => {
                 emit(&agent_tx, Agent2Ui::DebugSnapshot {
-                    hp_connected: hp_conn.is_some(),
+                    hp_connected: true,
                     session_seed: agent.session.seed.clone(),
                     context_tokens: agent.token_estimate,
                     tool_calls_total: agent.turn.tool_calls_this_turn,
@@ -282,16 +250,8 @@ pub fn run_agent_loop(
     }
 
     crate::tools::shutdown_tools();
-    crate::gate::kill_hp_daemon();
 
     agent.maybe_save_session();
-
-    if let Some(ref mut hp) = hp_conn {
-        let unreg = AgentToHp::Unregister {
-            pid: std::process::id(),
-        };
-        let _ = dsx_proto::write_frame(hp.get_mut(), &unreg);
-    }
 
     log::info!(
         "dsx-agent: shutdown complete (session {}, {} turns, {} tokens)",

@@ -5,8 +5,9 @@ edition.workspace = true
 
 [dependencies]
 dsx-types = { path = "../dsx-types" }
-dsx-gate = { path = "../dsx-gate" }
 dsx-agent = { path = "../dsx-agent" }
+dsx-tui = { path = "../dsx-tui" }
+dsx-tauri = { path = "../dsx-tauri/src-tauri" }
 
 [lints]
 workspace = true

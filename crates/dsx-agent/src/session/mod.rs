@@ -80,18 +80,22 @@ pub fn session_dir(seed: &str) -> Option<PathBuf> {
 
 pub fn session_path(seed: &str) -> Option<PathBuf> {
     let dir = session_dir(seed)?;
-    let new_path = dir.join("session.json");
+    let new_path = dir.join("session.toml");
 
     let base = sessions_dir()?;
     let _ = std::fs::create_dir_all(&base);
 
-    let old_path = base.join(format!("{}.json", seed));
-    if old_path.exists() {
-        if new_path.exists() {
-            let _ = std::fs::remove_file(&old_path);
-        } else {
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::rename(&old_path, &new_path);
+    // Legacy migration: move old .json flat files into new directory format
+    let old_json = base.join(format!("{}.json", seed));
+    let old_toml = base.join(format!("{}.toml", seed));
+    for old_path in [&old_json, &old_toml] {
+        if old_path.exists() {
+            if new_path.exists() {
+                let _ = std::fs::remove_file(old_path);
+            } else {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::rename(old_path, &new_path);
+            }
         }
     }
 
@@ -106,24 +110,26 @@ pub fn live_path(seed: &str) -> Option<PathBuf> {
 /// Returns None if no session file exists for this seed.
 pub fn find_existing_session_path(seed: &str) -> Option<PathBuf> {
     let base = sessions_dir()?;
-    // 1. Look for {seed}-{date}/session.json
+    // 1. Look for {seed}-{date}/session.toml
     if let Ok(entries) = std::fs::read_dir(&base) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with(&format!("{}-", seed)) && entry.path().is_dir() {
-                let p = entry.path().join("session.json");
+                let p = entry.path().join("session.toml");
                 if p.exists() { return Some(p); }
             }
         }
     }
-    // 2. Legacy flat file {seed}.json
-    let old = base.join(format!("{}.json", seed));
-    if old.exists() { return Some(old); }
+    // 2. Legacy flat files
+    for ext in ["toml", "json"] {
+        let old = base.join(format!("{}.{}", seed, ext));
+        if old.exists() { return Some(old); }
+    }
     None
 }
 
 pub fn index_path() -> Option<PathBuf> {
-    sessions_dir().map(|d| d.join("index.json"))
+    sessions_dir().map(|d| d.join("index.toml"))
 }
 
 // ── Shared helpers (crate-internal) ──

@@ -374,8 +374,11 @@ impl MenuState {
         let model = config.as_ref().and_then(|c| c.model.clone()).unwrap_or_else(|| "deepseek-v4-flash".into());
         let context_limit = config.as_ref().and_then(|c| c.context_limit).unwrap_or(1_000_000);
         let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16384);
-        let effort = config.as_ref().and_then(|c| c.effort.clone()).unwrap_or_else(|| "high".into());
+        let provider_id = config.as_ref().and_then(|c| c.provider_id.clone()).unwrap_or_else(|| "deepseek-openai".into());
+        let protocol = config.as_ref().and_then(|c| c.protocol.clone()).unwrap_or_else(|| "openai".into());
+        let reasoning_effort = config.as_ref().and_then(|c| c.reasoning_effort.clone()).unwrap_or_else(|| "high".into());
         let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| "https://api.deepseek.com".into());
+        let is_custom = provider_id == "custom";
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
         let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
 
@@ -396,10 +399,25 @@ impl MenuState {
             kind, key: key.into(), label, value: value.into(), editable, secret: String::new(),
         };
 
+        // ── Provider ──
+        items.push(mk(MenuItemKind::Section, "", l.t_menu_provider().into(), "", false));
+        items.push(mk(MenuItemKind::Toggle, "provider_id", l.t_menu_provider_id().into(),
+            &provider_id, true));
+        let proto_disp = format!("{} (auto)", protocol);
+        items.push(mk(MenuItemKind::Value, "protocol", l.t_menu_protocol().into(),
+            &proto_disp, false));
+        if is_custom {
+            items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
+                &base_url, true));
+        } else {
+            items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
+                &base_url, false));
+        }
+
         // ── Agent Behavior ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_agent_behavior().into(), "", false));
-        items.push(mk(MenuItemKind::Toggle, "effort", l.t_menu_reasoning_effort().into(),
-            &effort, true));
+        items.push(mk(MenuItemKind::Toggle, "reasoning_effort", l.t_menu_reasoning_effort().into(),
+            &reasoning_effort, true));
         items.push(mk(MenuItemKind::Toggle, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
             &max_tool_rounds.to_string(), true));
         items.push(mk(MenuItemKind::Value, "context7_api_key", l.t_menu_c7_key().into(),
@@ -441,9 +459,6 @@ impl MenuState {
             secret: api_key,
             editable: true,
         });
-        items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
-            &base_url, false));
-
         // ── Interface ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_interface().into(), "", false));
         items.push(mk(MenuItemKind::Toggle, "language", l.t_menu_language().into(),
@@ -474,7 +489,20 @@ impl MenuState {
         if !item.editable { return; }
 
         match item.key.as_str() {
-            "effort" => {
+            "provider_id" => {
+                let next = match self.items[self.selected].value.as_str() {
+                    "deepseek-openai" => "deepseek-anthropic",
+                    "deepseek-anthropic" => "custom",
+                    _ => "deepseek-openai",
+                }.to_string();
+                *self = Self::new(app);
+                if let Some(it) = self.items.iter_mut().find(|i| i.key == "provider_id") {
+                    it.value = next.clone();
+                }
+                self.status = next;
+                return;
+            }
+            "reasoning_effort" => {
                 item.value = if item.value == "high" { "max".into() } else { "high".into() };
             }
             "model" => {
@@ -485,11 +513,11 @@ impl MenuState {
             }
             "max_tokens" => {
                 item.value = match item.value.as_str() {
-                    "16384" => "32000".into(),
-                    "32000" => "96000".into(),
-                    "96000" => "128000".into(),
-                    "128000" => "256000".into(),
-                    "256000" => "384000".into(),
+                    "16384" => "40960".into(),
+                    "40960" => "81920".into(),
+                    "81920" => "163840".into(),
+                    "163840" => "200000".into(),
+                    "200000" => "384000".into(),
                     _ => "16384".into(),
                 };
             }
@@ -554,7 +582,9 @@ impl MenuState {
 
         for item in &self.items {
             match item.key.as_str() {
-                "effort" => { config.effort = Some(item.value.clone()); }
+                "provider_id" => { config.provider_id = Some(item.value.clone()); }
+                "protocol" => { config.protocol = Some(item.value.clone()); }
+                "reasoning_effort" => { config.reasoning_effort = Some(item.value.clone()); }
                 "model" => { config.model = Some(item.value.clone()); }
                 "context_limit" => {
                     if let Ok(v) = item.value.parse::<u32>() { config.context_limit = Some(v); }

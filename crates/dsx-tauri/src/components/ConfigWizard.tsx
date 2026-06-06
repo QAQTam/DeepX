@@ -24,7 +24,7 @@ export function ConfigWizard(props: ConfigWizardProps) {
     try {
       await api.saveConfig({
         apiKey: apiKey(), baseUrl: 'https://api.deepseek.com', model: model(), contextLimit: contextLimit(),
-        maxTokens: 16384, effort: 'high', lang: 'zh',
+        maxTokens: 16384, maxToolRounds: 10, providerId: 'deepseek-openai', protocol: 'openai', reasoningEffort: 'high', lang: 'zh', context7ApiKey: '',
       })
       props.onDone()
     } catch (e: any) {

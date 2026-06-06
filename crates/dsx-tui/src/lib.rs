@@ -1,7 +1,6 @@
 //! DeepX TUI — terminal frontend for the dsx agent.
 //!
-//! Spawns `dsx agent` as a child process, communicates via stdin/stdout
-//! JSON-LP protocol (Ui2Agent / Agent2Ui), renders a chat-like interface.
+//! Runs the agent in-process (thread) — no child process spawning.
 //! Falls back to setup wizard if no config file exists.
 
 mod app;
@@ -12,68 +11,31 @@ mod ui;
 use app::{App, Screen};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::event::EnableBracketedPaste;
-use dsx_proto::Agent2Ui;
+use dsx_proto::{Agent2Ui, Ui2Agent};
 use dsx_types::{ConfigStore, SessionMeta};
 use ratatui::DefaultTerminal;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-fn find_dsx_binary() -> String {
-    // 1. Same directory as dsx-tui (cargo build workspace)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(if cfg!(windows) { "dsx.exe" } else { "dsx" });
-            if candidate.exists() {
-                return candidate.to_string_lossy().to_string();
-            }
-        }
-    }
-    // 2. Fallback: assume on PATH
-    "dsx".to_string()
-}
+/// Spawn the agent in-process as a thread, return channels for communication.
+fn spawn_agent_inproc(
+    resume_seed: Option<&str>,
+) -> anyhow::Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, thread::JoinHandle<()>)> {
+    let mut agent = dsx_agent::agent::AgentState::init("tui");
+    agent.session.resume_seed = resume_seed.map(String::from);
 
-fn spawn_agent(resume_seed: Option<&str>) -> anyhow::Result<(Child, ChildStdin, mpsc::Receiver<Agent2Ui>, thread::JoinHandle<()>)> {
-    let dsx = find_dsx_binary();
-    let mut cmd = Command::new(&dsx);
-    cmd.arg("agent");
-    if let Some(seed) = resume_seed {
-        cmd.arg("--session").arg(seed);
-    }
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-
-    let stdin = child.stdin.take().expect("stdin");
-    let stdout = child.stdout.take().expect("stdout");
+    let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
     let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
 
-    let stdout_handle = thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => break,
-            };
-            if let Ok(frame) = serde_json::from_str::<Agent2Ui>(&line) {
-                if agent_tx.send(frame).is_err() { break; }
-            }
-        }
+    let handle = thread::spawn(move || {
+        dsx_agent::runner::run_agent_loop(agent, tui_rx, agent_tx);
+        dsx_agent::tools::shutdown_tools();
     });
 
-    Ok((child, stdin, agent_rx, stdout_handle))
+    Ok((tui_tx, agent_rx, handle))
 }
 
-fn send_to_agent(stdin: &mut ChildStdin, frame: &dsx_proto::Ui2Agent) {
-    let json = serde_json::to_string(frame).unwrap_or_default();
-    let _ = writeln!(stdin, "{}", json);
-    let _ = stdin.flush();
-}
-
-fn main() -> anyhow::Result<()> {
+pub fn run_tui() -> anyhow::Result<()> {
     let store = ConfigStore::default_location();
     let need_setup = !store.exists()
         || store.load_api_key().map_or(true, |k| k.is_empty());
@@ -95,13 +57,12 @@ fn main() -> anyhow::Result<()> {
         if app.should_quit { return Ok(()); }
         app.scroll_offset = 0;
         app.status = app.setup.lang.t_chat_ready().to_string();
-        match spawn_agent(app.resume_seed.as_deref()) {
-            Ok((mut child, mut stdin, agent_rx, stdout_handle)) => {
-                let result = run_chat(terminal, &mut app, &mut stdin, &agent_rx,
-                    |stdin, frame| send_to_agent(stdin, frame));
-                send_to_agent(&mut stdin, &dsx_proto::Ui2Agent::Shutdown);
-                let _ = child.wait();
-                stdout_handle.join().ok();
+        match spawn_agent_inproc(app.resume_seed.as_deref()) {
+            Ok((mut tui_tx, agent_rx, handle)) => {
+                let result = run_chat(terminal, &mut app, &mut tui_tx, &agent_rx,
+                    |tx, frame| { let _ = tx.send(frame.clone()); });
+                let _ = tui_tx.send(dsx_proto::Ui2Agent::Shutdown);
+                handle.join().ok();
                 result
             }
             Err(e) => {
@@ -116,12 +77,15 @@ fn main() -> anyhow::Result<()> {
     Ok(result?)
 }
 
+
 fn load_sessions(app: &mut App) {
     use std::fs;
     let dir = dsx_types::platform::sessions_dir();
-    let index_path = dir.join("index.json");
+    let index_path = dir.join("index.toml");
     if let Ok(data) = fs::read_to_string(&index_path) {
-        if let Ok(mut metas) = serde_json::from_str::<Vec<SessionMeta>>(&data) {
+        let metas: Option<Vec<SessionMeta>> = toml::from_str(&data).ok()
+            .or_else(|| serde_json::from_str(&data).ok());
+        if let Some(mut metas) = metas {
             metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
             app.sessions = metas;
         }
@@ -263,9 +227,9 @@ fn run_session_screen(
 fn run_chat(
     terminal: &mut DefaultTerminal,
     app: &mut App,
-    stdin: &mut ChildStdin,
+    tui_tx: &mut mpsc::Sender<Ui2Agent>,
     agent_rx: &mpsc::Receiver<Agent2Ui>,
-    send: impl Fn(&mut ChildStdin, &dsx_proto::Ui2Agent),
+    send: impl Fn(&mut mpsc::Sender<Ui2Agent>, &Ui2Agent),
 ) -> std::io::Result<()> {
     use std::time::{Duration, Instant};
     let mut agent_dead = false;
@@ -315,7 +279,7 @@ fn run_chat(
                             }
                         } else { continue };
                         if !reply.is_empty() {
-                            send(stdin, &dsx_proto::Ui2Agent::UserInput { text: reply });
+                            send(tui_tx, &dsx_proto::Ui2Agent::UserInput { text: reply });
                         }
                         app.ask = None;
                     }
@@ -349,7 +313,7 @@ fn run_chat(
                     if agent_dead { continue; }
                     let menu = crate::app::MenuState::new(app);
                     run_menu(terminal, app, menu)?;
-                    send(stdin, &dsx_proto::Ui2Agent::ReloadConfig);
+                    send(tui_tx, &dsx_proto::Ui2Agent::ReloadConfig);
                 }
                 (KeyModifiers::NONE, KeyCode::F(12)) => {
                     app.show_debug = !app.show_debug;
@@ -364,7 +328,7 @@ fn run_chat(
                 | (_, KeyCode::F(3)) => return Ok(()),
                 (_, KeyCode::Esc) => {
                     if !agent_dead {
-                        send(stdin, &dsx_proto::Ui2Agent::Cancel);
+                        send(tui_tx, &dsx_proto::Ui2Agent::Cancel);
                     }
                     app.status = app.setup.lang.t_chat_cancelled().to_string();
                 }
@@ -389,7 +353,7 @@ fn run_chat(
                         }
                         app.status = app.setup.lang.t_chat_thinking().to_string();
                         app.busy = true;
-                        send(stdin, &dsx_proto::Ui2Agent::UserInput { text });
+                        send(tui_tx, &dsx_proto::Ui2Agent::UserInput { text });
                     }
                 }
                 (_, KeyCode::Backspace) => {

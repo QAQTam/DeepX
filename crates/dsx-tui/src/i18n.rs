@@ -139,12 +139,6 @@ impl Lang {
             Lang::Zh => "── Agent 行为 ──",
         }
     }
-    pub fn t_menu_reasoning_effort(&self) -> &str {
-        match self {
-            Lang::En => "Reasoning Effort",
-            Lang::Zh => "推理强度",
-        }
-    }
     pub fn t_menu_max_tool_rounds(&self) -> &str {
         match self {
             Lang::En => "Max Tool Rounds",
@@ -155,6 +149,30 @@ impl Lang {
         match self {
             Lang::En => "Context7 API Key",
             Lang::Zh => "Context7 API 密钥",
+        }
+    }
+    pub fn t_menu_provider(&self) -> &str {
+        match self {
+            Lang::En => "── Provider ──",
+            Lang::Zh => "── 服务商 ──",
+        }
+    }
+    pub fn t_menu_provider_id(&self) -> &str {
+        match self {
+            Lang::En => "Provider",
+            Lang::Zh => "服务商",
+        }
+    }
+    pub fn t_menu_protocol(&self) -> &str {
+        match self {
+            Lang::En => "Protocol",
+            Lang::Zh => "协议类型",
+        }
+    }
+    pub fn t_menu_reasoning_effort(&self) -> &str {
+        match self {
+            Lang::En => "Reasoning Effort",
+            Lang::Zh => "推理强度",
         }
     }
     pub fn t_menu_model_section(&self) -> &str {

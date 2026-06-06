@@ -11,9 +11,12 @@ export interface ConfigData {
   model?: string
   context_limit?: number
   max_tokens?: number
-  effort?: string
+  max_tool_rounds?: number
+  provider_id?: string
+  protocol?: string
+  reasoning_effort?: string
   lang?: string
-  cached_models?: string
+  context7_api_key?: string
 }
 
 export interface BalanceResult {
@@ -65,8 +68,12 @@ export interface ConfigInput {
   model: string
   contextLimit: number
   maxTokens: number
-  effort: string
+  maxToolRounds: number
+  providerId: string
+  protocol: string
+  reasoningEffort: string
   lang: string
+  context7ApiKey: string
 }
 
 // ── API object (all 18 commands) ──
@@ -81,8 +88,12 @@ export const api = {
                                         model: c.model,
                                         contextLimit: c.contextLimit,
                                         maxTokens: c.maxTokens,
-                                        effort: c.effort,
+                                        maxToolRounds: c.maxToolRounds,
+                                        providerId: c.providerId,
+                                        protocol: c.protocol,
+                                        reasoningEffort: c.reasoningEffort,
                                         lang: c.lang,
+                                        context7ApiKey: c.context7ApiKey,
                                       }),
   updateConfig:    (field: string, value: string) => invoke<void>('update_config', { field, value }),
 
