@@ -4,3 +4,4 @@ target/
 *.swo
 .env
 node_modules/.dsx-trash/
+.dsx-trash/\nnode_modules/
