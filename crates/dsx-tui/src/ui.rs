@@ -374,7 +374,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let l = app.setup.lang;
     let input_lines = app.input.chars().filter(|&c| c == '\n').count() + 1;
-    let input_height = (input_lines as u16 + 2).min(8).max(3);
+    let input_height = (input_lines as u16 + 2).min(12).max(3);
 
     let [header_area, body, input_area] = Layout::vertical([
         Constraint::Length(2),
@@ -469,7 +469,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
                 let bg = Color::Rgb(55, 55, 65);
                 text_lines.push(Line::from(vec![
                     Span::styled(format!("  {}", &msg.content), Style::new().fg(Color::White).bg(bg)),
-                ]).alignment(Alignment::Right));
+                ]).alignment(Alignment::Left));
             }
             ChatRole::Thinking => {
                 let dim = Color::Rgb(140, 140, 150);
@@ -591,8 +591,13 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         .title(l.t_chat_input_title());
     let input_text: Vec<Line> = if app.input.is_empty() {
         vec![Line::from(Span::styled(l.t_chat_input_placeholder(), Style::new().fg(Color::DarkGray)))]
+    } else if app.cached_input_len != app.input.len() {
+        let lines: Vec<Line> = app.input.lines().map(|l| Line::from(Span::raw(l.to_string()))).collect();
+        app.cached_input_lines = lines.clone();
+        app.cached_input_len = app.input.len();
+        lines
     } else {
-        app.input.lines().map(|l| Line::from(Span::raw(l.to_string()))).collect()
+        app.cached_input_lines.clone()
     };
     frame.render_widget(Paragraph::new(input_text).block(input_block), input_area);
 

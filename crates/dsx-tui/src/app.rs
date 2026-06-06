@@ -260,6 +260,9 @@ pub struct App {
     pub line_count_msg_len: usize,
     pub line_count_width: u16,
     md_renderer: Option<MarkdownRenderer>,
+    // Input caching
+    pub cached_input_lines: Vec<ratatui::text::Line<'static>>,
+    pub cached_input_len: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -675,6 +678,8 @@ impl App {
             line_count_msg_len: 0,
             line_count_width: 0,
             md_renderer: None,
+            cached_input_lines: Vec::new(),
+            cached_input_len: 0,
             frame_count: 0,
             sessions: Vec::new(),
             session_index: 0,

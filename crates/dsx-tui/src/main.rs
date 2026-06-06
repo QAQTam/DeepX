@@ -11,6 +11,8 @@ mod ui;
 
 use app::{App, Screen};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::ExecutableCommand;
+use crossterm::event::EnableBracketedPaste;
 use dsx_proto::Agent2Ui;
 use dsx_types::{ConfigStore, SessionMeta};
 use ratatui::DefaultTerminal;
@@ -83,6 +85,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let result = ratatui::run(|terminal| {
+        crossterm::execute!(std::io::stdout(), EnableBracketedPaste).ok();
         if need_setup {
             run_setup(terminal, &mut app, &store)?;
         }
@@ -269,7 +272,13 @@ fn run_chat(
     loop {
         // 1. Handle keyboard first — input appears on same-frame render
         if event::poll(std::time::Duration::ZERO)? {
-            let key = if let Event::Key(k) = event::read()? { k } else { continue };
+            match event::read()? {
+                Event::Paste(data) => {
+                    let text = data.trim_end_matches(|c: char| c == '\n' || c == '\r');
+                    app.input.insert_str(app.cursor, text);
+                    app.cursor += text.len();
+                }
+                Event::Key(key) => {
             if key.kind != KeyEventKind::Press { continue; }
 
             // Ask popup: intercept keys
@@ -389,6 +398,9 @@ fn run_chat(
                 }
                 _ => {}
             }
+            } // Event::Key
+            _ => {}
+            } // match event
         } else if !app.streaming && !agent_dead {
             std::thread::sleep(std::time::Duration::from_millis(16));
         } else {
