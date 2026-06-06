@@ -1,18 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DebugLevel {
     Low,
+    #[default]
     Medium,
     High,
 }
 
-impl Default for DebugLevel {
-    fn default() -> Self { DebugLevel::Medium }
-}
-
 impl DebugLevel {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "low" => DebugLevel::Low,
             "high" => DebugLevel::High,

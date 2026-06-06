@@ -18,7 +18,7 @@ fn main() {
   if src.exists() {
     if let Some(dest_dir) = m.join("resources").to_str().map(|_| m.join("resources")) {
       drop(std::fs::create_dir_all(&dest_dir));
-      drop(std::fs::copy(&src, &dest_dir.join(&exe_name)));
+      drop(std::fs::copy(&src, dest_dir.join(&exe_name)));
     }
   }
   tauri_build::build()

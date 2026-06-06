@@ -199,6 +199,8 @@ pub fn run_agent_loop(
                     agent.config.model = cfg.model;
                     agent.config.base_url = cfg.base_url;
                     agent.config.protocol = cfg.protocol;
+                    agent.config.endpoint = cfg.endpoint;
+                    agent.config.provider_id = cfg.provider_id;
                     agent.config.reasoning_effort = cfg.reasoning_effort;
                     agent.config.max_tokens = cfg.max_tokens;
                     agent.config.context_limit = cfg.context_limit;

@@ -268,7 +268,7 @@ fn check_config() -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, provider_id: String, protocol: String, reasoning_effort: String, lang: String, max_tool_rounds: u32, context7_api_key: String) -> Result<(), String> {
+fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, provider_id: String, protocol: String, endpoint: String, reasoning_effort: String, lang: String, max_tool_rounds: u32, context7_api_key: String) -> Result<(), String> {
     let _lock = state.config_lock.lock().map_err(|e| format!("lock: {e}"))?;
     let store = dsx_types::ConfigStore::default_location();
     let mut cfg = store.load().unwrap_or_default();
@@ -279,6 +279,7 @@ fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: Strin
     cfg.max_tokens = Some(max_tokens);
     if !provider_id.is_empty() { cfg.provider_id = Some(provider_id); }
     if !protocol.is_empty() { cfg.protocol = Some(protocol); }
+    if !endpoint.is_empty() { cfg.endpoint = Some(endpoint); }
     if !reasoning_effort.is_empty() { cfg.reasoning_effort = Some(reasoning_effort); }
     if !lang.is_empty() { cfg.lang = Some(lang); }
     cfg.max_tool_rounds = Some(max_tool_rounds);
@@ -288,16 +289,21 @@ fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: Strin
 }
 
 #[tauri::command]
-async fn fetch_models(api_key: String, base_url: String) -> Result<Vec<String>, String> {
+async fn fetch_models(api_key: String, base_url: String, provider_id: String, endpoint_id: String) -> Result<Vec<String>, String> {
+    let url = if !provider_id.is_empty() && !endpoint_id.is_empty() {
+        dsx_agent::gate::registry::models_url_for(&provider_id, &endpoint_id)
+            .unwrap_or_else(|| {
+                let stripped = base_url.trim_end_matches('/').trim_end_matches("/chat/completions").trim_end_matches("/v1");
+                format!("{}/models", stripped)
+            })
+    } else {
+        let stripped = base_url.trim_end_matches('/').trim_end_matches("/chat/completions").trim_end_matches("/v1");
+        format!("{}/models", stripped)
+    };
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build().map_err(|e| format!("http client: {e}"))?;
-
-    let stripped = base_url
-        .trim_end_matches('/')
-        .trim_end_matches("/chat/completions")
-        .trim_end_matches("/v1");
-    let url = format!("{}/models", stripped);
 
     let mut req = client.get(&url);
     let key = api_key.trim().trim_matches('"').to_string();
@@ -371,6 +377,7 @@ fn load_config() -> Result<serde_json::Value, String> {
         "max_tool_rounds": cfg.max_tool_rounds,
         "provider_id": cfg.provider_id,
         "protocol": cfg.protocol,
+        "endpoint": cfg.endpoint,
         "reasoning_effort": cfg.reasoning_effort,
         "lang": cfg.lang,
         "context7_api_key": cfg.context7_api_key,
@@ -389,6 +396,9 @@ fn update_config(state: tauri::State<AgentState>, field: String, value: String) 
         "reasoning_effort" => cfg.reasoning_effort = Some(value),
         "lang" => cfg.lang = Some(value),
         "context7_api_key" => cfg.context7_api_key = Some(value),
+        "provider_id" => cfg.provider_id = Some(value),
+        "protocol" => cfg.protocol = Some(value),
+        "endpoint" => cfg.endpoint = Some(value),
         _ => {
             if let Ok(n) = value.parse::<u32>() {
                 match field.as_str() {

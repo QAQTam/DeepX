@@ -374,11 +374,11 @@ impl MenuState {
         let model = config.as_ref().and_then(|c| c.model.clone()).unwrap_or_else(|| "deepseek-v4-flash".into());
         let context_limit = config.as_ref().and_then(|c| c.context_limit).unwrap_or(1_000_000);
         let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16384);
-        let provider_id = config.as_ref().and_then(|c| c.provider_id.clone()).unwrap_or_else(|| "deepseek-openai".into());
+        let provider_id = config.as_ref().and_then(|c| c.provider_id.clone()).unwrap_or_else(|| "deepseek".into());
+        let endpoint = config.as_ref().and_then(|c| c.endpoint.clone()).unwrap_or_else(|| "openai".into());
         let protocol = config.as_ref().and_then(|c| c.protocol.clone()).unwrap_or_else(|| "openai".into());
         let reasoning_effort = config.as_ref().and_then(|c| c.reasoning_effort.clone()).unwrap_or_else(|| "high".into());
         let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| "https://api.deepseek.com".into());
-        let is_custom = provider_id == "custom";
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
         let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
 
@@ -401,18 +401,15 @@ impl MenuState {
 
         // ── Provider ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_provider().into(), "", false));
-        items.push(mk(MenuItemKind::Toggle, "provider_id", l.t_menu_provider_id().into(),
-            &provider_id, true));
+        items.push(mk(MenuItemKind::Value, "provider_id", l.t_menu_provider_id().into(),
+            &provider_id, false));
+        items.push(mk(MenuItemKind::Toggle, "endpoint", l.t_menu_endpoint().into(),
+            &endpoint, true));
         let proto_disp = format!("{} (auto)", protocol);
         items.push(mk(MenuItemKind::Value, "protocol", l.t_menu_protocol().into(),
             &proto_disp, false));
-        if is_custom {
-            items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
-                &base_url, true));
-        } else {
-            items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
-                &base_url, false));
-        }
+        items.push(mk(MenuItemKind::Value, "base_url", l.t_menu_base_url().into(),
+            &base_url, false));
 
         // ── Agent Behavior ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_agent_behavior().into(), "", false));
@@ -482,6 +479,28 @@ impl MenuState {
     }
 
     pub fn toggle(&mut self, app: &mut App) {
+        let selected = self.selected;
+        let current_key = self.items.get(selected).map(|i| i.key.clone()).unwrap_or_default();
+        let current_value = self.items.get(selected).map(|i| i.value.clone()).unwrap_or_default();
+        let pid_value = self.items.iter()
+            .find(|i| i.key == "provider_id")
+            .map(|i| i.value.clone()).unwrap_or_else(|| "deepseek".into());
+
+        // Pre-compute endpoint cycling for the "endpoint" toggle
+        let (_endpoints_list, next_endpoint) = if current_key == "endpoint" {
+            let providers = dsx_agent::gate::registry::all_providers();
+            let eps: Vec<String> = providers.iter()
+                .find(|p| p.id == pid_value)
+                .map(|p| p.endpoints.iter().map(|e| e.id.clone()).collect())
+                .unwrap_or_default();
+            let idx = eps.iter().position(|e| *e == current_value).unwrap_or(0);
+            let next = eps.get((idx + 1) % eps.len().max(1))
+                .cloned().unwrap_or_else(|| "openai".into());
+            (eps, next)
+        } else {
+            (Vec::new(), String::new())
+        };
+
         let item = match self.items.get_mut(self.selected) {
             Some(i) => i,
             None => return,
@@ -489,18 +508,18 @@ impl MenuState {
         if !item.editable { return; }
 
         match item.key.as_str() {
-            "provider_id" => {
-                let next = match self.items[self.selected].value.as_str() {
-                    "deepseek-openai" => "deepseek-anthropic",
-                    "deepseek-anthropic" => "custom",
-                    _ => "deepseek-openai",
-                }.to_string();
-                *self = Self::new(app);
-                if let Some(it) = self.items.iter_mut().find(|i| i.key == "provider_id") {
-                    it.value = next.clone();
+            "endpoint" => {
+                item.value = next_endpoint.clone();
+                let proto = dsx_agent::gate::registry::protocol_for(&pid_value, &next_endpoint);
+                let burl = dsx_agent::gate::registry::base_url_for(&pid_value, &next_endpoint);
+                if let Some(proto_item) = self.items.iter_mut().find(|i| i.key == "protocol") {
+                    proto_item.value = format!("{} (auto)", proto);
                 }
-                self.status = next;
-                return;
+                if !burl.is_empty() {
+                    if let Some(url_item) = self.items.iter_mut().find(|i| i.key == "base_url") {
+                        url_item.value = burl;
+                    }
+                }
             }
             "reasoning_effort" => {
                 item.value = if item.value == "high" { "max".into() } else { "high".into() };
@@ -583,6 +602,7 @@ impl MenuState {
         for item in &self.items {
             match item.key.as_str() {
                 "provider_id" => { config.provider_id = Some(item.value.clone()); }
+                "endpoint" => { config.endpoint = Some(item.value.clone()); }
                 "protocol" => { config.protocol = Some(item.value.clone()); }
                 "reasoning_effort" => { config.reasoning_effort = Some(item.value.clone()); }
                 "model" => { config.model = Some(item.value.clone()); }

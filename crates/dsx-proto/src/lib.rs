@@ -106,6 +106,6 @@ pub fn write_frame(writer: &mut impl Write, frame: &impl Serialize) -> io::Resul
 
 /// Convenience: write a raw string as a JSON-LP line.
 pub fn write_line(writer: &mut impl Write, line: &str) {
-    let _ = writeln!(writer, "{line}");
-    let _ = writer.flush();
+    let _unused = writeln!(writer, "{line}");
+    let _unused = writer.flush();
 }

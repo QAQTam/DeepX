@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PersistentConfig {
-    /// Provider preset: "deepseek-openai" | "deepseek-anthropic" | "custom"
+    /// Provider preset: "deepseek"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,9 +19,12 @@ pub struct PersistentConfig {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u32>,
-    /// Protocol: "openai" or "anthropic"
+    /// Protocol: "openai" or "anthropic" (deprecated — use endpoint)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<String>,
+    /// Endpoint within the provider: "openai" | "anthropic" | ...
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     /// Reasoning effort: "high" or "max". Thinking is always enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -52,6 +55,8 @@ pub struct ProfileConfig {
     pub context_limit: u32,
     #[serde(default = "default_base_url")]
     pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
 }
 
 fn default_base_url() -> String { "https://api.deepseek.com".into() }

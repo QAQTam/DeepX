@@ -1,74 +1,158 @@
-//! Provider preset registry — hardcoded endpoint configurations.
+//! Provider registry — known providers and their endpoints.
 //!
-//! Each preset bundles protocol + base_url + model list so the user
-//! selects a provider and everything else auto-fills.
+//! Architecture:
+//!   Provider (e.g. DeepSeek) has 1..N Endpoints (e.g. OpenAI-compat, Anthropic-native).
+//!   User selects (provider_id, endpoint_id) → protocol + base_url auto-fill.
+//!   Model list is fetched from endpoint's /models URL at runtime.
+//!
+//! Backward compat: old provider_id "deepseek-openai"/"deepseek-anthropic" are
+//! auto-migrated to provider_id="deepseek" + endpoint="openai"/"anthropic".
 
-use super::types::ProviderKind;
+use dsx_types::{EndpointSpec, ProviderSpec};
 
-#[derive(Debug, Clone)]
-pub struct ProviderPreset {
-    pub id: &'static str,
-    pub display: &'static str,
-    pub provider: &'static str, // "deepseek" | "custom"
-    pub protocol: &'static str, // "openai" | "anthropic"
-    pub base_url: &'static str,
-    pub default_model: &'static str,
-    pub models: &'static [&'static str],
+// ── Static registry ──
+
+fn deepseek() -> ProviderSpec {
+    ProviderSpec {
+        id: "deepseek".into(),
+        display: "DeepSeek".into(),
+        endpoints: vec![
+            EndpointSpec {
+                id: "openai".into(),
+                display: "OpenAI-compatible".into(),
+                protocol: "openai".into(),
+                base_url: "https://api.deepseek.com".into(),
+                default_model: "deepseek-v4-flash".into(),
+                models_url: Some("https://api.deepseek.com".into()),
+            },
+            EndpointSpec {
+                id: "anthropic".into(),
+                display: "Anthropic-native".into(),
+                protocol: "anthropic".into(),
+                base_url: "https://api.deepseek.com/anthropic".into(),
+                default_model: "deepseek-v4-pro".into(),
+                models_url: Some("https://api.deepseek.com".into()),
+            },
+        ],
+    }
 }
 
-const DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
-
-const PRESETS: &[ProviderPreset] = &[
-    ProviderPreset {
-        id: "deepseek-openai",
-        display: "DeepSeek (OpenAI)",
-        provider: "deepseek",
-        protocol: "openai",
-        base_url: "https://api.deepseek.com",
-        default_model: "deepseek-v4-flash",
-        models: DEEPSEEK_MODELS,
-    },
-    ProviderPreset {
-        id: "deepseek-anthropic",
-        display: "DeepSeek (Anthropic)",
-        provider: "deepseek",
-        protocol: "anthropic",
-        base_url: "https://api.deepseek.com",
-        default_model: "deepseek-v4-pro",
-        models: DEEPSEEK_MODELS,
-    },
-    ProviderPreset {
-        id: "custom",
-        display: "自定义 (Custom)",
-        provider: "custom",
-        protocol: "openai",
-        base_url: "",
-        default_model: "",
-        models: &[],
-    },
-];
-
-pub fn all_presets() -> &'static [ProviderPreset] {
-    PRESETS
+fn providers() -> Vec<ProviderSpec> {
+    vec![deepseek()]
 }
 
-pub fn find_preset(id: &str) -> Option<&'static ProviderPreset> {
-    PRESETS.iter().find(|p| p.id == id)
+// ── Lookup ──
+
+pub fn all_providers() -> Vec<ProviderSpec> {
+    providers()
 }
 
-/// Get the default model for a preset, or "deepseek-v4-flash" as universal fallback.
-pub fn default_model_for(id: &str) -> &'static str {
-    find_preset(id).map(|p| p.default_model).unwrap_or("deepseek-v4-flash")
+pub fn find_provider(id: &str) -> Option<ProviderSpec> {
+    providers().into_iter().find(|p| p.id == id)
 }
 
-/// Get the model list for a preset.
-pub fn models_for(id: &str) -> &'static [&'static str] {
-    find_preset(id).map(|p| p.models).unwrap_or(&[])
+pub fn find_endpoint(provider_id: &str, endpoint_id: &str) -> Option<EndpointSpec> {
+    find_provider(provider_id)
+        .and_then(|p| p.endpoints.into_iter().find(|e| e.id == endpoint_id))
 }
 
-/// Resolve provider kind from preset
-pub fn provider_kind_for(id: &str) -> ProviderKind {
-    find_preset(id)
-        .map(|p| ProviderKind::from_str(p.protocol))
-        .unwrap_or(ProviderKind::OpenAi)
+/// Resolve the first endpoint of a provider. Returns (endpoint, provider) tuples
+/// for the default first endpoint.
+pub fn first_endpoint_for(provider_id: &str) -> Option<EndpointSpec> {
+    find_provider(provider_id)
+        .and_then(|p| p.endpoints.into_iter().next())
+}
+
+// ── Model discovery ──
+
+/// Models URL for a given (provider, endpoint) pair.
+pub fn models_url_for(provider_id: &str, endpoint_id: &str) -> Option<String> {
+    let ep = find_endpoint(provider_id, endpoint_id)?;
+    let base = ep.models_url.as_deref().unwrap_or(&ep.base_url);
+    let stripped = base.trim_end_matches('/');
+    Some(format!("{}/models", stripped))
+}
+
+/// Fetch model list from the /models endpoint (sync, ureq).
+/// Falls back to [default_model] if the request fails.
+pub fn fetch_models(provider_id: &str, endpoint_id: &str, api_key: &str) -> Vec<String> {
+    let ep = match find_endpoint(provider_id, endpoint_id) {
+        Some(e) => e,
+        None => return vec![],
+    };
+
+    let url = match models_url_for(provider_id, endpoint_id) {
+        Some(u) => u,
+        None => return vec![ep.default_model.clone()],
+    };
+
+    let req = ureq::get(&url).set("Authorization", &format!("Bearer {}", api_key));
+
+    match req.timeout(std::time::Duration::from_secs(10)).call() {
+        Ok(resp) => {
+            let body: Result<serde_json::Value, _> = resp.into_json();
+            match body {
+                Ok(v) => {
+                    let models: Vec<String> = v["data"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|m| m["id"].as_str().map(String::from))
+                                .filter(|id| !id.starts_with("deepseek-re"))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if models.is_empty() {
+                        vec![ep.default_model.clone()]
+                    } else {
+                        models
+                    }
+                }
+                Err(_) => vec![ep.default_model.clone()],
+            }
+        }
+        Err(_) => vec![ep.default_model.clone()],
+    }
+}
+
+/// Get the default model for a (provider, endpoint) pair.
+pub fn default_model_for(provider_id: &str, endpoint_id: &str) -> String {
+    find_endpoint(provider_id, endpoint_id)
+        .map(|e| e.default_model.clone())
+        .unwrap_or_else(|| "deepseek-v4-flash".into())
+}
+
+/// Resolve protocol string for a (provider, endpoint) pair.
+pub fn protocol_for(provider_id: &str, endpoint_id: &str) -> String {
+    find_endpoint(provider_id, endpoint_id)
+        .map(|e| e.protocol.clone())
+        .unwrap_or_else(|| "openai".into())
+}
+
+/// Resolve base_url for a (provider, endpoint) pair.
+pub fn base_url_for(provider_id: &str, endpoint_id: &str) -> String {
+    find_endpoint(provider_id, endpoint_id)
+        .map(|e| e.base_url.clone())
+        .unwrap_or_default()
+}
+
+// ── Backward compatibility ──
+
+/// Migrate old provider_id ("deepseek-openai" / "deepseek-anthropic") to new
+/// (provider_id, endpoint) pair.
+pub fn migrate_provider_id(old_pid: &str) -> (String, String) {
+    match old_pid {
+        "deepseek-openai" => ("deepseek".into(), "openai".into()),
+        "deepseek-anthropic" => ("deepseek".into(), "anthropic".into()),
+        other => {
+            if find_provider(other).is_some() {
+                let ep = first_endpoint_for(other)
+                    .map(|e| e.id.clone())
+                    .unwrap_or_else(|| "openai".into());
+                (other.to_string(), ep)
+            } else {
+                ("deepseek".into(), "openai".into())
+            }
+        }
+    }
 }

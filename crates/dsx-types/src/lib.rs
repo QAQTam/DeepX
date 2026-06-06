@@ -13,6 +13,7 @@ pub mod config;
 pub mod session;
 pub mod api_types;
 pub mod anthropic;
+pub mod provider;
 
 // Unified arg parsing (shared across dsx-agent, dsx-tools)
 pub mod arg;
@@ -28,6 +29,7 @@ pub use message::{Message, ContentBlock, ToolCall, FunctionCall};
 pub use tool_def::{ToolDef, ToolFunction};
 pub use state::DebugLevel;
 pub use config::{PersistentConfig, ProfileConfig, ConfigStore, BalanceInfo};
+pub use provider::{ProviderSpec, EndpointSpec, ModelInfo};
 pub use session::{SessionFile, SessionMeta};
 pub use api_types::UsageInfo;
 

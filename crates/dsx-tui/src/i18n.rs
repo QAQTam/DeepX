@@ -163,6 +163,12 @@ impl Lang {
             Lang::Zh => "服务商",
         }
     }
+    pub fn t_menu_endpoint(&self) -> &str {
+        match self {
+            Lang::En => "Endpoint",
+            Lang::Zh => "接入端点",
+        }
+    }
     pub fn t_menu_protocol(&self) -> &str {
         match self {
             Lang::En => "Protocol",
