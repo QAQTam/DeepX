@@ -12,19 +12,26 @@ use std::io::BufReader;
 use std::net::TcpStream;
 use std::sync::mpsc;
 
-use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, TaskInfo, HpToAgent, ToolResultDef, Ui2Agent};
+use dsx_proto::{self, AgentToHp, Agent2Ui, DocInfo, TaskInfo, HpToAgent, Ui2Agent};
 
 use crate::agent::AgentState;
-use crate::orchestrator::{maybe_save_session, learning};
+use crate::orchestrator::learning;
+
+/// Emit an Agent2Ui event, logging errors instead of silently dropping.
+pub(super) fn emit(tx: &mpsc::Sender<Agent2Ui>, event: Agent2Ui) {
+    if let Err(e) = tx.send(event) {
+        log::warn!("dsx-agent: failed to emit UI event: {e}");
+    }
+}
 
 pub(super) fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
-    let mut docs: Vec<DocInfo> = agent.file_read_at.iter()
+    let mut docs: Vec<DocInfo> = agent.files.file_read_at.iter()
         .filter(|(path, _)| agent.is_file_stale(path))
         .map(|(path, &read_at)| {
             DocInfo {
                 tag: learning::doc_tag(path),
                 path: path.clone(),
-                turns_since_read: agent.current_turn.saturating_sub(read_at),
+                turns_since_read: agent.files.staleness_epoch.saturating_sub(read_at),
                 is_stale: true,
             }
         })
@@ -46,14 +53,14 @@ pub(super) fn build_recent_edits(agent: &AgentState) -> Vec<String> {
 }
 
 pub(super) fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
-    if agent.session_seed.is_empty() { return Vec::new(); }
+    if agent.session.seed.is_empty() { return Vec::new(); }
     let sessions_dir = std::path::PathBuf::from(dsx_types::platform::sessions_dir());
     let mut tasks = Vec::new();
     for entry in std::fs::read_dir(&sessions_dir).into_iter().flatten().flatten() {
         let path = entry.path();
         if !path.is_dir() { continue; }
         let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if !dir_name.starts_with(&agent.session_seed) { continue; }
+        if !dir_name.starts_with(&agent.session.seed) { continue; }
         let task_file = path.join("tasks-mem.md");
         if !task_file.is_file() { continue; }
         let Ok(content) = std::fs::read_to_string(&task_file) else { continue };
@@ -99,30 +106,30 @@ pub fn run_agent_loop(
         let _: Option<HpToAgent> = dsx_proto::read_frame(hp).ok().flatten();
     }
 
-                let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+                emit(&agent_tx, Agent2Ui::DebugSnapshot {
                     hp_connected: hp_conn.is_some(),
-                    session_seed: agent.session_seed.clone(),
+                    session_seed: agent.session.seed.clone(),
                     context_tokens: agent.token_estimate,
-                    tool_calls_total: agent.tool_calls_this_turn,
-                    tool_failures: agent.tool_failures as u32,
+                    tool_calls_total: agent.turn.tool_calls_this_turn,
+                    tool_failures: agent.turn.tool_failures as u32,
                     current_phase: "single".to_string(),
                     streaming: false,
                     dsml_compat_count: agent.dsml_compat_count,
                     documents: build_documents(&agent),
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
-          session_title: agent.session_title.clone(),
+          session_title: agent.session.title.clone(),
           prompt_cache_hit_tokens: cache_tokens(&agent).0,
           prompt_cache_miss_tokens: cache_tokens(&agent).1,
                   });
 
-    if agent.session_seed.is_empty() {
-        let seed = agent.resume_seed.clone();
+    if agent.session.seed.is_empty() {
+        let seed = agent.session.resume_seed.clone();
         lifecycle::init_session(&mut agent, seed.as_deref());
-        if agent.resume_seed.is_some() {
+        if agent.session.resume_seed.is_some() {
             let turns = crate::runner::turn::build_turns_from_context(&agent);
-            let _ = agent_tx.send(Agent2Ui::SessionRestored {
-                seed: agent.session_seed.clone(),
+            emit(&agent_tx, Agent2Ui::SessionRestored {
+                seed: agent.session.seed.clone(),
                 turns,
                 tokens_used: agent.token_estimate,
                 cache_hit_pct: 0.0,
@@ -154,7 +161,7 @@ pub fn run_agent_loop(
 
                 if hp_failed {
                     log::warn!("dsx-agent: gate failed, reconnecting...");
-                    let _ = agent_tx.send(Agent2Ui::Error {
+                    emit(&agent_tx, Agent2Ui::Error {
                         message: "gate disconnected. Attempting reconnect...".into(),
                     });
                     if let Some(stream) = crate::gate::try_reconnect() {
@@ -168,28 +175,28 @@ pub fn run_agent_loop(
                         }
                     } else {
                         log::error!("dsx-agent: gate reconnect failed");
-                        let _ = agent_tx.send(Agent2Ui::Error {
+                        emit(&agent_tx, Agent2Ui::Error {
                             message: "gate disconnected. Please try again.".into(),
                         });
                     }
                 }
-                let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+                emit(&agent_tx, Agent2Ui::DebugSnapshot {
                     hp_connected: hp_conn.is_some(),
-                    session_seed: agent.session_seed.clone(),
+                    session_seed: agent.session.seed.clone(),
                     context_tokens: agent.token_estimate,
-                    tool_calls_total: agent.tool_calls_this_turn,
-                    tool_failures: agent.tool_failures as u32,
+                    tool_calls_total: agent.turn.tool_calls_this_turn,
+                    tool_failures: agent.turn.tool_failures as u32,
                     current_phase: "single".to_string(),
                     streaming: false,
                     dsml_compat_count: agent.dsml_compat_count,
                     documents: build_documents(&agent),
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
-          session_title: agent.session_title.clone(),
+          session_title: agent.session.title.clone(),
           prompt_cache_hit_tokens: cache_tokens(&agent).0,
           prompt_cache_miss_tokens: cache_tokens(&agent).1,
                   });
-                let _ = agent_tx.send(Agent2Ui::Done);
+                emit(&agent_tx, Agent2Ui::Done);
             }
 
             Ui2Agent::ToolCall {
@@ -201,7 +208,7 @@ pub fn run_agent_loop(
                 let args_str = args.to_string();
                 let content = crate::tools::execute_tool_with_id(&name, &action, &args_str, &id);
                 let success = !content.starts_with("[ERROR]") && !content.starts_with("[FAIL]");
-                let _ = agent_tx.send(Agent2Ui::ToolResults {
+                emit(&agent_tx, Agent2Ui::ToolResults {
                     turn_id: "headless".into(),
                     round_num: 0,
                     results: vec![dsx_proto::ToolResultDef {
@@ -211,15 +218,15 @@ pub fn run_agent_loop(
                         file: None,
                     }],
                 });
-                let _ = agent_tx.send(Agent2Ui::Done);
+                emit(&agent_tx, Agent2Ui::Done);
             }
 
             Ui2Agent::Cancel => {
                 agent.pending_ask_user = None;
                 dsx_tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
-                agent.stream_cancelled = true;
+                agent.turn.stream_cancelled = true;
                 crate::tools::cancel_current_tool();
-                let _ = agent_tx.send(Agent2Ui::Cancelled);
+                emit(&agent_tx, Agent2Ui::Cancelled);
             }
 
             Ui2Agent::ReloadConfig => {
@@ -230,44 +237,43 @@ pub fn run_agent_loop(
                     agent.config.max_tokens = cfg.max_tokens;
                     agent.config.context_limit = cfg.context_limit;
                     agent.config.lang = cfg.lang;
-                    agent.health.context_limit = cfg.context_limit;
                     if let Some(ref key) = cfg.context7_api_key {
                         if !key.is_empty() {
                             crate::tools::set_context7_key(key);
                         }
                     }
-                    crate::tools::load_workspace(&agent.session_seed);
+                    crate::tools::load_workspace(&agent.session.seed);
                     log::info!("dsx-agent: config reloaded");
                 }
             }
 
             Ui2Agent::Shutdown => {
-                maybe_save_session(&mut agent);
-                let _ = agent_tx.send(Agent2Ui::ShutdownAck);
+                agent.maybe_save_session();
+                emit(&agent_tx, Agent2Ui::ShutdownAck);
                 break;
             }
 
             Ui2Agent::DebugCommand { cmd } => {
-                let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+                emit(&agent_tx, Agent2Ui::DebugSnapshot {
                     hp_connected: hp_conn.is_some(),
-                    session_seed: agent.session_seed.clone(),
+                    session_seed: agent.session.seed.clone(),
                     context_tokens: agent.token_estimate,
-                    tool_calls_total: agent.tool_calls_this_turn,
-                    tool_failures: agent.tool_failures as u32,
+                    tool_calls_total: agent.turn.tool_calls_this_turn,
+                    tool_failures: agent.turn.tool_failures as u32,
                     current_phase: "single".to_string(),
                     streaming: false,
                     dsml_compat_count: agent.dsml_compat_count,
                     documents: build_documents(&agent),
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
-          session_title: agent.session_title.clone(),
+          session_title: agent.session.title.clone(),
           prompt_cache_hit_tokens: cache_tokens(&agent).0,
           prompt_cache_miss_tokens: cache_tokens(&agent).1,
                   });
                 if cmd == "dump_context" {
                     let json = serde_json::to_string_pretty(&agent.ctx.to_vec())
                         .unwrap_or_default();
-                    let _ = agent_tx.send(Agent2Ui::Error {
+                    emit(&agent_tx, Agent2Ui::Error {
                         message: format!("[CONTEXT_DUMP]\n{}", json),
                     });
                 }
@@ -291,8 +297,8 @@ pub fn run_agent_loop(
 
     log::info!(
         "dsx-agent: shutdown complete (session {}, {} turns, {} tokens)",
-        agent.session_seed,
+        agent.session.seed,
         agent.ctx.turn_count(),
-        agent.session_tokens
+        agent.session.tokens
     );
 }

@@ -1,4 +1,4 @@
-use crate::{parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
+use crate::{parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_list_dir(args: &str) -> String {
     let path = parse_arg_or(args, "path", ".");
@@ -38,7 +38,6 @@ pub(super) fn exec_list_dir(args: &str) -> String {
 
 handler!(handle_list_dir, exec_list_dir);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -46,7 +45,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "List files and directories with names and sizes.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"Directory path","default":"."}},"additionalProperties":false}),
         handler: handle_list_dir,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(15),
     });
 }

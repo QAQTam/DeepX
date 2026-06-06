@@ -176,7 +176,7 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     });
     let result = exec_command(&args.to_string());
     let success = result.starts_with("[OK]");
-    ToolResult { success, content: result }
+    ToolResult { interrupt: None, success, content: result }
 }
 
 // ── 辅助函数 ──

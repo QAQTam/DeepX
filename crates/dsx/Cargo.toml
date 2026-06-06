@@ -7,3 +7,6 @@ edition.workspace = true
 dsx-types = { path = "../dsx-types" }
 dsx-gate = { path = "../dsx-gate" }
 dsx-agent = { path = "../dsx-agent" }
+
+[lints]
+workspace = true

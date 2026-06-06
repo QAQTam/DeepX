@@ -28,13 +28,24 @@ pub use web::set_c7_key;
 pub use safety::SafetyVerdict;
 pub use manager::ToolManager;
 
+/// Default tool safety check: always allow.
+pub fn default_allow(_: &ToolCallCtx) -> SafetyVerdict {
+    SafetyVerdict::Allow
+}
+
 // ── Macro: handler! ──
 
 #[macro_export]
 macro_rules! handler {
     ($name:ident, $exec:ident) => {
         fn $name(ctx: ToolCallCtx) -> ToolResult {
-            let args = serde_json::to_string(&ctx.args).unwrap_or_default();
+            let args = match serde_json::to_string(&ctx.args) {
+                Ok(a) => a,
+                Err(e) => {
+                    log::error!("handler {}: serialize args failed: {e}", stringify!($name));
+                    return ToolResult { interrupt: None, success: false, content: format!("[ERROR] bad arguments: {e}") };
+                }
+            };
             ToolResult::ok($exec(&args))
         }
     };
@@ -104,17 +115,30 @@ impl ToolCallCtx {
     }
 }
 
+use dsx_proto::InterruptRequest;
+
 // ── ToolResult ──
 
 #[derive(Clone, Debug)]
 pub struct ToolResult {
     pub success: bool,
     pub content: String,
+    /// When set, the agent pauses the turn loop and sends this to the UI.
+    /// The user's next message is injected as the tool_result.
+    pub interrupt: Option<InterruptRequest>,
 }
 
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
-        Self { success: true, content: content.into() }
+        Self { success: true, content: content.into(), interrupt: None }
+    }
+    /// A tool result that requests user input before continuing.
+    pub fn interrupt(prompt: impl Into<String>, options: Vec<String>) -> Self {
+        Self {
+            success: true,
+            content: String::new(),
+            interrupt: Some(InterruptRequest { prompt: prompt.into(), options }),
+        }
     }
 }
 

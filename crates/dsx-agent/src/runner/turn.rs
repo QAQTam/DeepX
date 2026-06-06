@@ -8,42 +8,27 @@ use dsx_proto::{Agent2Ui, ToolCallDef, ToolResultDef, TurnData, RoundData};
 use dsx_types::{ContentBlock, ToolCall};
 
 use crate::agent::{AgentState, ToolResultAppender};
-use crate::assembly::AssemblerError;
 use crate::orchestrator::{learning, tracker};
 use crate::session;
 use crate::tool_parser;
 
 use super::api_turn::run_api_turn;
 use super::ui_emit::{build_and_push_assistant, make_tool_def, make_tool_result};
-use super::{build_documents, build_recent_edits, build_tasks, cache_tokens};
+use super::{build_documents, build_recent_edits, build_tasks, cache_tokens, emit};
 
-/// Process a pending ask_user reply, pushing the user's text as a tool result.
+/// Process a pending ask_user reply, pushes the user's text as a tool result.
 fn process_ask_user_response(agent: &mut AgentState, text: &str) -> bool {
     if let Some(tool_call_id) = agent.pending_ask_user.take() {
-        if let Err(e) = agent.ctx.push_tool_result(&tool_call_id, text) {
-            log::error!("push_tool_result for ask_user failed: {:?} — text dropped", e);
-        }
+        agent.ctx.replace_tool_result(&tool_call_id, text);
         true
     } else {
         false
     }
 }
 
-/// Push `text` to the ContextAssembler, repairing TurnIncomplete deadlocks.
-fn push_user_message_with_repair(agent: &mut AgentState, text: &str) -> bool {
-    match agent.ctx.push_user(text) {
-        Ok(()) => true,
-        Err(AssemblerError::TurnIncomplete { .. }) => {
-            log::warn!("push_user TurnIncomplete — repairing (cancellation deadlock)");
-            agent.ctx.remove_last_step_if_incomplete();
-            agent.ctx.push_user_restore(text);
-            true
-        }
-        Err(e) => {
-            log::error!("push_user failed: {:?}", e);
-            false
-        }
-    }
+/// Push `text` to the ContextAssembler (auto-repairs cancellation deadlocks).
+fn push_user_message_with_repair(agent: &mut AgentState, text: &str) {
+    agent.ctx.push_user(text);
 }
 
 /// Initialize the session on the first user message.
@@ -51,14 +36,14 @@ fn init_session_on_first_message(
     agent: &mut AgentState,
     agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
-    if agent.session_seed.is_empty() {
-        let seed = agent.resume_seed.clone();
+    if agent.session.seed.is_empty() {
+        let seed = agent.session.resume_seed.clone();
         super::lifecycle::init_session(agent, seed.as_deref());
         if seed.is_some() {
             // Build TurnData from existing context for SessionRestored
             let turns = build_turns_from_context(agent);
-            let _ = agent_tx.send(Agent2Ui::SessionRestored {
-                seed: agent.session_seed.clone(),
+            emit(&agent_tx, Agent2Ui::SessionRestored {
+                seed: agent.session.seed.clone(),
                 turns,
                 tokens_used: agent.token_estimate,
                 cache_hit_pct: 0.0,
@@ -161,25 +146,23 @@ pub fn handle_user_input(
 
         init_session_on_first_message(agent, agent_tx);
 
-        if !push_user_message_with_repair(agent, text) {
-            return;
-        }
+        push_user_message_with_repair(agent, text);
     }
 
-    let turn_num = agent.health.turn.to_string();
+    let turn_num = agent.turn_count.to_string();
     let turn_id = format!("t{}", turn_num);
 
     // Only send TurnStart for new turns (not ask_user replies)
     if !is_ask_reply {
-        let _ = agent_tx.send(Agent2Ui::TurnStart {
+        emit(&agent_tx, Agent2Ui::TurnStart {
             turn_id: turn_id.clone(),
             user_text: text.to_string(),
         });
     }
 
-    agent.tool_failures = 0;
-    agent.tool_calls_this_turn = 0;
-    agent.files_written_this_turn.clear();
+    agent.turn.tool_failures = 0;
+    agent.turn.tool_calls_this_turn = 0;
+    agent.files.files_written_this_turn.clear();
 
     agent.refresh_progress_context();
     crate::skills::auto_activate(agent, text);
@@ -191,8 +174,8 @@ pub fn handle_user_input(
         if ipc_broken {
             break;
         }
-        if agent.stream_cancelled {
-            agent.stream_cancelled = false;
+        if agent.turn.stream_cancelled {
+            agent.turn.stream_cancelled = false;
             agent.system_note("system", "用户终止了当前操作。".to_string());
             break;
         }
@@ -218,7 +201,7 @@ pub fn handle_user_input(
                 parsed = dsml_tcs;
                 dsml_source = vec![true; parsed.len()];
             } else {
-                let _ = agent_tx.send(Agent2Ui::ToolNotice {
+                emit(&agent_tx, Agent2Ui::ToolNotice {
                     message: "DSML detected but no valid tool calls found.".into(),
                     level: "warn".into(),
                 });
@@ -248,7 +231,7 @@ pub fn handle_user_input(
 
         if let Some(ref u) = usage {
             agent.api_usage = Some(u.clone());
-            agent.session_tokens += u.total_tokens as u64;
+            agent.session.tokens += u.total_tokens as u64;
             agent.token_estimate = u.prompt_tokens;
         }
 
@@ -261,7 +244,7 @@ pub fn handle_user_input(
             .collect();
 
         // Send RoundComplete
-        let _ = agent_tx.send(Agent2Ui::RoundComplete {
+        emit(&agent_tx, Agent2Ui::RoundComplete {
             turn_id: turn_id.clone(),
             round_num,
             thinking: reasoning_content.clone().filter(|r| !r.is_empty()),
@@ -278,7 +261,7 @@ pub fn handle_user_input(
             }
 
             if content.trim().is_empty() {
-                agent.turn_annotations.push(
+                agent.turn.annotations.push(
                     "[System] You produced reasoning but no visible response. Summarize your findings now."
                         .to_string(),
                 );
@@ -288,47 +271,34 @@ pub fn handle_user_input(
 
             learning::post_turn_maintenance(agent, &assistant_msg);
 
-            agent.health.record_turn();
-            agent.health.reset_turn();
+            save_snapshot(agent);
 
-            session::save_live_snapshot(
-                &agent.session_seed,
-                &agent.ctx.to_vec(),
-                &agent.config.model,
-                agent.config.effort.as_deref(),
-            );
-
-            let _ = agent_tx.send(Agent2Ui::TurnEnd {
+            emit(&agent_tx, Agent2Ui::TurnEnd {
                 turn_id: turn_id.clone(),
                 stop_reason,
                 usage,
                 context_tokens: agent.token_estimate,
                 context_limit: agent.config.context_limit,
-                session_tokens: agent.session_tokens,
+                session_tokens: agent.session.tokens,
             });
             return;
         }
 
-        agent.tool_calls_this_turn += parsed.len() as u32;
+        agent.turn.tool_calls_this_turn += parsed.len() as u32;
 
-        session::save_live_snapshot(
-            &agent.session_seed,
-            &agent.ctx.to_vec(),
-            &agent.config.model,
-            agent.config.effort.as_deref(),
-        );
+        save_snapshot(agent);
 
-        if !agent.has_explored {
+        if !agent.files.has_explored {
             if parsed.iter().any(|tc| {
                 tc.function.name == "exec"
                     && dsx_types::arg::tool_action(&tc.function.arguments) == "explore"
             }) {
-                agent.has_explored = true;
+                agent.files.has_explored = true;
             }
         }
 
-        // Execute tools and collect results
-        let results: Vec<(String, String, String, String)> =
+        // Execute tools and collect results (with interrupt support)
+        let results: Vec<(String, String, String, crate::tools::ToolExecResult)> =
             if parsed.len() > 1 && !parsed.iter().any(|tc| tc.function.name == "ask_user") {
                 use std::thread;
                 let mut handles = Vec::new();
@@ -338,22 +308,25 @@ pub fn handle_user_input(
                     let id = tc.id.clone();
                     handles.push(thread::spawn(move || {
                         let result =
-                            crate::tools::execute_tool_with_id(&name, "", &args, &id);
+                            crate::tools::execute_tool_with_id_full(&name, "", &args, &id);
                         (name, id, args, result)
                     }));
                 }
-                handles.into_iter().map(|h| h.join().unwrap()).collect()
+                handles.into_iter().map(|h| h.join().unwrap_or_else(|e| {
+                    let msg = format!("[ERROR] tool thread panicked: {:?}", e.downcast_ref::<&str>().unwrap_or(&"unknown"));
+                    (String::new(), String::new(), String::new(), crate::tools::ToolExecResult { content: msg, interrupt: None })
+                })).collect()
             } else {
                 parsed.iter().map(|tc| {
                     let result =
-                        crate::tools::execute_tool_with_id(&tc.function.name, "", &tc.function.arguments, &tc.id);
+                        crate::tools::execute_tool_with_id_full(&tc.function.name, "", &tc.function.arguments, &tc.id);
                     (tc.function.name.clone(), tc.id.clone(), tc.function.arguments.clone(), result)
                 }).collect()
             };
 
         let mut tool_result_defs: Vec<ToolResultDef> = Vec::new();
 
-        for (tc_idx, (name, id, args, tr_content)) in results.iter().enumerate() {
+        for (tc_idx, (name, id, args, tr_result)) in results.iter().enumerate() {
             if dsx_tools::CANCEL.compare_exchange(
                 true, false,
                 std::sync::atomic::Ordering::SeqCst,
@@ -373,6 +346,7 @@ pub fn handle_user_input(
                 break;
             }
 
+            let tr_content = &tr_result.content;
             let tr_success =
                 !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
 
@@ -381,9 +355,9 @@ pub fn handle_user_input(
             }
 
             let failed = !tr_success;
-            agent.health.record_tool_call();
+            agent.turn.tool_calls_this_turn += 1;
             if failed {
-                agent.tool_failures += 1;
+                agent.turn.tool_failures += 1;
             }
 
             {
@@ -394,7 +368,7 @@ pub fn handle_user_input(
 
             // Emit audit record for InfoPanel real-time tool log
             let summary = tr_content.lines().next().unwrap_or(tr_content);
-            let _ = agent_tx.send(Agent2Ui::AuditRecord {
+            emit(&agent_tx, Agent2Ui::AuditRecord {
                 tool_name: name.clone(),
                 result_summary: summary.chars().take(120).collect(),
                 success: tr_success,
@@ -405,7 +379,7 @@ pub fn handle_user_input(
                     agent.dsml_compat_count += 1;
                 } else {
                     let short = tr_content.chars().take(120).collect::<String>();
-                    let _ = agent_tx.send(Agent2Ui::ToolNotice {
+                    emit(&agent_tx, Agent2Ui::ToolNotice {
                         message: format!("DSML tool '{name}' failed: {short}"),
                         level: "error".into(),
                     });
@@ -424,15 +398,15 @@ pub fn handle_user_input(
             }
             if name == "delete_file" {
                 if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                    agent.file_read_at.remove(&path);
-                    agent.file_written_at.remove(&path);
+                    agent.files.file_read_at.remove(&path);
+                    agent.files.file_written_at.remove(&path);
                 }
             }
         }
 
         // Send collected tool results
         if !tool_result_defs.is_empty() {
-            let _ = agent_tx.send(Agent2Ui::ToolResults {
+            emit(&agent_tx, Agent2Ui::ToolResults {
                 turn_id: turn_id.clone(),
                 round_num,
                 results: tool_result_defs,
@@ -440,44 +414,34 @@ pub fn handle_user_input(
         }
 
         // Emit real-time debug snapshot
-        let _ = agent_tx.send(Agent2Ui::DebugSnapshot {
+        emit(&agent_tx, Agent2Ui::DebugSnapshot {
             hp_connected: true,
-            session_seed: agent.session_seed.clone(),
+            session_seed: agent.session.seed.clone(),
             context_tokens: agent.token_estimate,
-            tool_calls_total: agent.tool_calls_this_turn,
-            tool_failures: agent.tool_failures as u32,
+            tool_calls_total: agent.turn.tool_calls_this_turn,
+            tool_failures: agent.turn.tool_failures as u32,
             current_phase: "tool_batch".to_string(),
             streaming: false,
             dsml_compat_count: agent.dsml_compat_count,
             documents: build_documents(agent),
             recent_edits: build_recent_edits(agent),
             tasks: build_tasks(agent),
-            session_title: agent.session_title.clone(),
+            session_title: agent.session.title.clone(),
             prompt_cache_hit_tokens: cache_tokens(agent).0,
             prompt_cache_miss_tokens: cache_tokens(agent).1,
         });
 
-        // Check for ask_user
-        for (name, id, args, _) in results.iter() {
-            if name == "ask_user" {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
-                    let question = parsed.get("question")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let options = parsed.get("options")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect::<Vec<_>>());
-                    let options_field = if options.as_ref().map(|o| o.is_empty()).unwrap_or(true) { None } else { options };
-                    let _ = agent_tx.send(Agent2Ui::AskUser {
-                        id: id.clone(),
-                        question,
-                        options: options_field,
-                    });
-                    agent.pending_ask_user = Some(id.clone());
-                }
+        // ── Generic interrupt: any tool can request user input ──
+        // Check all results for interrupt requests (not just ask_user).
+        for (_name, id, _args, tr_result) in results.iter() {
+            if let Some(ir) = &tr_result.interrupt {
+                let options_field = if ir.options.is_empty() { None } else { Some(ir.options.clone()) };
+                emit(&agent_tx, Agent2Ui::AskUser {
+                    id: id.clone(),
+                    question: ir.prompt.clone(),
+                    options: options_field,
+                });
+                agent.pending_ask_user = Some(id.clone());
                 break;
             }
         }
@@ -486,13 +450,13 @@ pub fn handle_user_input(
             break;
         }
 
-        if agent.tool_failures >= 3 {
+        if agent.turn.tool_failures >= 3 {
             log::warn!("safety gate: 3 cumulative tool failures");
-            agent.turn_annotations.push(
+            agent.turn.annotations.push(
                 "[System] 3 consecutive tool failures. Respond with analysis — do not call more tools."
                     .to_string(),
             );
-            agent.tool_failures = 0;
+            agent.turn.tool_failures = 0;
         }
 
         round_num += 1;
@@ -503,30 +467,33 @@ pub fn handle_user_input(
     }
 
     if ipc_broken {
-        let _ = agent_tx.send(Agent2Ui::TurnEnd {
+        emit(&agent_tx, Agent2Ui::TurnEnd {
             turn_id: turn_id.clone(),
             stop_reason: Some("error".to_string()),
             usage: None,
             context_tokens: agent.token_estimate,
             context_limit: agent.config.context_limit,
-            session_tokens: agent.session_tokens,
+            session_tokens: agent.session.tokens,
         });
         return;
     }
 
-    agent.health.reset_turn();
-
-    let _ = agent_tx.send(Agent2Ui::TurnEnd {
+    emit(&agent_tx, Agent2Ui::TurnEnd {
         turn_id: turn_id.clone(),
         stop_reason: Some("cancelled".to_string()),
         usage: None,
         context_tokens: agent.token_estimate,
         context_limit: agent.config.context_limit,
-        session_tokens: agent.session_tokens,
+        session_tokens: agent.session.tokens,
     });
 
+    save_snapshot(agent);
+}
+
+/// Save the current session snapshot to disk (crash recovery).
+fn save_snapshot(agent: &AgentState) {
     session::save_live_snapshot(
-        &agent.session_seed,
+        &agent.session.seed,
         &agent.ctx.to_vec(),
         &agent.config.model,
         agent.config.effort.as_deref(),

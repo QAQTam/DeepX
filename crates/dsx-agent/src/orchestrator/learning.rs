@@ -13,16 +13,16 @@ pub fn post_turn_maintenance(state: &mut AgentState, _final_msg: &Message) {
         state.tool_results.drain(0..excess);
     }
 
-    state.health.context_tokens = state.tokens_used();
-    state.health.context_limit = state.config.context_limit;
-
-    // Increment monotonic turn counter (replaces age_files)
-    state.current_turn += 1;
+    // Only advance staleness clock when files were written this turn.
+    // Chat-only turns don't make files go stale.
+    if !state.files.files_written_this_turn.is_empty() {
+        state.files.staleness_epoch += 1;
+    }
 
     // Inject stale-document warnings into turn annotations
     document_annotations(state);
 
-    state.health.record_turn();
+    state.turn_count += 1;
 }
 
 /// Generate a short tag for a file path.
@@ -39,7 +39,7 @@ pub fn doc_tag(path: &str) -> String {
 fn document_annotations(state: &mut AgentState) {
     let mut stale: Vec<(String, u32)> = Vec::new();
 
-    for (path, &read_at) in &state.file_read_at {
+    for (path, &read_at) in &state.files.file_read_at {
         if state.is_file_stale(path) {
             stale.push((path.clone(), read_at));
         }
@@ -61,5 +61,5 @@ fn document_annotations(state: &mut AgentState) {
             tag, path, read_at
         ));
     }
-    state.turn_annotations.push(msg);
+    state.turn.annotations.push(msg);
 }

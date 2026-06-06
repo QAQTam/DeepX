@@ -752,6 +752,13 @@ impl App {
     pub fn push_msg(&mut self, role: ChatRole, content: &str) {
         // Flush previous renderer state before starting a new message
         self.finalize_last_message();
+        // Trim old messages to cap render cost at ~250 messages
+        const MAX_MSGS: usize = 250;
+        if self.messages.len() >= MAX_MSGS {
+            let trim = self.messages.len() - MAX_MSGS + 50;
+            self.messages.drain(0..trim);
+            self.scroll_offset = self.scroll_offset.saturating_sub(trim);
+        }
         const MAX_STORED: usize = 50_000;
         let content = if content.chars().count() > MAX_STORED {
             let truncated: String = content.chars().take(MAX_STORED).collect();
@@ -777,6 +784,8 @@ impl App {
     /// Push a message placeholder for streaming — rendering is deferred to append_last().
     fn push_streaming_msg(&mut self, role: ChatRole, content: &str) {
         self.streaming_rendered_len = 0;
+        self.md_renderer = None;  // Reset markdown state to avoid state pollution
+        self.pending_tail_lines = 0;
         self.messages.push(ChatMessage { role, content: content.to_string(), lines: Vec::new(), tool_status: ToolStatus::None, tool_id: String::new() });
     }
 

@@ -1,5 +1,5 @@
 use std::process::Command;
-use crate::{parse_arg, parse_opt, parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
+use crate::{parse_arg, parse_opt, parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_search(args: &str) -> String {
     let pattern = parse_arg(args, "pattern");
@@ -151,7 +151,6 @@ fn is_binary_file(path: &std::path::Path) -> bool {
 
 handler!(handle_search, exec_search);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -159,7 +158,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Regex search across files. Returns file:line matches. Grep for your codebase.",
         input_schema: serde_json::json!({"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern"},"glob":{"type":"string","description":"File glob filter (e.g. *.rs)"},"path":{"type":"string","description":"Search directory","default":"."}},"required":["pattern"],"additionalProperties":false}),
         handler: handle_search,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

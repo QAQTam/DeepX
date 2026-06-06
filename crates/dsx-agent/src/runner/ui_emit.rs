@@ -46,10 +46,7 @@ pub fn build_and_push_assistant(
         content: blocks,
     };
 
-    if let Err(e) = agent.ctx.push_assistant(assistant_msg.clone()) {
-        log::error!("push_assistant failed: {:?} — repairing", e);
-        agent.ctx.push_assistant_restore(assistant_msg.clone());
-    }
+    agent.ctx.push_assistant(assistant_msg.clone());
 
     assistant_msg
 }

@@ -1,4 +1,4 @@
-use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
+use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 // ── move_file ──
 
@@ -34,7 +34,6 @@ handler!(handle_copy_file, exec_copy_file);
 
 // ── Registration ──
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -42,7 +41,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Move or rename a file or directory. Creates parent dirs of dest.",
         input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
         handler: handle_move_file,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
@@ -50,7 +49,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Copy a file. Creates parent dirs of dest.",
         input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
         handler: handle_copy_file,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

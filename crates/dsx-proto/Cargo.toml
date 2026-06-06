@@ -8,3 +8,6 @@ description = "DSX IPC message protocol definitions"
 dsx-types = { path = "../dsx-types" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[lints]
+workspace = true

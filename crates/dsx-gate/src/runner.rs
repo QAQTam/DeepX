@@ -54,7 +54,7 @@ pub fn run() {
 
     let addr = format!("127.0.0.1:{port}");
     let listener = TcpListener::bind(&addr).expect("dsx-gate: failed to bind TCP listener");
-    let actual_port = listener.local_addr().unwrap().port();
+    let actual_port = listener.local_addr().expect("listener local_addr").port();
 
     write_port_file(actual_port);
     eprintln!("dsx-gate: listening on 127.0.0.1:{actual_port}");
@@ -211,7 +211,6 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
         let sys = system;
         let gw = provider_cfg;
         let effort_o = effort.clone();
-        let tx_err = tx.clone();
         let client = http_client.clone();
         tokio::spawn(async move {
             let uid = user_id.clone();
@@ -220,7 +219,7 @@ fn handle_api_chat_streaming(line: &str, writer: &mut impl Write) {
             ).await;
             if let Err(e) = result {
                 eprintln!("dsx-gate: gateway error: {e:?}");
-                let _ = tx_err.send(StreamEvent::Error(format!("{e:?}"))).await;
+                log::error!("dsx-gate: chat_stream failed: {e:?}");
             }
         });
 
@@ -360,11 +359,11 @@ fn port_file_path() -> std::path::PathBuf {
 fn write_port_file(port: u16) {
     let path = port_file_path();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        drop(std::fs::create_dir_all(parent));
     }
-    let _ = std::fs::write(&path, port.to_string());
+    drop(std::fs::write(&path, port.to_string()));
 }
 
 fn clear_port_file() {
-    let _ = std::fs::write(port_file_path(), "");
+    drop(std::fs::write(port_file_path(), ""));
 }

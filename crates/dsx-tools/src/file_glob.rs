@@ -1,4 +1,4 @@
-use crate::{parse_arg, parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
+use crate::{parse_arg, parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_glob(args: &str) -> String {
     let pattern = parse_arg(args, "pattern");
@@ -82,7 +82,6 @@ fn simple_glob_match(glob: &str, filename: &str) -> bool {
 
 handler!(handle_glob, exec_glob);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -90,7 +89,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Find files matching a glob pattern recursively (e.g. *.rs, src/**/*.rs).",
         input_schema: serde_json::json!({"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern"},"path":{"type":"string","description":"Start directory","default":"."}},"required":["pattern"],"additionalProperties":false}),
         handler: handle_glob,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

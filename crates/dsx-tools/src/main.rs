@@ -39,7 +39,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let response = mgr.handle_req(
+    let r = mgr.handle_req(
         "cli_0".into(),
         tool,
         "",
@@ -47,18 +47,6 @@ fn main() {
         None,
     );
 
-    match response {
-        dsx_proto::ToolsToAgent::ToolResultMessage { content, success, .. } => {
-            println!("{}", content);
-            if !success { std::process::exit(1); }
-        }
-        dsx_proto::ToolsToAgent::ToolError { error, .. } => {
-            eprintln!("Error: {error}");
-            std::process::exit(1);
-        }
-        _ => {
-            eprintln!("Unexpected response");
-            std::process::exit(1);
-        }
-    }
+    println!("{}", r.content);
+    if !r.success { std::process::exit(1); }
 }

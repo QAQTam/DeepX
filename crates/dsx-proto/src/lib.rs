@@ -13,7 +13,6 @@
 //! ## Submodules
 //!
 //! - `agent_protocol` — `Ui2Agent` / `Agent2Ui`
-//! - `tools` — `AgentToTools` / `ToolsToAgent`
 //! - `hp` — `AgentToHp` / `HpToAgent`
 
 use serde::{Deserialize, Serialize, Serializer};
@@ -22,14 +21,23 @@ use std::fmt;
 // ── Submodule declarations ──────────────────────────────────────────────
 
 mod agent_protocol;
-mod tools;
 mod hp;
 
-// ── Re-exports (backward-compatible paths) ──────────────────────────────
+// ── Re-exports ──────────────────────────────────────────────────────────
 
 pub use agent_protocol::{Agent2Ui, DocInfo, FileSnapshotInfo, RoundData, RoundDeltaKind, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent};
-pub use tools::{AgentToTools, ToolsToAgent};
 pub use hp::{AgentToHp, HpToAgent};
+
+// ── InterruptRequest (tool → agent interrupt flow) ──────────────────────
+
+/// A request for user input injected as a tool_result by the agent.
+/// When a tool returns this, the agent pauses the turn loop and asks the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterruptRequest {
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+}
 
 // ── Redacted (prevents API key leaks in debug logs) ─────────────────────
 

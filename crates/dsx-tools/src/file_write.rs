@@ -1,4 +1,4 @@
-use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
+use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_write_file(args: &str) -> String {
     let path = parse_arg(args, "path");
@@ -28,7 +28,6 @@ pub(super) fn exec_write_file(args: &str) -> String {
 
 handler!(handle_write_file, exec_write_file);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -36,7 +35,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Create, overwrite, or append to a file. Creates parent dirs. For new files or full rewrites; prefer edit_file for small changes.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","content"],"additionalProperties":false}),
         handler: handle_write_file,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

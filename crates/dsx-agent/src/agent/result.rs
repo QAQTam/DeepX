@@ -50,17 +50,14 @@ impl<'a> ToolResultAppender<'a> {
         let failed = raw.starts_with("[ERROR]") || raw.starts_with("[FAIL]");
         let result = wrap_tool_result(tool_name, &truncated);
 
-        if let Err(e) = self.state.ctx.push_tool_result(tc_id, &result) {
-            log::warn!("ToolResultAppender: push_tool_result failed for {}: {:?}", tc_id, e);
-            let _ = self.state.ctx.push_tool_result_for(tc_id, &result);
-        }
+        self.state.ctx.push_tool_result(tc_id, &result);
 
         self.state.tool_results.push((tool_name.to_string(), result.clone()));
 
         if !failed && (tool_name == "write_file" || tool_name == "edit_file") {
             tracker::track_file_written(self.state, args);
             if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                self.state.re_read_required = Some(path.clone());
+                self.state.files.re_read_required = Some(path.clone());
             }
         }
 

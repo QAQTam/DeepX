@@ -21,3 +21,7 @@ opt-level = "z"
 lto = true
 strip = true
 codegen-units = 1
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+let_underscore_drop = "warn"

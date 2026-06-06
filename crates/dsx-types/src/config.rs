@@ -83,7 +83,7 @@ impl ConfigStore {
         };
         let tmp = self.path.with_extension("json.tmp");
         if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            drop(std::fs::create_dir_all(parent));
         }
         std::fs::write(&tmp, &content).is_ok()
             && std::fs::rename(&tmp, &self.path).is_ok()

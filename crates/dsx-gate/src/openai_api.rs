@@ -12,6 +12,13 @@ use futures_util::StreamExt;
 use reqwest::Client as HttpClient;
 use tokio::sync::mpsc;
 
+/// Send a StreamEvent, logging if the receiver has been dropped.
+async fn emit(tx: &mpsc::Sender<StreamEvent>, event: StreamEvent) {
+    if let Err(e) = tx.send(event).await {
+        log::warn!("dsx-gate: failed to send stream event: {e}");
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Provider {
     pub base_url: String,
@@ -113,7 +120,7 @@ pub async fn chat_stream(
         dump_api_error(user_id.as_deref(), status.as_u16(), &text);
         let code_desc = deepseek_error_description(status.as_u16());
         let msg = format!("OpenAI API HTTP {} ({})", status, code_desc);
-        let _ = tx.send(StreamEvent::Error(format!("{}: {}", msg, text))).await;
+        emit(&tx, StreamEvent::Error(format!("{}: {}", msg, text))).await;
         return Err(anyhow::anyhow!("{}", msg));
     }
 
@@ -122,14 +129,14 @@ pub async fn chat_stream(
     tokio::spawn(async move {
         match query_balance(&api_key_for_balance).await {
             Some(info) => {
-                let _ = tx_balance.send(StreamEvent::Balance {
+                emit(&tx_balance, StreamEvent::Balance {
                     is_available: info.is_available,
                     total_balance: info.total_balance,
                     currency: info.currency,
                 }).await;
             }
             None => {
-                let _ = tx_balance.send(StreamEvent::Error("Balance query failed".into())).await;
+                emit(&tx_balance, StreamEvent::Error("Balance query failed".into())).await;
             }
         }
     });
@@ -192,7 +199,7 @@ pub async fn chat_stream(
                         if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
                             let t = text.to_string();
                             text_buf.push_str(&t);
-                            let _ = tx.send(StreamEvent::ContentDelta(t.clone())).await;
+                            emit(&tx, StreamEvent::ContentDelta(t.clone())).await;
 
                             dsml_buf.push_str(&t);
                             let mut search_from = 0usize;
@@ -204,7 +211,7 @@ pub async fn chat_stream(
                                         let name = rest[..quote_end].to_string();
                                         if dsml_seen.insert(name.clone()) {
                                             let idx = dsml_seen.len() - 1;
-                                            let _ = tx.send(StreamEvent::ToolCallProgress {
+                                            emit(&tx, StreamEvent::ToolCallProgress {
                                                 index: idx,
                                                 id: format!("dsml_tc_{}", idx),
                                                 name,
@@ -222,7 +229,7 @@ pub async fn chat_stream(
                         if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
                             let r = rc.to_string();
                             reasoning_buf.push_str(&r);
-                            let _ = tx.send(StreamEvent::ReasoningDelta(r)).await;
+                            emit(&tx, StreamEvent::ReasoningDelta(r)).await;
                         }
 
                         if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -242,7 +249,7 @@ pub async fn chat_stream(
                                     .and_then(|v| v.as_str())
                                 {
                                     entry.2.push_str(args);
-                                    let _ = tx.send(StreamEvent::ToolCallProgress {
+                                    emit(&tx, StreamEvent::ToolCallProgress {
                                         index: idx,
                                         id: entry.0.clone(),
                                         name: entry.1.clone(),
@@ -303,7 +310,7 @@ pub async fn chat_stream(
         content: blocks,
     };
 
-    let _ = tx.send(StreamEvent::Done { raw_message, usage: usage_info, stop_reason }).await;
+    emit(&tx, StreamEvent::Done { raw_message, usage: usage_info, stop_reason }).await;
     Ok(())
 }
 

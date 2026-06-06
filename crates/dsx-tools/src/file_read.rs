@@ -1,4 +1,4 @@
-use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
+use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_read_file(args: &str) -> String {
     let path = parse_arg(args, "path");
@@ -15,6 +15,8 @@ pub(super) fn exec_read_file(args: &str) -> String {
     }
     match std::fs::read_to_string(&path) {
         Ok(content) => {
+            // Normalize CRLF → LF
+            let content = content.replace("\r\n", "\n").replace('\r', "\n");
             let all_lines: Vec<&str> = content.lines().collect();
             let total = all_lines.len();
             let start_idx = start.map(|s| (s - 1).min(total)).unwrap_or(0);
@@ -22,27 +24,33 @@ pub(super) fn exec_read_file(args: &str) -> String {
             let start_idx = start_idx.min(end_idx);
             let lines: Vec<&str> = all_lines[start_idx..end_idx].to_vec();
             let shown = lines.len();
-            let total_lines = all_lines.len();
 
             if start.is_some() || end.is_some() {
-                let mut result = format!("[OK] {} lines {}-{}/{} of {}\n", shown, start_idx + 1, end_idx, total_lines, path);
+                let mut result = format!("[OK] {} lines {}-{}/{} of {}\n", shown, start_idx + 1, end_idx, total, path);
                 for (i, l) in lines.iter().enumerate() {
                     result.push_str(&format!("{:>6}  {}\n", start_idx + i + 1, l));
                 }
                 result
-            } else {
-                let head: Vec<&str> = lines.iter().take(50).cloned().collect();
-                let tail: Vec<&str> = lines.iter().rev().take(10).collect::<Vec<_>>().into_iter().rev().cloned().collect();
-                let mut result = format!("[PARTIAL] {} lines, showing 1-50/{}\n", total_lines, path);
-                for (i, l) in head.iter().enumerate() {
+            } else if total <= 500 {
+                // Full output for files ≤500 lines (avoids AI re-read)
+                let mut result = format!("[OK] {} lines total ({})\n", total, path);
+                for (i, l) in all_lines.iter().enumerate() {
                     result.push_str(&format!("{:>6}  {}\n", i + 1, l));
                 }
-                if total_lines > 50 {
-                    result.push_str("  ⋮\n");
-                    for (i, l) in tail.iter().enumerate() {
-                        result.push_str(&format!("{:>6}  {}\n", total_lines - tail.len() + i + 1, l));
-                    }
-                    result.push_str(&format!("[HINT] Use start_line=N end_line=N to read specific lines.\n"));
+                result
+            } else {
+                // Head + tail for larger files with anchor index
+                let head = 100.min(total);
+                let tail = 50.min(total - head);
+                let mut result = format!("[PARTIAL] {} — {} lines, showing first {} + last {}\n", path, total, head, tail);
+                for (i, l) in all_lines.iter().take(head).enumerate() {
+                    result.push_str(&format!("{:>6}  {}\n", i + 1, l));
+                }
+                if total > head + tail {
+                    result.push_str(&format!("  ⋮  [{} lines omitted — use start_line to read specific range]\n", total - head - tail));
+                }
+                for (i, l) in all_lines.iter().rev().take(tail).collect::<Vec<_>>().iter().rev().enumerate() {
+                    result.push_str(&format!("{:>6}  {}\n", total - tail + i + 1, l));
                 }
                 result
             }
@@ -65,7 +73,6 @@ pub(super) fn exec_read_file(args: &str) -> String {
 
 handler!(handle_read_file, exec_read_file);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -73,7 +80,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Read file content. Default preview: first 50 lines + last 10 lines. Use start_line/end_line for precise range.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"start_line":{"type":"integer","description":"First line to read (1-based)","default":1},"end_line":{"type":"integer","description":"Last line to read (inclusive). If omitted, reads to end of file."}},"required":["path"],"additionalProperties":false}),
         handler: handle_read_file,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(15),
     });
 }

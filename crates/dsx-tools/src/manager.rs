@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::{ToolKey, ToolHandler, ToolCallCtx, CANCEL, CURRENT_SESSION, SafetyVerdict};
-use dsx_proto::ToolsToAgent;
+use crate::{ToolKey, ToolHandler, ToolCallCtx, CANCEL, CURRENT_SESSION, SafetyVerdict, ToolResult};
 
 pub struct ToolManager {
     pub(crate) handlers: BTreeMap<ToolKey, ToolHandler>,
@@ -62,14 +61,12 @@ impl ToolManager {
         }
     }
 
-    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>) -> ToolsToAgent {
+    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>) -> ToolResult {
         let t0 = std::time::Instant::now();
 
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                return ToolsToAgent::ToolError {
-                    id, error: format!("Tool '{}' not in allowed list", name), code: "FORBIDDEN".into(),
-                };
+                return ToolResult { success: false, content: format!("[ERROR] Tool '{}' not in allowed list", name), interrupt: None };
             }
         }
 
@@ -78,9 +75,7 @@ impl ToolManager {
             None => {
                 match self.handlers.iter().find(|(k, _)| k.name == name) {
                     Some((_, h)) => h,
-                    None => return ToolsToAgent::ToolError {
-                        id, error: format!("Unknown tool: {}/{}", name, action), code: "UNKNOWN_TOOL".into(),
-                    },
+                    None => return ToolResult { success: false, content: format!("[ERROR] Unknown tool: {}/{}", name, action), interrupt: None },
                 }
             }
         };
@@ -91,7 +86,7 @@ impl ToolManager {
         };
         match (handler.safety)(&ctx) {
             SafetyVerdict::Block(reason) => {
-                return ToolsToAgent::ToolError { id, error: reason, code: "BLOCKED".into() };
+                return ToolResult { success: false, content: format!("[ERROR] {}", reason), interrupt: None };
             }
             SafetyVerdict::Allow => {}
         }
@@ -113,13 +108,13 @@ impl ToolManager {
 
         self.inflight_tasks.remove(&id);
 
-        let (content, success) = match result {
-            Ok(tr) => (tr.content, tr.success),
+        let (content, success, interrupt) = match result {
+            Ok(tr) => (tr.content, tr.success, tr.interrupt),
             Err(panic_info) => {
                 let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
                     else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
                     else { "unknown panic".to_string() };
-                (format!("[ERROR] Tool panicked: {}", msg), false)
+                (format!("[ERROR] Tool panicked: {}", msg), false, None)
             }
         };
 
@@ -131,10 +126,7 @@ impl ToolManager {
         let args_summary = audit_args_summary(&tool_name, &audit_args);
         eprintln!("[AUDIT] {tool_name}  {status}  {elapsed_ms}ms  {output_size}chars  args={{{args_summary}}}");
 
-        ToolsToAgent::ToolResultMessage {
-            id, name: tool_name, action: action.into(), success, content,
-            elapsed_ms, output_size,
-        }
+        ToolResult { success, content, interrupt }
     }
 
     pub fn cancel_tool(&mut self, id: Option<&str>) {

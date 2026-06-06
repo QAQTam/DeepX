@@ -82,7 +82,7 @@ pub fn activate_skill(state: &mut crate::agent::AgentState, name: &str) -> bool 
         Err(_) => return false,
     };
     let label = format!("skill:{}", name);
-    state.turn_annotations.push(format!("[{}]\n{}", label, content));
+    state.turn.annotations.push(format!("[{}]\n{}", label, content));
     true
 }
 
@@ -138,10 +138,10 @@ fn parse_frontmatter(content: &str) -> Option<(String, String)> {
                 in_metadata = false;
             }
         }
-        if let Some(v) = trimmed.strip_prefix("name:") {
-            name = v.trim().to_string();
-        } else if let Some(v) = trimmed.strip_prefix("description:") {
-            desc = v.trim().to_string();
+        if let Some(v) = trimmed.strip_prefix("name:").or_else(|| trimmed.strip_prefix("name：")) {
+            name = v.trim().trim_matches('"').trim_matches('\'').to_string();
+        } else if let Some(v) = trimmed.strip_prefix("description:").or_else(|| trimmed.strip_prefix("description：")) {
+            desc = v.trim().trim_matches('"').trim_matches('\'').to_string();
         }
     }
 

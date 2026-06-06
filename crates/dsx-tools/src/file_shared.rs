@@ -1,5 +1,29 @@
 //! Shared helpers for file edit tools.
 
+/// Normalize CRLF → LF in content. Returns (normalized, was_crlf).
+pub(super) fn normalize_newlines(content: &str) -> (String, bool) {
+    if content.contains("\r\n") {
+        (content.replace("\r\n", "\n"), true)
+    } else if content.contains('\r') {
+        (content.replace('\r', "\n"), true)
+    } else {
+        (content.to_string(), false)
+    }
+}
+
+/// Find the closest line in content to the given search string.
+/// Returns (line_number, line_content).
+pub(super) fn closest_line(content: &str, search: &str) -> Option<(usize, String)> {
+    let needle = search.lines().next().unwrap_or(search).trim();
+    if needle.is_empty() { return None; }
+    content.lines()
+        .enumerate()
+        .map(|(i, l)| (i, l, l.trim().len() as i64 - needle.len() as i64))
+        .filter(|(_, l, _)| l.contains(needle) || needle.contains(l.trim()))
+        .min_by_key(|(_, _, diff)| diff.unsigned_abs())
+        .map(|(i, l, _)| (i + 1, l.to_string()))
+}
+
 pub(super) fn build_diff(before: &str, after: &str, old: &str, new: &str, path: &str) -> String {
     let before_lines: Vec<&str> = before.lines().collect();
     let after_lines: Vec<&str> = after.lines().collect();

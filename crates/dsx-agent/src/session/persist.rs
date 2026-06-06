@@ -111,7 +111,8 @@ pub fn save_session(
     effort: Option<&str>,
 ) {
     let Some(sfile_path) = super::session_path(seed) else { return };
-    let _ = std::fs::create_dir_all(sfile_path.parent().unwrap());
+    let Some(parent) = sfile_path.parent() else { return };
+    let _ = std::fs::create_dir_all(parent);
 
     let now = super::now_epoch();
     // Preserve created_at from existing meta if available
@@ -152,7 +153,8 @@ pub fn finalize_session(
 
 fn save_index(metas: &[SessionMeta]) {
     let Some(path) = super::index_path() else { return };
-    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    let Some(parent) = path.parent() else { return };
+    let _ = std::fs::create_dir_all(parent);
     let _ = std::fs::write(&path, serde_json::to_string_pretty(metas).unwrap_or_default());
 }
 

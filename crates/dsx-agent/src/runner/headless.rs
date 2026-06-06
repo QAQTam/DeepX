@@ -31,8 +31,7 @@ pub fn run() {
 
     let mcp_configs = config.mcp_servers.clone();
     let mut agent = AgentState::new(config);
-    agent.resume_seed = resume_seed;
-    agent.health.context_limit = agent.config.context_limit;
+    agent.session.resume_seed = resume_seed;
 
     let hp_conn = crate::gate::try_reconnect().map(BufReader::new);
 

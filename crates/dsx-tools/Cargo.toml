@@ -17,3 +17,6 @@ regex = "1"
 ureq = { version = "3", features = ["json"] }
 html2text = "0.17"
 log = "0.4"
+
+[lints]
+workspace = true

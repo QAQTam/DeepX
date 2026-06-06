@@ -175,30 +175,21 @@ fn start_reader(reader: BufReader<Box<dyn Read + Send>>, app: AppHandle) -> Join
                 Ok(_) => {
                     let t = line.trim();
                     if t.is_empty() { continue; }
-                    match serde_json::from_str::<serde_json::Value>(t) {
-                        Ok(v) => {
-                            let kind = v["type"].as_str().unwrap_or("");
-                            match kind {
-                                "turn_start" | "turn_end" |
-                                "round_delta" | "round_complete" | "tool_results" |
-                                "done" | "error" | "cancelled" |
-                                "ask_user" | "balance" | "session_restored" |
-                                "debug_snapshot" | "shutdown_ack" |
-                                "audit_record" | "tool_notice" => {
-                                    if kind == "session_restored" {
-                                        if let Some(seed) = v["seed"].as_str() {
-                                            if let Ok(mut guard) = app.state::<AgentState>().session_seed.lock() {
-                                                *guard = Some(seed.to_string());
-                                            }
-                                        }
-                                    }
-                                    let _ = app.emit("agent-event", v);
+                    match serde_json::from_str::<dsx_proto::Agent2Ui>(t) {
+                        Ok(frame) => {
+                            // Type-safe seed extraction for session tracking
+                            if let dsx_proto::Agent2Ui::SessionRestored { ref seed, .. } = frame {
+                                if let Ok(mut guard) = app.state::<AgentState>().session_seed.lock() {
+                                    *guard = Some(seed.clone());
                                 }
-                                _ => {}
+                            }
+                            // Re-serialize to JSON for frontend consumption
+                            if let Ok(v) = serde_json::to_value(&frame) {
+                                let _ = app.emit("agent-event", v);
                             }
                         }
                         Err(e) => {
-                            log::warn!("agent: non-JSON stdout line ({} chars): {}", t.len(), e);
+                            log::warn!("agent: non-Agent2Ui stdout line ({} chars): {}", t.len(), e);
                         }
                     }
                 }

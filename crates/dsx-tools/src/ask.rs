@@ -1,6 +1,8 @@
-//! ask_user tool — ask the user a question mid-task.
-//! Used when the model needs a decision it can't make alone
-//! (e.g., library choice, configuration preference, ambiguous requirement).
+//! ask_user tool — ask the user a question mid-task (NEW interrupt-based design).
+//!
+//! Returns an `InterruptRequest` via `ToolResult::interrupt`. The agent
+//! pauses the turn loop, sends the prompt to the UI, and resumes when
+//! the user replies. The reply is injected as a normal tool_result.
 
 use super::{ToolHandler, ToolKey, ToolCallCtx, ToolResult};
 use std::time::Duration;
@@ -14,13 +16,13 @@ fn handle_ask_user(ctx: ToolCallCtx) -> ToolResult {
             .collect())
         .unwrap_or_default();
 
-    let mut content = format!("[ASK_USER] {}", question);
-    if !options.is_empty() {
-        for (i, opt) in options.iter().enumerate() {
-            content.push_str(&format!("\n  {}. {}", i + 1, opt));
-        }
-    }
-    ToolResult { success: true, content }
+    let prompt = if question.is_empty() {
+        "Please provide input:".to_string()
+    } else {
+        question
+    };
+
+    ToolResult::interrupt(prompt, options)
 }
 
 pub fn register(mgr: &mut crate::ToolManager) {

@@ -3,13 +3,19 @@
 //! ToolManager is linked directly into the agent process, eliminating
 //! IPC failures, respawn complexity, and serialization overhead.
 
-use dsx_proto::ToolsToAgent;
+use dsx_proto::InterruptRequest;
 use dsx_types::ToolDef;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+
+/// Return type for tool execution with interrupt support.
+pub struct ToolExecResult {
+    pub content: String,
+    pub interrupt: Option<InterruptRequest>,
+}
 
 // ── Global state ──
 
-static TOOL_MANAGER: Mutex<Option<dsx_tools::ToolManager>> = Mutex::new(None);
+static TOOL_MANAGER: OnceLock<Mutex<dsx_tools::ToolManager>> = OnceLock::new();
 
 /// Initialize the in-process tool manager.
 /// Must be called once at startup, before any tool execution.
@@ -23,9 +29,7 @@ pub fn init_tools(session_seed: &str, mcp_servers: &[dsx_tools::mcp_bridge::McpS
         }
     }
 
-    if let Ok(mut guard) = TOOL_MANAGER.lock() {
-        *guard = Some(mgr);
-    }
+    let _ = TOOL_MANAGER.set(Mutex::new(mgr));
     log::info!("dsx: tool manager inited ({} tools)", all_tools().len());
 }
 
@@ -37,8 +41,8 @@ fn with_mgr<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&mut dsx_tools::ToolManager) -> R,
 {
-    let mut guard = TOOL_MANAGER.lock().ok()?;
-    guard.as_mut().map(|mgr| f(mgr))
+    let mut guard = TOOL_MANAGER.get()?.lock().ok()?;
+    Some(f(&mut guard))
 }
 
 // ── Tool definition accessors ──
@@ -54,6 +58,11 @@ pub fn execute_tool(name: &str, action: &str, args: &str) -> String {
 }
 
 pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: &str) -> String {
+    execute_tool_with_id_full(name, action, args, tool_call_id).content
+}
+
+/// Execute a tool and return the full result including any interrupt request.
+pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call_id: &str) -> ToolExecResult {
     let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
     let call_id = if tool_call_id.is_empty() {
         format!("agent_{}", std::time::SystemTime::now()
@@ -75,7 +84,7 @@ pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: 
     log::info!("tool [{source}] call: {name} (id={call_id})");
 
     if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-        return "[CANCELLED]".to_string();
+        return ToolExecResult { content: "[CANCELLED]".to_string(), interrupt: None };
     }
 
     let result = with_mgr(|mgr| {
@@ -83,14 +92,8 @@ pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: 
     });
 
     match result {
-        Some(ToolsToAgent::ToolResultMessage { content, .. }) => {
-            content
-        }
-        Some(ToolsToAgent::ToolError { error, .. }) => {
-            format!("[ERROR] {}", error)
-        }
-        Some(_) => "[ERROR] unexpected response from tool manager".to_string(),
-        None => "[ERROR] tool manager not initialised — call init_tools() first".to_string(),
+        Some(r) => ToolExecResult { content: r.content, interrupt: r.interrupt },
+        None => ToolExecResult { content: "[ERROR] tool manager not initialised — call init_tools() first".to_string(), interrupt: None },
     }
 }
 
@@ -131,8 +134,6 @@ pub fn cancel_current_tool() {
 
 pub fn shutdown_tools() {
     dsx_tools::mcp_bridge::shutdown_mcp_servers();
-    if let Ok(mut guard) = TOOL_MANAGER.lock() {
-        *guard = None;
-    }
+    log::info!("dsx: tool manager shut down");
 }
 

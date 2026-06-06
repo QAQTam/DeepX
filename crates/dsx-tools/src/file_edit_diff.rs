@@ -1,5 +1,5 @@
-use crate::{ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
-use super::file_shared::{disambiguate_match, apply_diff_and_format};
+use crate::{ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
+use super::file_shared::{disambiguate_match, apply_diff_and_format, normalize_newlines};
 
 pub(super) fn exec_edit_file_diff(args: &str) -> String {
     let v: serde_json::Value = match serde_json::from_str(args) {
@@ -21,7 +21,7 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
     let description = v.get("description").and_then(|v| v.as_str()).unwrap_or("");
 
-    let content = match std::fs::read_to_string(path) {
+    let raw = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
             let err = e.to_string();
@@ -31,6 +31,11 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
             return format!("[ERROR] Cannot read {}: {}\n[HINT] Use list_dir() first.", path, e);
         }
     };
+    // Normalize CRLF → LF so line matching works
+    let (content, was_crlf) = normalize_newlines(&raw);
+    if was_crlf {
+        log::info!("file_edit_diff: {} had CRLF, normalized to LF for matching", path);
+    }
     let file_lines: Vec<&str> = content.lines().collect();
     let norm_old: Vec<String> = old_lines.iter().map(|l| l.trim_end().to_string()).collect();
     let win = norm_old.len();
@@ -71,7 +76,6 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
 
 handler!(handle_edit_file_diff, exec_edit_file_diff);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -79,7 +83,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Context/Fuzzy edit: give old_lines+new_lines+optional context. Tolerant of whitespace changes. Use INSTEAD of edit_file when exact old_string is uncertain or changing multi-line blocks.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

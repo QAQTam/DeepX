@@ -17,8 +17,8 @@ fn main() {
   let src = ws_root.join("target").join(&profile).join(&exe_name);
   if src.exists() {
     if let Some(dest_dir) = m.join("resources").to_str().map(|_| m.join("resources")) {
-      let _ = std::fs::create_dir_all(&dest_dir);
-      let _ = std::fs::copy(&src, &dest_dir.join(&exe_name));
+      drop(std::fs::create_dir_all(&dest_dir));
+      drop(std::fs::copy(&src, &dest_dir.join(&exe_name)));
     }
   }
   tauri_build::build()

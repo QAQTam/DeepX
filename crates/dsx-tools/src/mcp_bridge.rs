@@ -38,7 +38,7 @@ fn rpc_call(
     params: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let id = {
-        let mut c = session.id_counter.lock().unwrap();
+        let mut c = session.id_counter.lock().expect("lock");
         *c += 1;
         *c
     };
@@ -54,12 +54,12 @@ fn rpc_call(
 
     let line = serde_json::to_string(&body).map_err(|e| format!("json serialize: {e}"))?;
     {
-        let mut stdin = session.stdin.lock().unwrap();
+        let mut stdin = session.stdin.lock().expect("lock");
         writeln!(&mut stdin, "{}", line).map_err(|e| format!("write: {e}"))?;
         stdin.flush().map_err(|e| format!("flush: {e}"))?;
     }
 
-    let mut stdout = session.stdout.lock().unwrap();
+    let mut stdout = session.stdout.lock().expect("lock");
     let mut buf = String::new();
     stdout.read_line(&mut buf).map_err(|e| format!("read: {e}"))?;
 
@@ -105,8 +105,8 @@ fn initialize_mcp_session(config: &McpServerConfig) -> Result<(Arc<McpSession>, 
     // Send initialized notification
     {
         let msg = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-        let line = serde_json::to_string(&msg).unwrap();
-        let mut stdin = session.stdin.lock().unwrap();
+        let line = serde_json::to_string(&msg).expect("serialize MCP notification");
+        let mut stdin = session.stdin.lock().expect("lock");
         writeln!(&mut stdin, "{}", line).map_err(|e| format!("write: {e}"))?;
         stdin.flush().map_err(|e| format!("flush: {e}"))?;
     }
@@ -137,18 +137,18 @@ struct McpToolDef {
 /// The shared handler function for all MCP tools.
 /// Looks up the session by tool name from the global registry.
 fn mcp_tool_handler(ctx: ToolCallCtx) -> ToolResult {
-    let guard = MCP_SESSIONS.lock().unwrap();
+    let guard = MCP_SESSIONS.lock().expect("lock");
     let sessions = match guard.as_ref() {
         Some(s) => s,
         None => return ToolResult {
-            success: false,
+            interrupt: None, success: false,
             content: "[ERROR] MCP sessions not initialized".to_string(),
         },
     };
     let session = match sessions.get(&ctx.name) {
         Some(s) => s.clone(),
         None => return ToolResult {
-            success: false,
+            interrupt: None, success: false,
             content: format!("[ERROR] MCP tool '{}' — session not found", ctx.name),
         },
     };
@@ -171,7 +171,7 @@ fn mcp_tool_handler(ctx: ToolCallCtx) -> ToolResult {
             ToolResult::ok(content)
         }
         Err(e) => ToolResult {
-            success: false,
+            interrupt: None, success: false,
             content: format!("[ERROR] MCP tool '{}' failed: {}", ctx.name, e),
         },
     }
@@ -211,15 +211,15 @@ pub fn register_mcp_servers(
         }
     }
 
-    *MCP_SESSIONS.lock().unwrap() = Some(sessions);
+    *MCP_SESSIONS.lock().expect("lock") = Some(sessions);
     Ok(())
 }
 
 /// Clean up all MCP server processes.
 pub fn shutdown_mcp_servers() {
-    if let Some(sessions) = MCP_SESSIONS.lock().unwrap().take() {
+    if let Some(sessions) = MCP_SESSIONS.lock().expect("lock").take() {
         for (_, session) in sessions {
-            let _ = session.child.lock().unwrap().kill();
+            let _ = session.child.lock().expect("lock").kill();
         }
     }
 }

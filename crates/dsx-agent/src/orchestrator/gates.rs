@@ -13,54 +13,54 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
     let is_exec = tool_name == "exec" && (action == "execute" || action == "run");
     let is_explore = tool_name == "explore" || (tool_name == "exec" && action == "explore");
     if is_read || is_write {
-        if !state.has_explored {
-            let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] '{}' blocked: you haven't explored the project yet.\n[HINT] Call explore() first.", tool_name));
+        if !state.files.has_explored {
+            state.ctx.push_tool_result(tc_id, &format!("[ERROR] '{}' blocked: you haven't explored the project yet.\n[HINT] Call explore() first.", tool_name));
             return true;
         }
         if is_write {
             if let Some(ref path) = parse_file_arg(args) {
                 let declared = last_assistant_mentions(state, path);
                 if !declared {
-                    state.turn_annotations.push(format!("[intent] write to '{}' was NOT declared in assistant reasoning \u{2014} consider requiring declaration", path));
+                    state.turn.annotations.push(format!("[intent] write to '{}' was NOT declared in assistant reasoning \u{2014} consider requiring declaration", path));
                 }
             }
         }
         if is_edit {
             if let Some(ref path) = parse_file_arg(args) {
                 if state.is_file_stale(path) {
-                    let read_at = state.file_read_at.get(path).copied().unwrap_or(0);
-                    let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'file edit' blocked: file '{}' last read at turn {}. Stale.\n[HINT] Call read_file(path=\"{}\") first.", path, read_at, path));
+                    let read_at = state.files.file_read_at.get(path).copied().unwrap_or(0);
+                    state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'file edit' blocked: file '{}' last read at turn {}. Stale.\n[HINT] Call read_file(path=\"{}\") first.", path, read_at, path));
                     return true;
                 }
             }
         }
     }
     if is_exec {
-        if !state.has_explored {
-            let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'exec execute' blocked: you haven't explored yet.\n[HINT] Call explore() first."));
+        if !state.files.has_explored {
+            state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'exec execute' blocked: you haven't explored yet.\n[HINT] Call explore() first."));
             return true;
         }
         let cmd = parse_cmd_arg(args).unwrap_or_else(|| "?".into());
         if last_assistant_content(state).is_empty() {
-            state.turn_annotations.push(format!("[exec] '{}' — next time, say what you're running so the log captures it.", cmd.chars().take(60).collect::<String>()));
+            state.turn.annotations.push(format!("[exec] '{}' — next time, say what you're running so the log captures it.", cmd.chars().take(60).collect::<String>()));
         }
         if let Some((tool_match, cmd_summary)) = detect_tool_equivalent(&cmd) {
-            state.turn_annotations.push(format!("[exec] '{}' looks like {}() — if {}() is insufficient, tell us why.", cmd_summary, tool_match, tool_match));
+            state.turn.annotations.push(format!("[exec] '{}' looks like {}() — if {}() is insufficient, tell us why.", cmd_summary, tool_match, tool_match));
         }
-        for written in &state.files_written_this_turn {
+        for written in &state.files.files_written_this_turn {
             let written_matches = cmd.contains(written)
                 || std::path::absolute(written).ok()
                     .map(|a| cmd.contains(a.to_string_lossy().as_ref()))
                     .unwrap_or(false);
             if written_matches && classify_path(written) != PathTrust::Trusted {
-                let _ = state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'exec' blocked: '{}' was written this turn.\n[HINT] Explain what the script does and run it NEXT turn.", written));
+                state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'exec' blocked: '{}' was written this turn.\n[HINT] Explain what the script does and run it NEXT turn.", written));
                 return true;
             }
         }
     }
     if is_explore {
         // explore() marks the project as explored
-        state.has_explored = true;
+        state.files.has_explored = true;
     }
     false
 }
@@ -68,7 +68,7 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
 /// Re-read gate: after file write/edit, block ALL other tools until the
 /// written/edited file is re-read to prevent context hallucination.
 pub fn re_read_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: &str) -> bool {
-    let required_path = match &state.re_read_required {
+    let required_path = match &state.files.re_read_required {
         Some(p) => p.clone(),
         None => return false,
     };
@@ -76,10 +76,10 @@ pub fn re_read_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
     let is_same_file = parse_file_arg(args)
         .map_or(false, |p| p == required_path);
     if is_read && is_same_file {
-        state.re_read_required = None;
+        state.files.re_read_required = None;
         return false;
     }
-    let _ = state.ctx.push_tool_result(tc_id, &format!(
+    state.ctx.push_tool_result(tc_id, &format!(
         "[ERROR] '{}' blocked: must re-read '{}' after write/edit to prevent hallucination.\n[HINT] Call read_file(path=\"{}\") first.",
         tool_name, required_path, required_path
     ));
@@ -119,8 +119,9 @@ pub fn detect_tool_equivalent(cmd: &str) -> Option<(String, String)> {
     // grep/rg → search
     if let Some(rest) = cmd.strip_prefix("grep ").or_else(|| cmd.strip_prefix("rg ")) {
         let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() >= 2 && parts.last().unwrap_or(&"").contains('.') {
-            return Some(("search".into(), format!("grep {} {}", parts[0], parts.last().unwrap())));
+        let last = parts.last().copied().unwrap_or("");
+        if parts.len() >= 2 && last.contains('.') {
+            return Some(("search".into(), format!("grep {} {}", parts[0], last)));
         }
     }
     // tee file / >> file / > file → write_file (append)

@@ -1,19 +1,4 @@
-use crate::agent::AgentState;
 use dsx_types::Message;
-
-/// Errors the assembler can surface when invariants would be violated.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AssemblerError {
-    /// Attempted to push a user message while the current turn has incomplete steps.
-    TurnIncomplete { missing: String },
-    /// Attempted to push an assistant while no user message is pending.
-    NoUserPending,
-    /// Attempted to push a tool result referencing a tool_call_id not present
-    /// in the current step's tool_calls.
-    OrphanToolResult { tool_call_id: String },
-    /// Attempted to push tool result but current step has no tool_calls.
-    NoToolUseInStep,
-}
 
 // ── Data model ──
 
@@ -58,12 +43,6 @@ impl Step {
         if ids.is_empty() { return true; }
         ids.iter().all(|id| self.tool_result_has_id(id))
     }
-
-    fn missing_tool_count(&self) -> usize {
-        let ids = self.assistant_tool_ids();
-        ids.iter().filter(|id| !self.tool_result_has_id(id)).count()
-    }
-
 }
 
 /// A single conversation turn: one user message + a chain of assistant steps.
@@ -75,29 +54,7 @@ pub struct Turn {
 
 impl Turn {
     fn new(user: Message) -> Self {
-        Self {
-            user,
-            steps: Vec::new(),
-        }
-    }
-
-    /// The current step (last in the chain).
-    fn current_step(&self) -> Option<&Step> {
-        self.steps.last()
-    }
-
-    fn current_step_mut(&mut self) -> Option<&mut Step> {
-        self.steps.last_mut()
-    }
-
-    /// All steps complete? (every step's tool_uses satisfied)
-    fn all_steps_satisfied(&self) -> bool {
-        self.steps.iter().all(|s| s.all_tools_satisfied())
-    }
-
-    /// Total missing tool results across all incomplete steps.
-    fn total_missing_tools(&self) -> usize {
-        self.steps.iter().map(|s| s.missing_tool_count()).sum()
+        Self { user, steps: Vec::new() }
     }
 
     fn find_step_for_mut(&mut self, tool_call_id: &str) -> Option<&mut Step> {
@@ -111,6 +68,9 @@ impl Turn {
 ///
 /// All message mutations go through this assembler. It is the single source of
 /// truth for message state and the only path to produce context for the API.
+///
+/// Methods are infallible — inconsistencies are auto-repaired with a log warning
+/// rather than rejected. The LLM API itself enforces message alternation.
 #[derive(Debug, Clone)]
 pub struct ContextAssembler {
     system_messages: Vec<Message>,
@@ -118,181 +78,170 @@ pub struct ContextAssembler {
 }
 
 impl ContextAssembler {
-    // ── Construction ──
-
     pub fn new() -> Self {
-        Self {
-            system_messages: Vec::new(),
-            turns: Vec::new(),
-        }
+        Self { system_messages: Vec::new(), turns: Vec::new() }
     }
 
     // ── System messages ──
 
+    pub fn system_messages(&self) -> &[Message] {
+        &self.system_messages
+    }
+
     pub fn push_system(&mut self, msg: Message) {
         debug_assert_eq!(msg.role, "system", "push_system requires role=system");
         self.system_messages.push(msg);
-        
     }
 
     // ── User messages ──
 
-    /// Push a user message. Actively rejects if the current turn has unfulfilled tool calls.
-    pub fn push_user(&mut self, text: &str) -> Result<(), AssemblerError> {
-        if self.has_unfulfilled_tool_calls() {
-            return Err(AssemblerError::TurnIncomplete {
-                missing: format!(
-                    "{} step(s) with missing tool results — cannot push user yet",
-                    self.turns.last().map(|t| t.total_missing_tools()).unwrap_or(0)
-                ),
-            });
-        }
-        if let Some(last) = self.turns.last() {
-            if last.steps.is_empty() {
-                return Err(AssemblerError::TurnIncomplete {
-                    missing: "current turn has no assistant response yet".into(),
-                });
-            }
-        }
-        self.turns.push(Turn::new(Message::user(text)));
-        
-        Ok(())
-    }
-
-    /// Push user unconditionally — RESTORE ONLY. Do not use in normal flow.
-    /// Skipped checks: turn completeness, alternation.
-    #[doc(hidden)]
-    pub fn push_user_restore(&mut self, text: &str) {
-        if let Some(last) = self.turns.last_mut() {
-            if last.steps.is_empty() {
-                let prefix = last.user.content.iter().find_map(|b| {
-                    if let dsx_types::ContentBlock::Text { text } = b {
-                        Some(text.clone())
-                    } else {
-                        None
+    /// Push a user message. If the previous step has unfulfilled tool calls,
+    /// auto-complete them with a note (cancel recovery).
+    pub fn push_user(&mut self, text: &str) {
+        if let Some(turn) = self.turns.last_mut() {
+            if let Some(step) = turn.steps.last_mut() {
+                let missing: Vec<(String, String)> = {
+                    let tool_ids = step.assistant_tool_ids();
+                    tool_ids.iter()
+                        .filter(|id| !step.tool_result_has_id(id))
+                        .map(|id| {
+                            let name = step.assistant.content.iter().find_map(|b| {
+                                if let dsx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
+                                    if tid == id { Some(name.clone()) } else { None }
+                                } else { None }
+                            }).unwrap_or_default();
+                            (id.clone(), name)
+                        })
+                        .collect()
+                };
+                if !missing.is_empty() {
+                    log::warn!("push_user: auto-completing {} unfulfilled tool(s) in previous step", missing.len());
+                    for (id, name) in missing {
+                        step.tool_results.push(Message::tool(&id, &format!(
+                            "[CANCELLED] Tool '{}' was not executed (user interrupted).", name
+                        )));
                     }
-                }).unwrap_or_default();
-                last.user.content = vec![dsx_types::ContentBlock::text(&format!("{}\n\n{}", prefix, text))];
-                
-                return;
+                }
             }
         }
         self.turns.push(Turn::new(Message::user(text)));
-        
     }
 
     // ── Assistant messages ──
 
     /// Push an assistant response. Creates a new Step in the current turn.
-    /// Actively rejects if current turn has unfulfilled tool calls.
-    pub fn push_assistant(&mut self, msg: Message) -> Result<(), AssemblerError> {
+    /// If no turn exists, auto-creates one with an empty user message (restore path).
+    /// If previous step has unfulfilled tools, auto-complete them.
+    pub fn push_assistant(&mut self, msg: Message) {
         debug_assert_eq!(msg.role, "assistant", "push_assistant requires role=assistant");
-        // Check before mutable borrow
-        let has_unfulfilled = self.has_unfulfilled_tool_calls();
-        let turn = self.turns.last_mut().ok_or(AssemblerError::NoUserPending)?;
-        // Previous step must be satisfied before starting a new one
-        if has_unfulfilled {
-            if let Some(last_step) = turn.current_step() {
-                return Err(AssemblerError::TurnIncomplete {
-                    missing: format!(
-                        "{} tool result(s) missing from previous step",
-                        last_step.missing_tool_count()
-                    ),
-                });
-            }
-        }
-        turn.steps.push(Step::new(msg));
-        
-        Ok(())
-    }
 
-    /// Push assistant without validation — RESTORE ONLY. Do not use in normal flow.
-    /// Skipped checks: turn existence, alternation, pending tools.
-    #[doc(hidden)]
-    pub fn push_assistant_restore(&mut self, msg: Message) {
         if self.turns.is_empty() {
+            log::warn!("push_assistant: no turn exists, auto-creating empty user turn");
             self.turns.push(Turn::new(Message::user("")));
         }
-        let turn = self.turns.last_mut().unwrap();
+
+        let turn = self.turns.last_mut().expect("turns non-empty after guarantee");
+
+        // Auto-complete any unfulfilled tools in the current step
+        if let Some(step) = turn.steps.last_mut() {
+            let missing: Vec<(String, String)> = {
+                let tool_ids = step.assistant_tool_ids();
+                tool_ids.iter()
+                    .filter(|id| !step.tool_result_has_id(id))
+                    .map(|id| {
+                        let name = step.assistant.content.iter().find_map(|b| {
+                            if let dsx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
+                                if tid == id { Some(name.clone()) } else { None }
+                            } else { None }
+                        }).unwrap_or_default();
+                        (id.clone(), name)
+                    })
+                    .collect()
+            };
+            if !missing.is_empty() {
+                log::warn!("push_assistant: auto-completing {} unfulfilled tool(s) from previous step", missing.len());
+                for (id, name) in missing {
+                    step.tool_results.push(Message::tool(&id, &format!(
+                        "[AUTO] Tool '{}' was not executed before next assistant response.", name
+                    )));
+                }
+            }
+        }
+
         turn.steps.push(Step::new(msg));
-        
     }
 
     // ── Tool results ──
 
-    /// Push a tool result to the CURRENT step. Validates tool_call_id exists.
-    pub fn push_tool_result(&mut self, tool_call_id: &str, result: &str) -> Result<(), AssemblerError> {
-        let turn = self.turns.last_mut()
-            .ok_or(AssemblerError::OrphanToolResult { tool_call_id: tool_call_id.into() })?;
-        let step = turn.current_step_mut()
-            .ok_or(AssemblerError::NoToolUseInStep)?;
-
-        if !step.has_tool_call(tool_call_id) {
-            return Err(AssemblerError::OrphanToolResult { tool_call_id: tool_call_id.into() });
-        }
-
-        if !step.tool_result_has_id(tool_call_id) {
-            step.tool_results.push(Message::tool(tool_call_id, result));
-            
-        }
-        Ok(())
-    }
-
-    /// Push a tool result by searching all turns for the matching assistant.
-    /// Used by async exec results that may arrive across turns.
-    pub fn push_tool_result_for(&mut self, tool_call_id: &str, result: &str) -> Result<(), AssemblerError> {
+    /// Push a tool result, searching across all turns for the matching tool_call_id.
+    /// If no matching tool use is found, logs a warning and appends to the last step.
+    pub fn push_tool_result(&mut self, tool_call_id: &str, result: &str) {
+        // Search all turns (most recent first)
         for turn in self.turns.iter_mut().rev() {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
                 if !step.tool_result_has_id(tool_call_id) {
                     step.tool_results.push(Message::tool(tool_call_id, result));
-                    
                 }
-                return Ok(());
+                return;
             }
         }
-        Err(AssemblerError::OrphanToolResult { tool_call_id: tool_call_id.into() })
+        // Fallback: append to last step if possible
+        if let Some(turn) = self.turns.last_mut() {
+            if let Some(step) = turn.steps.last_mut() {
+                log::warn!("push_tool_result: orphan tool_result {} — appending to last step", tool_call_id);
+                step.tool_results.push(Message::tool(tool_call_id, result));
+                return;
+            }
+        }
+        log::error!("push_tool_result: orphan tool_result {} — nowhere to place, dropped", tool_call_id);
     }
 
-    // ── Validation ──
-
-    pub fn validate(&self) -> Result<(), String> {
-        if self.turns.is_empty() && self.system_messages.is_empty() {
-            return Ok(()); // empty is valid
-        }
-        for (i, turn) in self.turns.iter().enumerate() {
-            if turn.steps.is_empty() && i < self.turns.len() - 1 {
-                return Err(format!("Turn {}: no assistant steps (not last turn)", i));
-            }
-            for (j, step) in turn.steps.iter().enumerate() {
-                if !step.all_tools_satisfied() && j < turn.steps.len() - 1 {
-                    return Err(format!("Turn {} step {}: incomplete but not last step", i, j));
-                }
-                for tr in &step.tool_results {
-                    let tid = tr.content.iter().find_map(|b| {
-                        if let dsx_types::ContentBlock::ToolResult { tool_use_id, .. } = b {
-                            Some(tool_use_id.as_str())
-                        } else {
-                            None
-                        }
-                    });
-                    let Some(tid) = tid else { continue };
-                    if !step.has_tool_call(tid) {
-                        return Err(format!("Turn {} step {}: orphan tool_result {}", i, j, tid));
-                    }
-                }
+    /// Replace an existing tool result's content (for interrupt replies like ask_user).
+    pub fn replace_tool_result(&mut self, tool_call_id: &str, result: &str) {
+        for turn in self.turns.iter_mut().rev() {
+            if let Some(step) = turn.find_step_for_mut(tool_call_id) {
+                // Remove old result(s) for this tool_call_id, then push new one
+                step.tool_results.retain(|tr| {
+                    !tr.content.iter().any(|b| {
+                        matches!(b, dsx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == tool_call_id)
+                    })
+                });
+                step.tool_results.push(Message::tool(tool_call_id, result));
+                return;
             }
         }
-        for (i, m) in self.system_messages.iter().enumerate() {
-            if m.role != "system" {
-                return Err(format!("System[{}]: expected role=system, got {}", i, m.role));
-            }
-        }
-        Ok(())
+        log::error!("replace_tool_result: tool_call_id {} not found in any turn", tool_call_id);
     }
 
-    // ── Flat view ──
+    // ── Queries ──
 
-    /// Collect all messages into a flat Vec for UI rendering and session persistence.
+    /// True if the last step has unsatisfied tool calls.
+    pub fn has_pending_tools(&self) -> bool {
+        self.turns.last()
+            .and_then(|t| t.steps.last())
+            .map(|s| !s.all_tools_satisfied())
+            .unwrap_or(false)
+    }
+
+    /// Number of turns in the conversation.
+    pub fn turn_count(&self) -> usize {
+        self.turns.len()
+    }
+
+    /// Total message count (system + user + assistant + tool_results).
+    pub fn message_count(&self) -> usize {
+        self.system_messages.len()
+            + self.turns.iter().map(|t| 1 + t.steps.iter().map(|s| 1 + s.tool_results.len()).sum::<usize>()).sum::<usize>()
+    }
+
+    /// Read-only access to all turns (for session restore rendering).
+    pub fn turns(&self) -> &[Turn] {
+        &self.turns
+    }
+
+    // ── Serialization ──
+
+    /// Flatten all messages into a Vec (system + user + assistant + tool_results interleaved).
     pub fn to_vec(&self) -> Vec<Message> {
         let mut v: Vec<Message> = self.system_messages.clone();
         for turn in &self.turns {
@@ -305,37 +254,11 @@ impl ContextAssembler {
         v
     }
 
-    pub fn message_count(&self) -> usize {
-        self.system_messages.len()
-            + self.turns.iter().map(|t| 1 + t.steps.iter().map(|s| 1 + s.tool_results.len()).sum::<usize>()).sum::<usize>()
-    }
-
-    pub fn turn_count(&self) -> usize {
-        self.turns.len()
-    }
-
-    // ── State queries ──
-
-    /// Read-only access to all turns for compaction.
-    /// Turn+Step structure is preserved — no flatten round-trip needed.
-    pub fn turns(&self) -> &[Turn] {
-        &self.turns
-    }
-
-    /// True if the current turn has any unfulfilled tool calls in any step.
-    /// Used by push_user and push_assistant to actively reject invalid state transitions.
-    pub fn has_unfulfilled_tool_calls(&self) -> bool {
-        self.turns.last()
-            .map(|t| !t.all_steps_satisfied())
-            .unwrap_or(false)
-    }
-
-    /// Whether the last step has unsatisfied tool calls.
-    pub fn has_pending_tools(&self) -> bool {
-        self.turns.last()
-            .and_then(|t| t.current_step())
-            .map(|s| !s.all_tools_satisfied())
-            .unwrap_or(false)
+    /// Return conversation messages (user/assistant/tool), system messages stripped.
+    pub fn build(&self) -> Vec<Message> {
+        let mut msgs = self.to_vec();
+        msgs.retain(|m| m.role != "system");
+        msgs
     }
 
     // ── Import from legacy Vec<Message> (session restore) ──
@@ -356,35 +279,22 @@ impl ContextAssembler {
                     let text = msgs[i].content.iter().find_map(|b| {
                         if let dsx_types::ContentBlock::Text { text } = b {
                             Some(text.clone())
-                        } else {
-                            None
-                        }
+                        } else { None }
                     }).unwrap_or_default();
-                    let _ = assembler.push_user(&text);
+                    assembler.push_user(&text);
                     i += 1;
                 }
                 "assistant" => {
-                    let msg = msgs[i].clone();
-                    assembler.push_assistant_restore(msg);
+                    assembler.push_assistant(msgs[i].clone());
                     i += 1;
                 }
                 "tool" => {
                     let (tc_id, result) = msgs[i].content.iter().find_map(|b| {
                         if let dsx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = b {
                             Some((tool_use_id.clone(), content.clone()))
-                        } else {
-                            None
-                        }
+                        } else { None }
                     }).unwrap_or_default();
-                    match assembler.push_tool_result_for(&tc_id, &result) {
-                        Ok(()) => {}
-                        Err(AssemblerError::OrphanToolResult { .. }) => {
-                            repairs.push(format!("orphan tool_result {} deleted on import", tc_id));
-                        }
-                        Err(e) => {
-                            repairs.push(format!("import error: {:?}", e));
-                        }
-                    }
+                    assembler.push_tool_result(&tc_id, &result);
                     i += 1;
                 }
                 _ => { i += 1; }
@@ -392,7 +302,6 @@ impl ContextAssembler {
         }
 
         // Repair: inject neutral [RESTORE] note for orphan tool_uses
-        // (satisfies API tool_call/tool_result alternation without faking errors)
         for turn in assembler.turns.iter_mut() {
             for step in turn.steps.iter_mut() {
                 let missing: Vec<(String, String)> = {
@@ -403,9 +312,7 @@ impl ContextAssembler {
                             let name = step.assistant.content.iter().find_map(|b| {
                                 if let dsx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
                                     if tid == id { Some(name.clone()) } else { None }
-                                } else {
-                                    None
-                                }
+                                } else { None }
                             }).unwrap_or_default();
                             (id.clone(), name)
                         })
@@ -426,7 +333,7 @@ impl ContextAssembler {
         (assembler, repairs)
     }
 
-    // ── Remove last incomplete step (for stream cancel recovery) ──
+    // ── Stream cancel recovery ──
 
     /// If the last step has unsatisfied tools, remove it.
     /// Used when the user cancels streaming during a tool_use response.
@@ -435,96 +342,10 @@ impl ContextAssembler {
             if let Some(step) = turn.steps.last() {
                 if !step.all_tools_satisfied() {
                     turn.steps.pop();
-                    
                     return true;
                 }
             }
         }
         false
     }
-
-    // ── Build: conversation messages ──
-
-    /// Return conversation messages (user/assistant/tool), system messages stripped.
-    /// Tool results are kept verbatim to preserve KV cache prefix stability across turns.
-    pub fn build(&self) -> Vec<Message> {
-        let mut msgs = self.to_vec();
-        msgs.retain(|m| m.role != "system");
-        msgs
-    }
-}
-
-
-
-// ── build_context ──
-
-/// Build context for the next API request.
-///
-/// # Design
-///
-/// DeepSeek V4 preserves reasoning across tool-calling context.
-/// Two-layer design keeps V4 in tool-calling mode (no synthetic user messages):
-///
-/// Layer 1: System prompt (static — KV cached)
-/// Layer 2: Conversation history with smart-compressed old tool results
-///
-/// Turn annotations appended to the last real user message.
-/// ```
-pub fn build_context(state: &mut AgentState) -> Vec<Message> {
-
-    // ── Layer 1: System prompt ──
-    let mut sys = crate::config::system_prompt();
-    sys.push_str("\n\n");
-    sys.push_str(crate::prompt::DSML_SCHEMA);
-
-//    sys.push_str("### Available Tools\n\n");
-//    for td in &state.tool_defs {
-//        sys.push_str(&format!("- {}: {}\n", td.function.name, td.function.description));
-//    }
-
-    if state.config.effort.as_deref() == Some("max") {
-        sys.push('\n');
-        sys.push_str(crate::prompt::THINK_MAX);
-    }
-
-    // Inject skills list
-    sys.push_str(&crate::skills::skills_prompt_section());
-
-    let mut messages = vec![Message::system(&sys)];
-
-    // ── Layer 2: Conversation history ──
-    // Must come BEFORE context messages so that history token positions
-    // stay fixed across turns — KV cache can reuse them exactly.
-    let mut conv = state.ctx.build();
-
-    // Turn annotations → appended to last user message in conv (not full messages)
-    let mut dyn_suffix = String::new();
-    if !state.turn_annotations.is_empty() {
-        let ann = state.turn_annotations.join("\n");
-        dyn_suffix.push_str("\n\n## Notes\n");
-        dyn_suffix.push_str(&ann);
-    }
-
-    if !dyn_suffix.is_empty() {
-        if let Some(last_user) = conv.iter_mut().rev().find(|m| m.role == "user") {
-            let existing = last_user.content.iter_mut().find_map(|b| {
-                if let dsx_types::ContentBlock::Text { ref mut text } = b {
-                    Some(text)
-                } else {
-                    None
-                }
-            });
-            if let Some(text) = existing {
-                text.push_str(&dyn_suffix);
-            } else {
-                last_user.content.push(dsx_types::ContentBlock::text(&dyn_suffix));
-            }
-        }
-    }
-
-    messages.extend(conv);
-
-    state.turn_annotations.clear();
-
-    messages
 }

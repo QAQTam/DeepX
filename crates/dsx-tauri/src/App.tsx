@@ -95,11 +95,15 @@ export default function App() {
     if (agent.state.connected) session.refresh()
   })
 
-  // ── Auto-scroll chat to bottom ──
+  // ── Auto-scroll chat to bottom (only near bottom) ──
   createEffect(() => {
     messages()
     agent.state.streaming
-    msgEndRef?.scrollIntoView({ behavior: 'instant' })
+    const el = (msgEndRef as HTMLDivElement)?.parentElement
+    if (el) {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+      if (dist < 120) msgEndRef?.scrollIntoView({ behavior: 'instant' })
+    }
   })
 
   // ── Auto-focus input on connect ──
@@ -119,54 +123,8 @@ export default function App() {
       if (!p || typeof p.type !== 'string') return
 
       switch (p.type) {
-        case 'assistant_msg': {
-          const thinking = (p.thinking || '') as string
-          const text = (p.text || '') as string
-          const content = thinking ? `\n<reasoning>${thinking}</reasoning>\n${text}` : text
-          pushMsg({ role: 'assistant', content })
-          addTokens(content)
-          break
-        }
-        case 'tool_call': {
-          const tool = ((p as any).tool || p) as any
-          const toolId = (tool.id as string) || `tc-${Date.now()}`
-          const name = (tool.name as string) || 'unknown'
-          const argsDisplay = (tool.args_display as string) || ''
-          const body = tool.body
-          setMessages(prev => {
-            const msgs = [...prev]
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              if (msgs[i].role === 'assistant') {
-                const cards = [...(msgs[i].tool_cards || [])]
-                cards.push({ id: toolId, name, args: argsDisplay, body })
-                msgs[i] = { ...msgs[i], tool_cards: cards }
-                return msgs
-              }
-            }
-            return msgs
-          })
-          break
-        }
-        case 'tool_result': {
-          const toolId = (p.tool_id as string) || ''
-          const output = (p.output as string) || ''
-          const success = p.success as boolean | undefined
-          setMessages(prev => {
-            const msgs = [...prev]
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              if (msgs[i].role === 'assistant' && msgs[i].tool_cards) {
-                const cards = msgs[i].tool_cards!.map(tc =>
-                  tc.id === toolId ? { ...tc, output, success } : tc
-                )
-                msgs[i] = { ...msgs[i], tool_cards: cards }
-                return msgs
-              }
-            }
-            return msgs
-          })
-          break
-        }
         case 'turn_start': {
+          agent.dispatch({ type: 'TURN_START', turn_id: p.turn_id as string, user_text: p.user_text as string })
           setStreamingThink('')
           setStreamingText('')
           setStreamingToolNames([])
@@ -241,6 +199,7 @@ export default function App() {
           break
         }
         case 'turn_end': {
+          agent.dispatch({ type: 'TURN_END', turn_id: p.turn_id as string })
           setStreamingThink('')
           setStreamingText('')
           setStreamingToolNames([])
@@ -276,6 +235,7 @@ export default function App() {
           break
         }
         case 'session_restored': {
+          agent.dispatch({ type: 'RESTORE_SESSION', seed: (p.seed as string) || '', turns: (p.turns as any[]) || [] })
           const seed = (p as any).seed as string
           setTokenUsage(prev => ({ ...prev, used: (p as any).tokens_used || prev.used }))
           if (seed) {
@@ -306,6 +266,7 @@ export default function App() {
           break
         }
         case 'error': {
+            agent.dispatch({ type: 'ERROR', message: (p.message as string) || 'Agent error' })
           const msg = (p as any).message as string || 'Agent error'
           toast.addToast(msg, 'error')
           pushMsg({ role: 'assistant', content: `\u26a0 ${msg}` })
@@ -333,7 +294,7 @@ export default function App() {
     pushMsg({ role: 'user', content: text })
     addTokens(text)
     agent.send(text)
-    setTimeout(() => inputRef?.focus(), 50)
+    inputRef?.focus()
   }
 
   // ── Ask answer submit ──

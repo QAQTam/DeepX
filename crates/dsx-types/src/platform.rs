@@ -55,13 +55,13 @@ pub fn workspace_path() -> PathBuf {
 /// - Unix: `kill -9`
 pub fn kill_process(pid: u32) {
     if cfg!(target_os = "windows") {
-        let _ = std::process::Command::new("taskkill")
+        drop(std::process::Command::new("taskkill")
             .args(["/F", "/PID", &pid.to_string()])
-            .output();
+            .output());
     } else {
-        let _ = std::process::Command::new("kill")
+        drop(std::process::Command::new("kill")
             .args(["-9", &pid.to_string()])
-            .output();
+            .output());
     }
 }
 

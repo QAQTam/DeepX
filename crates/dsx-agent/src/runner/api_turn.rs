@@ -9,6 +9,7 @@ use dsx_proto::{self, AgentToHp, Agent2Ui, RoundDeltaKind};
 use crate::agent::AgentState;
 
 use super::gate_bridge::read_hp_frame;
+use super::emit;
 
 struct StreamState {
     has_text_start: bool,
@@ -42,7 +43,7 @@ pub(super) fn run_api_turn(
     ),
     (),
 > {
-    let messages = crate::assembly::build_context(agent);
+    let messages = agent.build_context();
 
     let messages_json = serde_json::to_value(&messages).unwrap_or_default();
 
@@ -57,13 +58,13 @@ pub(super) fn run_api_turn(
         } else {
             None
         },
-        user_id: Some(agent.session_seed.clone()),
+        user_id: Some(agent.session.seed.clone()),
         api_key: Some(dsx_proto::Redacted(agent.config.api_key.clone())),
     };
 
     if let Err(e) = dsx_proto::write_frame(hp.get_mut(), &chat) {
         log::error!("dsx-agent: write_frame to HP failed: {}", e);
-        let _ = agent_tx.send(Agent2Ui::Error {
+        emit(&agent_tx, Agent2Ui::Error {
             message: "Failed to communicate with gate daemon.".into(),
         });
         return Err(());
@@ -77,7 +78,7 @@ pub(super) fn run_api_turn(
         let frame = match read_hp_frame(hp) {
             Ok(Some(f)) => f,
             Ok(None) | Err(..) => {
-                let _ = agent_tx.send(Agent2Ui::Error {
+                emit(&agent_tx, Agent2Ui::Error {
                     message: "Gate connection closed unexpectedly.".into(),
                 });
                 return Err(());
@@ -86,11 +87,11 @@ pub(super) fn run_api_turn(
 
         match frame {
             dsx_proto::HpToAgent::ContentDelta { delta, reasoning } => {
-                if agent.stream_cancelled
+                if agent.turn.stream_cancelled
                     || dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
                 {
                     log::info!("dsx-agent: streaming cancelled");
-                    agent.stream_cancelled = false;
+                    agent.turn.stream_cancelled = false;
                     // Don't send RoundDelta for cancelled stream — caller handles TurnEnd
                     break;
                 }
@@ -100,7 +101,7 @@ pub(super) fn run_api_turn(
                         if !stream.has_reasoning_start {
                             stream.has_reasoning_start = true;
                         }
-                        let _ = agent_tx.send(Agent2Ui::RoundDelta {
+                        emit(&agent_tx, Agent2Ui::RoundDelta {
                             turn_id: turn_id.into(),
                             round_num,
                             kind: RoundDeltaKind::Thinking,
@@ -114,7 +115,7 @@ pub(super) fn run_api_turn(
                     if !stream.has_text_start {
                         stream.has_text_start = true;
                     }
-                    let _ = agent_tx.send(Agent2Ui::RoundDelta {
+                    emit(&agent_tx, Agent2Ui::RoundDelta {
                         turn_id: turn_id.into(),
                         round_num,
                         kind: RoundDeltaKind::Answering,
@@ -131,7 +132,7 @@ pub(super) fn run_api_turn(
                     }
                     if !stream.dsml_tool_names.contains(name) {
                         stream.dsml_tool_names.push(name.clone());
-                        let _ = agent_tx.send(Agent2Ui::RoundDelta {
+                        emit(&agent_tx, Agent2Ui::RoundDelta {
                             turn_id: turn_id.into(),
                             round_num,
                             kind: RoundDeltaKind::ToolCalling,
@@ -158,10 +159,10 @@ pub(super) fn run_api_turn(
                 ));
             }
             dsx_proto::HpToAgent::Balance { is_available, total_balance, currency } => {
-                let _ = agent_tx.send(Agent2Ui::Balance { is_available, total_balance, currency });
+                emit(&agent_tx, Agent2Ui::Balance { is_available, total_balance, currency });
             }
             dsx_proto::HpToAgent::Error { message } => {
-                let _ = agent_tx.send(Agent2Ui::Error { message: message.clone() });
+                emit(&agent_tx, Agent2Ui::Error { message: message.clone() });
                 return Err(());
             }
             _ => {}

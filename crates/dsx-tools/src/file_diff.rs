@@ -1,4 +1,4 @@
-use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
+use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_diff(args: &str) -> String {
     let path_a = parse_arg(args, "path_a");
@@ -66,7 +66,6 @@ pub(super) fn exec_diff(args: &str) -> String {
 
 handler!(handle_diff, exec_diff);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -74,7 +73,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Compare two files line by line. Shows first diff region with context.",
         input_schema: serde_json::json!({"type":"object","properties":{"path_a":{"type":"string","description":"First file path"},"path_b":{"type":"string","description":"Second file path"}},"required":["path_a","path_b"],"additionalProperties":false}),
         handler: handle_diff,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

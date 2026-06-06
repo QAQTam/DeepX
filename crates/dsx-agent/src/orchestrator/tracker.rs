@@ -4,13 +4,13 @@ use crate::agent::AgentState;
 /// Track a file written/edited this turn for sandbox enforcement.
 pub fn track_file_written(state: &mut AgentState, args: &str) {
     if let Some(p) = dsx_types::arg::parse_file_arg(args) {
-        if !state.files_written_this_turn.contains(&p) {
-            state.files_written_this_turn.push(p.clone());
+        if !state.files.files_written_this_turn.contains(&p) {
+            state.files.files_written_this_turn.push(p.clone());
         }
         if let Ok(abs) = std::path::absolute(&p) {
             let abs_str = abs.to_string_lossy().to_string();
-            if abs_str != p && !state.files_written_this_turn.contains(&abs_str) {
-                state.files_written_this_turn.push(abs_str);
+            if abs_str != p && !state.files.files_written_this_turn.contains(&abs_str) {
+                state.files.files_written_this_turn.push(abs_str);
             }
         }
     }

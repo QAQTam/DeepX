@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
+use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_delete_file(args: &str) -> String {
     let path = parse_arg(args, "path");
@@ -71,7 +71,6 @@ fn find_trash_root() -> std::path::PathBuf {
 
 handler!(handle_delete_file, exec_delete_file);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -79,7 +78,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Move a file to trash (.dsx-trash/) instead of permanent deletion. Use restore_file to recover.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path to delete"}},"required":["path"],"additionalProperties":false}),
         handler: handle_delete_file,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(15),
     });
 }

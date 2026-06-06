@@ -1,6 +1,6 @@
 use std::net::TcpStream;
 use std::process::Child;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use dsx_proto::{self, AgentToHp};
@@ -8,7 +8,7 @@ use dsx_proto::{self, AgentToHp};
 /// Stores the most recently spawned gate daemon child process so it can be
 /// killed during shutdown. Without this, `try_reconnect()` orphans every
 /// process it spawns.
-static HP_DAEMON: Mutex<Option<Child>> = Mutex::new(None);
+static HP_DAEMON: OnceLock<Mutex<Child>> = OnceLock::new();
 
 /// Read HP port from port file.
 pub(crate) fn hp_port() -> u16 {
@@ -49,8 +49,8 @@ pub fn connect() -> Option<TcpStream> {
 /// Kill the HP daemon child process spawned by `try_reconnect()`, if any.
 /// Called during shutdown to prevent orphan processes.
 pub fn kill_hp_daemon() {
-    if let Ok(mut guard) = HP_DAEMON.lock() {
-        if let Some(mut child) = guard.take() {
+    if let Some(lock) = HP_DAEMON.get() {
+        if let Ok(mut child) = lock.lock() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -98,12 +98,15 @@ pub fn try_reconnect() -> Option<TcpStream> {
                             pid: std::process::id(),
                         };
                         let _ = dsx_proto::write_frame(&mut stream, &reg);
-                        if let Ok(mut guard) = HP_DAEMON.lock() {
-                            if let Some(mut prev) = guard.take() {
-                                let _ = prev.kill();
-                                let _ = prev.wait();
+                        // Store child for cleanup; kill previous if reconnecting
+                        if let Some(lock) = HP_DAEMON.get() {
+                            if let Ok(mut guard) = lock.lock() {
+                                let _ = guard.kill();
+                                let _ = guard.wait();
+                                *guard = child;
                             }
-                            *guard = Some(child);
+                        } else {
+                            let _ = HP_DAEMON.set(Mutex::new(child));
                         }
                         return Some(stream);
                     }

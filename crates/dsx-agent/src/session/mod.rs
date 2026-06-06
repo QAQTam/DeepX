@@ -31,7 +31,7 @@ pub fn generate_seed() -> String {
     let mut h = DefaultHasher::new();
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_nanos()
         .hash(&mut h);
     std::process::id().hash(&mut h);

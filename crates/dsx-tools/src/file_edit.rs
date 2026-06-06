@@ -1,5 +1,5 @@
-use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolResult, SafetyVerdict, handler};
-use super::file_shared::build_diff;
+use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
+use super::file_shared::{build_diff, normalize_newlines, closest_line};
 
 pub(super) fn exec_edit_file(args: &str) -> String {
     let path = parse_arg(args, "path");
@@ -8,7 +8,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
     let replace_all = parse_opt_bool(args, "replace_all").unwrap_or(false);
     let use_regex = parse_opt_bool(args, "regex").unwrap_or(false);
 
-    let content = match std::fs::read_to_string(&path) {
+    let raw = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
             let err_msg = e.to_string();
@@ -18,6 +18,16 @@ pub(super) fn exec_edit_file(args: &str) -> String {
             return format!("[ERROR] Cannot read {}: {}\n[HINT] Use list_dir() on the parent directory to verify the file exists.", path, e);
         },
     };
+
+    // Normalize CRLF → LF so old_string always matches
+    let (content, was_crlf) = normalize_newlines(&raw);
+    if was_crlf {
+        log::info!("file_edit: {} had CRLF, normalized to LF for matching", path);
+    }
+
+    // Internally strip CR from old/new too (AI may paste CRLF)
+    let old = old.replace("\r\n", "\n").replace('\r', "\n");
+    let new = new.replace("\r\n", "\n").replace('\r', "\n");
 
     if use_regex {
         let re = match regex::Regex::new(&old) {
@@ -43,7 +53,11 @@ pub(super) fn exec_edit_file(args: &str) -> String {
     } else if replace_all {
         let new_content = content.replace(&old, &new);
         if new_content == content {
-            return format!("[PARTIAL] {} — no occurrences found\n[HINT] Verify the old_string is correct.", path);
+            let hint = match closest_line(&content, &old) {
+                Some((line_no, line)) => format!("\n[HINT] Closest match at line {}: {}", line_no, line.chars().take(80).collect::<String>()),
+                None => String::new(),
+            };
+            return format!("[PARTIAL] {} — no occurrences found\n[HINT] Verify the old_string is correct.{}", path, hint);
         }
         let count = content.matches(&old).count();
         match std::fs::write(&path, &new_content) {
@@ -66,14 +80,19 @@ pub(super) fn exec_edit_file(args: &str) -> String {
                     Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
                 }
             }
-            None => format!("[PARTIAL] {} — string not found\n[HINT] The old_string may have changed. Re-read the file and try again.", path),
+            None => {
+                let hint = match closest_line(&content, &old) {
+                    Some((line_no, line)) => format!("\n[HINT] Closest match at line {}: {}", line_no, line.chars().take(80).collect::<String>()),
+                    None => String::new(),
+                };
+                format!("[PARTIAL] {} — string not found\n[HINT] Check whitespace/indentation.{}", path, hint)
+            }
         }
     }
 }
 
 handler!(handle_edit_file, exec_edit_file);
 
-fn default_allow(_ctx: &ToolCallCtx) -> SafetyVerdict { SafetyVerdict::Allow }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -81,7 +100,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Find-and-replace in a file. Supports regex with regex=true, replace_all for all occurrences. Surgical edits only.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_string","new_string"],"additionalProperties":false}),
         handler: handle_edit_file,
-        safety: default_allow,
+        safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

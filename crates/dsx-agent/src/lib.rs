@@ -11,7 +11,6 @@ pub mod prompt;
 pub mod skills;
 // ── Core modules ──
 pub mod agent;
-pub mod health;
 pub mod tools;
 
 pub mod orchestrator;
