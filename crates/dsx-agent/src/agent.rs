@@ -147,7 +147,10 @@ impl AgentState {
 
             sys.push_str(&crate::config::system_prompt());
             sys.push_str("\n\n");
-            sys.push_str(crate::prompt::DSML_SCHEMA);
+
+            if self.config.provider_id == "deepseek" {
+                sys.push_str(crate::prompt::DSML_SCHEMA);
+            }
 
             messages = vec![Message::system(&sys)];
         }

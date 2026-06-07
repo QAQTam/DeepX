@@ -227,10 +227,13 @@ fn start_agent_inner(app: &AppHandle, state: &AgentState) -> Result<serde_json::
     let app_handle = app.clone();
     let rdr_handle = thread::spawn(move || {
         while let Ok(frame) = agent_rx.recv() {
-            if let Agent2Ui::SessionRestored { ref seed, .. } = frame {
-                if let Ok(mut guard) = app_handle.state::<AgentState>().session_seed.lock() {
-                    *guard = Some(seed.clone());
+            match &frame {
+                Agent2Ui::SessionRestored { ref seed, .. } | Agent2Ui::SessionCreated { ref seed } => {
+                    if let Ok(mut guard) = app_handle.state::<AgentState>().session_seed.lock() {
+                        *guard = Some(seed.clone());
+                    }
                 }
+                _ => {}
             }
             if let Ok(v) = serde_json::to_value(&frame) {
                 let _ = app_handle.emit("agent-event", v);
@@ -268,7 +271,7 @@ fn check_config() -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, provider_id: String, protocol: String, endpoint: String, reasoning_effort: String, lang: String, max_tool_rounds: u32, context7_api_key: String) -> Result<(), String> {
+fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, provider_id: String, endpoint: String, reasoning_effort: String, lang: String, max_tool_rounds: u32, context7_api_key: String) -> Result<(), String> {
     let _lock = state.config_lock.lock().map_err(|e| format!("lock: {e}"))?;
     let store = dsx_types::ConfigStore::default_location();
     let mut cfg = store.load().unwrap_or_default();
@@ -278,7 +281,6 @@ fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: Strin
     cfg.context_limit = Some(context_limit);
     cfg.max_tokens = Some(max_tokens);
     if !provider_id.is_empty() { cfg.provider_id = Some(provider_id); }
-    if !protocol.is_empty() { cfg.protocol = Some(protocol); }
     if !endpoint.is_empty() { cfg.endpoint = Some(endpoint); }
     if !reasoning_effort.is_empty() { cfg.reasoning_effort = Some(reasoning_effort); }
     if !lang.is_empty() { cfg.lang = Some(lang); }
@@ -328,12 +330,8 @@ async fn fetch_models(api_key: String, base_url: String, provider_id: String, en
         .unwrap_or_default();
 
     if models.is_empty() {
-        log::warn!("No models returned from API, using hardcoded defaults");
-        Ok(vec![
-            "deepseek-v4-flash".into(),
-            "deepseek-reasoner-v4".into(),
-            "deepseek-chat".into(),
-        ])
+        log::warn!("No models returned from API, using default from registry");
+        Ok(vec![dsx_agent::gate::registry::default_model_for(&provider_id, &endpoint_id)])
     } else {
         Ok(models)
     }
@@ -346,9 +344,10 @@ async fn get_balance(api_key: String) -> Result<serde_json::Value, String> {
         return Err("API key is invalid".to_string());
     }
     let store = dsx_types::ConfigStore::default_location();
+    let (pid, ep) = dsx_agent::gate::registry::first_provider_endpoint();
     let base_url = store.load()
         .and_then(|c| c.base_url)
-        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+        .unwrap_or_else(|| dsx_agent::gate::registry::base_url_for(&pid, &ep));
     let stripped = base_url.trim_end_matches('/').trim_end_matches("/chat/completions").trim_end_matches("/v1");
     let url = format!("{}/user/balance", stripped);
     let client = reqwest::Client::builder()
@@ -368,6 +367,9 @@ async fn get_balance(api_key: String) -> Result<serde_json::Value, String> {
 fn load_config() -> Result<serde_json::Value, String> {
     let store = dsx_types::ConfigStore::default_location();
     let cfg = store.load().unwrap_or_default();
+    let pid = cfg.provider_id.clone().unwrap_or_else(|| "deepseek".into());
+    let ep = cfg.endpoint.clone().unwrap_or_else(|| "openai".into());
+    let protocol = dsx_agent::gate::registry::protocol_for(&pid, &ep);
     Ok(serde_json::json!({
         "api_key": cfg.api_key,
         "base_url": cfg.base_url,
@@ -376,7 +378,7 @@ fn load_config() -> Result<serde_json::Value, String> {
         "max_tokens": cfg.max_tokens,
         "max_tool_rounds": cfg.max_tool_rounds,
         "provider_id": cfg.provider_id,
-        "protocol": cfg.protocol,
+        "protocol": protocol,
         "endpoint": cfg.endpoint,
         "reasoning_effort": cfg.reasoning_effort,
         "lang": cfg.lang,
@@ -397,7 +399,6 @@ fn update_config(state: tauri::State<AgentState>, field: String, value: String) 
         "lang" => cfg.lang = Some(value),
         "context7_api_key" => cfg.context7_api_key = Some(value),
         "provider_id" => cfg.provider_id = Some(value),
-        "protocol" => cfg.protocol = Some(value),
         "endpoint" => cfg.endpoint = Some(value),
         _ => {
             if let Ok(n) = value.parse::<u32>() {
@@ -440,10 +441,13 @@ fn restart_agent_inner(app: &AppHandle, state: &AgentState, seed: Option<&str>) 
     let app_handle = app.clone();
     let rdr_handle = thread::spawn(move || {
         while let Ok(frame) = agent_rx.recv() {
-            if let Agent2Ui::SessionRestored { ref seed, .. } = frame {
-                if let Ok(mut guard) = app_handle.state::<AgentState>().session_seed.lock() {
-                    *guard = Some(seed.clone());
+            match &frame {
+                Agent2Ui::SessionRestored { ref seed, .. } | Agent2Ui::SessionCreated { ref seed } => {
+                    if let Ok(mut guard) = app_handle.state::<AgentState>().session_seed.lock() {
+                        *guard = Some(seed.clone());
+                    }
                 }
+                _ => {}
             }
             if let Ok(v) = serde_json::to_value(&frame) {
                 let _ = app_handle.emit("agent-event", v);
@@ -472,6 +476,14 @@ fn stop_agent(app: AppHandle, state: tauri::State<AgentState>) -> Result<(), Str
 #[tauri::command]
 fn resume_agent(app: AppHandle, state: tauri::State<AgentState>, seed: String) -> Result<(), String> {
     restart_agent(&app, &state, Some(&seed))
+}
+
+#[tauri::command]
+fn create_session(state: tauri::State<AgentState>) -> Result<(), String> {
+    let guard = state.tui_tx.lock().map_err(|e| format!("lock: {e}"))?;
+    let tx = guard.as_ref().ok_or("Agent not started")?;
+    tx.send(Ui2Agent::CreateSession).map_err(|e| format!("send: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -616,7 +628,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             check_config, save_config, load_config, update_config, fetch_models,
-            start_agent, check_agent_status, send_message, reload_agent, stop_agent, resume_agent,
+            start_agent, check_agent_status, send_message, reload_agent, stop_agent, resume_agent, create_session,
             load_session_messages,
             set_workspace, get_workspace, scan_directory,
             cancel_agent,

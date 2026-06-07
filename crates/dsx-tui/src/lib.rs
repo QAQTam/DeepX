@@ -59,6 +59,9 @@ pub fn run_tui() -> anyhow::Result<()> {
         app.status = app.setup.lang.t_chat_ready().to_string();
         match spawn_agent_inproc(app.resume_seed.as_deref()) {
             Ok((mut tui_tx, agent_rx, handle)) => {
+                if app.resume_seed.is_none() {
+                    let _ = tui_tx.send(dsx_proto::Ui2Agent::CreateSession);
+                }
                 let result = run_chat(terminal, &mut app, &mut tui_tx, &agent_rx,
                     |tx, frame| { let _ = tx.send(frame.clone()); });
                 let _ = tui_tx.send(dsx_proto::Ui2Agent::Shutdown);
@@ -139,7 +142,8 @@ fn run_setup(
                         app.validating = true;
                         terminal.draw(|frame| ui::render_setup(frame, app))?;
 
-                        let ok = app.setup.fetch_models();
+                        let (pid, _) = dsx_agent::gate::registry::first_provider_endpoint();
+                        let ok = app.setup.fetch_models(&pid);
                         app.validating = false;
                         if ok {
                             app.setup.status = l.t_key_valid().to_string();

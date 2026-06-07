@@ -14,6 +14,7 @@ export interface ConfigData {
   max_tool_rounds?: number
   provider_id?: string
   protocol?: string
+  endpoint?: string
   reasoning_effort?: string
   lang?: string
   context7_api_key?: string
@@ -70,7 +71,7 @@ export interface ConfigInput {
   maxTokens: number
   maxToolRounds: number
   providerId: string
-  protocol: string
+  endpoint: string
   reasoningEffort: string
   lang: string
   context7ApiKey: string
@@ -90,7 +91,7 @@ export const api = {
                                         maxTokens: c.maxTokens,
                                         maxToolRounds: c.maxToolRounds,
                                         providerId: c.providerId,
-                                        protocol: c.protocol,
+                                        endpoint: c.endpoint,
                                         reasoningEffort: c.reasoningEffort,
                                         lang: c.lang,
                                         context7ApiKey: c.context7ApiKey,
@@ -98,7 +99,7 @@ export const api = {
   updateConfig:    (field: string, value: string) => invoke<void>('update_config', { field, value }),
 
   // Models & Balance
-  fetchModels:     (apiKey: string, baseUrl: string) => invoke<string[]>('fetch_models', { apiKey, baseUrl }),
+  fetchModels:     (apiKey: string, baseUrl: string, providerId: string, endpointId: string) => invoke<string[]>('fetch_models', { apiKey, baseUrl, providerId, endpointId }),
   getBalance:      (apiKey: string) => invoke<BalanceResult>('get_balance', { apiKey }),
 
   // Agent lifecycle
@@ -106,6 +107,7 @@ export const api = {
   checkAgentStatus: () => invoke<{ running: boolean; seed?: string }>('check_agent_status'),
   stopAgent:       ()              => invoke<void>('stop_agent'),
   resumeAgent:     (seed: string)  => invoke<void>('resume_agent', { seed }),
+  createSession:   ()              => invoke<void>('create_session'),
   cancelAgent:     ()              => invoke<void>('cancel_agent'),
   reloadAgent:     ()              => invoke<void>('reload_agent'),
 

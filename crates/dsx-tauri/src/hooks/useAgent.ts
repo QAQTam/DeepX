@@ -18,6 +18,7 @@ export interface AgentHandle {
   start: () => Promise<void>
   stop: () => Promise<void>
   resume: (seed: string) => Promise<void>
+  createSession: () => Promise<void>
   cancel: () => void
   send: (text: string) => void
   dispatch: (action: AgentAction) => void
@@ -79,6 +80,14 @@ export function useAgent(): AgentHandle {
     }
   }
 
+  const createSession = async () => {
+    try {
+      await api.createSession()
+    } catch (e: any) {
+      dispatch({ type: 'ERROR', message: String(e) })
+    }
+  }
+
   const cancel = () => {
     api.cancelAgent().catch(() => {})
     dispatch({ type: 'CANCEL' })
@@ -92,6 +101,6 @@ export function useAgent(): AgentHandle {
     state,
     get isStreaming() { return state.streaming },
     get statusChecked() { return _statusChecked() },
-    start, stop, resume, cancel, send, dispatch,
+    start, stop, resume, createSession, cancel, send, dispatch,
   }
 }

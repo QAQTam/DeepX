@@ -5,6 +5,7 @@
 import { createSignal, createEffect, onMount, onCleanup, Show } from 'solid-js'
 import { listen } from '@tauri-apps/api/event'
 import { useAgent, useConfig, useSession, useBalance, useDocuments } from './hooks'
+import { api } from './bridge/tauri'
 import type { Message } from './types'
 import { ChatMessage } from './components/ChatMessage'
 import { InfoPanel } from './components/InfoPanel'
@@ -69,6 +70,13 @@ export default function App() {
   createEffect(() => {
     if (cfg.checkDone && cfg.config && agent.statusChecked && !agent.state.connected && agent.state.status === 'idle') {
       agent.start()
+    }
+  })
+
+  // ── Auto-create session after fresh agent start ──
+  createEffect(() => {
+    if (agent.state.connected && !agent.state.seed) {
+      agent.createSession()
     }
   })
 
@@ -248,6 +256,13 @@ export default function App() {
           }
           break
         }
+        case 'session_created': {
+          const seed = (p as any).seed as string
+          if (seed) {
+            agent.dispatch({ type: 'RESTORE_SESSION', seed, turns: [] })
+          }
+          break
+        }
         case 'debug_snapshot': {
           docs.updateFromSnapshot({
             documents: (p as any).documents,
@@ -406,6 +421,18 @@ export default function App() {
               {/* Input Area */}
               <div class="border-t border-[var(--border)] p-3 shrink-0 bg-[var(--bg-primary)] transition-theme">
                 <div class="flex items-end gap-2">
+                  <button
+                    onClick={() => agent.state.connected && api.reloadAgent().catch(() => {})}
+                    class="shrink-0 w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] text-[var(--muted)] flex items-center justify-center
+                      hover:bg-[var(--accent)]/15 hover:text-[var(--accent)] transition-colors"
+                    title={tt('chat.reloadConfig')}
+                    aria-label={tt('chat.reloadConfig')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <path d="M2 8a6 6 0 0 1 10.47-4M14 8a6 6 0 0 1-10.47 4"/>
+                      <path d="M12 2v2.5H9.5M4 14v-2.5h2.5"/>
+                    </svg>
+                  </button>
                   <textarea
                     ref={inputRef}
                     class="flex-1 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-sm

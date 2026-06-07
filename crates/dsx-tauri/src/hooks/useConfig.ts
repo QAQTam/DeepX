@@ -46,7 +46,8 @@ export function useConfig(): UseConfigReturn {
   }
 
   const fetchModels = async (apiKey: string, baseUrl: string): Promise<string[]> => {
-    return await api.fetchModels(apiKey, baseUrl)
+    const cfg = _config()
+    return await api.fetchModels(apiKey, baseUrl, cfg?.provider_id ?? 'deepseek', cfg?.endpoint ?? 'openai')
   }
 
   onMount(() => { load() })

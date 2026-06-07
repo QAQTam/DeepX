@@ -28,15 +28,14 @@ pub struct SetupState {
 
 impl SetupState {
     pub fn new() -> Self {
+        let (pid, ep) = dsx_agent::gate::registry::first_provider_endpoint();
+        let def_model = dsx_agent::gate::registry::default_model_for(&pid, &ep);
         Self {
             step: 0,
             lang: crate::i18n::Lang::En,
             api_key: String::new(),
-            model: String::from("deepseek-v4-flash"),
-            model_list: vec![
-                "deepseek-v4-flash".into(),
-                "deepseek-v4-pro".into(),
-            ],
+            model: def_model.clone(),
+            model_list: vec![def_model],
             model_index: 0,
             context_limit: String::from("1000000"),
             error: String::new(),
@@ -142,15 +141,20 @@ impl SetupState {
         }
     }
 
-    /// Fetch model list from DeepSeek API using the provided key.
+    /// Fetch model list from provider API using the provided key.
     /// Returns true if successful (populates model_list).
-    pub fn fetch_models(&mut self) -> bool {
+    pub fn fetch_models(&mut self, provider_id: &str) -> bool {
         let key = self.api_key.trim();
         if key.is_empty() {
             return false;
         }
-        let url = "https://api.deepseek.com/models";
-        let resp = ureq::get(url)
+        let ep_id = dsx_agent::gate::registry::first_endpoint_for(provider_id)
+            .map(|e| e.id).unwrap_or_else(|| "openai".into());
+        let url = match dsx_agent::gate::registry::models_url_for(provider_id, &ep_id) {
+            Some(u) => u,
+            None => return false,
+        };
+        let resp = ureq::get(&url)
             .header("Authorization", &format!("Bearer {}", key))
             .call();
         match resp {
@@ -207,10 +211,12 @@ impl SetupState {
     }
 
     pub fn to_persistent_config(&self) -> PersistentConfig {
+        let (pid, ep) = dsx_agent::gate::registry::first_provider_endpoint();
+        let base_url = dsx_agent::gate::registry::base_url_for(&pid, &ep);
         PersistentConfig {
             api_key: Some(self.api_key.trim().to_string()),
             model: Some(self.model.trim().to_string()),
-            base_url: Some("https://api.deepseek.com".into()),
+            base_url: Some(base_url),
             context_limit: Some(self.context_limit.parse().unwrap_or(1_000_000)),
             lang: Some(self.lang.as_str().to_string()),
             ..Default::default()
@@ -371,14 +377,18 @@ impl MenuState {
             api_key.clone()
         };
 
-        let model = config.as_ref().and_then(|c| c.model.clone()).unwrap_or_else(|| "deepseek-v4-flash".into());
+        let (default_pid, default_ep) = dsx_agent::gate::registry::first_provider_endpoint();
+        let default_base = dsx_agent::gate::registry::base_url_for(&default_pid, &default_ep);
+        let default_model = dsx_agent::gate::registry::default_model_for(&default_pid, &default_ep);
+
+        let model = config.as_ref().and_then(|c| c.model.clone()).unwrap_or_else(|| default_model.clone());
         let context_limit = config.as_ref().and_then(|c| c.context_limit).unwrap_or(1_000_000);
         let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16384);
-        let provider_id = config.as_ref().and_then(|c| c.provider_id.clone()).unwrap_or_else(|| "deepseek".into());
-        let endpoint = config.as_ref().and_then(|c| c.endpoint.clone()).unwrap_or_else(|| "openai".into());
-        let protocol = config.as_ref().and_then(|c| c.protocol.clone()).unwrap_or_else(|| "openai".into());
+        let provider_id = config.as_ref().and_then(|c| c.provider_id.clone()).unwrap_or_else(|| default_pid.clone());
+        let endpoint = config.as_ref().and_then(|c| c.endpoint.clone()).unwrap_or_else(|| default_ep.clone());
+        let protocol = dsx_agent::gate::registry::protocol_for(&provider_id, &endpoint);
         let reasoning_effort = config.as_ref().and_then(|c| c.reasoning_effort.clone()).unwrap_or_else(|| "high".into());
-        let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| "https://api.deepseek.com".into());
+        let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| default_base);
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
         let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
 
@@ -401,8 +411,8 @@ impl MenuState {
 
         // ── Provider ──
         items.push(mk(MenuItemKind::Section, "", l.t_menu_provider().into(), "", false));
-        items.push(mk(MenuItemKind::Value, "provider_id", l.t_menu_provider_id().into(),
-            &provider_id, false));
+        items.push(mk(MenuItemKind::Toggle, "provider_id", l.t_menu_provider_id().into(),
+            &provider_id, true));
         items.push(mk(MenuItemKind::Toggle, "endpoint", l.t_menu_endpoint().into(),
             &endpoint, true));
         let proto_disp = format!("{} (auto)", protocol);
@@ -508,6 +518,31 @@ impl MenuState {
         if !item.editable { return; }
 
         match item.key.as_str() {
+            "provider_id" => {
+                let providers = dsx_agent::gate::registry::all_providers();
+                let ids: Vec<&str> = providers.iter().map(|p| p.id.as_str()).collect();
+                if let Some(cur) = ids.iter().position(|&p| p == item.value) {
+                    item.value = ids[(cur + 1) % ids.len()].to_string();
+                }
+                let new_pid = &item.value;
+                let ep = dsx_agent::gate::registry::first_endpoint_for(new_pid)
+                    .map(|e| e.id).unwrap_or_else(|| "openai".into());
+                let proto = dsx_agent::gate::registry::protocol_for(new_pid, &ep);
+                let burl = dsx_agent::gate::registry::base_url_for(new_pid, &ep);
+                let def_model = dsx_agent::gate::registry::default_model_for(new_pid, &ep);
+                if let Some(e) = self.items.iter_mut().find(|i| i.key == "endpoint") {
+                    e.value = ep;
+                }
+                if let Some(p) = self.items.iter_mut().find(|i| i.key == "protocol") {
+                    p.value = format!("{} (auto)", proto);
+                }
+                if let Some(u) = self.items.iter_mut().find(|i| i.key == "base_url") {
+                    u.value = burl;
+                }
+                if let Some(m) = self.items.iter_mut().find(|i| i.key == "model") {
+                    m.value = def_model;
+                }
+            }
             "endpoint" => {
                 item.value = next_endpoint.clone();
                 let proto = dsx_agent::gate::registry::protocol_for(&pid_value, &next_endpoint);
@@ -525,9 +560,14 @@ impl MenuState {
                 item.value = if item.value == "high" { "max".into() } else { "high".into() };
             }
             "model" => {
-                item.value = match item.value.as_str() {
-                    "deepseek-v4-flash" => "deepseek-v4-pro".into(),
-                    _ => "deepseek-v4-flash".into(),
+                let def = dsx_agent::gate::registry::default_model_for(&pid_value, "");
+                // cycle through known models by provider
+                item.value = match (pid_value.as_str(), item.value.as_str()) {
+                    ("deepseek", "deepseek-v4-flash") => "deepseek-v4-pro".into(),
+                    ("deepseek", _) => "deepseek-v4-flash".into(),
+                    ("mimo", "mimo-v2.5-pro") => "mimo-v2.5".into(),
+                    ("mimo", _) => "mimo-v2.5-pro".into(),
+                    _ => def,
                 };
             }
             "max_tokens" => {
@@ -603,7 +643,6 @@ impl MenuState {
             match item.key.as_str() {
                 "provider_id" => { config.provider_id = Some(item.value.clone()); }
                 "endpoint" => { config.endpoint = Some(item.value.clone()); }
-                "protocol" => { config.protocol = Some(item.value.clone()); }
                 "reasoning_effort" => { config.reasoning_effort = Some(item.value.clone()); }
                 "model" => { config.model = Some(item.value.clone()); }
                 "context_limit" => {
@@ -619,7 +658,6 @@ impl MenuState {
                     config.lang = Some(item.value.clone());
                 }
                 "api_key" => {
-                    // secret holds the real key; value is the masked display
                     let v = item.secret.trim().to_string();
                     if !v.is_empty() { config.api_key = Some(v); }
                 }
@@ -641,9 +679,7 @@ impl MenuState {
                 }
                 _ => {}
             }
-        }
-
-        config.profiles = Some(self.profiles.clone());
+        }        config.profiles = Some(self.profiles.clone());
 
         if store.save(&config) {
             self.status = self.lang.t_menu_saved().into();

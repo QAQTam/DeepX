@@ -7,15 +7,11 @@ use dsx_types::Message;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderKind {
     OpenAi,
-    Anthropic,
 }
 
 impl ProviderKind {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "anthropic" => Self::Anthropic,
-            _ => Self::OpenAi,
-        }
+    pub fn from_str(_s: &str) -> Self {
+        Self::OpenAi
     }
 }
 
@@ -25,24 +21,17 @@ pub struct ProviderConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub user_id_mode: Option<dsx_types::UserSendMode>,
 }
 
 impl ProviderConfig {
-    pub fn openai(base_url: &str, api_key: &str, model: &str) -> Self {
+    pub fn openai(base_url: &str, api_key: &str, model: &str, user_id_mode: Option<dsx_types::UserSendMode>) -> Self {
         Self {
             kind: ProviderKind::OpenAi,
             base_url: base_url.to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
-        }
-    }
-
-    pub fn anthropic(base_url: &str, api_key: &str, model: &str) -> Self {
-        Self {
-            kind: ProviderKind::Anthropic,
-            base_url: base_url.to_string(),
-            api_key: api_key.to_string(),
-            model: model.to_string(),
+            user_id_mode,
         }
     }
 }

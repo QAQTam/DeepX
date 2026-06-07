@@ -1,14 +1,14 @@
 //! Provider registry — known providers and their endpoints.
 //!
 //! Architecture:
-//!   Provider (e.g. DeepSeek) has 1..N Endpoints (e.g. OpenAI-compat, Anthropic-native).
+//!   Provider (e.g. DeepSeek) has 1..N Endpoints (all OpenAI-compatible for now).
 //!   User selects (provider_id, endpoint_id) → protocol + base_url auto-fill.
 //!   Model list is fetched from endpoint's /models URL at runtime.
 //!
 //! Backward compat: old provider_id "deepseek-openai"/"deepseek-anthropic" are
-//! auto-migrated to provider_id="deepseek" + endpoint="openai"/"anthropic".
+//! auto-migrated to provider_id="deepseek" + endpoint="openai".
 
-use dsx_types::{EndpointSpec, ProviderSpec};
+use dsx_types::{EndpointSpec, ProviderSpec, UserSendMode};
 
 // ── Static registry ──
 
@@ -24,21 +24,32 @@ fn deepseek() -> ProviderSpec {
                 base_url: "https://api.deepseek.com".into(),
                 default_model: "deepseek-v4-flash".into(),
                 models_url: Some("https://api.deepseek.com".into()),
+                user_id_mode: Some(UserSendMode::Body),
             },
+        ],
+    }
+}
+
+fn mimo() -> ProviderSpec {
+    ProviderSpec {
+        id: "mimo".into(),
+        display: "Xiaomi MiMo".into(),
+        endpoints: vec![
             EndpointSpec {
-                id: "anthropic".into(),
-                display: "Anthropic-native".into(),
-                protocol: "anthropic".into(),
-                base_url: "https://api.deepseek.com/anthropic".into(),
-                default_model: "deepseek-v4-pro".into(),
-                models_url: Some("https://api.deepseek.com".into()),
+                id: "openai".into(),
+                display: "OpenAI-compatible".into(),
+                protocol: "openai".into(),
+                base_url: "https://api.xiaomimimo.com/v1".into(),
+                default_model: "mimo-v2.5-pro".into(),
+                models_url: Some("https://api.xiaomimimo.com/v1".into()),
+                user_id_mode: None,
             },
         ],
     }
 }
 
 fn providers() -> Vec<ProviderSpec> {
-    vec![deepseek()]
+    vec![deepseek(), mimo()]
 }
 
 // ── Lookup ──
@@ -61,6 +72,16 @@ pub fn find_endpoint(provider_id: &str, endpoint_id: &str) -> Option<EndpointSpe
 pub fn first_endpoint_for(provider_id: &str) -> Option<EndpointSpec> {
     find_provider(provider_id)
         .and_then(|p| p.endpoints.into_iter().next())
+}
+
+pub fn first_provider_endpoint() -> (String, String) {
+    let providers = all_providers();
+    let p = providers.first();
+    let pid = p.map(|p| p.id.clone()).unwrap_or_else(|| "deepseek".into());
+    let ep = first_endpoint_for(&pid)
+        .map(|e| e.id.clone())
+        .unwrap_or_else(|| "openai".into());
+    (pid, ep)
 }
 
 // ── Model discovery ──
@@ -141,18 +162,12 @@ pub fn base_url_for(provider_id: &str, endpoint_id: &str) -> String {
 /// Migrate old provider_id ("deepseek-openai" / "deepseek-anthropic") to new
 /// (provider_id, endpoint) pair.
 pub fn migrate_provider_id(old_pid: &str) -> (String, String) {
-    match old_pid {
-        "deepseek-openai" => ("deepseek".into(), "openai".into()),
-        "deepseek-anthropic" => ("deepseek".into(), "anthropic".into()),
-        other => {
-            if find_provider(other).is_some() {
-                let ep = first_endpoint_for(other)
-                    .map(|e| e.id.clone())
-                    .unwrap_or_else(|| "openai".into());
-                (other.to_string(), ep)
-            } else {
-                ("deepseek".into(), "openai".into())
-            }
-        }
+    if find_provider(old_pid).is_some() {
+        let ep = first_endpoint_for(old_pid)
+            .map(|e| e.id.clone())
+            .unwrap_or_else(|| "openai".into());
+        (old_pid.to_string(), ep)
+    } else {
+        ("deepseek".into(), "openai".into())
     }
 }

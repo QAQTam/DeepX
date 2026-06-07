@@ -21,9 +21,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
   const [contextLimit, setContextLimit] = createSignal(1000000)
   const [maxTokens, setMaxTokens] = createSignal(16384)
   const [maxToolRounds, setMaxToolRounds] = createSignal(10)
-  const [providerId, setProviderId] = createSignal('deepseek-openai')
-  const [protocol, setProtocol] = createSignal('openai')
-  const [isCustom, setIsCustom] = createSignal(false)
+  const [providerId, setProviderId] = createSignal('deepseek')
+  const [endpoint, setEndpoint] = createSignal('openai')
   const [reasoningEffort, setReasoningEffort] = createSignal('high')
   const [lang, setLangState] = createSignal('zh')
   const [context7Key, setContext7Key] = createSignal('')
@@ -38,8 +37,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
       if (cfg.context_limit) setContextLimit(cfg.context_limit)
       if (cfg.max_tokens) setMaxTokens(cfg.max_tokens)
       if (cfg.max_tool_rounds) setMaxToolRounds(cfg.max_tool_rounds)
-      if (cfg.provider_id) { setProviderId(cfg.provider_id); setIsCustom(cfg.provider_id === 'custom'); }
-      if (cfg.protocol) setProtocol(cfg.protocol)
+      if (cfg.provider_id) setProviderId(cfg.provider_id)
+      if (cfg.endpoint) setEndpoint(cfg.endpoint)
       if (cfg.reasoning_effort) setReasoningEffort(cfg.reasoning_effort)
       if (cfg.lang) setLangState(cfg.lang)
       if (cfg.context7_api_key) setContext7Key(cfg.context7_api_key)
@@ -50,7 +49,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
     setFetching(true)
     setFetchError('')
     try {
-      const list = await api.fetchModels(apiKey(), baseUrl())
+      const list = await api.fetchModels(apiKey(), baseUrl(), providerId(), endpoint())
       setModels(list)
       if (list.length > 0 && !list.includes(model())) setModel(list[0])
     } catch (e: any) {
@@ -66,8 +65,9 @@ export function SettingsDialog(props: SettingsDialogProps) {
       await api.saveConfig({
         apiKey: apiKey(), baseUrl: baseUrl(), model: model(),
         contextLimit: contextLimit(), maxTokens: maxTokens(), maxToolRounds: maxToolRounds(),
-        providerId: providerId(), protocol: protocol(), reasoningEffort: reasoningEffort(), lang: lang(), context7ApiKey: context7Key(),
+        providerId: providerId(), endpoint: endpoint(), reasoningEffort: reasoningEffort(), lang: lang(), context7ApiKey: context7Key(),
       })
+      api.reloadAgent().catch(() => {})
       setLang(lang())
       props.onClose()
     } catch { /* ignore */ }
@@ -137,15 +137,19 @@ export function SettingsDialog(props: SettingsDialogProps) {
             onInput={(e) => setMaxToolRounds(Number(e.currentTarget.value))}
           />
 
-          {/* Protocol */}
+          {/* Endpoint */}
           <Select
-            label={tt('settings.protocol')}
+            label={tt('settings.endpoint')}
             options={[
-              { value: 'openai', label: 'OpenAI / DeepSeek' },
-              { value: 'anthropic', label: 'Anthropic' },
+              { value: 'openai', label: 'OpenAI-compatible' },
+              { value: 'anthropic', label: 'Anthropic-native' },
             ]}
-            value={protocol()}
-            onChange={(e) => setProtocol(e.currentTarget.value)}
+            value={endpoint()}
+            onChange={(e) => {
+              const ep = e.currentTarget.value
+              setEndpoint(ep)
+              setBaseUrl(ep === 'anthropic' ? 'https://api.deepseek.com/anthropic' : 'https://api.deepseek.com')
+            }}
           />
 
           {/* Thinking Effort */}
@@ -159,7 +163,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
               { value: 'xhigh', label: 'X-High' },
               { value: 'max', label: 'Max' },
             ]}
-            value={thinkingEffort()}
+            value={reasoningEffort()}
             onChange={(e) => setReasoningEffort(e.currentTarget.value)}
           />
 

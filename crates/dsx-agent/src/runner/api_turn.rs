@@ -42,12 +42,11 @@ pub(super) fn run_api_turn(
 > {
     let messages = agent.build_context();
 
-    let provider = match agent.config.protocol.as_str() {
-        "anthropic" => gate::ProviderConfig::anthropic(
-            &agent.config.base_url, &agent.config.api_key, &agent.config.model),
-        _ => gate::ProviderConfig::openai(
-            &agent.config.base_url, &agent.config.api_key, &agent.config.model),
-    };
+    let user_id_mode = gate::registry::find_endpoint(&agent.config.provider_id, &agent.config.endpoint)
+        .and_then(|ep| ep.user_id_mode);
+
+    let provider = gate::ProviderConfig::openai(
+        &agent.config.base_url, &agent.config.api_key, &agent.config.model, user_id_mode);
     let tools = if allow_tools {
         Some(agent.tool_defs.clone())
     } else {
@@ -64,7 +63,6 @@ pub(super) fn run_api_turn(
 
     let result = gate::chat_stream(
         &provider,
-        None, // system prompt handled by ContextAssembler
         messages,
         tools,
         agent.config.max_tokens,

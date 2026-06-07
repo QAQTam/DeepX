@@ -38,8 +38,9 @@ fn run_config() {
     );
 
     let mut api_key = String::new();
-    let mut base_url = "https://api.deepseek.com".to_string();
-    let mut model = "deepseek-v4-flash".to_string();
+    let (pid, ep) = dsx_agent::gate::registry::first_provider_endpoint();
+    let mut base_url = dsx_agent::gate::registry::base_url_for(&pid, &ep);
+    let mut model = dsx_agent::gate::registry::default_model_for(&pid, &ep);
     let mut context_limit = 1_000_000u32;
 
     if let Some(existing) = store.load_value() {
@@ -56,7 +57,7 @@ fn run_config() {
     println!("(leave blank to keep current value)");
     println!();
 
-    println!("[1/3] DeepSeek API key");
+    println!("[1/3] API key");
     print!("  Key [{}]: ", if api_key.is_empty() { "(none)" } else { "****" });
     std::io::stdout().flush().ok();
     let mut input = String::new();
@@ -66,8 +67,7 @@ fn run_config() {
 
     println!();
     println!("[2/3] Model name");
-    println!("  deepseek-v4-flash    — Fast, general purpose");
-    println!("  deepseek-v4-pro      — High capability");
+    println!("  {} (default)", model);
     print!("  Model [{}]: ", model);
     std::io::stdout().flush().ok();
     input.clear();
@@ -76,7 +76,7 @@ fn run_config() {
     if !trimmed.is_empty() { model = trimmed; }
 
     println!();
-    println!("[3/3] Max context tokens (DeepSeek: 1,000,000)");
+    println!("[3/3] Max context tokens (default: 1,000,000)");
     print!("  Context limit [{}]: ", context_limit);
     std::io::stdout().flush().ok();
     input.clear();

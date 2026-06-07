@@ -25,6 +25,9 @@ pub enum Ui2Agent {
         args: serde_json::Value,
     },
 
+    #[serde(rename = "create_session")]
+    CreateSession,
+
     #[serde(rename = "cancel")]
     Cancel,
 
@@ -192,6 +195,12 @@ pub enum Agent2Ui {
         tokens_used: u32,
         #[serde(default)]
         cache_hit_pct: f64,
+    },
+
+    /// A new session was created (response to CreateSession).
+    #[serde(rename = "session_created")]
+    SessionCreated {
+        seed: String,
     },
 
     // ── System events ──

@@ -7,29 +7,25 @@
 //!   protocol + base_url from EndpointSpec
 //!   models from GET /models (with fallback to default_model)
 
-use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone)]
+pub enum UserSendMode {
+    Body,
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct EndpointSpec {
     pub id: String,
     pub display: String,
     pub protocol: String,
     pub base_url: String,
     pub default_model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub models_url: Option<String>,
+    pub user_id_mode: Option<UserSendMode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ProviderSpec {
     pub id: String,
     pub display: String,
     pub endpoints: Vec<EndpointSpec>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
-    pub id: String,
-    pub object: String,
-    pub owned_by: String,
 }

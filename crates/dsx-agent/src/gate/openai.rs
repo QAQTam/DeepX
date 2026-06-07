@@ -50,7 +50,9 @@ pub fn chat_stream_openai(
         body_map.insert("tools".into(), serde_json::Value::Array(t.clone()));
     }
     if let Some(ref uid) = user_id {
-        body_map.insert("user_id".into(), serde_json::json!(uid));
+        if provider.user_id_mode.is_some() {
+            body_map.insert("user_id".into(), serde_json::json!(uid));
+        }
     }
 
     let body = serde_json::Value::Object(body_map);
@@ -70,7 +72,7 @@ pub fn chat_stream_openai(
         Err(ureq::Error::Status(code, resp)) => {
             let text = resp.into_string().unwrap_or_default();
             dump_api_error(user_id.as_deref(), code as u16, &text);
-            let code_desc = deepseek_error_description(code as u16);
+            let code_desc = http_error_description(code);
             let msg = format!("OpenAI API HTTP {} ({})", code, code_desc);
             on_event(StreamEvent::Error(format!("{}: {}", msg, text)));
             return Err(anyhow::anyhow!("{}", msg));
@@ -240,7 +242,7 @@ pub fn chat_stream_openai(
         // Query balance lazily after first chunk arrives
         if !balance_queried {
             balance_queried = true;
-            if let Some(info) = query_balance(&provider.api_key) {
+            if let Some(info) = query_balance(&provider.api_key, &provider.base_url) {
                 on_event(StreamEvent::Balance {
                     is_available: info.is_available,
                     total_balance: info.total_balance,
@@ -393,8 +395,9 @@ fn build_chat_url(base_url: &str) -> String {
 
 // ── Balance query ──
 
-pub fn query_balance(api_key: &str) -> Option<dsx_types::BalanceInfo> {
-    let resp = ureq::get("https://api.deepseek.com/user/balance")
+pub fn query_balance(api_key: &str, base_url: &str) -> Option<dsx_types::BalanceInfo> {
+    let balance_url = base_url.trim_end_matches('/').trim_end_matches("/v1").to_string() + "/user/balance";
+    let resp = ureq::get(&balance_url)
         .set("Authorization", &format!("Bearer {}", api_key))
         .timeout(Duration::from_secs(10))
         .call()
@@ -418,7 +421,7 @@ pub fn query_balance(api_key: &str) -> Option<dsx_types::BalanceInfo> {
 
 // ── Error descriptions ──
 
-fn deepseek_error_description(status: u16) -> &'static str {
+fn http_error_description(status: u16) -> &'static str {
     match status {
         400 => "Bad Request — 格式错误",
         401 => "Unauthorized — API key 无效",

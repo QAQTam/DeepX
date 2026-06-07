@@ -29,23 +29,22 @@ fn push_user_message_with_repair(agent: &mut AgentState, text: &str) {
     agent.ctx.push_user(text);
 }
 
-/// Initialize the session on the first user message.
 fn init_session_on_first_message(
     agent: &mut AgentState,
     agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
-    if agent.session.seed.is_empty() {
-        let seed = agent.session.resume_seed.clone();
-        super::lifecycle::init_session(agent, seed.as_deref());
-        if seed.is_some() {
-            // Build TurnData from existing context for SessionRestored
-            let turns = build_turns_from_context(agent);
-            emit(&agent_tx, Agent2Ui::SessionRestored {
-                seed: agent.session.seed.clone(),
-                turns,
-                tokens_used: agent.token_estimate,
-                cache_hit_pct: 0.0,
-            });
+    if let Some(ref seed) = agent.session.resume_seed.clone() {
+        if agent.session.seed.is_empty() {
+            super::lifecycle::init_session(agent, Some(seed));
+            if agent.session.from_resume {
+                let turns = build_turns_from_context(agent);
+                emit(&agent_tx, Agent2Ui::SessionRestored {
+                    seed: agent.session.seed.clone(),
+                    turns,
+                    tokens_used: agent.token_estimate,
+                    cache_hit_pct: 0.0,
+                });
+            }
         }
     }
 }
@@ -159,7 +158,9 @@ pub fn handle_user_input(
 
     agent.turn.tool_failures = 0;
     agent.turn.tool_calls_this_turn = 0;
+    agent.turn.stream_cancelled = false;
     agent.files.files_written_this_turn.clear();
+    dsx_tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
 
     agent.refresh_progress_context();
 
@@ -253,6 +254,7 @@ pub fn handle_user_input(
             // Cancel / stop_reason="cancelled": user interrupted — exit cleanly, don't loop.
             if stop_reason.as_deref() == Some("cancelled") {
                 log::info!("turn: cancelled at r={}, exiting turn", round_num);
+                save_snapshot(agent);
                 emit(&agent_tx, Agent2Ui::TurnEnd {
                     turn_id: turn_id.clone(),
                     stop_reason,
@@ -293,8 +295,6 @@ pub fn handle_user_input(
             });
             return;
         }
-
-        agent.turn.tool_calls_this_turn += parsed.len() as u32;
 
         save_snapshot(agent);
 
@@ -488,16 +488,16 @@ pub fn handle_user_input(
         return;
     }
 
+    save_snapshot(agent);
+
     emit(&agent_tx, Agent2Ui::TurnEnd {
         turn_id: turn_id.clone(),
-        stop_reason: Some("cancelled".to_string()),
-        usage: None,
+        stop_reason: Some("interrupted".to_string()),
+        usage: agent.api_usage.clone(),
         context_tokens: agent.token_estimate,
         context_limit: agent.config.context_limit,
         session_tokens: agent.session.tokens,
     });
-
-    save_snapshot(agent);
 }
 
 /// Save the current session snapshot to disk (crash recovery).

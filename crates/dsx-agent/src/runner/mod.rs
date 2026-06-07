@@ -113,10 +113,10 @@ pub fn run_agent_loop(
         prompt_cache_miss_tokens: cache_tokens(&agent).1,
     });
 
-    if agent.session.seed.is_empty() {
+    if agent.session.seed.is_empty() && agent.session.resume_seed.is_some() {
         let seed = agent.session.resume_seed.clone();
-        lifecycle::init_session(&mut agent, seed.as_deref());
-        if agent.session.resume_seed.is_some() {
+        let restored = lifecycle::init_session(&mut agent, seed.as_deref());
+        if restored && agent.session.from_resume {
             let turns = crate::runner::turn::build_turns_from_context(&agent);
             emit(&agent_tx, Agent2Ui::SessionRestored {
                 seed: agent.session.seed.clone(),
@@ -140,6 +140,12 @@ pub fn run_agent_loop(
 
         match frame {
             Ui2Agent::UserInput { text } => {
+                if agent.session.seed.is_empty() {
+                    emit(&agent_tx, Agent2Ui::Error {
+                        message: "No session — create one first".into(),
+                    });
+                    continue;
+                }
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                     || turn::handle_user_input(&mut agent, &text, &agent_tx),
                 ));
@@ -185,6 +191,17 @@ pub fn run_agent_loop(
                 emit(&agent_tx, Agent2Ui::Done);
             }
 
+            Ui2Agent::CreateSession => {
+                if agent.session.seed.is_empty() {
+                    lifecycle::create_session(&mut agent);
+                    emit(&agent_tx, Agent2Ui::SessionCreated {
+                        seed: agent.session.seed.clone(),
+                    });
+                } else {
+                    log::warn!("dsx-agent: CreateSession ignored — session {} already active", agent.session.seed);
+                }
+            }
+
             Ui2Agent::Cancel => {
                 agent.pending_ask_user = None;
                 dsx_tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -198,7 +215,6 @@ pub fn run_agent_loop(
                     agent.config.api_key = cfg.api_key;
                     agent.config.model = cfg.model;
                     agent.config.base_url = cfg.base_url;
-                    agent.config.protocol = cfg.protocol;
                     agent.config.endpoint = cfg.endpoint;
                     agent.config.provider_id = cfg.provider_id;
                     agent.config.reasoning_effort = cfg.reasoning_effort;

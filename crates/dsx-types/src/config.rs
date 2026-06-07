@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PersistentConfig {
-    /// Provider preset: "deepseek"
+    /// Provider ID (e.g. "deepseek", "mimo")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,9 +19,6 @@ pub struct PersistentConfig {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u32>,
-    /// Protocol: "openai" or "anthropic" (deprecated — use endpoint)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
     /// Endpoint within the provider: "openai" | "anthropic" | ...
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,

@@ -12,7 +12,6 @@ pub struct Config {
     pub context_limit: u32,
     pub provider_id: String,
     pub endpoint: String,
-    pub protocol: String,
     pub reasoning_effort: String,
     pub profiles: HashMap<String, dsx_types::ProfileConfig>,
     pub active_profile: String,
@@ -24,19 +23,22 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        let (provider_id, endpoint) = crate::gate::registry::first_provider_endpoint();
+        let base_url = crate::gate::registry::base_url_for(&provider_id, &endpoint);
+        let model = crate::gate::registry::default_model_for(&provider_id, &endpoint);
+
         let mut profiles = HashMap::new();
         profiles.insert("default".into(), dsx_types::ProfileConfig {
-            model: "deepseek-v4-flash".into(), max_tokens: 16384,
+            model: model.clone(), max_tokens: 16384,
             effort: Some("high".into()), context_limit: 1_000_000,
-            base_url: "https://api.deepseek.com".into(),
+            base_url: base_url.clone(),
             endpoint: None,
         });
         Self {
-            api_key: String::new(), base_url: "https://api.deepseek.com".into(),
-            model: "deepseek-v4-flash".into(), max_tokens: 16384, context_limit: 1_000_000,
-            provider_id: "deepseek".into(),
-            endpoint: "openai".into(),
-            protocol: "openai".into(),
+            api_key: String::new(), base_url,
+            model, max_tokens: 16384, context_limit: 1_000_000,
+            provider_id,
+            endpoint,
             reasoning_effort: "high".into(),
             profiles, active_profile: "default".into(),
             max_tool_rounds: None,
@@ -56,7 +58,7 @@ impl Config {
             // ── Backward compat: migrate old provider_id → new (provider_id, endpoint) ──
             let raw_pid = pc.provider_id.unwrap_or_default();
             let (provider_id, endpoint) = if raw_pid.is_empty() {
-                ("deepseek".to_string(), "openai".to_string())
+                crate::gate::registry::first_provider_endpoint()
             } else {
                 crate::gate::registry::migrate_provider_id(&raw_pid)
             };
@@ -66,9 +68,11 @@ impl Config {
                 .filter(|e| !e.is_empty())
                 .unwrap_or(endpoint);
 
-            // ── Resolve protocol + base_url from endpoint ──
-            cfg.protocol = crate::gate::registry::protocol_for(&cfg.provider_id, &cfg.endpoint);
+            // ── Resolve base_url from endpoint (user override takes priority) ──
             let endpoint_base_url = crate::gate::registry::base_url_for(&cfg.provider_id, &cfg.endpoint);
+            if !endpoint_base_url.is_empty() {
+                cfg.base_url = endpoint_base_url.clone();
+            }
 
             if let Some(profiles) = pc.profiles {
                 cfg.profiles = profiles;
@@ -81,21 +85,29 @@ impl Config {
                     cfg.reasoning_effort = profile.effort.clone().unwrap_or_else(|| "high".into());
                     cfg.context_limit = profile.context_limit;
                     cfg.base_url = profile.base_url.clone();
+                    if let Some(ref ep) = profile.endpoint {
+                        if !ep.is_empty() {
+                            cfg.endpoint = ep.clone();
+                            let ep_burl = crate::gate::registry::base_url_for(&cfg.provider_id, ep);
+                            if !ep_burl.is_empty() && ep_burl != cfg.base_url {
+                                cfg.base_url = ep_burl;
+                            }
+                        }
+                    }
                 }
             }
             if let Some(k) = pc.api_key { if !k.is_empty() { cfg.api_key = k; } }
             if let Some(m) = pc.model { if !m.is_empty() { cfg.model = m; } }
-            // base_url: user override takes priority, otherwise use endpoint default
-            if let Some(u) = pc.base_url {
-                if !u.is_empty() && u != endpoint_base_url {
-                    cfg.base_url = u;
-                } else if u.is_empty() && !endpoint_base_url.is_empty() {
-                    cfg.base_url = endpoint_base_url;
-                } else {
-                    cfg.base_url = u;
+            // User base_url override: only apply if differs from all known endpoint defaults
+            if let Some(ref u) = pc.base_url {
+                if !u.is_empty() {
+                    let is_ep_default = crate::gate::registry::all_providers().iter()
+                        .flat_map(|p| &p.endpoints)
+                        .any(|e| e.base_url == *u || e.models_url.as_deref() == Some(u.as_str()));
+                    if !is_ep_default {
+                        cfg.base_url = u.clone();
+                    }
                 }
-            } else if !endpoint_base_url.is_empty() {
-                cfg.base_url = endpoint_base_url.clone();
             }
             if let Some(mt) = pc.max_tokens { cfg.max_tokens = mt; }
             if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
@@ -139,7 +151,6 @@ impl Config {
             max_tokens: Some(self.max_tokens),
             context_limit: Some(self.context_limit),
             provider_id: Some(self.provider_id.clone()),
-            protocol: Some(self.protocol.clone()),
             endpoint: Some(self.endpoint.clone()),
             reasoning_effort: Some(self.reasoning_effort.clone()),
             profiles: Some(profiles),
@@ -163,7 +174,10 @@ impl Config {
         self.base_url = profile.base_url;
         if let Some(ref ep) = profile.endpoint {
             self.endpoint = ep.clone();
-            self.protocol = crate::gate::registry::protocol_for(&self.provider_id, ep);
+            let ep_burl = crate::gate::registry::base_url_for(&self.provider_id, ep);
+            if !ep_burl.is_empty() && ep_burl != self.base_url {
+                self.base_url = ep_burl;
+            }
         }
         self.active_profile = name.to_string();
         self.save();
@@ -190,4 +204,9 @@ impl Config {
     }
 
     pub fn is_ready(&self) -> bool { !self.api_key.is_empty() }
+
+    /// Protocol derived from (provider_id, endpoint) in the registry.
+    pub fn protocol(&self) -> String {
+        crate::gate::registry::protocol_for(&self.provider_id, &self.endpoint)
+    }
 }
