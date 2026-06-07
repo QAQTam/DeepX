@@ -11,6 +11,7 @@ export interface ToolCardEntry {
   args: string
   body?: any
   output?: string
+  liveOutput?: string
   success?: boolean
 }
 

@@ -186,6 +186,14 @@ pub enum Agent2Ui {
         results: Vec<ToolResultDef>,
     },
 
+    /// Real-time stdout/stderr chunk from a running exec tool.
+    /// Frontend accumulates these until the corresponding ToolResult arrives.
+    #[serde(rename = "tool_exec_delta")]
+    ToolExecDelta {
+        tool_call_id: String,
+        delta: String,
+    },
+
     // ── Session restore ──
 
     /// Full session history sent on resume.

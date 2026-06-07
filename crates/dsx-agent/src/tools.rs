@@ -5,7 +5,7 @@
 
 use dsx_proto::InterruptRequest;
 use dsx_types::ToolDef;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, Mutex, OnceLock};
 
 /// Return type for tool execution with interrupt support.
 pub struct ToolExecResult {
@@ -58,11 +58,12 @@ pub fn execute_tool(name: &str, action: &str, args: &str) -> String {
 }
 
 pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: &str) -> String {
-    execute_tool_with_id_full(name, action, args, tool_call_id).content
+    execute_tool_with_id_full(name, action, args, tool_call_id, None).content
 }
 
 /// Execute a tool and return the full result including any interrupt request.
-pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call_id: &str) -> ToolExecResult {
+/// `progress_tx` is an optional channel sender; exec tools stream stdout chunks to it.
+pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<String>>) -> ToolExecResult {
     let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
     let call_id = if tool_call_id.is_empty() {
         format!("agent_{}", std::time::SystemTime::now()
@@ -88,7 +89,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     }
 
     let result = with_mgr(|mgr| {
-        mgr.handle_req(call_id, name, effective_action, args_val, Some(60))
+        mgr.handle_req(call_id.clone(), name, effective_action, args_val, Some(60), progress_tx)
     });
 
     match result {

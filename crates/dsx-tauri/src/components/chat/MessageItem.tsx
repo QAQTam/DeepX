@@ -1,11 +1,10 @@
 // ── MessageItem ──
 // Renders a single user or assistant message.
 
-import { For } from 'solid-js'
 import type { Message, ToolCardEntry } from '../../types'
 import { ReasoningBlock } from './ReasoningBlock'
 import { MarkdownBody } from './MarkdownBody'
-import { ToolCard } from './ToolCard'
+import { ToolBatchStrip } from './ToolBatchStrip'
 
 interface MessageItemProps {
   msg: Message
@@ -39,18 +38,7 @@ export function MessageItem(props: MessageItemProps) {
 
       {/* Tool Cards */}
       {toolCards && toolCards.length > 0 && (
-        <div class="mt-2 space-y-2 max-w-[85%]">
-          <For each={toolCards}>{(tc, i) => (
-            <ToolCard ctx={{
-              id: tc.id || `tc-${i()}`,
-              name: tc.name,
-              args: tc.args || '',
-              body: tc.body,
-              output: tc.output,
-              success: tc.success,
-            }} />
-          )}</For>
-        </div>
+        <ToolBatchStrip cards={toolCards} />
       )}
     </div>
   )

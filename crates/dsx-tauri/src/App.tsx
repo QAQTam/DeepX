@@ -231,6 +231,29 @@ export default function App() {
           setStreamKind(null)
           break
         }
+        case 'tool_exec_delta': {
+          const tid = (p as any).tool_call_id as string
+          const delta = (p as any).delta as string
+          if (tid && delta) {
+            setMessages(prev => {
+              for (let i = prev.length - 1; i >= 0; i--) {
+                const tc = prev[i].tool_cards
+                if (tc) {
+                  const idx = tc.findIndex(c => c.id === tid)
+                  if (idx >= 0) {
+                    const msgs = prev.slice()
+                    const cards = msgs[i].tool_cards!.slice()
+                    cards[idx] = { ...cards[idx], liveOutput: (cards[idx].liveOutput || '') + delta }
+                    msgs[i] = { ...msgs[i], tool_cards: cards }
+                    return msgs
+                  }
+                }
+              }
+              return prev
+            })
+          }
+          break
+        }
         case 'tool_results': {
           const results = (p.results as any[]) || []
           setMessages(prev => {
@@ -576,6 +599,8 @@ export default function App() {
 
 function ToolCallPreview(props: { names: string[] }) {
   const delays = ['0ms', '60ms', '120ms', '180ms', '240ms', '300ms']
+  const visible = () => props.names.slice(0, 8)
+  const more = () => props.names.length > 8 ? props.names.length - 8 : 0
   return (
     <div class="flex items-start gap-2.5 mb-1 anim-fade-in">
       <div class="w-7 h-7 rounded-full bg-[var(--accent)]/15 flex items-center justify-center shrink-0 mt-0.5 anim-pulse-glow">
@@ -586,9 +611,9 @@ function ToolCallPreview(props: { names: string[] }) {
         </svg>
       </div>
       <div class="inline-block max-w-[85%] rounded-2xl px-4 py-2.5 text-sm bg-[var(--bg-secondary)] border border-[var(--accent)]/30 rounded-bl-md shadow-[0_0_12px_rgba(124,58,237,0.12)] transition-theme">
-        <div class="text-[var(--accent)] font-medium mb-1.5">工具调用准备中...</div>
+        <div class="text-[var(--accent)] font-medium mb-1.5">工具调用准备中... <Show when={more() > 0}><span class="text-[var(--muted)]">(+{more()})</span></Show></div>
         <div class="flex flex-wrap gap-1.5">
-          <For each={props.names}>{(n, i) => (
+          <For each={visible()}>{(n, i) => (
             <span
               class="text-xs font-mono bg-[var(--accent)]/10 text-[var(--accent)] px-2 py-1 rounded-md border border-[var(--accent)]/20 animate-task-enter"
               style={{ 'animation-delay': delays[i() % delays.length] ?? '0ms' } as any}

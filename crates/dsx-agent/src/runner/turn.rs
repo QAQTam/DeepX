@@ -14,6 +14,18 @@ use super::api_turn::run_api_turn;
 use super::ui_emit::{build_and_push_assistant, make_tool_def, make_tool_result};
 use super::{build_documents, build_recent_edits, build_tasks, cache_tokens, emit};
 
+fn truncate_exec_for_model(output: &str) -> String {
+    if output.len() <= 8192 { return output.to_string(); }
+    let lines: Vec<&str> = output.lines().collect();
+    let head = 30usize;
+    let tail = 40usize;
+    if lines.len() <= head + tail + 10 { return output.to_string(); }
+    let head_part = lines[..head].join("\n");
+    let tail_part = lines[lines.len() - tail..].join("\n");
+    let skipped = lines.len() - head - tail;
+    format!("{head_part}\n--- {skipped} lines omitted (exec output truncated for context) ---\n{tail_part}")
+}
+
 /// Process a pending ask_user reply, pushes the user's text as a tool result.
 fn process_ask_user_response(agent: &mut AgentState, text: &str) -> bool {
     if let Some(tool_call_id) = agent.pending_ask_user.take() {
@@ -319,9 +331,24 @@ pub fn handle_user_input(
                     let name = tc.function.name.clone();
                     let args = tc.function.arguments.clone();
                     let id = tc.id.clone();
+                    let agent_tx = agent_tx.clone();
                     handles.push(thread::spawn(move || {
+                        let (ptx, prx) = if name == "exec" {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            (Some(tx), Some(rx))
+                        } else {
+                            (None, None)
+                        };
                         let result =
-                            crate::tools::execute_tool_with_id_full(&name, "", &args, &id);
+                            crate::tools::execute_tool_with_id_full(&name, "", &args, &id, ptx);
+                        if let Some(rx) = prx {
+                            while let Ok(delta) = rx.recv() {
+                                let _ = agent_tx.send(Agent2Ui::ToolExecDelta {
+                                    tool_call_id: id.clone(),
+                                    delta,
+                                });
+                            }
+                        }
                         (name, id, args, result)
                     }));
                 }
@@ -331,8 +358,22 @@ pub fn handle_user_input(
                 })).collect()
             } else {
                 parsed.iter().map(|tc| {
+                    let (ptx, prx) = if tc.function.name == "exec" {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        (Some(tx), Some(rx))
+                    } else {
+                        (None, None)
+                    };
                     let result =
-                        crate::tools::execute_tool_with_id_full(&tc.function.name, "", &tc.function.arguments, &tc.id);
+                        crate::tools::execute_tool_with_id_full(&tc.function.name, "", &tc.function.arguments, &tc.id, ptx);
+                    if let Some(rx) = prx {
+                        while let Ok(delta) = rx.recv() {
+                            let _ = agent_tx.send(Agent2Ui::ToolExecDelta {
+                                tool_call_id: tc.id.clone(),
+                                delta,
+                            });
+                        }
+                    }
                     (tc.function.name.clone(), tc.id.clone(), tc.function.arguments.clone(), result)
                 }).collect()
             };
@@ -374,8 +415,13 @@ pub fn handle_user_input(
             }
 
             {
+                let ctx_content = if name == "exec" {
+                    truncate_exec_for_model(tr_content)
+                } else {
+                    tr_content.clone()
+                };
                 let mut appender = ToolResultAppender::new(agent);
-                appender.append(name, id, args, tr_content);
+                appender.append(name, id, args, &ctx_content);
             }
             tool_result_defs.push(make_tool_result(id, tr_content, tr_success, None));
 

@@ -191,6 +191,9 @@ fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
                                     for tc in tcs.iter_mut() {
                                         if tc["id"].as_str() == Some(tool_use_id.as_str()) {
                                             tc["output"] = serde_json::json!(content);
+                                            let s = content.as_str();
+                                            let success = !s.starts_with("[ERROR]") && !s.starts_with("[FAIL]");
+                                            tc["success"] = serde_json::json!(success);
                                         }
                                     }
                                 }

@@ -3,6 +3,7 @@
 // ToolCard.tsx dispatches by tool name through this registry.
 
 import type { JSX } from 'solid-js'
+import { createEffect } from 'solid-js'
 import { tt } from '../i18n'
 
 export interface ToolCardContext {
@@ -11,15 +12,17 @@ export interface ToolCardContext {
   args: string
   body?: unknown
   output?: string
+  liveOutput?: string
   success?: boolean
 }
 
 export interface ToolRenderer {
-  toolName: string | string[]  // single or aliases
+  toolName: string | string[]
   icon: string
   label: string
+  autoOpen?: boolean
   renderHeader: (ctx: ToolCardContext) => JSX.Element
-  renderResult?: (output: string) => JSX.Element  // optional custom result renderer
+  renderResult?: (output: string) => JSX.Element
 }
 
 const registry = new Map<string, ToolRenderer>()
@@ -58,10 +61,12 @@ registerTool({
   toolName: 'read_file',
   icon: '📄',
   label: '读取文件',
+  autoOpen: true,
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
     return <span>{sp(a.path || '')}</span>
   },
+  renderResult: output => <CodeBlock code={stripStatus(output)} />,
 })
 
 registerTool({
@@ -72,6 +77,7 @@ registerTool({
     const a = parseArgs(ctx.args)
     return <span>{sp(a.path || '')}</span>
   },
+  renderResult: output => <WriteResult output={output} />,
 })
 
 registerTool({
@@ -82,6 +88,7 @@ registerTool({
     const a = parseArgs(ctx.args)
     return <span>{sp(a.path || '')}</span>
   },
+  renderResult: output => <EditResult output={output} />,
 })
 
 registerTool({
@@ -92,6 +99,7 @@ registerTool({
     const a = parseArgs(ctx.args)
     return <span>{sp(a.path || '')}</span>
   },
+  renderResult: output => <EditResult output={output} />,
 })
 
 registerTool({
@@ -128,6 +136,7 @@ registerTool({
   toolName: 'exec',
   icon: '>_',
   label: '执行命令',
+  autoOpen: true,
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
     const cwd = a.cwd
@@ -138,6 +147,7 @@ registerTool({
       </div>
     )
   },
+  renderResult: output => <TerminalBlock output={output} />,
 })
 
 registerTool({
@@ -239,3 +249,92 @@ registerTool({
     return <span>{a.question?.slice(0, 60) || ''}</span>
   },
 })
+
+// ── Custom Result Renderers ──
+
+function stripStatus(raw: string): string {
+  const lines = raw.split('\n')
+  if (lines.length > 0 && (lines[0].startsWith('[OK]') || lines[0].startsWith('[ERROR]'))) return lines.slice(1).join('\n')
+  return raw
+}
+
+function CodeBlock(props: { code: string; maxLines?: number }) {
+  const lines = props.code.split('\n')
+  const truncated = props.maxLines && lines.length > props.maxLines
+  const shown = truncated ? lines.slice(0, props.maxLines) : lines
+  return (
+    <div class="rounded-lg overflow-hidden border border-[var(--border)]">
+      <div class="px-3 py-1.5 bg-[#1e1e2e] text-[11px] text-[var(--muted)] font-mono flex items-center justify-between">
+        <span>{lines.length} lines</span>
+        <span class="text-[10px] opacity-50">plain text</span>
+      </div>
+      <pre class="!m-0 p-3 text-xs font-mono bg-[#1a1a2e] text-[#cdd6f4] overflow-x-auto max-h-96 leading-relaxed">
+        <code>{shown.map((l, i) => (
+          <div class="flex">
+            <span class="shrink-0 w-10 text-right text-[#585b70] select-none mr-3">{i + 1}</span>
+            <span class="whitespace-pre">{l || ' '}</span>
+          </div>
+        ))}</code>
+        {truncated && <div class="text-[var(--warning)] mt-1 text-center">— {lines.length - props.maxLines!} more lines —</div>}
+      </pre>
+    </div>
+  )
+}
+
+function WriteResult(props: { output: string }) {
+  const firstLine = props.output.split('\n')[0]
+  const isOk = firstLine.startsWith('[OK]')
+  const content = stripStatus(props.output)
+  return (
+    <div>
+      <div class={`px-3 py-2 text-xs font-mono rounded-t-lg flex items-center gap-2 ${isOk ? 'bg-[var(--success)]/10 text-[var(--success)]' : 'bg-[var(--error)]/10 text-[var(--error)]'}`}>
+        <span>{isOk ? '✓' : '✗'}</span>
+        <span>{firstLine}</span>
+      </div>
+      {content.trim() && <CodeBlock code={content} maxLines={30} />}
+    </div>
+  )
+}
+
+function EditResult(props: { output: string }) {
+  const lines = props.output.split('\n')
+  const status = lines[0] || ''
+  const oldLine = lines.find(l => l.startsWith('old:'))?.replace('old: ', '') || ''
+  const newLine = lines.find(l => l.startsWith('new:'))?.replace('new: ', '') || ''
+  return (
+    <div class="px-3 py-2 space-y-1.5">
+      <div class={`text-xs font-mono ${status.startsWith('[OK]') ? 'text-[var(--success)]' : 'text-[var(--error)]'}`}>{status}</div>
+      {oldLine && (
+        <div class="flex items-start gap-2 text-xs font-mono">
+          <span class="shrink-0 text-[var(--error)] font-medium">−</span>
+          <code class="px-1.5 py-0.5 rounded bg-[var(--error)]/10 text-[var(--error)] break-all">{oldLine}</code>
+        </div>
+      )}
+      {newLine && (
+        <div class="flex items-start gap-2 text-xs font-mono">
+          <span class="shrink-0 text-[var(--success)] font-medium">+</span>
+          <code class="px-1.5 py-0.5 rounded bg-[var(--success)]/10 text-[var(--success)] break-all">{newLine}</code>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TerminalBlock(props: { output: string }) {
+  let preRef!: HTMLPreElement
+  createEffect(() => {
+    props.output
+    if (preRef) preRef.scrollTop = preRef.scrollHeight
+  })
+  return (
+    <div class="rounded-lg overflow-hidden border border-[var(--border)]">
+      <div class="px-3 py-1.5 bg-[#11111b] text-[11px] text-[var(--muted)] font-mono flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-[#f38ba8]" />
+        <span class="w-2 h-2 rounded-full bg-[#f9e2af]" />
+        <span class="w-2 h-2 rounded-full bg-[#a6e3a1]" />
+        <span class="ml-2 text-[10px]">terminal</span>
+      </div>
+      <pre ref={preRef} class="!m-0 p-3 text-xs font-mono bg-[#0d0d1a] text-[#cdd6f4] overflow-x-auto max-h-64 leading-relaxed whitespace-pre">{props.output}</pre>
+    </div>
+  )
+}

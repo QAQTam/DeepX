@@ -45,6 +45,7 @@ fn main() {
         "",
         parsed_args,
         None,
+        None,
     );
 
     println!("{}", r.content);

@@ -8,12 +8,13 @@ import { getToolRenderer, type ToolCardContext } from '../../domain/tool-registr
 
 interface ToolCardProps {
   ctx: ToolCardContext
+  defaultOpen?: boolean
 }
 
 export function ToolCard(props: ToolCardProps) {
-  const [open, setOpen] = createSignal(false)
   const renderer = getToolRenderer(props.ctx.name)
-  const isPending = () => props.ctx.output === undefined
+  const [open, setOpen] = createSignal(props.defaultOpen ?? renderer?.autoOpen ?? false)
+  const isPending = () => props.ctx.success === undefined
 
   return (
     <div
@@ -54,9 +55,13 @@ export function ToolCard(props: ToolCardProps) {
       </button>
 
       {/* Body */}
-      {open() && !isPending() && (
+      {open() && (
         <div class="border-t border-[var(--border-light)]">
-          {renderer?.renderResult ? (
+          {isPending() ? (
+            <div class="p-3 text-xs font-mono max-h-48 overflow-y-auto whitespace-pre text-[#cdd6f4] bg-[#0d0d1a]">
+              {props.ctx.liveOutput || <span class="text-[var(--muted)] flex items-center gap-2"><span class="anim-spin-slow text-sm">◇</span>Waiting for output...</span>}
+            </div>
+          ) : renderer?.renderResult ? (
             renderer.renderResult(props.ctx.output ?? '')
           ) : (
             <ToolResultOutput raw={props.ctx.output ?? ''} />

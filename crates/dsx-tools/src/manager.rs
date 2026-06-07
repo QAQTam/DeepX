@@ -61,7 +61,7 @@ impl ToolManager {
         }
     }
 
-    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>) -> ToolResult {
+    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<String>>) -> ToolResult {
         let t0 = std::time::Instant::now();
 
         if let Some(ref allowed) = self.allowed {
@@ -82,7 +82,7 @@ impl ToolManager {
 
         let ctx = ToolCallCtx {
             id: id.clone(), name: name.to_string(), action: action.to_string(),
-            args: args.clone(), tx_progress: None, timeout_secs,
+            args: args.clone(), tx_progress: progress_tx.clone(), timeout_secs,
         };
         match (handler.safety)(&ctx) {
             SafetyVerdict::Block(reason) => {
@@ -99,7 +99,7 @@ impl ToolManager {
 
         let ctx = ToolCallCtx {
             id: id.clone(), name: tool_name.clone(), action: action.to_string(),
-            args, tx_progress: None, timeout_secs,
+            args, tx_progress: progress_tx, timeout_secs,
         };
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
