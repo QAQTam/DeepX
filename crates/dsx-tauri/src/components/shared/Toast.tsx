@@ -1,7 +1,7 @@
 // ── Toast Notification System ──
 // Lightweight toast queue with auto-dismiss.
 
-import { createContext, useContext, createSignal, type JSX } from 'solid-js'
+import { createContext, useContext, createSignal, type JSX, For } from 'solid-js'
 
 export interface Toast {
   id: number
@@ -35,7 +35,7 @@ export function ToastProvider(props: { children: JSX.Element }) {
       {props.children}
       {/* Toast container */}
       <div class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none" aria-live="polite">
-        {toasts().map(t => (
+        <For each={toasts()}>{t => (
           <div
             class={`pointer-events-auto px-4 py-2.5 rounded-lg shadow-lg text-sm anim-msg-in max-w-sm
               ${t.type === 'error' ? 'bg-[var(--error)] text-white'
@@ -46,7 +46,7 @@ export function ToastProvider(props: { children: JSX.Element }) {
           >
             {t.message}
           </div>
-        ))}
+        )}</For>
       </div>
     </ToastCtx.Provider>
   )

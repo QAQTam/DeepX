@@ -139,12 +139,6 @@ impl Lang {
             Lang::Zh => "── Agent 行为 ──",
         }
     }
-    pub fn t_menu_max_tool_rounds(&self) -> &str {
-        match self {
-            Lang::En => "Max Tool Rounds",
-            Lang::Zh => "最大工具轮数",
-        }
-    }
     pub fn t_menu_c7_key(&self) -> &str {
         match self {
             Lang::En => "Context7 API Key",

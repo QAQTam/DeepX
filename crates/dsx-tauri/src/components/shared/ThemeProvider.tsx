@@ -2,7 +2,7 @@
 // Manages data-theme attribute on <html> for CSS variable switching.
 // Supports: 'light' | 'dark' | 'system'
 
-import { createContext, useContext, createSignal, createEffect, type JSX } from 'solid-js'
+import { createContext, useContext, createSignal, createEffect, onCleanup, type JSX } from 'solid-js'
 
 export type Theme = 'light' | 'dark' | 'system'
 
@@ -59,8 +59,7 @@ export function ThemeProvider(props: { children: JSX.Element }) {
       setResolved(resolveTheme('system'))
     }
     mq?.addEventListener('change', handler)
-    // No cleanup needed — Solid handles disposal automatically when effect re-runs
-    // but for completeness, we'd use onCleanup
+    onCleanup(() => mq?.removeEventListener('change', handler))
   })
 
   return (

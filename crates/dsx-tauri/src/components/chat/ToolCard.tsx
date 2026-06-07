@@ -1,7 +1,7 @@
 // ── ToolCard ──
 // Renders a tool call card by dispatching through ToolRegistry.
 
-import { createSignal } from 'solid-js'
+import { createSignal, For } from 'solid-js'
 import { tt } from '../../i18n'
 import { getToolRenderer, type ToolCardContext } from '../../domain/tool-registry'
 
@@ -9,9 +9,9 @@ interface ToolCardProps {
   ctx: ToolCardContext
 }
 
-export function ToolCard({ ctx }: ToolCardProps) {
+export function ToolCard(props: ToolCardProps) {
   const [open, setOpen] = createSignal(false)
-  const renderer = getToolRenderer(ctx.name)
+  const renderer = getToolRenderer(props.ctx.name)
 
   return (
     <div class="my-2 border border-[var(--border-light)] rounded-lg overflow-hidden bg-[var(--bg-surface)] transition-theme">
@@ -25,28 +25,28 @@ export function ToolCard({ ctx }: ToolCardProps) {
           {renderer?.icon || '⚙'}
         </span>
         <span class="font-medium text-[var(--text-h)]">
-          {renderer?.label || ctx.name}
+          {renderer?.label || props.ctx.name}
         </span>
         <span class="flex-1 text-[var(--text)] truncate">
-          {renderer?.renderHeader(ctx)}
+          {renderer?.renderHeader(props.ctx)}
         </span>
         <span class={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-mono
-          ${ctx.success === true ? 'bg-[var(--success-light)] text-[var(--success)]'
-          : ctx.success === false ? 'bg-[var(--error-light)] text-[var(--error)]'
-          : ctx.output !== undefined ? 'bg-[var(--success-light)] text-[var(--success)]'
+          ${props.ctx.success === true ? 'bg-[var(--success-light)] text-[var(--success)]'
+          : props.ctx.success === false ? 'bg-[var(--error-light)] text-[var(--error)]'
+          : props.ctx.output !== undefined ? 'bg-[var(--success-light)] text-[var(--success)]'
           : 'bg-[var(--warning-light)] text-[var(--warning)]'}`}>
-          {ctx.output !== undefined ? tt('chat.toolDone') : tt('chat.toolPending')}
+          {props.ctx.output !== undefined ? tt('chat.toolDone') : tt('chat.toolPending')}
         </span>
         <span class="shrink-0 text-[var(--muted)] text-xs">{open() ? '▾' : '▸'}</span>
       </button>
 
       {/* Body */}
-      {open() && ctx.output !== undefined && (
+      {open() && props.ctx.output !== undefined && (
         <div class="border-t border-[var(--border-light)]">
           {renderer?.renderResult ? (
-            renderer.renderResult(ctx.output)
+            renderer.renderResult(props.ctx.output)
           ) : (
-            <ToolResultOutput raw={ctx.output} />
+            <ToolResultOutput raw={props.ctx.output} />
           )}
         </div>
       )}
@@ -63,9 +63,9 @@ function ToolResultOutput({ raw }: { raw: string }) {
 
   return (
     <div class="p-3 text-xs font-mono max-h-64 overflow-y-auto">
-      {display.map((line) => (
+      <For each={display}>{(line) => (
         <div class={lineColor(line)}>{line || ' '}</div>
-      ))}
+      )}</For>
       {truncated && (
         <div class="text-[var(--warning)] mt-1 font-medium">
           ⚠ 输出被截断（共 {lines.length} 行）

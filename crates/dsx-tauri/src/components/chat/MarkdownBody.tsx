@@ -63,8 +63,7 @@ const renderer: any = {
     return `<div class="my-2 rounded-lg overflow-hidden border border-[var(--border)]">
       <div class="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-tertiary)] text-xs text-[var(--muted)] font-medium">
         <span>${lang || 'code'}</span>
-        <button class="hover:text-[var(--text-h)] transition-colors"
-          onclick="navigator.clipboard.writeText(this.getAttribute('data-code'))"
+        <button class="copy-code-btn hover:text-[var(--text-h)] transition-colors"
           data-code="${escapedForAttr}">${tt('common.copy')}</button>
       </div>
       <pre class="!m-0 p-3 text-xs font-mono bg-[var(--bg-tertiary)] text-[var(--text)] overflow-x-auto"><code class="language-${lang}">${highlighted}</code></pre>
@@ -115,6 +114,15 @@ export function MarkdownBody(props: MarkdownBodyProps) {
     return typeof result === 'string' ? result : String(result)
   })
   return (
-    <div class="prose prose-sm max-w-none text-[var(--text)] markdown-body" innerHTML={html()} />
+    <div
+      class="prose prose-sm max-w-none text-[var(--text)] markdown-body"
+      innerHTML={html()}
+      onClick={(e) => {
+        const btn = (e.target as Element).closest('.copy-code-btn')
+        if (btn) {
+          navigator.clipboard.writeText(btn.getAttribute('data-code') || '').catch(e => console.error('copy failed:', e))
+        }
+      }}
+    />
   )
 }

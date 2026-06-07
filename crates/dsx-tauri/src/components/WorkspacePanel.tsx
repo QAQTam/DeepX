@@ -1,7 +1,7 @@
 // ── WorkspacePanel ──
 // Right sidebar: workspace directory browser, document tracking, recent edits, tasks.
 
-import { createSignal, onMount } from 'solid-js'
+import { createSignal, onMount, For } from 'solid-js'
 import { invoke } from '@tauri-apps/api/core'
 import type { DocInfo } from '../types'
 import { tt } from '../i18n'
@@ -37,11 +37,11 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
   const [showEdits, setShowEdits] = createSignal(true)
 
   onMount(() => {
-    invoke<string>('get_workspace').then(p => { setWorkspacePath(p); refreshDir(p) }).catch(() => {})
+    invoke<string>('get_workspace').then(p => { setWorkspacePath(p); refreshDir(p) }).catch(e => console.error('get_workspace failed:', e))
   })
 
   const refreshDir = (path: string) => {
-    invoke<any>('scan_directory', { path }).then(r => setDirEntries(r.entries)).catch(() => setDirEntries(null))
+    invoke<any>('scan_directory', { path }).then(r => setDirEntries(r.entries)).catch(e => { console.error('scan_directory failed:', e); setDirEntries(null) })
   }
 
   const pickFolder = async () => {
@@ -53,7 +53,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
         setWorkspacePath(selected as string)
         refreshDir(selected as string)
       }
-    } catch { /* ignore */ }
+    } catch(e) { console.error('pickFolder failed:', e) }
   }
 
   return (
@@ -73,13 +73,13 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
       {dirEntries() && dirEntries()!.length > 0 && (
         <Card padding="sm">
           <div class="max-h-48 overflow-y-auto space-y-0.5 text-xs font-mono">
-            {dirEntries()!.map(e => (
+            <For each={dirEntries()!}>{e => (
               <div class="flex items-center gap-1.5 text-[var(--text)]">
                 <span class="text-[var(--muted)]">{e.is_dir ? '📁' : '📄'}</span>
                 <span class="truncate flex-1">{e.name}</span>
                 {!e.is_dir && <span class="text-[var(--muted)] shrink-0">{formatSize(e.size)}</span>}
               </div>
-            ))}
+            )}</For>
           </div>
         </Card>
       )}
@@ -98,12 +98,12 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
             {props.tasks.length === 0 ? (
               <EmptyState title={tt('workspace.noTasks')} />
             ) : (
-              props.tasks.map(t => (
+              <For each={props.tasks}>{t => (
                 <div class="flex items-center gap-1.5 text-xs">
                   <Badge variant={statusColor(t.status)}>{tt(statusLabel[t.status] || t.status)}</Badge>
                   <span class="text-[var(--text)] truncate">{t.subject}</span>
                 </div>
-              ))
+              )}</For>
             )}
           </div>
         )}
@@ -123,11 +123,11 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
             {props.documents.length === 0 ? (
               <EmptyState title={tt('workspace.noDocuments')} />
             ) : (
-              props.documents.map(d => (
+              <For each={props.documents}>{d => (
                 <div class="text-[var(--text)] truncate">
                   <span class="text-[var(--muted)]">{d.path}</span>
                 </div>
-              ))
+              )}</For>
             )}
           </div>
         )}
@@ -147,9 +147,9 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
             {props.recentEdits.length === 0 ? (
               <EmptyState title={tt('workspace.noEdits')} />
             ) : (
-              props.recentEdits.map(f => (
+              <For each={props.recentEdits}>{f => (
                 <div class="text-[var(--text)] truncate">{f}</div>
-              ))
+              )}</For>
             )}
           </div>
         )}

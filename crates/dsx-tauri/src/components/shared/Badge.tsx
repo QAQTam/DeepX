@@ -1,6 +1,7 @@
 // ── Badge ──
 
 import type { JSX } from 'solid-js'
+import { mergeProps } from 'solid-js'
 
 type BadgeVariant = 'default' | 'accent' | 'success' | 'warning' | 'error'
 
@@ -18,10 +19,11 @@ const color: Record<BadgeVariant, string> = {
   error:   'bg-[var(--error)]/10 text-[var(--error)]',
 }
 
-export function Badge({ variant = 'default', children, class: className = '' }: BadgeProps) {
+export function Badge(props: BadgeProps) {
+  const merged = mergeProps({ variant: 'default' as const, class: '' }, props)
   return (
-    <span class={`inline-flex items-center px-1.5 py-0.5 rounded-md text-xs font-medium ${color[variant]} ${className}`}>
-      {children}
+    <span class={`inline-flex items-center px-1.5 py-0.5 rounded-md text-xs font-medium ${color[merged.variant]} ${merged.class}`}>
+      {props.children}
     </span>
   )
 }

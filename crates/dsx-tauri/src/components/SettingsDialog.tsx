@@ -1,8 +1,9 @@
 // ── SettingsDialog ──
-// Full settings: API Key, model, context limit, max tokens, effort, language, theme.
+// Provider → Endpoint → BaseUrl → Model hierarchy.
+// Models from preset registry, not fetched.
 
-import { createSignal, onMount } from 'solid-js'
-import { api, type ConfigData } from '../bridge/tauri'
+import { createSignal, createEffect, onMount } from 'solid-js'
+import { api, type ConfigData, type ProviderInfo, type EndpointInfo } from '../bridge/tauri'
 import { tt, setLang } from '../i18n'
 import { Button, Input, Select } from './shared'
 import { useTheme, type Theme } from './shared/ThemeProvider'
@@ -11,104 +12,144 @@ interface SettingsDialogProps {
   onClose: () => void
 }
 
+function modelOptionsFor(endpoint: EndpointInfo | undefined, currentModel: string) {
+  const list = (endpoint?.models?.length ?? 0) > 0 ? endpoint!.models : (endpoint?.default_model ? [endpoint.default_model] : [])
+  const seen = new Set(list)
+  const merged = list.slice()
+  if (currentModel && !seen.has(currentModel) && currentModel.trim()) {
+    merged.unshift(currentModel)
+  }
+  return merged
+}
+
 export function SettingsDialog(props: SettingsDialogProps) {
   const [apiKey, setApiKey] = createSignal('')
-  const [baseUrl, setBaseUrl] = createSignal('https://api.deepseek.com')
-  const [model, setModel] = createSignal('deepseek-v4-flash')
-  const [models, setModels] = createSignal<string[]>([])
-  const [fetching, setFetching] = createSignal(false)
-  const [fetchError, setFetchError] = createSignal('')
+  const [baseUrl, setBaseUrl] = createSignal('')
+  const [model, setModel] = createSignal('')
   const [contextLimit, setContextLimit] = createSignal(1000000)
   const [maxTokens, setMaxTokens] = createSignal(16384)
-  const [maxToolRounds, setMaxToolRounds] = createSignal(10)
-  const [providerId, setProviderId] = createSignal('deepseek')
-  const [endpoint, setEndpoint] = createSignal('openai')
+  const [providerId, setProviderId] = createSignal('')
+  const [endpointId, setEndpointId] = createSignal('')
   const [reasoningEffort, setReasoningEffort] = createSignal('high')
   const [lang, setLangState] = createSignal('zh')
   const [context7Key, setContext7Key] = createSignal('')
   const [saving, setSaving] = createSignal(false)
+
+  const [providers, setProviders] = createSignal<ProviderInfo[]>([])
   const { theme, setTheme } = useTheme()
 
+  const currentProvider = (): ProviderInfo | undefined =>
+    providers().find(p => p.id === providerId())
+
+  const currentEndpoint = (): EndpointInfo | undefined =>
+    currentProvider()?.endpoints.find(e => e.id === endpointId())
+
+  const endpointsForProvider = (): EndpointInfo[] =>
+    currentProvider()?.endpoints ?? []
+
+  // ── Load config + providers ──
   onMount(() => {
+    api.listProviders().then(list => {
+      setProviders(list)
+      if (list.length > 0) {
+        const first = list[0]
+        if (!providerId()) setProviderId(first.id)
+        if (!endpointId()) setEndpointId(first.endpoints[0]?.id ?? '')
+        if (!baseUrl()) setBaseUrl(first.endpoints[0]?.base_url ?? '')
+        if (!model()) setModel(first.endpoints[0]?.default_model ?? '')
+      }
+    }).catch(e => console.error('listProviders failed:', e))
+
     api.loadConfig().then((cfg: ConfigData) => {
       if (cfg.api_key && cfg.api_key !== 'null') setApiKey(cfg.api_key)
       if (cfg.base_url) setBaseUrl(cfg.base_url)
       if (cfg.model) setModel(cfg.model)
       if (cfg.context_limit) setContextLimit(cfg.context_limit)
       if (cfg.max_tokens) setMaxTokens(cfg.max_tokens)
-      if (cfg.max_tool_rounds) setMaxToolRounds(cfg.max_tool_rounds)
       if (cfg.provider_id) setProviderId(cfg.provider_id)
-      if (cfg.endpoint) setEndpoint(cfg.endpoint)
+      if (cfg.endpoint) setEndpointId(cfg.endpoint)
       if (cfg.reasoning_effort) setReasoningEffort(cfg.reasoning_effort)
       if (cfg.lang) setLangState(cfg.lang)
       if (cfg.context7_api_key) setContext7Key(cfg.context7_api_key)
-    }).catch(() => {})
+    }).catch(e => console.error('loadConfig failed:', e))
   })
 
-  const fetchModels = async () => {
-    setFetching(true)
-    setFetchError('')
-    try {
-      const list = await api.fetchModels(apiKey(), baseUrl(), providerId(), endpoint())
-      setModels(list)
-      if (list.length > 0 && !list.includes(model())) setModel(list[0])
-    } catch (e: any) {
-      setFetchError(String(e))
-    } finally {
-      setFetching(false)
-    }
-  }
+  // ── Provider change → auto-fill endpoint, baseUrl, model ──
+  createEffect(() => {
+    const pid = providerId()
+    const p = providers().find(p => p.id === pid)
+    if (!p || p.endpoints.length === 0) return
+    const ep = p.endpoints[0]
+    if (endpointId() !== ep.id) setEndpointId(ep.id)
+    setBaseUrl(ep.base_url)
+    setModel(ep.default_model)
+  })
 
   const save = async () => {
     setSaving(true)
     try {
       await api.saveConfig({
         apiKey: apiKey(), baseUrl: baseUrl(), model: model(),
-        contextLimit: contextLimit(), maxTokens: maxTokens(), maxToolRounds: maxToolRounds(),
-        providerId: providerId(), endpoint: endpoint(), reasoningEffort: reasoningEffort(), lang: lang(), context7ApiKey: context7Key(),
+        contextLimit: contextLimit(), maxTokens: maxTokens(),
+        providerId: providerId(), endpoint: endpointId(), reasoningEffort: reasoningEffort(), lang: lang(), context7ApiKey: context7Key(),
       })
-      api.reloadAgent().catch(() => {})
+      api.reloadAgent().catch(e => console.error('reloadAgent failed:', e))
       setLang(lang())
       props.onClose()
-    } catch { /* ignore */ }
+    } catch(e) { console.error('saveConfig failed:', e) }
     finally { setSaving(false) }
   }
 
   return (
-    <div class="absolute inset-0 bg-black/30 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label={tt('settings.title')}>
+    <div class="absolute inset-0 bg-black/30 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label={tt('settings.title')} onKeyDown={(e) => { if (e.key === 'Escape') props.onClose() }}>
       <div class="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-md w-full mx-4 shadow-md transition-theme max-h-[90vh] overflow-y-auto">
         <div class="text-lg font-bold text-[var(--text-h)] mb-4">{tt('settings.title')}</div>
 
         <div class="space-y-4">
           {/* API Key */}
-          <div>
-            <Input
-              label={tt('settings.apiKey')}
-              type="password"
-              value={apiKey()}
-              onInput={(e) => setApiKey(e.currentTarget.value)}
-              placeholder="sk-..."
-            />
-            <div class="flex items-center gap-2 mt-1">
-              <Button variant="secondary" size="sm" onClick={fetchModels} loading={fetching()}>
-                {tt('settings.fetchModels')}
-              </Button>
-              {fetchError() && <span class="text-xs text-[var(--error)]">{fetchError()}</span>}
-            </div>
-          </div>
+          <Input
+            label={tt('settings.apiKey')}
+            type="password"
+            value={apiKey()}
+            onInput={(e) => setApiKey(e.currentTarget.value)}
+            placeholder="sk-..."
+          />
+
+          {/* Provider */}
+          <Select
+            label="Provider"
+            options={providers().map(p => ({ value: p.id, label: p.display }))}
+            value={providerId()}
+            onChange={(e) => { setProviderId(e.currentTarget.value) }}
+          />
+
+          {/* Endpoint */}
+          <Select
+            label={tt('settings.endpoint')}
+            options={endpointsForProvider().map(e => ({ value: e.id, label: e.display }))}
+            value={endpointId()}
+            onChange={(e) => {
+              const epId = e.currentTarget.value
+              setEndpointId(epId)
+              const ep = currentProvider()?.endpoints.find(e => e.id === epId)
+              if (ep) {
+                setBaseUrl(ep.base_url)
+                setModel(ep.default_model)
+              }
+            }}
+          />
 
           {/* Base URL */}
           <Input
             label={tt('settings.baseUrl')}
             value={baseUrl()}
             onInput={(e) => setBaseUrl(e.currentTarget.value)}
-            placeholder="https://api.deepseek.com"
           />
 
-          {/* Model */}
+          {/* Model — preset from registry */}
           <Select
             label={tt('settings.model')}
-            options={models().map(m => ({ value: m, label: m }))}
+            options={modelOptionsFor(currentEndpoint(), model()).map(m => ({ value: m, label: m }))}
             value={model()}
             onChange={(e) => setModel(e.currentTarget.value)}
           />
@@ -127,29 +168,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
             type="number"
             value={String(maxTokens())}
             onInput={(e) => setMaxTokens(Number(e.currentTarget.value))}
-          />
-
-          {/* Max Tool Rounds */}
-          <Input
-            label={tt('settings.maxToolRounds')}
-            type="number"
-            value={String(maxToolRounds())}
-            onInput={(e) => setMaxToolRounds(Number(e.currentTarget.value))}
-          />
-
-          {/* Endpoint */}
-          <Select
-            label={tt('settings.endpoint')}
-            options={[
-              { value: 'openai', label: 'OpenAI-compatible' },
-              { value: 'anthropic', label: 'Anthropic-native' },
-            ]}
-            value={endpoint()}
-            onChange={(e) => {
-              const ep = e.currentTarget.value
-              setEndpoint(ep)
-              setBaseUrl(ep === 'anthropic' ? 'https://api.deepseek.com/anthropic' : 'https://api.deepseek.com')
-            }}
           />
 
           {/* Thinking Effort */}

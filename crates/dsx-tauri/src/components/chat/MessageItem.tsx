@@ -1,6 +1,7 @@
 // ── MessageItem ──
 // Renders a single user or assistant message.
 
+import { For } from 'solid-js'
 import type { Message, ToolCardEntry } from '../../types'
 import { ReasoningBlock } from './ReasoningBlock'
 import { MarkdownBody } from './MarkdownBody'
@@ -10,19 +11,19 @@ interface MessageItemProps {
   msg: Message
 }
 
-export function MessageItem({ msg }: MessageItemProps) {
-  if (msg.role === 'user') {
+export function MessageItem(props: MessageItemProps) {
+  if (props.msg.role === 'user') {
     return (
       <div class="flex justify-end mb-4 anim-msg-in">
         <div class="max-w-[75%] bg-[var(--accent)] text-white rounded-2xl rounded-br-md px-4 py-2.5 text-sm leading-relaxed shadow-sm">
-          <div class="whitespace-pre-wrap">{msg.content}</div>
+          <div class="whitespace-pre-wrap">{props.msg.content}</div>
         </div>
       </div>
     )
   }
 
   // Assistant message — may contain reasoning + content + tool cards
-  const { reasoning, content, toolCards } = parseAssistant(msg.content, msg.reasoning, msg.tool_cards)
+  const { reasoning, content, toolCards } = parseAssistant(props.msg.content, props.msg.reasoning, props.msg.tool_cards)
 
   return (
     <div class="mb-4 anim-msg-in">
@@ -39,16 +40,16 @@ export function MessageItem({ msg }: MessageItemProps) {
       {/* Tool Cards */}
       {toolCards && toolCards.length > 0 && (
         <div class="mt-2 space-y-2 max-w-[85%]">
-          {toolCards.map((tc, i) => (
+          <For each={toolCards}>{(tc, i) => (
             <ToolCard ctx={{
-              id: tc.id || `tc-${i}`,
+              id: tc.id || `tc-${i()}`,
               name: tc.name,
               args: tc.args || '',
               body: tc.body,
               output: tc.output,
               success: tc.success,
             }} />
-          ))}
+          )}</For>
         </div>
       )}
     </div>
@@ -56,7 +57,7 @@ export function MessageItem({ msg }: MessageItemProps) {
 }
 
 // ── Parser: extract reasoning from content ──
-const REASONING_RE = /<reasoning>([\s\S]*?)<\/reasoning>/gi
+const REASONING_RE = /<reasoning>([\s\S]*?)<\/reasoning>/i
 
 function parseAssistant(content: string, reasoning?: string, toolCards?: ToolCardEntry[]): {
   reasoning: string

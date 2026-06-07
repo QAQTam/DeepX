@@ -3,6 +3,7 @@
 // Sizes: sm | md | lg
 
 import type { JSX } from 'solid-js'
+import { mergeProps } from 'solid-js'
 import { Spinner } from './Spinner'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
@@ -29,21 +30,19 @@ const sizeClass: Record<Size, string> = {
   lg: 'px-5 py-2.5 text-sm rounded-xl gap-2',
 }
 
-export function Button({
-  variant = 'secondary', size = 'md', loading, icon, children,
-  disabled, class: className = '', ...rest
-}: ButtonProps) {
+export function Button(props: ButtonProps) {
+  const merged = mergeProps({ variant: 'secondary' as Variant, size: 'md' as Size, class: '' }, props)
   return (
     <button
       class={`inline-flex items-center justify-center font-medium transition-colors
         disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-[var(--accent)]
-        ${variantClass[variant]} ${sizeClass[size]} ${className}`}
-      disabled={disabled || loading}
-      aria-busy={loading}
-      {...rest}
+        ${variantClass[merged.variant]} ${sizeClass[merged.size]} ${merged.class}`}
+      disabled={merged.disabled || merged.loading}
+      aria-busy={merged.loading}
+      {...props}
     >
-      {loading ? <Spinner size={size} /> : icon}
-      {children && <span>{children}</span>}
+      {merged.loading ? <Spinner size={merged.size} /> : merged.icon}
+      {merged.children && <span>{merged.children}</span>}
     </button>
   )
 }

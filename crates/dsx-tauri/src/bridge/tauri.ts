@@ -11,13 +11,27 @@ export interface ConfigData {
   model?: string
   context_limit?: number
   max_tokens?: number
-  max_tool_rounds?: number
   provider_id?: string
   protocol?: string
   endpoint?: string
   reasoning_effort?: string
   lang?: string
   context7_api_key?: string
+}
+
+export interface ProviderInfo {
+  id: string
+  display: string
+  endpoints: EndpointInfo[]
+}
+
+export interface EndpointInfo {
+  id: string
+  display: string
+  protocol: string
+  base_url: string
+  default_model: string
+  models: string[]
 }
 
 export interface BalanceResult {
@@ -69,7 +83,6 @@ export interface ConfigInput {
   model: string
   contextLimit: number
   maxTokens: number
-  maxToolRounds: number
   providerId: string
   endpoint: string
   reasoningEffort: string
@@ -89,7 +102,6 @@ export const api = {
                                         model: c.model,
                                         contextLimit: c.contextLimit,
                                         maxTokens: c.maxTokens,
-                                        maxToolRounds: c.maxToolRounds,
                                         providerId: c.providerId,
                                         endpoint: c.endpoint,
                                         reasoningEffort: c.reasoningEffort,
@@ -99,7 +111,7 @@ export const api = {
   updateConfig:    (field: string, value: string) => invoke<void>('update_config', { field, value }),
 
   // Models & Balance
-  fetchModels:     (apiKey: string, baseUrl: string, providerId: string, endpointId: string) => invoke<string[]>('fetch_models', { apiKey, baseUrl, providerId, endpointId }),
+  listProviders:   ()              => invoke<ProviderInfo[]>('list_providers'),
   getBalance:      (apiKey: string) => invoke<BalanceResult>('get_balance', { apiKey }),
 
   // Agent lifecycle

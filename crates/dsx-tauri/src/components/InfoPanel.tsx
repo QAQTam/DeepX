@@ -1,7 +1,7 @@
 // ── InfoPanel ──
 // Left sidebar: context usage, KV cache, balance, tool calls, audit log, sessions.
 
-import { createSignal, type Accessor } from 'solid-js'
+import { createSignal, type Accessor, For } from 'solid-js'
 import { tt } from '../i18n'
 import { Button, Badge, Card, EmptyState } from './shared'
 import { getAllToolLabels } from '../domain/tool-registry'
@@ -99,9 +99,9 @@ export function InfoPanel(props: InfoPanelProps) {
         <Card padding="sm">
           <div class="text-xs text-[var(--muted)] mb-1">{tt('info.activeTools')}</div>
           <div class="flex flex-wrap gap-1">
-            {props.toolNames.map(n => (
+            <For each={props.toolNames}>{n => (
               <Badge variant="accent">{toolLabels[n] || n}</Badge>
-            ))}
+            )}</For>
           </div>
         </Card>
       )}
@@ -111,11 +111,11 @@ export function InfoPanel(props: InfoPanelProps) {
         <Card padding="sm">
           <div class="text-xs text-[var(--muted)] mb-1">{tt('info.auditLog')} ({props.auditLog.length})</div>
           <div class="max-h-32 overflow-y-auto space-y-1 text-xs font-mono">
-            {props.auditLog.map((entry: any) => (
+            <For each={props.auditLog}>{(entry: any) => (
               <div class={`truncate ${entry.success ? 'text-[var(--text)]' : 'text-[var(--error)]'}`}>
                 {entry.name} {entry.args?.slice(0, 40)}
               </div>
-            ))}
+            )}</For>
           </div>
         </Card>
       )}
@@ -134,7 +134,7 @@ export function InfoPanel(props: InfoPanelProps) {
             {props.sessions().length === 0 ? (
               <EmptyState title={tt('info.noSessions')} />
             ) : (
-              props.sessions().map(s => (
+              <For each={props.sessions()}>{s => (
                 <div class={`flex items-center justify-between text-xs py-1 px-1.5 rounded ${s.seed === props.sessionId() ? 'bg-[var(--accent)]/10' : ''}`}>
                   <button class="text-left flex-1 truncate text-[var(--text)] hover:text-[var(--accent)]" onClick={() => props.onResumeSession(s.seed)}>
                     <span class="font-mono">{s.seed?.slice(0, 8)}</span>
@@ -145,7 +145,7 @@ export function InfoPanel(props: InfoPanelProps) {
                     ✕
                   </Button>
                 </div>
-              ))
+              )}</For>
             )}
           </div>
         )}

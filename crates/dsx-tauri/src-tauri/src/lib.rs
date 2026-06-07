@@ -271,7 +271,7 @@ fn check_config() -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, provider_id: String, endpoint: String, reasoning_effort: String, lang: String, max_tool_rounds: u32, context7_api_key: String) -> Result<(), String> {
+fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: String, model: String, context_limit: u32, max_tokens: u32, provider_id: String, endpoint: String, reasoning_effort: String, lang: String, context7_api_key: String) -> Result<(), String> {
     let _lock = state.config_lock.lock().map_err(|e| format!("lock: {e}"))?;
     let store = dsx_types::ConfigStore::default_location();
     let mut cfg = store.load().unwrap_or_default();
@@ -284,7 +284,6 @@ fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: Strin
     if !endpoint.is_empty() { cfg.endpoint = Some(endpoint); }
     if !reasoning_effort.is_empty() { cfg.reasoning_effort = Some(reasoning_effort); }
     if !lang.is_empty() { cfg.lang = Some(lang); }
-    cfg.max_tool_rounds = Some(max_tool_rounds);
     if !context7_api_key.is_empty() { cfg.context7_api_key = Some(context7_api_key); }
     if !store.save(&cfg) { return Err("Failed to save config".into()); }
     Ok(())
@@ -376,7 +375,6 @@ fn load_config() -> Result<serde_json::Value, String> {
         "model": cfg.model,
         "context_limit": cfg.context_limit,
         "max_tokens": cfg.max_tokens,
-        "max_tool_rounds": cfg.max_tool_rounds,
         "provider_id": cfg.provider_id,
         "protocol": protocol,
         "endpoint": cfg.endpoint,
@@ -405,7 +403,6 @@ fn update_config(state: tauri::State<AgentState>, field: String, value: String) 
                 match field.as_str() {
                     "context_limit" => cfg.context_limit = Some(n),
                     "max_tokens" => cfg.max_tokens = Some(n),
-                    "max_tool_rounds" => cfg.max_tool_rounds = Some(n),
                     _ => return Err(format!("Unknown config field: {field}")),
                 }
             } else if value == "true" || value == "false" {
@@ -484,6 +481,28 @@ fn create_session(state: tauri::State<AgentState>) -> Result<(), String> {
     let tx = guard.as_ref().ok_or("Agent not started")?;
     tx.send(Ui2Agent::CreateSession).map_err(|e| format!("send: {e}"))?;
     Ok(())
+}
+
+#[tauri::command]
+fn list_providers() -> Result<serde_json::Value, String> {
+    let providers = dsx_agent::gate::registry::all_providers();
+    let json: Vec<serde_json::Value> = providers.iter().map(|p| {
+        serde_json::json!({
+            "id": p.id,
+            "display": p.display,
+            "endpoints": p.endpoints.iter().map(|e| {
+                serde_json::json!({
+                    "id": e.id,
+                    "display": e.display,
+                    "protocol": e.protocol,
+                    "base_url": e.base_url,
+                    "default_model": e.default_model,
+                    "models": e.models,
+                })
+            }).collect::<Vec<_>>(),
+        })
+    }).collect();
+    Ok(serde_json::json!(json))
 }
 
 #[tauri::command]
@@ -627,7 +646,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            check_config, save_config, load_config, update_config, fetch_models,
+            check_config, save_config, load_config, update_config, fetch_models, list_providers,
             start_agent, check_agent_status, send_message, reload_agent, stop_agent, resume_agent, create_session,
             load_session_messages,
             set_workspace, get_workspace, scan_directory,

@@ -30,13 +30,17 @@ impl SetupState {
     pub fn new() -> Self {
         let (pid, ep) = dsx_agent::gate::registry::first_provider_endpoint();
         let def_model = dsx_agent::gate::registry::default_model_for(&pid, &ep);
+        let model_list = dsx_agent::gate::registry::find_endpoint(&pid, &ep)
+            .map(|e| if e.models.is_empty() { vec![e.default_model.clone()] } else { e.models.clone() })
+            .unwrap_or_else(|| vec![def_model.clone()]);
+        let model_index = model_list.iter().position(|m| m == &def_model).unwrap_or(0);
         Self {
             step: 0,
             lang: crate::i18n::Lang::En,
             api_key: String::new(),
-            model: def_model.clone(),
-            model_list: vec![def_model],
-            model_index: 0,
+            model: def_model,
+            model_list,
+            model_index,
             context_limit: String::from("1000000"),
             error: String::new(),
             status: String::new(),
@@ -141,8 +145,8 @@ impl SetupState {
         }
     }
 
-    /// Fetch model list from provider API using the provided key.
-    /// Returns true if successful (populates model_list).
+    /// Validate API key by checking connectivity. Model list already comes from registry presets.
+    /// Returns true if the key appears valid (non-empty + connects).
     pub fn fetch_models(&mut self, provider_id: &str) -> bool {
         let key = self.api_key.trim();
         if key.is_empty() {
@@ -158,28 +162,9 @@ impl SetupState {
             .header("Authorization", &format!("Bearer {}", key))
             .call();
         match resp {
-            Ok(r) => {
-                let body = r.into_body().read_to_string().unwrap_or_default();
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-                    if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
-                        let ids: Vec<String> = data
-                            .iter()
-                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
-                            .collect();
-                        if !ids.is_empty() {
-                            if !ids.contains(&self.model) {
-                                self.model = ids[0].clone();
-                                self.model_index = 0;
-                            } else {
-                                self.model_index = ids.iter().position(|n| n == &self.model).unwrap_or(0);
-                            }
-                            self.model_list = ids;
-                            self.models_loaded = true;
-                             return true;
-                        }
-                    }
-                }
-                false
+            Ok(_r) => {
+                self.models_loaded = true;
+                true
             }
             Err(_) => false,
         }
@@ -392,7 +377,6 @@ impl MenuState {
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
         let profiles = config.as_ref().and_then(|c| c.profiles.clone()).unwrap_or_default();
 
-        let max_tool_rounds = config.as_ref().and_then(|c| c.max_tool_rounds).unwrap_or(10);
         let c7_key = config.as_ref().and_then(|c| c.context7_api_key.clone()).unwrap_or_default();
 
         let session_seed = app.debug.session_seed.clone();
@@ -425,8 +409,6 @@ impl MenuState {
         items.push(mk(MenuItemKind::Section, "", l.t_menu_agent_behavior().into(), "", false));
         items.push(mk(MenuItemKind::Toggle, "reasoning_effort", l.t_menu_reasoning_effort().into(),
             &reasoning_effort, true));
-        items.push(mk(MenuItemKind::Toggle, "max_tool_rounds", l.t_menu_max_tool_rounds().into(),
-            &max_tool_rounds.to_string(), true));
         items.push(mk(MenuItemKind::Value, "context7_api_key", l.t_menu_c7_key().into(),
             if c7_key.is_empty() { "(not set)" } else { "****" }, true));
 
@@ -560,14 +542,19 @@ impl MenuState {
                 item.value = if item.value == "high" { "max".into() } else { "high".into() };
             }
             "model" => {
-                let def = dsx_agent::gate::registry::default_model_for(&pid_value, "");
-                // cycle through known models by provider
-                item.value = match (pid_value.as_str(), item.value.as_str()) {
-                    ("deepseek", "deepseek-v4-flash") => "deepseek-v4-pro".into(),
-                    ("deepseek", _) => "deepseek-v4-flash".into(),
-                    ("mimo", "mimo-v2.5-pro") => "mimo-v2.5".into(),
-                    ("mimo", _) => "mimo-v2.5-pro".into(),
-                    _ => def,
+                let ep = dsx_agent::gate::registry::find_endpoint(&pid_value, "");
+                let models: Vec<String> = ep
+                    .map(|e| if e.models.is_empty() { vec![e.default_model.clone()] } else { e.models })
+                    .unwrap_or_else(|| {
+                        let def = dsx_agent::gate::registry::default_model_for(&pid_value, "");
+                        vec![def]
+                    });
+                let current = item.value.as_str();
+                let idx = models.iter().position(|m| m == current);
+                item.value = match idx {
+                    Some(i) if i + 1 < models.len() => models[i + 1].clone(),
+                    Some(_) => models[0].clone(),
+                    None => models.first().cloned().unwrap_or_else(|| "deepseek-v4-flash".into()),
                 };
             }
             "max_tokens" => {
@@ -586,14 +573,6 @@ impl MenuState {
                     "256000" => "512000".into(),
                     "512000" => "1000000".into(),
                     _ => "128000".into(),
-                };
-            }
-            "max_tool_rounds" => {
-                item.value = match item.value.as_str() {
-                    "5" => "10".into(),
-                    "10" => "15".into(),
-                    "15" => "20".into(),
-                    _ => "5".into(),
                 };
             }
             "language" => {
@@ -650,9 +629,6 @@ impl MenuState {
                 }
                 "max_tokens" => {
                     if let Ok(v) = item.value.parse::<u32>() { config.max_tokens = Some(v); }
-                }
-                "max_tool_rounds" => {
-                    if let Ok(v) = item.value.parse::<u32>() { config.max_tool_rounds = Some(v); }
                 }
                 "language" => {
                     config.lang = Some(item.value.clone());

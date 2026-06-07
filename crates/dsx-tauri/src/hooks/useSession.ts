@@ -22,7 +22,7 @@ export function useSession(): UseSessionReturn {
     try {
       const list = await api.cmdSessions()
       setSessions(list)
-    } catch { /* ignore */ }
+    } catch(e) { console.error('cmdSessions failed:', e) }
     finally { setLoading(false) }
   }
 

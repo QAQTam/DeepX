@@ -1,6 +1,8 @@
 // ── Skeleton ──
 // Inline block shimmer placeholder for loading states.
 
+import { mergeProps } from 'solid-js'
+
 interface SkeletonProps {
   width?: string
   height?: string
@@ -10,12 +12,13 @@ interface SkeletonProps {
 
 const roundedClass = { sm: 'rounded-sm', md: 'rounded-md', full: 'rounded-full' }
 
-export function Skeleton({ width = '100%', height = '1rem', rounded = 'sm', class: className = '' }: SkeletonProps) {
+export function Skeleton(props: SkeletonProps) {
+  const merged = mergeProps({ width: '100%', height: '1rem', rounded: 'sm' as const, class: '' }, props)
   return (
     <span
       aria-hidden="true"
-      class={`inline-block anim-shimmer bg-[var(--bg-tertiary)] ${roundedClass[rounded]} ${className}`}
-      style={{ width, height }}
+      class={`inline-block anim-shimmer bg-[var(--bg-tertiary)] ${roundedClass[merged.rounded]} ${merged.class}`}
+      style={{ width: merged.width, height: merged.height }}
     />
   )
 }

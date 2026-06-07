@@ -29,7 +29,7 @@ body {
 
 /* ── Font utilities ── */
 .font-mono {
-  font-family: 'Cascadia Mono', 'Cascadia Code', ui-monospace, Menlo, Monaco, Consolas, monospace;
+  font-family: 'Cascadia Code', ui-monospace, Menlo, Monaco, Consolas, monospace;
 }
 
 /* ── Focus visible ── */

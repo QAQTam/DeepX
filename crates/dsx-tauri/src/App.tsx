@@ -2,7 +2,7 @@
 // State management delegated to hooks. View composition only.
 // Migrated from React — all event handlers match original exactly.
 
-import { createSignal, createEffect, onMount, onCleanup, Show } from 'solid-js'
+import { createSignal, createEffect, onMount, onCleanup, Show, For } from 'solid-js'
 import { listen } from '@tauri-apps/api/event'
 import { useAgent, useConfig, useSession, useBalance, useDocuments } from './hooks'
 import { api } from './bridge/tauri'
@@ -42,7 +42,6 @@ export default function App() {
   const [streamingText, setStreamingText] = createSignal('')
   const [streamingToolNames, setStreamingToolNames] = createSignal<string[]>([])
   const [streamKind, setStreamKind] = createSignal<'thinking' | 'tool_calling' | 'answering' | null>(null)
-  const [, setConfigVersion] = createSignal(0)
 
   let inputRef!: HTMLTextAreaElement
   let msgEndRef!: HTMLDivElement
@@ -75,7 +74,7 @@ export default function App() {
 
   // ── Auto-create session after fresh agent start ──
   createEffect(() => {
-    if (agent.state.connected && !agent.state.seed) {
+    if (agent.state.connected && !agent.state.sessionId) {
       agent.createSession()
     }
   })
@@ -110,7 +109,7 @@ export default function App() {
     const el = (msgEndRef as HTMLDivElement)?.parentElement
     if (el) {
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-      if (dist < 120) msgEndRef?.scrollIntoView({ behavior: 'instant' })
+      if (dist < 120) msgEndRef?.scrollIntoView({ behavior: 'auto' })
     }
   })
 
@@ -295,6 +294,14 @@ export default function App() {
           }
           break
         }
+        case 'done': {
+          break
+        }
+        case 'cancelled': {
+          setAskUser(null)
+          setAskAnswer('')
+          break
+        }
       }
     })
 
@@ -315,8 +322,15 @@ export default function App() {
   // ── Ask answer submit ──
   const submitAskAnswer = () => {
     if (!askUser()) return
-    const response = (askAnswer() || '').trim() || 'skipped'
+    const response = askAnswer().trim()
+    if (!response) return
     agent.send(response)
+    setAskUser(null)
+    setAskAnswer('')
+  }
+
+  const dismissAskUser = () => {
+    agent.send('[SKIPPED]')
     setAskUser(null)
     setAskAnswer('')
   }
@@ -338,12 +352,12 @@ export default function App() {
     }>
       {/* Config wizard (first run) */}
       <Show when={!cfg.checkDone}>
-        <ConfigWizard onDone={() => { setConfigVersion(v => v + 1); window.location.reload() }} />
+        <ConfigWizard onDone={() => { window.location.reload() }} />
       </Show>
 
       {/* Main App */}
       <Show when={cfg.checkDone}>
-        <div class="h-screen flex flex-col bg-[var(--bg-primary)] text-[var(--text)] overflow-hidden">
+        <div class="h-screen flex flex-col bg-[var(--bg-primary)] text-[var(--text)] overflow-hidden relative">
           {/* Top Bar */}
           <div class="h-10 flex items-center justify-between px-3 border-b border-[var(--border)] bg-[var(--bg-secondary)] shrink-0 transition-theme">
             <div class="flex items-center gap-2">
@@ -393,23 +407,23 @@ export default function App() {
               {/* Messages */}
               <div class="flex-1 overflow-y-auto px-4 py-3 space-y-1">
                   
-                {messages().map(msg => <ChatMessage msg={msg} />)}
+                <For each={messages()}>{msg => <ChatMessage msg={msg} />}</For>
+
+                <Show when={agent.isStreaming && (streamingThink() || streamingText())}>
+                  <div class="mb-4 pl-2">
+                    <Show when={streamingThink()}>
+                      <ReasoningBlock content={streamingThink()} />
+                    </Show>
+                    <Show when={streamingText()}>
+                      <div class="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-sm leading-relaxed shadow-sm">
+                        <div class="whitespace-pre-wrap text-[var(--text)]">{streamingText()}</div>
+                      </div>
+                    </Show>
+                  </div>
+                </Show>
+
                 <div ref={msgEndRef} />
               </div>
-
-              {/* Streaming Content */}
-              <Show when={agent.isStreaming && (streamingThink() || streamingText())}>
-                <div class="mb-4 pl-2">
-                  <Show when={streamingThink()}>
-                    <ReasoningBlock content={streamingThink()} />
-                  </Show>
-                  <Show when={streamingText()}>
-                    <div class="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-sm leading-relaxed shadow-sm">
-                      <div class="whitespace-pre-wrap text-[var(--text)]">{streamingText()}</div>
-                    </div>
-                  </Show>
-                </div>
-              </Show>
 
               {/* Stream Indicator */}
               <StreamIndicator
@@ -422,7 +436,7 @@ export default function App() {
               <div class="border-t border-[var(--border)] p-3 shrink-0 bg-[var(--bg-primary)] transition-theme">
                 <div class="flex items-end gap-2">
                   <button
-                    onClick={() => agent.state.connected && api.reloadAgent().catch(() => {})}
+                    onClick={() => agent.state.connected && api.reloadAgent().catch(e => console.error('reload failed:', e))}
                     class="shrink-0 w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] text-[var(--muted)] flex items-center justify-center
                       hover:bg-[var(--accent)]/15 hover:text-[var(--accent)] transition-colors"
                     title={tt('chat.reloadConfig')}
@@ -469,7 +483,7 @@ export default function App() {
 
           {/* Modals */}
           <Show when={showSettings()}>
-            <SettingsDialog onClose={() => { setShowSettings(false); setConfigVersion(v => v + 1) }} />
+            <SettingsDialog onClose={() => { setShowSettings(false) }} />
           </Show>
           <Show when={askUser()}>
             <AskUserDialog
@@ -478,6 +492,7 @@ export default function App() {
               answer={askAnswer()}
               setAnswer={setAskAnswer}
               onSubmit={submitAskAnswer}
+              onDismiss={dismissAskUser}
             />
           </Show>
         </div>

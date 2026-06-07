@@ -19,6 +19,7 @@ pub struct EndpointSpec {
     pub protocol: String,
     pub base_url: String,
     pub default_model: String,
+    pub models: Vec<String>,
     pub models_url: Option<String>,
     pub user_id_mode: Option<UserSendMode>,
 }

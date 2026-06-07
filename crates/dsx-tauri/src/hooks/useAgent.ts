@@ -53,7 +53,7 @@ export function useAgent(): AgentHandle {
       if (s.running) {
         dispatch({ type: 'CONNECTED', seed: s.seed || '', sessions: [] })
       }
-    }).catch(() => {}).finally(() => setStatusChecked(true))
+    }).catch(e => console.error('checkAgentStatus failed:', e)).finally(() => setStatusChecked(true))
   })
 
   const start = async () => {
@@ -89,12 +89,12 @@ export function useAgent(): AgentHandle {
   }
 
   const cancel = () => {
-    api.cancelAgent().catch(() => {})
+    api.cancelAgent().catch(e => console.error('cancelAgent failed:', e))
     dispatch({ type: 'CANCEL' })
   }
 
   const send = (text: string) => {
-    api.sendMessage(text).catch(() => {})
+    api.sendMessage(text).catch(e => console.error('sendMessage failed:', e))
   }
 
   return {

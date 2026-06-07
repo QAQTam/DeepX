@@ -10,7 +10,6 @@ interface UseConfigReturn {
   load: () => Promise<void>
   save: (input: ConfigInput) => Promise<void>
   update: (field: string, value: string) => Promise<void>
-  fetchModels: (apiKey: string, baseUrl: string) => Promise<string[]>
   readonly checkDone: boolean
 }
 
@@ -45,17 +44,12 @@ export function useConfig(): UseConfigReturn {
     await api.updateConfig(field, value)
   }
 
-  const fetchModels = async (apiKey: string, baseUrl: string): Promise<string[]> => {
-    const cfg = _config()
-    return await api.fetchModels(apiKey, baseUrl, cfg?.provider_id ?? 'deepseek', cfg?.endpoint ?? 'openai')
-  }
-
   onMount(() => { load() })
 
   return {
     get config() { return _config() },
     get loading() { return _loading() },
-    load, save, update, fetchModels,
+    load, save, update,
     get checkDone() { return _checkDone() },
   }
 }

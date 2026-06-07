@@ -15,7 +15,6 @@ pub struct Config {
     pub reasoning_effort: String,
     pub profiles: HashMap<String, dsx_types::ProfileConfig>,
     pub active_profile: String,
-    pub max_tool_rounds: Option<u32>,
     pub context7_api_key: Option<String>,
     pub lang: Option<String>,
     pub mcp_servers: Vec<dsx_tools::mcp_bridge::McpServerConfig>,
@@ -41,7 +40,6 @@ impl Default for Config {
             endpoint,
             reasoning_effort: "high".into(),
             profiles, active_profile: "default".into(),
-            max_tool_rounds: None,
             context7_api_key: None,
             lang: None,
             mcp_servers: Vec::new(),
@@ -112,7 +110,6 @@ impl Config {
             if let Some(mt) = pc.max_tokens { cfg.max_tokens = mt; }
             if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
             if let Some(ref re) = pc.reasoning_effort { if !re.is_empty() { cfg.reasoning_effort = re.clone(); } }
-            if let Some(v) = pc.max_tool_rounds { cfg.max_tool_rounds = Some(v); }
             if let Some(ref k) = pc.context7_api_key { if !k.is_empty() { cfg.context7_api_key = Some(k.clone()); } }
             if let Some(ref l) = pc.lang { if !l.is_empty() { cfg.lang = Some(l.clone()); } }
             if let Some(ref mcp) = pc.mcp_servers {
@@ -155,7 +152,6 @@ impl Config {
             reasoning_effort: Some(self.reasoning_effort.clone()),
             profiles: Some(profiles),
             active_profile: Some(self.active_profile.clone()),
-            max_tool_rounds: self.max_tool_rounds,
             lang: self.lang.clone(),
             context7_api_key: self.context7_api_key.clone(),
             mcp_servers: mcp_val,

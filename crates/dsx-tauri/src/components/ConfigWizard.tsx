@@ -1,10 +1,10 @@
 // ── ConfigWizard ──
-// First-run 3-step setup wizard.
+// First-run 3-step setup wizard. Uses provider registry for defaults.
 
-import { createSignal } from 'solid-js'
-import { api } from '../bridge/tauri'
+import { createSignal, onMount } from 'solid-js'
+import { api, type ProviderInfo, type EndpointInfo } from '../bridge/tauri'
 import { tt } from '../i18n'
-import { Button, Input } from './shared'
+import { Button, Input, Select } from './shared'
 
 interface ConfigWizardProps {
   onDone: () => void
@@ -13,18 +13,41 @@ interface ConfigWizardProps {
 export function ConfigWizard(props: ConfigWizardProps) {
   const [step, setStep] = createSignal(1)
   const [apiKey, setApiKey] = createSignal('')
-  const [model, setModel] = createSignal('deepseek-v4-flash')
+  const [providerId, setProviderId] = createSignal('deepseek')
+  const [providers, setProviders] = createSignal<ProviderInfo[]>([])
+  const [model, setModel] = createSignal('')
   const [contextLimit, setContextLimit] = createSignal(1000000)
   const [saving, setSaving] = createSignal(false)
   const [saveError, setSaveError] = createSignal('')
+
+  onMount(() => {
+    api.listProviders().then(list => {
+      setProviders(list)
+      if (list.length > 0) {
+        setProviderId(list[0].id)
+        setModel(list[0].endpoints[0]?.default_model ?? '')
+      }
+    }).catch(() => {})
+  })
+
+  const currentEndpoints = () => {
+    const p = providers().find(p => p.id === providerId())
+    return p?.endpoints ?? []
+  }
+
+  const currentEndpoint = (): EndpointInfo | undefined =>
+    currentEndpoints()[0]
+
+  const baseUrl = () => currentEndpoints()[0]?.base_url ?? ''
+  const endpointId = () => currentEndpoints()[0]?.id ?? 'openai'
 
   const finish = async () => {
     setSaving(true)
     setSaveError('')
     try {
       await api.saveConfig({
-        apiKey: apiKey(), baseUrl: 'https://api.deepseek.com', model: model(), contextLimit: contextLimit(),
-        maxTokens: 16384, maxToolRounds: 10, providerId: 'deepseek', endpoint: 'openai', reasoningEffort: 'high', lang: 'zh', context7ApiKey: '',
+        apiKey: apiKey(), baseUrl: baseUrl(), model: model(), contextLimit: contextLimit(),
+        maxTokens: 16384, providerId: providerId(), endpoint: endpointId(), reasoningEffort: 'high', lang: 'zh', context7ApiKey: '',
       })
       props.onDone()
     } catch (e: any) {
@@ -33,10 +56,11 @@ export function ConfigWizard(props: ConfigWizardProps) {
     }
   }
 
-  const finishLabel = () => step() < 3 ? tt('common.next') : tt('common.start')
+  const finishLabel = () => step() < getTotalSteps() ? tt('common.next') : tt('common.start')
+  const getTotalSteps = () => 4
 
   return (
-    <div class="h-full flex items-center justify-center bg-[var(--bg-primary)] selection:bg-[var(--accent-light)]">
+    <div class="h-full flex items-center justify-center bg-[var(--bg-primary)] selection:bg-[var(--accent-light)]" onKeyDown={(e) => { if (e.key === 'Escape') props.onDone() }}>
       <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl p-8 max-w-md w-full mx-4 shadow-md transition-theme">
         <div class="text-center mb-6">
           <div class="text-xl font-bold text-[var(--text-h)] mb-1">DSX</div>
@@ -45,7 +69,7 @@ export function ConfigWizard(props: ConfigWizardProps) {
 
         {/* Step indicator */}
         <div class="flex justify-center gap-2 mb-6">
-          {[1, 2, 3].map(s => (
+          {[1, 2, 3, 4].map(s => (
             <div class={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
               s < step() ? 'bg-[var(--success)] text-white'
               : s === step() ? 'bg-[var(--accent)] text-white'
@@ -56,8 +80,26 @@ export function ConfigWizard(props: ConfigWizardProps) {
           ))}
         </div>
 
-        {/* Step 1: API Key */}
+        {/* Step 1: Provider */}
         {step() === 1 && (
+          <div class="space-y-4">
+            <p class="text-sm text-[var(--text)]">Select your AI provider</p>
+            <Select
+              label="Provider"
+              options={providers().map(p => ({ value: p.id, label: p.display }))}
+              value={providerId()}
+              onChange={(e) => {
+                setProviderId(e.currentTarget.value)
+                const p = providers().find(p => p.id === e.currentTarget.value)
+                const ep = p?.endpoints[0]
+                if (ep) setModel(ep.default_model)
+              }}
+            />
+          </div>
+        )}
+
+        {/* Step 2: API Key */}
+        {step() === 2 && (
           <div class="space-y-4">
             <p class="text-sm text-[var(--text)]">{tt('settings.wizardStep1')}</p>
             <Input
@@ -71,20 +113,21 @@ export function ConfigWizard(props: ConfigWizardProps) {
           </div>
         )}
 
-        {/* Step 2: Model */}
-        {step() === 2 && (
+        {/* Step 3: Model */}
+        {step() === 3 && (
           <div class="space-y-4">
             <p class="text-sm text-[var(--text)]">{tt('settings.wizardStep2')}</p>
-            <Input
-              label={tt('settings.model')}
+            <Select
+              label={`Model (${providerId()})`}
+              options={(currentEndpoint()?.models ?? []).map(m => ({ value: m, label: m }))}
               value={model()}
-              onInput={(e) => setModel(e.currentTarget.value)}
+              onChange={(e) => setModel(e.currentTarget.value)}
             />
           </div>
         )}
 
-        {/* Step 3: Context Limit */}
-        {step() === 3 && (
+        {/* Step 4: Context Limit */}
+        {step() === 4 && (
           <div class="space-y-4">
             <p class="text-sm text-[var(--text)]">{tt('settings.wizardStep3')}</p>
             <Input
@@ -110,7 +153,7 @@ export function ConfigWizard(props: ConfigWizardProps) {
               {tt('common.previous')}
             </Button>
           )}
-          <Button variant="primary" onClick={() => step() < 3 ? setStep(s => s + 1) : finish()} loading={saving()} class="flex-1">
+          <Button variant="primary" onClick={() => step() < getTotalSteps() ? setStep(s => s + 1) : finish()} loading={saving()} class="flex-1">
             {saving() ? tt('settings.saving') : finishLabel()}
           </Button>
         </div>
