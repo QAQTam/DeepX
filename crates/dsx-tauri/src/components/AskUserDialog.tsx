@@ -64,7 +64,7 @@ export function AskUserDialog(props: AskUserDialogProps) {
 
         <div class="flex gap-2 justify-end">
           <Button variant="secondary" size="sm" onClick={props.onDismiss} class="flex-1">
-            {tt('skip')}
+              {tt('common.skip')}
           </Button>
           <Button variant="primary" size="sm" onClick={submit}
             disabled={!props.answer.trim()}

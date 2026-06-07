@@ -1,12 +1,10 @@
 // ── App Shell (SolidJS) ──
 // State management delegated to hooks. View composition only.
-// Migrated from React — all event handlers match original exactly.
+// Event handling extracted to useAgentEvents hook.
 
-import { createSignal, createEffect, onMount, onCleanup, Show, For } from 'solid-js'
-import { listen } from '@tauri-apps/api/event'
-import { useAgent, useConfig, useSession, useBalance, useDocuments } from './hooks'
+import { createSignal, createEffect, onCleanup, Show, For } from 'solid-js'
+import { useAgent, useConfig, useSession, useBalance, useDocuments, useAgentEvents } from './hooks'
 import { api } from './bridge/tauri'
-import type { Message } from './types'
 import { ChatMessage } from './components/ChatMessage'
 import { InfoPanel } from './components/InfoPanel'
 import { WorkspacePanel } from './components/WorkspacePanel'
@@ -31,12 +29,9 @@ export default function App() {
   const balance = useBalance()
   const docs = useDocuments()
   const toast = useToast()
+  const events = useAgentEvents(agent, session, docs, balance, toast)
 
   // ── UI state ──
-  const [messages, setMessages] = createSignal<Message[]>([])
-  const [thinkingSecs, setThinkingSecs] = createSignal(0)
-  const [tokenUsage, setTokenUsage] = createSignal({ used: 0, limit: 150000 })
-  const [cacheInfo, setCacheInfo] = createSignal({ hit: 0, miss: 0 })
   const [showSettings, setShowSettings] = createSignal(false)
   const [leftOpen, setLeftOpen] = createSignal(true)
   const [rightOpen, setRightOpen] = createSignal(true)
@@ -46,33 +41,14 @@ export default function App() {
 
   let resizeStartX = 0
   let resizeStartWidth = 0
-  const [askUser, setAskUser] = createSignal<{ question: string; options?: string[] } | null>(null)
-  const [askAnswer, setAskAnswer] = createSignal('')
-  const [auditLog, setAuditLog] = createSignal<Array<{ name: string; args: string; success: boolean }>>([])
-  const [streamingThink, setStreamingThink] = createSignal('')
-  const [streamingText, setStreamingText] = createSignal('')
-  const [streamingToolNames, setStreamingToolNames] = createSignal<string[]>([])
-  const [streamKind, setStreamKind] = createSignal<'thinking' | 'tool_calling' | 'answering' | null>(null)
-
   let inputRef!: HTMLTextAreaElement
   let msgEndRef!: HTMLDivElement
-  let thinkStart = 0
-  let timerRef: ReturnType<typeof setInterval> | null = null
-
-  // ── Helper: push message ──
-  const pushMsg = (msg: Message) => setMessages(prev => [...prev, msg])
-
-  // ── Helper: token counting ──
-  const addTokens = (text: string) => {
-    const count = Math.ceil(text.length / 3.5)
-    setTokenUsage(prev => ({ ...prev, used: Math.min(prev.used + count, prev.limit) }))
-  }
 
   // ── Sync context limit from loaded config ──
   createEffect(() => {
     const c = cfg.config
     if (c?.context_limit) {
-      setTokenUsage(prev => prev.limit === c.context_limit ? prev : { ...prev, limit: c.context_limit! })
+      events.setTokenUsage(prev => prev.limit === c.context_limit ? prev : { ...prev, limit: c.context_limit! })
     }
   })
 
@@ -95,24 +71,6 @@ export default function App() {
     }
   })
 
-  // ── Thinking timer ──
-  createEffect(() => {
-    if (!agent.state.streaming) {
-      setThinkingSecs(0)
-      setStreamingThink('')
-      setStreamingText('')
-      setStreamingToolNames([])
-      setStreamKind(null)
-      return
-    }
-    thinkStart = Date.now()
-    timerRef = setInterval(() => setThinkingSecs(Math.floor((Date.now() - thinkStart) / 1000)), 200)
-    onCleanup(() => {
-      if (timerRef) { clearInterval(timerRef); timerRef = null }
-      setThinkingSecs(0)
-    })
-  })
-
   // ── Refresh session list on connect ──
   createEffect(() => {
     if (agent.state.connected) session.refresh()
@@ -120,7 +78,7 @@ export default function App() {
 
   // ── Auto-scroll chat to bottom (only near bottom) ──
   createEffect(() => {
-    messages()
+    events.messages()
     agent.state.streaming
     const el = (msgEndRef as HTMLDivElement)?.parentElement
     if (el) {
@@ -162,244 +120,30 @@ export default function App() {
     })
   })
 
-  // ── Event handlers — matches original React App.tsx exactly ──
-  onMount(() => {
-    const unlistens: (() => void)[] = []
-    const on = (event: string, handler: (e: any) => void) => {
-      listen(event, handler).then(fn => unlistens.push(fn))
-    }
-
-    on('agent-event', (e: { payload: Record<string, unknown> }) => {
-      const p = e.payload
-      if (!p || typeof p.type !== 'string') return
-
-      switch (p.type) {
-        case 'turn_start': {
-          agent.dispatch({ type: 'TURN_START', turn_id: p.turn_id as string, user_text: p.user_text as string })
-          setStreamingThink('')
-          setStreamingText('')
-          setStreamingToolNames([])
-          setStreamKind(null)
-          break
-        }
-        case 'round_delta': {
-          const kind = (p.kind as string) || ''
-          const delta = (p.delta as string) || ''
-          if (kind === 'thinking') {
-            setStreamingThink(prev => prev + delta)
-            setStreamKind('thinking')
-          } else if (kind === 'answering') {
-            setStreamingText(prev => prev + delta)
-            setStreamKind('answering')
-          } else if (kind === 'tool_calling') {
-            setStreamingToolNames(prev => prev.includes(delta) ? prev : [...prev, delta])
-            setStreamKind('tool_calling')
-          }
-          break
-        }
-        case 'round_complete': {
-          const thinking = (p.thinking as string) || ''
-          const answer = (p.answer as string) || ''
-          const toolCalls = (p.tool_calls as any[]) || []
-          const combined = (thinking ? `\n<reasoning>${thinking}</reasoning>\n` : '') + answer
-          if (combined.trim()) {
-            pushMsg({
-              role: 'assistant',
-              content: combined,
-              reasoning: thinking || undefined,
-              tool_cards: toolCalls.map((tc: any) => ({
-                id: tc.id,
-                name: tc.name || '?',
-                args: tc.args_display || '',
-              })),
-            })
-            addTokens(thinking + answer)
-          } else if (toolCalls.length > 0) {
-            pushMsg({
-              role: 'assistant',
-              content: toolCalls.map((tc: any) => tc.name || '?').join(', '),
-              tool_cards: toolCalls.map((tc: any) => ({
-                id: tc.id,
-                name: tc.name || '?',
-                args: tc.args_display || '',
-              })),
-            })
-          }
-          setStreamingThink('')
-          setStreamingText('')
-          setStreamingToolNames([])
-          setStreamKind(null)
-          break
-        }
-        case 'tool_exec_delta': {
-          const tid = (p as any).tool_call_id as string
-          const delta = (p as any).delta as string
-          if (tid && delta) {
-            setMessages(prev => {
-              for (let i = prev.length - 1; i >= 0; i--) {
-                const tc = prev[i].tool_cards
-                if (tc) {
-                  const idx = tc.findIndex(c => c.id === tid)
-                  if (idx >= 0) {
-                    const msgs = prev.slice()
-                    const cards = msgs[i].tool_cards!.slice()
-                    cards[idx] = { ...cards[idx], liveOutput: (cards[idx].liveOutput || '') + delta }
-                    msgs[i] = { ...msgs[i], tool_cards: cards }
-                    return msgs
-                  }
-                }
-              }
-              return prev
-            })
-          }
-          break
-        }
-        case 'tool_results': {
-          const results = (p.results as any[]) || []
-          setMessages(prev => {
-            const msgs = [...prev]
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              if (msgs[i].role === 'assistant' && msgs[i].tool_cards) {
-                const cards = msgs[i].tool_cards!.map(tc => {
-                  const match = results.find((r: any) => r.tool_call_id === tc.id)
-                  return match ? { ...tc, output: match.output, success: match.success } : tc
-                })
-                msgs[i] = { ...msgs[i], tool_cards: cards }
-                return msgs
-              }
-            }
-            return msgs
-          })
-          break
-        }
-        case 'turn_end': {
-          agent.dispatch({ type: 'TURN_END', turn_id: p.turn_id as string })
-          setStreamingThink('')
-          setStreamingText('')
-          setStreamingToolNames([])
-          setStreamKind(null)
-          const u = (p as any).usage
-          if (u) {
-            setTokenUsage(prev => ({
-              used: u.prompt_tokens || prev.used,
-              limit: (p as any).context_limit || prev.limit,
-            }))
-            setCacheInfo({ hit: u.prompt_cache_hit_tokens || 0, miss: u.prompt_cache_miss_tokens || 0 })
-          }
-          break
-        }
-        case 'audit_record': {
-          setAuditLog(prev => [...prev, {
-            name: (p as any).tool_name as string || '?',
-            args: (p as any).result_summary as string || '',
-            success: !!(p as any).success,
-          }].slice(-20))
-          break
-        }
-        case 'ask_user': {
-          setAskUser({ question: p.question as string, options: p.options as string[] | undefined })
-          break
-        }
-        case 'balance': {
-          const tb = (p as any).total_balance as string
-          const cur = (p as any).currency as string
-          if (tb && cur) {
-            balance.setBalance(`${tb} ${cur}`)
-          }
-          break
-        }
-        case 'session_restored': {
-          agent.dispatch({ type: 'RESTORE_SESSION', seed: (p.seed as string) || '', turns: (p.turns as any[]) || [] })
-          const seed = (p as any).seed as string
-          setTokenUsage(prev => ({ ...prev, used: (p as any).tokens_used || prev.used }))
-          if (seed) {
-            session.loadMessages(seed).then(msgs => {
-              const arr = (Array.isArray(msgs) ? msgs : (msgs as any)?.messages ?? []) as Message[]
-              setMessages(arr)
-            }).catch(e => {
-              toast.addToast('Load failed: ' + String(e), 'error')
-            })
-          }
-          break
-        }
-        case 'session_created': {
-          const seed = (p as any).seed as string
-          if (seed) {
-            agent.dispatch({ type: 'RESTORE_SESSION', seed, turns: [] })
-          }
-          break
-        }
-        case 'debug_snapshot': {
-          docs.updateFromSnapshot({
-            documents: (p as any).documents,
-            recent_edits: (p as any).recent_edits,
-            tasks: (p as any).tasks,
-          })
-          const hit = (p as any).prompt_cache_hit_tokens
-          const miss = (p as any).prompt_cache_miss_tokens
-          if (typeof hit === 'number' && typeof miss === 'number') {
-            setCacheInfo({ hit, miss })
-          }
-          const ctx = (p as any).context_tokens
-          if (typeof ctx === 'number' && ctx > 0) {
-            setTokenUsage(prev => ({ ...prev, used: ctx }))
-          }
-          break
-        }
-        case 'error': {
-            agent.dispatch({ type: 'ERROR', message: (p.message as string) || 'Agent error' })
-          const msg = (p as any).message as string || 'Agent error'
-          toast.addToast(msg, 'error')
-          pushMsg({ role: 'assistant', content: `\u26a0 ${msg}` })
-          break
-        }
-        case 'tool_notice': {
-          const level = (p as any).level as string
-          const msg = (p as any).message as string || ''
-          if (level === 'warn' || level === 'error') {
-            pushMsg({ role: 'system', content: `\u26a0\uFE0F ${msg}` })
-          }
-          break
-        }
-        case 'done': {
-          break
-        }
-        case 'cancelled': {
-          setAskUser(null)
-          setAskAnswer('')
-          break
-        }
-      }
-    })
-
-    onCleanup(() => unlistens.forEach(fn => fn()))
-  })
-
   // ── Send message ──
   const send = () => {
     const text = inputRef?.value?.trim()
     if (!text || agent.isStreaming || !agent.state.connected) return
     inputRef.value = ''
-    pushMsg({ role: 'user', content: text })
-    addTokens(text)
+    events.setMessages(prev => [...prev, { role: 'user', content: text }])
     agent.send(text)
     inputRef?.focus()
   }
 
   // ── Ask answer submit ──
   const submitAskAnswer = () => {
-    if (!askUser()) return
-    const response = askAnswer().trim()
+    if (!events.askUser()) return
+    const response = events.askAnswer().trim()
     if (!response) return
     agent.send(response)
-    setAskUser(null)
-    setAskAnswer('')
+    events.setAskUser(null)
+    events.setAskAnswer('')
   }
 
   const dismissAskUser = () => {
     agent.send('[SKIPPED]')
-    setAskUser(null)
-    setAskAnswer('')
+    events.setAskUser(null)
+    events.setAskAnswer('')
   }
 
   // ── Loading ──
@@ -452,16 +196,16 @@ export default function App() {
             <div class={`shrink-0 border-r border-[var(--border)] overflow-hidden ${!dragging() ? 'transition-[width] duration-200' : ''}`} style={{ width: leftOpen() ? `${leftWidth()}px` : '0px' }}>
               <div class="h-full overflow-y-auto p-3 space-y-3" style={{ width: `${leftWidth()}px` }}>
                 <InfoPanel
-                  tokens={tokenUsage}
-                  cache={cacheInfo}
+                  tokens={events.tokenUsage}
+                  cache={events.cacheInfo}
                   balance={balance.balance}
                   sessionId={() => agent.state.sessionId || ''}
                   sessions={() => session.sessions}
-                  auditLog={auditLog()}
+                  auditLog={events.auditLog()}
                   toolBatch={null}
-                  toolNames={streamingToolNames()}
+                  toolNames={events.streamingToolNames()}
                   onSettings={() => setShowSettings(true)}
-                  onNewSession={() => agent.start()}
+                  onNewSession={() => agent.createSession()}
                   onResumeSession={seed => agent.resume(seed)}
                   onDeleteAllSessions={session.deleteAll}
                   onDeleteSession={seed => session.deleteSession(seed)}
@@ -482,20 +226,20 @@ export default function App() {
             <div class="flex-1 flex flex-col min-w-0">
               {/* Messages */}
               <div class="flex-1 overflow-y-auto px-4 py-3 space-y-1">
-                  
-                <For each={messages()}>{msg => <ChatMessage msg={msg} />}</For>
 
-                <Show when={agent.isStreaming && (streamingThink() || streamingText() || (streamKind() === 'tool_calling' && streamingToolNames().length > 0))}>
+                <For each={events.messages()}>{msg => <ChatMessage msg={msg} />}</For>
+
+                <Show when={agent.isStreaming && (events.streamingThink() || events.streamingText() || (events.streamKind() === 'tool_calling' && events.streamingToolNames().length > 0))}>
                   <div class="mb-4 pl-2">
-                    <Show when={streamingThink()}>
-                      <ReasoningBlock content={streamingThink()} />
+                    <Show when={events.streamingThink()}>
+                      <ReasoningBlock content={events.streamingThink()} />
                     </Show>
-                    <Show when={streamKind() === 'tool_calling' && streamingToolNames().length > 0}>
-                      <ToolCallPreview names={streamingToolNames()} />
+                    <Show when={events.streamKind() === 'tool_calling' && events.streamingToolNames().length > 0}>
+                      <ToolCallPreview names={events.streamingToolNames()} />
                     </Show>
-                    <Show when={streamingText()}>
+                    <Show when={events.streamingText()}>
                       <div class="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-[15px] leading-relaxed shadow-sm">
-                        <div class="whitespace-pre-wrap text-[var(--text)]">{streamingText()}</div>
+                        <div class="whitespace-pre-wrap text-[var(--text)]">{events.streamingText()}</div>
                       </div>
                     </Show>
                   </div>
@@ -506,9 +250,9 @@ export default function App() {
 
               {/* Stream Indicator */}
               <StreamIndicator
-                mode={streamKind() || 'idle'}
-                toolNames={streamingToolNames()}
-                secs={thinkingSecs()}
+                mode={events.streamKind() || 'idle'}
+                toolNames={events.streamingToolNames()}
+                secs={events.thinkingSecs()}
               />
 
               {/* Input Area */}
@@ -579,12 +323,12 @@ export default function App() {
           <Show when={showSettings()}>
             <SettingsDialog onClose={() => { setShowSettings(false) }} />
           </Show>
-          <Show when={askUser()}>
+          <Show when={events.askUser()}>
             <AskUserDialog
-              question={askUser()!.question}
-              options={askUser()!.options}
-              answer={askAnswer()}
-              setAnswer={setAskAnswer}
+              question={events.askUser()!.question}
+              options={events.askUser()!.options}
+              answer={events.askAnswer()}
+              setAnswer={v => events.setAskAnswer(v)}
               onSubmit={submitAskAnswer}
               onDismiss={dismissAskUser}
             />

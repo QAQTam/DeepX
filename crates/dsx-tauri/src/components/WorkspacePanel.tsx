@@ -2,7 +2,7 @@
 // Right sidebar: workspace directory browser, document tracking, recent edits, tasks.
 
 import { createSignal, onMount, For } from 'solid-js'
-import { invoke } from '@tauri-apps/api/core'
+import { api } from '../bridge/tauri'
 import type { DocInfo } from '../types'
 import { tt } from '../i18n'
 import { Button, Badge, Card, EmptyState } from './shared'
@@ -41,11 +41,11 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
   const [showEdits, setShowEdits] = createSignal(true)
 
   onMount(() => {
-    invoke<string>('get_workspace').then(p => { setWorkspacePath(p); refreshDir(p) }).catch(e => console.error('get_workspace failed:', e))
+    api.getWorkspace().then(p => { setWorkspacePath(p); refreshDir(p) }).catch(e => console.error('get_workspace failed:', e))
   })
 
   const refreshDir = (path: string) => {
-    invoke<any>('scan_directory', { path }).then(r => setDirEntries(r.entries)).catch(e => { console.error('scan_directory failed:', e); setDirEntries(null) })
+    api.scanDirectory(path).then(r => setDirEntries(r.entries)).catch(e => { console.error('scan_directory failed:', e); setDirEntries(null) })
   }
 
   const pickFolder = async () => {
@@ -53,7 +53,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({ directory: true, multiple: false, title: tt('workspace.selectFolder') })
       if (selected) {
-        await invoke('set_workspace', { path: selected })
+        await api.setWorkspace(selected as string)
         setWorkspacePath(selected as string)
         refreshDir(selected as string)
       }

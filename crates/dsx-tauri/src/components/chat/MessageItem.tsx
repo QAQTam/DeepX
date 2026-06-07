@@ -18,6 +18,17 @@ export function MessageItem(props: MessageItemProps) {
           <div class="whitespace-pre-wrap">{props.msg.content}</div>
         </div>
       </div>
+      )
+    }
+
+  // System message (tool notices, warnings)
+  if (props.msg.role === 'system') {
+    return (
+      <div class="flex justify-center mb-3 anim-fade-in">
+        <div class="max-w-[80%] bg-[var(--warning-light)] border border-[var(--warning)]/30 rounded-lg px-3 py-2 text-xs text-[var(--warning)] font-mono">
+          {props.msg.content}
+        </div>
+      </div>
     )
   }
 

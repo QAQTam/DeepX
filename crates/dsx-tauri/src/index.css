@@ -2,6 +2,7 @@
 @import "./styles/tokens.css";
 @import "./styles/base.css";
 @import "./styles/animations.css";
+@import "./styles/markdown.css";
 
 @font-face {
   font-family: 'Inter';
@@ -13,7 +14,8 @@
   font-family: 'Inter';
   font-style: normal;
   font-weight: 500;
-  src: url('./assets/fonts/inter-400.woff2') format('woff2');
+    /* TODO: add inter-500.woff2; using 400 as fallback */
+    src: url('./assets/fonts/inter-400.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Inter';

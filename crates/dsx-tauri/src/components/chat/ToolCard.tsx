@@ -59,7 +59,7 @@ export function ToolCard(props: ToolCardProps) {
         <div class="border-t border-[var(--border-light)]">
           {isPending() ? (
             <div class="p-3 text-xs font-mono max-h-48 overflow-y-auto whitespace-pre text-[#cdd6f4] bg-[#0d0d1a]">
-              {props.ctx.liveOutput || <span class="text-[var(--muted)] flex items-center gap-2"><span class="anim-spin-slow text-sm">◇</span>Waiting for output...</span>}
+              {props.ctx.liveOutput ? props.ctx.liveOutput : <span class="text-[var(--muted)] flex items-center gap-2"><span class="anim-spin-slow text-sm">◇</span>Waiting for output...</span>}
             </div>
           ) : renderer?.renderResult ? (
             renderer.renderResult(props.ctx.output ?? '')

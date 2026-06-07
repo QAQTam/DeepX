@@ -292,52 +292,6 @@ fn save_config(state: tauri::State<AgentState>, api_key: String, base_url: Strin
     Ok(())
 }
 
-#[tauri::command]
-async fn fetch_models(api_key: String, base_url: String, provider_id: String, endpoint_id: String) -> Result<Vec<String>, String> {
-    let url = if !provider_id.is_empty() && !endpoint_id.is_empty() {
-        dsx_agent::gate::registry::models_url_for(&provider_id, &endpoint_id)
-            .unwrap_or_else(|| {
-                let stripped = base_url.trim_end_matches('/').trim_end_matches("/chat/completions").trim_end_matches("/v1");
-                format!("{}/models", stripped)
-            })
-    } else {
-        let stripped = base_url.trim_end_matches('/').trim_end_matches("/chat/completions").trim_end_matches("/v1");
-        format!("{}/models", stripped)
-    };
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build().map_err(|e| format!("http client: {e}"))?;
-
-    let mut req = client.get(&url);
-    let key = api_key.trim().trim_matches('"').to_string();
-    if !key.is_empty() && key != "null" {
-        req = req.header("Authorization", format!("Bearer {}", key));
-    }
-
-    let resp = req.send().await.map_err(|e| format!("request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("{} returned {}: {}", url, status, body.chars().take(120).collect::<String>()));
-    }
-
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
-    let models: Vec<String> = body["data"].as_array()
-        .map(|arr| arr.iter()
-            .filter_map(|m| m["id"].as_str().map(String::from))
-            .filter(|id| !id.starts_with("deepseek-re"))
-            .collect())
-        .unwrap_or_default();
-
-    if models.is_empty() {
-        log::warn!("No models returned from API, using default from registry");
-        Ok(vec![dsx_agent::gate::registry::default_model_for(&provider_id, &endpoint_id)])
-    } else {
-        Ok(models)
-    }
-}
 
 #[tauri::command]
 async fn get_balance(api_key: String) -> Result<serde_json::Value, String> {
@@ -621,18 +575,17 @@ fn stop_agent_inner(_app: &AppHandle, state: &AgentState) {
     if let Ok(mut guard) = state.tui_tx.lock() {
         *guard = None;
     }
-    // Join agent thread
-    if let Ok(mut guard) = state.agent_handle.lock() {
-        if let Some(hdl) = guard.take() {
+    // Spawn background cleanup to avoid blocking the caller
+    let agent_hdl = state.agent_handle.lock().ok().and_then(|mut g| g.take());
+    let reader_hdl = state.reader_handle.lock().ok().and_then(|mut g| g.take());
+    std::thread::spawn(move || {
+        if let Some(hdl) = agent_hdl {
             let _ = hdl.join();
         }
-    }
-    // Join reader thread
-    if let Ok(mut guard) = state.reader_handle.lock() {
-        if let Some(hdl) = guard.take() {
+        if let Some(hdl) = reader_hdl {
             let _ = hdl.join();
         }
-    }
+    });
     if let Ok(mut seed) = state.session_seed.lock() {
         *seed = None;
     }
@@ -651,7 +604,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            check_config, save_config, load_config, update_config, fetch_models, list_providers,
+            check_config, save_config, load_config, update_config, list_providers,
             start_agent, check_agent_status, send_message, reload_agent, stop_agent, resume_agent, create_session,
             load_session_messages,
             set_workspace, get_workspace, scan_directory,

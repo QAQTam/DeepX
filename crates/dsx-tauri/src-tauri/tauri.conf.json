@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://api.deepseek.com"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.openai.com https://*.anthropic.com https://api.deepseek.com https://openrouter.ai https://*.siliconflow.cn https://*.volces.com"
     }
   },
   "bundle": {

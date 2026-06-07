@@ -1,5 +1,7 @@
 export { useAgent } from './useAgent'
 export type { AgentHandle } from './useAgent'
+export { useAgentEvents } from './useAgentEvents'
+export type { AgentEventsHandle } from './useAgentEvents'
 export { useConfig } from './useConfig'
 export { useSession } from './useSession'
 export { useBalance } from './useBalance'

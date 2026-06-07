@@ -1,6 +1,9 @@
 /* ── Design Tokens ── */
 /* Light theme (default) */
 /* Dark theme via [data-theme="dark"] or system preference */
+/* NOTE: dark values are duplicated in data-theme and @media blocks because */
+/* CSS has no native mixin/include. Both are required: data-theme for manual */
+/* override, @media for system-preference fallback. Keep in sync manually. */
 
 :root {
   --bg-primary: #ffffff;
