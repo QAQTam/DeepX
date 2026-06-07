@@ -27,11 +27,11 @@ export function ReasoningBlock(props: ReasoningBlockProps) {
         class="flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
         aria-expanded={open()}
       >
-        <span class="text-[10px]">{open() ? '\u25BE' : '\u25B8'}</span>
+        <span class="text-[11px]">{open() ? '\u25BE' : '\u25B8'}</span>
         <span>{open() ? tt('chat.reasoningHide') : tt('chat.reasoningShow')}</span>
       </button>
       {open() && (
-        <div class="mt-2 p-3 bg-[var(--bg-tertiary)] rounded-lg text-xs text-[var(--text)] whitespace-pre-wrap border border-[var(--border-light)] max-h-64 overflow-y-auto font-mono leading-relaxed">
+        <div class="mt-2 p-3 bg-[var(--bg-tertiary)] rounded-lg text-[13px] text-[var(--text)] whitespace-pre-wrap border border-[var(--border-light)] max-h-64 overflow-y-auto font-mono leading-relaxed">
           {props.content}
           <div ref={bottomRef} />
         </div>

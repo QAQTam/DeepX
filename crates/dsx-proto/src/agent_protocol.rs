@@ -91,6 +91,7 @@ pub struct DocInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskInfo {
+    pub id: String,
     pub subject: String,
     pub description: String,
     pub status: String,

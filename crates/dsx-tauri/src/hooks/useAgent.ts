@@ -47,13 +47,13 @@ export function useAgent(): AgentHandle {
     })
   })
 
-  // ── Check if agent already running ──
+  // ── Check if agent already running (just probe, don't claim connected) ──
   onMount(() => {
     api.checkAgentStatus().then(s => {
       if (s.running) {
-        dispatch({ type: 'CONNECTED', seed: s.seed || '', sessions: [] })
+        dispatch({ type: 'START_CONNECT' })
       }
-    }).catch(e => console.error('checkAgentStatus failed:', e)).finally(() => setStatusChecked(true))
+    }).catch(() => {}).finally(() => setStatusChecked(true))
   })
 
   const start = async () => {

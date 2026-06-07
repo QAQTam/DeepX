@@ -1,7 +1,62 @@
-//! Task management: create, update, list tasks.
+//! Task management: create, update, delete, list tasks.
+//! Format: "- [status] T{id}: subject — description"
 
-use crate::CURRENT_SESSION;
 use super::{parse_arg, parse_opt};
+
+fn current_seed() -> String {
+    crate::CURRENT_SESSION.lock().unwrap().clone().unwrap_or_default()
+}
+
+fn read_tasks() -> Vec<String> {
+    let seed = current_seed();
+    if seed.is_empty() { return Vec::new(); }
+    let content = crate::persistence::read_memory(&seed, "tasks");
+    content
+        .lines()
+        .filter(|l| l.starts_with("- [") && !l.trim().is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn write_tasks(lines: &[String]) {
+    let seed = current_seed();
+    if seed.is_empty() { return; }
+    crate::persistence::write_memory(&seed, "tasks", &lines.join("\n"));
+}
+
+fn next_id(lines: &[String]) -> u32 {
+    let mut max = 0u32;
+    for l in lines {
+        if let Some(rest) = l.trim_start_matches("- [").split_once("] ") {
+            let body = rest.1.trim_start();
+            if let Some(id_str) = body.splitn(2, ':').next() {
+                if id_str.starts_with('T') {
+                    if let Ok(n) = id_str[1..].parse::<u32>() {
+                        if n > max { max = n; }
+                    }
+                }
+            }
+        }
+    }
+    max + 1
+}
+
+fn find_task(lines: &[String], id: u32) -> Option<usize> {
+    let prefix = format!("T{}:", id);
+    lines.iter().position(|l| l.trim_start().contains(&prefix))
+}
+
+fn parse_id(args: &str) -> Result<u32, String> {
+    let v: serde_json::Value = serde_json::from_str(args).map_err(|e| format!("parse: {e}"))?;
+    let val = v.get("id").ok_or("missing 'id'")?;
+    let n = val.as_u64()
+        .or_else(|| val.as_str().and_then(|s| s.parse::<u64>().ok()))
+        .ok_or("'id' must be a positive integer")?;
+    if n == 0 || n > u32::MAX as u64 {
+        return Err("'id' must be a positive integer".into());
+    }
+    Ok(n as u32)
+}
 
 pub(super) fn exec_task_create(args: &str) -> String {
     let subject = parse_arg(args, "subject");
@@ -14,107 +69,110 @@ pub(super) fn exec_task_create(args: &str) -> String {
         return "[ERROR] task_create: description max 200 chars\n[HINT] Write a concise 1-sentence description.".to_string();
     }
 
-    let seed = CURRENT_SESSION.get().cloned().unwrap_or_default();
+    let seed = current_seed();
     if seed.is_empty() {
         return "[ERROR] task_create: no active session. Start a conversation first.".to_string();
     }
 
-    let entry = format!("- [pending] {} — {}", subject, description);
-    crate::persistence::append_memory(&seed, "tasks", &entry);
+    let mut lines = read_tasks();
+    let id = next_id(&lines);
+    let entry = format!("- [pending] T{}: {} — {}", id, subject, description);
+    lines.push(entry);
+    write_tasks(&lines);
 
-    format!("[OK] Task created [pending]: {}\nUse task_update(status=in_progress) when you start working on it.", subject)
+    format!("[OK] Task T{} created [pending]: {}\nUse task_update(id={}, status=in_progress) when you start working on it.", id, subject, id)
 }
 
 pub(super) fn exec_task_update(args: &str) -> String {
-    let subject = parse_arg(args, "subject");
+    let id: u32 = match parse_id(args) {
+        Ok(n) => n,
+        Err(e) => return format!("[ERROR] task_update: {}", e),
+    };
     let status = parse_arg(args, "status");
 
     if !matches!(status.as_str(), "pending" | "in_progress" | "completed" | "cancelled") {
         return "[ERROR] task_update: status must be pending, in_progress, completed, or cancelled".to_string();
     }
 
-    let seed = CURRENT_SESSION.get().cloned().unwrap_or_default();
-    if seed.is_empty() {
-        return "[ERROR] task_update: no active session. Start a conversation first.".to_string();
-    }
+    let mut lines = read_tasks();
+    let idx = match find_task(&lines, id) {
+        Some(i) => i,
+        None => return format!("[ERROR] task_update: task T{} not found. Use task_list to see task IDs.", id),
+    };
 
-    // Read tasks.md, find the task line, replace status
-    let content = crate::persistence::read_memory(&seed, "tasks");
     let old_markers = ["[pending]", "[in_progress]", "[completed]", "[cancelled]"];
     let new_marker = format!("[{}]", status);
-    let mut found = false;
-    let mut updated = String::with_capacity(content.len());
-
-    let subject_match = format!("] {} —", subject);
-    for line in content.lines() {
-        if line.contains(&subject_match) {
-            let mut replaced = line.to_string();
-            for marker in &old_markers {
-                if replaced.contains(marker) {
-                    replaced = replaced.replace(marker, &new_marker);
-                    found = true;
-                    break;
-                }
-            }
-            updated.push_str(&replaced);
-        } else {
-            updated.push_str(line);
+    for marker in &old_markers {
+        if lines[idx].contains(marker) {
+            lines[idx] = lines[idx].replace(marker, &new_marker);
+            break;
         }
-        updated.push('\n');
     }
+    write_tasks(&lines);
+    format!("[OK] Task T{} → {}", id, status)
+}
 
-    if !found {
-        return format!("[ERROR] task_update: task '{}' not found. Use task_list to see tasks.", subject);
-    }
+pub(super) fn exec_task_delete(args: &str) -> String {
+    let id: u32 = match parse_id(args) {
+        Ok(n) => n,
+        Err(e) => return format!("[ERROR] task_delete: {}", e),
+    };
 
-    crate::persistence::write_memory(&seed, "tasks", &updated);
-    format!("[OK] Task '{}' → {}", subject, status)
+    let mut lines = read_tasks();
+    let idx = match find_task(&lines, id) {
+        Some(i) => i,
+        None => return format!("[ERROR] task_delete: task T{} not found.", id),
+    };
+
+    let removed = lines.remove(idx);
+    let subject = removed
+        .split(" — ").next()
+        .and_then(|s| s.split(": ").nth(1))
+        .unwrap_or("?");
+    write_tasks(&lines);
+    format!("[OK] Task T{} deleted: {}", id, subject)
 }
 
 pub(super) fn exec_task_list(args: &str) -> String {
     let filter_status = parse_opt(args, "status").unwrap_or_default();
 
-    let seed = CURRENT_SESSION.get().cloned().unwrap_or_default();
-    if seed.is_empty() {
-        return "[ERROR] task_list: no active session. Start a conversation first.".to_string();
+    let lines = read_tasks();
+    if lines.is_empty() {
+        return "[OK] No tasks yet. Use task_create(subject=..., description=...) to create one.".to_string();
     }
 
-    let content = crate::persistence::read_memory(&seed, "tasks");
-    let task_lines: Vec<&str> = content
-        .lines()
-        .filter(|l| l.starts_with("- [") && (l.contains("[pending]") || l.contains("[in_progress]") || l.contains("[completed]") || l.contains("[cancelled]")))
-        .collect();
-
-    if task_lines.is_empty() {
-        return "[OK] No tasks yet. Use task_create to create one.".to_string();
-    }
-
-    let filtered: Vec<&&str> = if filter_status.is_empty() {
-        task_lines.iter().collect()
+    let marker = if filter_status.is_empty() { None } else { Some(format!("[{}]", filter_status)) };
+    let filtered: Vec<&String> = if let Some(ref m) = marker {
+        lines.iter().filter(|l| l.contains(m.as_str())).collect()
     } else {
-        let marker = format!("[{}]", filter_status);
-        task_lines.iter().filter(|l| l.contains(&marker)).collect()
+        lines.iter().collect()
     };
 
     if filtered.is_empty() {
-        return format!("[OK] No tasks with status '{}'.", filter_status);
+        return if filter_status.is_empty() {
+            "[OK] No tasks.".to_string()
+        } else {
+            format!("[OK] No tasks with status '{}'.", filter_status)
+        };
     }
 
     let icon = |s: &str| match s {
         "pending" => "○",
         "in_progress" => "●",
         "completed" => "✓",
+        "cancelled" => "✗",
         _ => "?",
     };
 
-    let mut result = format!("[OK] Tasks ({}) :\n", filtered.len());
+    let mut result = format!("[OK] Tasks ({}):\n", filtered.len());
     for line in &filtered {
-        let line = line.trim_start_matches("- ");
-        let status = if line.contains("[pending]") { "pending" }
-            else if line.contains("[in_progress]") { "in_progress" }
-            else if line.contains("[completed]") { "completed" }
+        let trimmed = line.trim_start_matches("- ");
+        let status = if trimmed.contains("[pending]") { "pending" }
+            else if trimmed.contains("[in_progress]") { "in_progress" }
+            else if trimmed.contains("[completed]") { "completed" }
+            else if trimmed.contains("[cancelled]") { "cancelled" }
             else { "?" };
-        result.push_str(&format!("{} {}\n", icon(status), line));
+        result.push_str(&format!("{} {}\n", icon(status), trimmed));
     }
     result
 }
@@ -130,6 +188,9 @@ fn handle_task_create(ctx: ToolCallCtx) -> ToolResult {
 fn handle_task_update(ctx: ToolCallCtx) -> ToolResult {
     ToolResult::ok(exec_task_update(&serde_json::to_string(&ctx.args).unwrap_or_default()))
 }
+fn handle_task_delete(ctx: ToolCallCtx) -> ToolResult {
+    ToolResult::ok(exec_task_delete(&serde_json::to_string(&ctx.args).unwrap_or_default()))
+}
 fn handle_task_list(ctx: ToolCallCtx) -> ToolResult {
     ToolResult::ok(exec_task_list(&serde_json::to_string(&ctx.args).unwrap_or_default()))
 }
@@ -137,11 +198,11 @@ fn handle_task_list(ctx: ToolCallCtx) -> ToolResult {
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("task_create", ""),
-        description: "Create a tracked task.",
+        description: "Create a tracked task. Returns a task ID (T1, T2…) for reference.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
-                "subject": {"type": "string", "description": "Task subject, imperative form"},
-                "description": {"type": "string", "description": "What needs to be done"}
+                "subject": {"type": "string", "description": "Task subject, imperative form, 1-100 chars"},
+                "description": {"type": "string", "description": "What needs to be done, 1-200 chars"}
             }, "required": ["subject", "description"], "additionalProperties": false
         }),
         handler: handle_task_create,
@@ -150,20 +211,32 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
     mgr.register(ToolHandler {
         key: ToolKey::new("task_update", ""),
-        description: "Update task status: pending->in_progress->completed.",
+        description: "Update task status by ID: pending → in_progress → completed | cancelled.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
-                "subject": {"type": "string", "description": "Exact task subject to update (must match task_create)"},
+                "id": {"type": "integer", "description": "Task ID (T1, T2, … — use the number only)"},
                 "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]}
-            }, "required": ["subject", "status"], "additionalProperties": false
+            }, "required": ["id", "status"], "additionalProperties": false
         }),
         handler: handle_task_update,
         safety: |_| SafetyVerdict::Allow,
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
+        key: ToolKey::new("task_delete", ""),
+        description: "Delete a task by ID.",
+        input_schema: serde_json::json!({
+            "type": "object", "properties": {
+                "id": {"type": "integer", "description": "Task ID to delete (T1, T2, … — use the number only)"}
+            }, "required": ["id"], "additionalProperties": false
+        }),
+        handler: handle_task_delete,
+        safety: |_| SafetyVerdict::Allow,
+        default_timeout: Duration::from_secs(15),
+    });
+    mgr.register(ToolHandler {
         key: ToolKey::new("task_list", ""),
-        description: "List tasks filtered by status.",
+        description: "List tasks, optionally filtered by status.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
                 "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]}

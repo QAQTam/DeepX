@@ -218,11 +218,11 @@ export function SettingsDialog(props: SettingsDialogProps) {
           />
         </div>
 
-        <div class="flex gap-2 mt-6">
-          <Button variant="secondary" onClick={props.onClose} class="flex-1">
+        <div class="flex gap-3 mt-6">
+          <Button variant="secondary" size="lg" onClick={props.onClose} class="flex-1">
             {tt('common.cancel')}
           </Button>
-          <Button variant="primary" onClick={save} loading={saving()} class="flex-1">
+          <Button variant="primary" size="lg" onClick={save} loading={saving()} class="flex-1">
             {saving() ? tt('settings.saving') : tt('common.save')}
           </Button>
         </div>

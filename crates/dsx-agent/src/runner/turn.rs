@@ -171,8 +171,11 @@ pub fn handle_user_input(
         if ipc_broken {
             break;
         }
-        if agent.turn.stream_cancelled {
+        if agent.turn.stream_cancelled
+            || dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
+        {
             agent.turn.stream_cancelled = false;
+            dsx_tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
             agent.system_note("system", "用户终止了当前操作。".to_string());
             break;
         }

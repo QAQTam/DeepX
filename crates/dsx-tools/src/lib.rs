@@ -52,7 +52,7 @@ macro_rules! handler {
 }
 
 use std::sync::atomic::AtomicBool;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use dsx_types::ToolDef;
@@ -60,10 +60,11 @@ use dsx_types::ToolDef;
 // ── Global state ──
 
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
-pub static CURRENT_SESSION: OnceLock<String> = OnceLock::new();
+pub static CURRENT_SESSION: Mutex<Option<String>> = Mutex::new(None);
 
 pub fn set_current_session(seed: &str) {
-    let _ = CURRENT_SESSION.set(seed.to_string());
+    let mut guard = CURRENT_SESSION.lock().unwrap();
+    *guard = Some(seed.to_string());
 }
 
 pub static CURRENT_WORKSPACE: OnceLock<String> = OnceLock::new();

@@ -63,7 +63,7 @@ export function ConfigWizard(props: ConfigWizardProps) {
     <div class="h-full flex items-center justify-center bg-[var(--bg-primary)] selection:bg-[var(--accent-light)]" onKeyDown={(e) => { if (e.key === 'Escape') props.onDone() }}>
       <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl p-8 max-w-md w-full mx-4 shadow-md transition-theme">
         <div class="text-center mb-6">
-          <div class="text-xl font-bold text-[var(--text-h)] mb-1">DSX</div>
+          <div class="text-xl font-bold text-[var(--text-h)] mb-1">DeepX</div>
           <div class="text-sm text-[var(--muted)]">{tt('settings.wizardTitle')}</div>
         </div>
 
@@ -147,13 +147,13 @@ export function ConfigWizard(props: ConfigWizardProps) {
         )}
 
         {/* Actions */}
-        <div class="flex gap-2 mt-6">
+        <div class="flex gap-3 mt-6">
           {step() > 1 && (
-            <Button variant="secondary" onClick={() => setStep(s => s - 1)} class="flex-1">
+            <Button variant="secondary" size="lg" onClick={() => setStep(s => s - 1)} class="flex-1">
               {tt('common.previous')}
             </Button>
           )}
-          <Button variant="primary" onClick={() => step() < getTotalSteps() ? setStep(s => s + 1) : finish()} loading={saving()} class="flex-1">
+          <Button variant="primary" size="lg" onClick={() => step() < getTotalSteps() ? setStep(s => s + 1) : finish()} loading={saving()} class="flex-1">
             {saving() ? tt('settings.saving') : finishLabel()}
           </Button>
         </div>

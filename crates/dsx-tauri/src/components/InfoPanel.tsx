@@ -52,38 +52,26 @@ export function InfoPanel(props: InfoPanelProps) {
   return (
     <div class="space-y-3">
       {/* Header */}
-      <div class="flex items-center justify-between">
-        <h2 class="text-sm font-semibold text-[var(--text-h)]">{tt('info.title')}</h2>
-        <Button variant="ghost" size="sm" onClick={props.onSettings}>
-          {tt('info.settings')}
-        </Button>
-      </div>
+      <h2 class="text-sm font-semibold text-[var(--text-h)]">DeepX</h2>
 
-      {/* Context Usage */}
+      {/* Context Usage + KV Cache */}
       <Card padding="sm">
-        <div class="text-xs text-[var(--muted)] mb-1">{tt('info.contextUsage')}</div>
-        <div class="h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
-          <div class="h-full rounded-full transition-all duration-500" style={{ width: `${usagePct()}%`, 'background-color': usageColor() }} />
+        <div class="text-xs text-[var(--muted)] mb-1.5">{tt('info.contextUsage')}</div>
+        <div class="flex items-end gap-2">
+          <div class="text-lg font-mono font-bold text-[var(--text-h)] leading-none">{props.tokens().used.toLocaleString()}</div>
+          <div class="text-xs text-[var(--muted)] mb-0.5">/ {props.tokens().limit.toLocaleString()}</div>
+          <div class="flex-1" />
+          {cacheTotal() > 0 && (
+            <div class="text-xs font-mono text-[var(--success)]">{Math.round(cacheHitPct())}% hit</div>
+          )}
         </div>
-        <div class="flex justify-between mt-1 text-xs text-[var(--muted)] font-mono">
-          <span>{props.tokens().used.toLocaleString()}</span>
-          <span>{props.tokens().limit.toLocaleString()}</span>
+        <div class="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden mt-1.5 flex">
+          <div class="h-full rounded-full transition-all duration-500" style={{ width: `${usagePct()}%`, 'background-color': usageColor() }} />
+          {cacheTotal() > 0 && (
+            <div class="h-full transition-all duration-500" style={{ width: `${Math.min(usagePct() + (cacheHitPct() * (1 - usagePct() / 100)) / 2, 100) - usagePct()}%`, 'background-color': 'var(--success)', opacity: 0.3 }} />
+          )}
         </div>
       </Card>
-
-      {/* KV Cache */}
-      {cacheTotal() > 0 && (
-        <Card padding="sm">
-          <div class="text-xs text-[var(--muted)] mb-1">{tt('info.kvCache')}</div>
-          <div class="flex justify-between text-xs font-mono">
-            <span class="text-[var(--success)]">{tt('info.cacheHit')}: {props.cache().hit.toLocaleString()}</span>
-            <span class="text-[var(--muted)]">{tt('info.cacheMiss')}: {props.cache().miss.toLocaleString()}</span>
-          </div>
-          <div class="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden mt-1">
-            <div class="h-full bg-[var(--success)] rounded-full transition-all duration-500" style={{ width: `${cacheHitPct()}%` }} />
-          </div>
-        </Card>
-      )}
 
       {/* Balance */}
       <Card padding="sm">
@@ -127,7 +115,7 @@ export function InfoPanel(props: InfoPanelProps) {
           class="w-full flex items-center justify-between text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
         >
           <span>{tt('info.sessions')} ({props.sessions().length})</span>
-          <span class="text-[10px]">{showHistory() ? '▾' : '▸'}</span>
+          <span class="text-[11px]">{showHistory() ? '▾' : '▸'}</span>
         </button>
         {showHistory() && (
           <div class="mt-2 space-y-1 max-h-48 overflow-y-auto">

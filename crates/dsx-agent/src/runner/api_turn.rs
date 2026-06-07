@@ -196,8 +196,10 @@ pub(super) fn run_api_turn(
     // Check if stream was cancelled
     if stream_stop_reason.as_deref() == Some("cancelled")
         || agent.turn.stream_cancelled
+        || dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
     {
         agent.turn.stream_cancelled = false;
+        dsx_tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
         return Ok((String::new(), None, serde_json::Value::Null, None, Some("cancelled".into())));
     }
 

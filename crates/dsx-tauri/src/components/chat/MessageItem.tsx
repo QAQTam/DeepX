@@ -15,7 +15,7 @@ export function MessageItem(props: MessageItemProps) {
   if (props.msg.role === 'user') {
     return (
       <div class="flex justify-end mb-4 anim-msg-in">
-        <div class="max-w-[75%] bg-[var(--accent)] text-white rounded-2xl rounded-br-md px-4 py-2.5 text-sm leading-relaxed shadow-sm">
+        <div class="max-w-[75%] bg-[var(--accent)] text-white rounded-2xl rounded-br-md px-4 py-2.5 text-[15px] leading-relaxed shadow-sm">
           <div class="whitespace-pre-wrap">{props.msg.content}</div>
         </div>
       </div>
@@ -32,7 +32,7 @@ export function MessageItem(props: MessageItemProps) {
 
       {/* Content */}
       {content && (
-        <div class="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-sm leading-relaxed shadow-sm">
+        <div class="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-[15px] leading-relaxed shadow-sm">
           <MarkdownBody content={content} />
         </div>
       )}

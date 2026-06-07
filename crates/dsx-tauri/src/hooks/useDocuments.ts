@@ -5,6 +5,7 @@ import { createSignal } from 'solid-js'
 import type { DocInfo } from '../types'
 
 interface Task {
+  id: string
   subject: string
   description: string
   status: string

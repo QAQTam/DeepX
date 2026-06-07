@@ -16,30 +16,31 @@ interface InputProps extends JSX.InputHTMLAttributes<HTMLInputElement> {
 
 export function Input(props: InputProps) {
   const id = () => props.id || nextId()
+  const { label, hint, error, class: userClass, ...rest } = props
   return (
     <div class="flex flex-col gap-1">
-      {props.label && (
+      {label && (
         <label for={id()} class="text-sm font-medium text-[var(--text-h)]">
-          {props.label}
+          {label}
         </label>
       )}
       <input
-        {...props}
+        {...rest}
         id={id()}
         class={`bg-[var(--bg-primary)] border rounded-lg px-3 py-2 text-sm text-[var(--text-h)]
           outline-none transition-colors font-mono
           placeholder:text-[var(--muted)]
           focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/20
-          ${props.error ? 'border-[var(--error)]' : 'border-[var(--border)]'}
-          ${props.class || ''}`}
-        aria-invalid={!!props.error}
-        aria-describedby={props.error ? `${id()}-error` : props.hint ? `${id()}-hint` : undefined}
+          ${error ? 'border-[var(--error)]' : 'border-[var(--border)]'}
+          ${userClass || ''}`}
+        aria-invalid={!!error}
+        aria-describedby={error ? `${id()}-error` : hint ? `${id()}-hint` : undefined}
       />
-      {props.hint && !props.error && (
-        <p id={`${id()}-hint`} class="text-xs text-[var(--muted)]">{props.hint}</p>
+      {hint && !error && (
+        <p id={`${id()}-hint`} class="text-xs text-[var(--muted)]">{hint}</p>
       )}
-      {props.error && (
-        <p id={`${id()}-error`} class="text-xs text-[var(--error)]" role="alert">{props.error}</p>
+      {error && (
+        <p id={`${id()}-error`} class="text-xs text-[var(--error)]" role="alert">{error}</p>
       )}
     </div>
   )

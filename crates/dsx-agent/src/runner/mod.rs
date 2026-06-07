@@ -73,8 +73,19 @@ pub(super) fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
                 .replacen("[in_progress] ", "", 1)
                 .replacen("[completed] ", "", 1)
                 .replacen("[cancelled] ", "", 1);
-            let (subject, description) = task_text.split_once(" — ").unwrap_or((&task_text, ""));
+            let (id, rest) = if task_text.trim_start().starts_with("T") {
+                let after_marker = task_text.trim_start().strip_prefix("T").unwrap_or("");
+                if let Some((num_str, after)) = after_marker.split_once(": ") {
+                    (format!("T{}", num_str.trim()), after.trim().to_string())
+                } else {
+                    ("?".into(), task_text.clone())
+                }
+            } else {
+                ("?".into(), task_text.clone())
+            };
+            let (subject, description) = rest.split_once(" — ").unwrap_or((&rest, ""));
             tasks.push(TaskInfo {
+                id,
                 subject: subject.trim().to_string(),
                 description: description.trim().to_string(),
                 status: status.to_string(),

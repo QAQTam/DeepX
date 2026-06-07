@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::{ToolKey, ToolHandler, ToolCallCtx, CANCEL, CURRENT_SESSION, SafetyVerdict, ToolResult};
+use crate::{ToolKey, ToolHandler, ToolCallCtx, CANCEL, SafetyVerdict, ToolResult};
 
 pub struct ToolManager {
     pub(crate) handlers: BTreeMap<ToolKey, ToolHandler>,
@@ -38,7 +38,7 @@ impl ToolManager {
 
     pub fn apply_init(&mut self, allowed_tools: Vec<String>, session_seed: &str) {
         self.allowed = if allowed_tools.is_empty() { None } else { Some(allowed_tools) };
-        let _ = CURRENT_SESSION.set(session_seed.to_string());
+        crate::set_current_session(session_seed);
     }
 
     pub fn all_defs(&self) -> Vec<dsx_types::ToolDef> {

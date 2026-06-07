@@ -32,6 +32,7 @@ const sizeClass: Record<Size, string> = {
 
 export function Button(props: ButtonProps) {
   const merged = mergeProps({ variant: 'secondary' as Variant, size: 'md' as Size, class: '' }, props)
+  const { children, loading, icon, class: _, ...rest } = merged
   return (
     <button
       class={`inline-flex items-center justify-center font-medium transition-colors
@@ -39,7 +40,7 @@ export function Button(props: ButtonProps) {
         ${variantClass[merged.variant]} ${sizeClass[merged.size]} ${merged.class}`}
       disabled={merged.disabled || merged.loading}
       aria-busy={merged.loading}
-      {...props}
+      {...rest}
     >
       {merged.loading ? <Spinner size={merged.size} /> : merged.icon}
       {merged.children && <span>{merged.children}</span>}

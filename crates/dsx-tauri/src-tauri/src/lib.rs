@@ -548,6 +548,8 @@ fn scan_directory(path: String) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn cancel_agent(state: tauri::State<AgentState>) -> Result<(), String> {
+    dsx_tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+    dsx_agent::tools::cancel_current_tool();
     let guard = state.tui_tx.lock().map_err(|e| format!("lock: {e}"))?;
     let tx = guard.as_ref().ok_or("Agent not started")?;
     tx.send(Ui2Agent::Cancel).map_err(|e| format!("send: {e}"))?;

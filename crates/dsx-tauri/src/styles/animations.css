@@ -61,3 +61,38 @@
 .transition-theme {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
+
+/* Task animations */
+@keyframes task-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-task-enter {
+  animation: task-enter 0.3s ease;
+}
+
+@keyframes task-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.animate-task-pulse {
+  animation: task-pulse 1.5s ease-in-out infinite;
+}
+
+/* Tool card entrance */
+@keyframes tool-card-enter {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-tool-card {
+  animation: tool-card-enter 0.35s ease-out;
+}
+
+/* Running tool card border pulse */
+@keyframes tool-run {
+  0%, 100% { box-shadow: 0 0 8px rgba(124, 58, 237, 0.12); }
+  50% { box-shadow: 0 0 16px rgba(124, 58, 237, 0.25); }
+}
+.animate-tool-run {
+  animation: tool-run 1.5s ease-in-out infinite;
+}

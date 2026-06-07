@@ -8,6 +8,7 @@ import { tt } from '../i18n'
 import { Button, Badge, Card, EmptyState } from './shared'
 
 interface Task {
+  id: string
   subject: string
   description: string
   status: string
@@ -28,6 +29,9 @@ const statusLabel: Record<string, string> = {
 
 const statusColor = (s: string) =>
   s === 'in_progress' ? 'accent' : s === 'completed' ? 'success' : s === 'cancelled' ? 'error' : 'warning'
+
+const taskAnimClass = (status: string) =>
+  status === 'in_progress' ? 'animate-task-pulse' : ''
 
 export function WorkspacePanel(props: WorkspacePanelProps) {
   const [workspacePath, setWorkspacePath] = createSignal<string | null>(null)
@@ -91,7 +95,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
           class="w-full flex items-center justify-between text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
         >
           <span>{tt('workspace.tasks')} ({props.tasks.length})</span>
-          <span class="text-[10px]">{showTasks() ? '▾' : '▸'}</span>
+          <span class="text-[11px]">{showTasks() ? '▾' : '▸'}</span>
         </button>
         {showTasks() && (
           <div class="mt-2 space-y-1 max-h-48 overflow-y-auto">
@@ -99,7 +103,8 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
               <EmptyState title={tt('workspace.noTasks')} />
             ) : (
               <For each={props.tasks}>{t => (
-                <div class="flex items-center gap-1.5 text-xs">
+                <div class={`flex items-center gap-1.5 text-xs animate-task-enter ${taskAnimClass(t.status)}`}>
+                  <span class="text-[11px] font-mono text-[var(--muted)] shrink-0">{t.id}</span>
                   <Badge variant={statusColor(t.status)}>{tt(statusLabel[t.status] || t.status)}</Badge>
                   <span class="text-[var(--text)] truncate">{t.subject}</span>
                 </div>
@@ -116,7 +121,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
           class="w-full flex items-center justify-between text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
         >
           <span>{tt('workspace.documents')} ({props.documents.length})</span>
-          <span class="text-[10px]">{showDocs() ? '▾' : '▸'}</span>
+          <span class="text-[11px]">{showDocs() ? '▾' : '▸'}</span>
         </button>
         {showDocs() && (
           <div class="mt-2 space-y-0.5 max-h-48 overflow-y-auto text-xs font-mono">
@@ -140,7 +145,7 @@ export function WorkspacePanel(props: WorkspacePanelProps) {
           class="w-full flex items-center justify-between text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
         >
           <span>{tt('workspace.recentEdits')} ({props.recentEdits.length})</span>
-          <span class="text-[10px]">{showEdits() ? '▾' : '▸'}</span>
+          <span class="text-[11px]">{showEdits() ? '▾' : '▸'}</span>
         </button>
         {showEdits() && (
           <div class="mt-2 space-y-0.5 max-h-48 overflow-y-auto text-xs font-mono">
