@@ -2,9 +2,10 @@
 // Renders a tool call card by dispatching through ToolRegistry.
 // Pending cards (tool executing) get a running pulse animation.
 
-import { createSignal, For } from 'solid-js'
+import { createSignal, useContext, For } from 'solid-js'
 import { tt } from '../../i18n'
 import { getToolRenderer, type ToolCardContext } from '../../domain/tool-registry'
+import { LiveOutputContext } from '../../hooks/LiveOutputContext'
 
 interface ToolCardProps {
   ctx: ToolCardContext
@@ -15,6 +16,8 @@ export function ToolCard(props: ToolCardProps) {
   const renderer = getToolRenderer(props.ctx.name)
   const [open, setOpen] = createSignal(props.defaultOpen ?? renderer?.autoOpen ?? false)
   const isPending = () => props.ctx.success === undefined
+  const liveCtx = useContext(LiveOutputContext)
+  const currentLive = () => liveCtx?.liveOutputs?.()?.[props.ctx.id] ?? props.ctx.liveOutput
 
   return (
     <div
@@ -25,7 +28,7 @@ export function ToolCard(props: ToolCardProps) {
     >
       {/* Header */}
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => { setOpen(o => !o); liveCtx?.notifyResize() }}
         class="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[var(--bg-tertiary)] transition-colors text-left"
         aria-expanded={open()}
       >
@@ -59,7 +62,7 @@ export function ToolCard(props: ToolCardProps) {
         <div class="border-t border-[var(--border-light)]">
           {isPending() ? (
             <div class="p-3 text-xs font-mono max-h-48 overflow-y-auto whitespace-pre text-[#cdd6f4] bg-[#0d0d1a]">
-              {props.ctx.liveOutput ? props.ctx.liveOutput : <span class="text-[var(--muted)] flex items-center gap-2"><span class="anim-spin-slow text-sm">◇</span>Waiting for output...</span>}
+              {currentLive() ?? <span class="text-[var(--muted)] flex items-center gap-2"><span class="anim-spin-slow text-sm">◇</span>Waiting for output...</span>}
             </div>
           ) : renderer?.renderResult ? (
             renderer.renderResult(props.ctx.output ?? '')

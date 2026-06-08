@@ -1,7 +1,8 @@
 // ── ReasoningBlock ──
 // Collapsible reasoning/thinking chain display.
+// Only auto-scrolls during active streaming (content growing), not on resume.
 
-import { createSignal, createEffect } from 'solid-js'
+import { createSignal, createEffect, onCleanup } from 'solid-js'
 import { tt } from '../../i18n'
 
 interface ReasoningBlockProps {
@@ -11,11 +12,26 @@ interface ReasoningBlockProps {
 export function ReasoningBlock(props: ReasoningBlockProps) {
   const [open, setOpen] = createSignal(true)
   let bottomRef!: HTMLDivElement
+  let rafId = 0
+  let prevLen = 0
 
   createEffect(() => {
-    props.content
+    const cur = props.content.length
     open()
-    bottomRef?.scrollIntoView({ behavior: 'smooth' })
+    // Only auto-scroll if content is actively growing (streaming).
+    // On resume, content arrives at full length — skip scroll.
+    const isStreaming = cur > prevLen && prevLen > 0
+    prevLen = cur
+    if (!isStreaming) return
+    if (rafId) return
+    rafId = requestAnimationFrame(() => {
+      rafId = 0
+      bottomRef?.scrollIntoView({ behavior: 'auto' })
+    })
+  })
+
+  onCleanup(() => {
+    if (rafId) cancelAnimationFrame(rafId)
   })
 
   if (!props.content.trim()) return null

@@ -1,4 +1,4 @@
-use dsx_proto::{Agent2Ui, DocInfo, RoundDeltaKind, TurnData};
+use dsx_proto::{Agent2Ui, DocInfo, RoundBlock, RoundDeltaKind, TurnData};
 use dsx_types::{ConfigStore, PersistentConfig, SessionMeta};
 use crate::markdown::MarkdownRenderer;
 
@@ -1030,7 +1030,7 @@ impl App {
                 }
                 self.append_last(&delta);
             }
-            Agent2Ui::RoundComplete { turn_id: _, round_num: _, thinking, answer, tool_calls, is_final } => {
+            Agent2Ui::RoundComplete { turn_id: _, round_num: _, thinking: _, answer: _, tool_calls: _, is_final, blocks } => {
                 if let Some(idx) = self.draft_round_msg_idx.take() {
                     if idx < self.messages.len() {
                         self.messages.truncate(idx);
@@ -1041,25 +1041,32 @@ impl App {
                 self.md_renderer = None;
                 self.pending_tail_lines = 0;
                 self.debug.streaming = false;
-                if let Some(ref t) = thinking {
-                    if !t.is_empty() {
-                        self.push_msg(ChatRole::Thinking, t);
+
+                let mut tool_count = 0u32;
+                for b in &blocks {
+                    match b {
+                        RoundBlock::Reasoning { content } => {
+                            if !content.is_empty() {
+                                self.push_msg(ChatRole::Thinking, content);
+                            }
+                        }
+                        RoundBlock::Text { content } => {
+                            if !content.is_empty() {
+                                self.push_msg(ChatRole::Assistant, content);
+                            }
+                        }
+                        RoundBlock::Tool { card } => {
+                            self.debug.tool_calls_total += 1;
+                            tool_count += 1;
+                            let label = format_tool_label(&card.name, &card.args_display);
+                            self.push_tool_msg(&card.id, &label, ToolStatus::Pending);
+                        }
                     }
                 }
-                if let Some(ref a) = answer {
-                    if !a.is_empty() {
-                        self.push_msg(ChatRole::Assistant, a);
-                    }
-                }
-                for tc in &tool_calls {
-                    self.debug.tool_calls_total += 1;
-                    let label = format_tool_label(&tc.name, &tc.args_display);
-                    self.push_tool_msg(&tc.id, &label, ToolStatus::Pending);
-                }
-                // Start tool batch tracking for progress / elapsed animation
-                if !tool_calls.is_empty() {
+
+                if tool_count > 0 {
                     self.tool_batch_start = Some(std::time::Instant::now());
-                    self.tool_batch_total = tool_calls.len() as u32;
+                    self.tool_batch_total = tool_count;
                     self.tool_batch_done = 0;
                 } else {
                     self.tool_batch_start = None;

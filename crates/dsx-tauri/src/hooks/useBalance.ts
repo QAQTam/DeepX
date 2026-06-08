@@ -21,7 +21,10 @@ export function useBalance(): UseBalanceReturn {
       const result = await api.getBalance(apiKey)
       const info = result?.balance_infos?.[0]
       if (info) setBalance(`${info.total_balance} ${info.currency}`)
-    } catch { /* noop */ }
+    } catch (e) {
+      console.error('getBalance failed:', e)
+      throw e
+    }
     finally { setLoading(false) }
   }
 

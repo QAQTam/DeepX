@@ -7,6 +7,7 @@ import { api, type ConfigData, type ProviderInfo, type EndpointInfo } from '../b
 import { tt, setLang } from '../i18n'
 import { Button, Input, Select } from './shared'
 import { useTheme, type Theme } from './shared/ThemeProvider'
+import { useToast } from './shared'
 
 interface SettingsDialogProps {
   onClose: () => void
@@ -37,6 +38,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
 
   const [providers, setProviders] = createSignal<ProviderInfo[]>([])
   const { theme, setTheme } = useTheme()
+  const toast = useToast()
 
   const currentProvider = (): ProviderInfo | undefined =>
     providers().find(p => p.id === providerId())
@@ -95,13 +97,18 @@ export function SettingsDialog(props: SettingsDialogProps) {
       })
       api.reloadAgent().catch(e => console.error('reloadAgent failed:', e))
       setLang(lang())
+      toast.addToast(tt('settings.saved'), 'success')
       props.onClose()
-    } catch(e) { console.error('saveConfig failed:', e) }
+    } catch(e) {
+        console.error('saveConfig failed:', e)
+        toast.addToast(tt('settings.saveFailed') + ': ' + String(e), 'error')
+      }
     finally { setSaving(false) }
   }
 
   return (
-    <div class="absolute inset-0 bg-black/30 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label={tt('settings.title')} onKeyDown={(e) => { if (e.key === 'Escape') props.onClose() }}>
+    <div class="absolute inset-0 bg-black/30 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label={tt('settings.title')} onKeyDown={(e) => { if (e.key === 'Escape') toast.addToast(tt('settings.saved'), 'success')
+        props.onClose() }}>
       <div class="bg-[var(--bg-primary)] border border-[var(--border)] rounded-2xl p-6 max-w-md w-full mx-4 shadow-md transition-theme max-h-[90vh] overflow-y-auto">
         <div class="text-lg font-bold text-[var(--text-h)] mb-4">{tt('settings.title')}</div>
 

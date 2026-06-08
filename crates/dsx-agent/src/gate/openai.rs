@@ -64,7 +64,7 @@ pub fn chat_stream_openai(
     let resp = ureq::post(&url)
         .set("Authorization", &format!("Bearer {}", provider.api_key))
         .set("Content-Type", "application/json")
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(900))
         .send_json(&body);
 
     let resp = match resp {

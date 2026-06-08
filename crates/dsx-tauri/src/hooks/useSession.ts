@@ -10,7 +10,7 @@ interface UseSessionReturn {
   refresh: () => Promise<void>
   deleteSession: (seed: string) => Promise<void>
   deleteAll: () => Promise<void>
-  loadMessages: (seed: string) => Promise<unknown[]>
+  loadMessages: (seed: string, offset?: number, limit?: number) => Promise<{ messages: unknown[]; total: number; offset: number }>
 }
 
 export function useSession(): UseSessionReturn {
@@ -36,9 +36,12 @@ export function useSession(): UseSessionReturn {
     setSessions([])
   }
 
-  const loadMessages = async (seed: string) => {
-    const res = await api.loadSessionMessages(seed)
-    return Array.isArray(res) ? res : (res as any).messages ?? []
+  const loadMessages = async (seed: string, offset?: number, limit?: number) => {
+    const res = await api.loadSessionMessages(seed, offset, limit)
+    const messages = Array.isArray(res) ? res : (res as any).messages ?? []
+    const total = (res as any).total ?? messages.length
+    const off = (res as any).offset ?? 0
+    return { messages, total, offset: off }
   }
 
   return {

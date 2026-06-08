@@ -73,6 +73,8 @@ export interface SessionMessages {
     reasoning?: string
     tool_cards?: unknown[]
   }>
+  total: number
+  offset: number
 }
 
 // ── Input types ──
@@ -127,7 +129,7 @@ export const api = {
   sendMessage:     (text: string)  => invoke<void>('send_message', { text }),
 
   // Sessions
-  loadSessionMessages: (seed: string) => invoke<SessionMessages>('load_session_messages', { seed }),
+  loadSessionMessages: (seed: string, offset?: number, limit?: number) => invoke<SessionMessages>('load_session_messages', { seed, offset, limit }),
   cmdSessions:     ()              => invoke<SessionInfo[]>('cmd_sessions'),
   deleteSession:   (seed: string)  => invoke<void>('delete_session', { seed }),
   deleteAllSessions: ()            => invoke<void>('delete_all_sessions'),

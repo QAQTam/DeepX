@@ -129,7 +129,7 @@ export function InfoPanel(props: InfoPanelProps) {
                     {s.date && <span class="text-[var(--muted)] ml-1">{s.date}</span>}
                     {s.message_count !== undefined && <span class="text-[var(--muted)] ml-1">({s.message_count})</span>}
                   </button>
-                  <Button variant="ghost" size="sm" onClick={() => props.onDeleteSession(s.seed)} class="text-[var(--error)] text-xs">
+                  <Button variant="ghost" size="sm" onClick={() => props.onDeleteSession(s.seed)} class="text-[var(--error)] text-xs" aria-label="Delete session">
                     ✕
                   </Button>
                 </div>
@@ -141,7 +141,7 @@ export function InfoPanel(props: InfoPanelProps) {
           <Button variant="secondary" size="sm" onClick={props.onNewSession} class="flex-1">
             {tt('chat.newSession')}
           </Button>
-          <Button variant="ghost" size="sm" onClick={props.onDeleteAllSessions} class="text-[var(--error)]">
+          <Button variant="ghost" size="sm" onClick={() => { if (props.sessions().length > 0 && confirm(tt('info.confirmDeleteAll'))) props.onDeleteAllSessions() }} class="text-[var(--error)]">
             {tt('common.delete')}
           </Button>
         </div>

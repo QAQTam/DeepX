@@ -1,10 +1,12 @@
 // ── MessageItem ──
 // Renders a single user or assistant message.
+// Assistant messages use ordered blocks[] to preserve stream sequence.
 
-import type { Message, ToolCardEntry } from '../../types'
+import { For, Match, Switch } from 'solid-js'
+import type { Message, MessageBlock } from '../../types'
 import { ReasoningBlock } from './ReasoningBlock'
 import { MarkdownBody } from './MarkdownBody'
-import { ToolBatchStrip } from './ToolBatchStrip'
+import { ToolCard } from './ToolCard'
 
 interface MessageItemProps {
   msg: Message
@@ -32,48 +34,26 @@ export function MessageItem(props: MessageItemProps) {
     )
   }
 
-  // Assistant message — may contain reasoning + content + tool cards
-  const { reasoning, content, toolCards } = parseAssistant(props.msg.content, props.msg.reasoning, props.msg.tool_cards)
-
+  // Assistant message — render blocks in stream order
   return (
     <div class="mb-4 anim-msg-in">
-      {/* Reasoning */}
-      {reasoning && <ReasoningBlock content={reasoning} />}
-
-      {/* Content */}
-      {content && (
-        <div class="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-[15px] leading-relaxed shadow-sm">
-          <MarkdownBody content={content} />
-        </div>
-      )}
-
-      {/* Tool Cards */}
-      {toolCards && toolCards.length > 0 && (
-        <ToolBatchStrip cards={toolCards} />
-      )}
+      <For each={props.msg.blocks ?? []}>
+        {(block) => (
+          <Switch>
+            <Match when={(block as MessageBlock).type === 'reasoning'}>
+              <ReasoningBlock content={(block as any).content} />
+            </Match>
+            <Match when={(block as MessageBlock).type === 'text'}>
+              <div class="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-[15px] leading-relaxed shadow-sm">
+                <MarkdownBody content={(block as any).content} />
+              </div>
+            </Match>
+            <Match when={(block as MessageBlock).type === 'tool'}>
+              <ToolCard ctx={(block as any).card} />
+            </Match>
+          </Switch>
+        )}
+      </For>
     </div>
   )
-}
-
-// ── Parser: extract reasoning from content ──
-const REASONING_RE = /<reasoning>([\s\S]*?)<\/reasoning>/i
-
-function parseAssistant(content: string, reasoning?: string, toolCards?: ToolCardEntry[]): {
-  reasoning: string
-  content: string
-  toolCards?: ToolCardEntry[]
-} {
-  let thinking = ''
-  let text = content
-  const match = REASONING_RE.exec(content)
-  if (match) {
-    thinking = match[1].trim()
-    text = content.replace(REASONING_RE, '').trim()
-  }
-
-  if (!thinking && reasoning) {
-    thinking = reasoning
-  }
-
-  return { reasoning: thinking, content: text, toolCards }
 }

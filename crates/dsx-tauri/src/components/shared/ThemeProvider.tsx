@@ -54,11 +54,12 @@ export function ThemeProvider(props: { children: JSX.Element }) {
   const mq = typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)') : null
 
   createEffect(() => {
-    if (theme() !== 'system') return
     const handler = () => {
       setResolved(resolveTheme('system'))
     }
-    mq?.addEventListener('change', handler)
+    if (theme() === 'system') {
+      mq?.addEventListener('change', handler)
+    }
     onCleanup(() => mq?.removeEventListener('change', handler))
   })
 

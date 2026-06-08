@@ -48,6 +48,7 @@ export default {
     toolFailure: '失败',
     toolPending: '执行中',
     toolDone: '完成',
+    toolPreparing: '工具调用准备中...',
     turnEnd: '本轮结束',
     done: '完成',
     cancelled: '已取消',
@@ -62,6 +63,7 @@ export default {
     stop: '停止',
     newSession: '新对话',
     useReasoning: '使用推理',
+    loadMore: '加载更早的消息',
   },
 
   askUser: {
@@ -133,7 +135,8 @@ export default {
     baseUrl: 'API 地址',
     context7Key: 'Context7 API Key',
     saving: '保存中...',
-    saved: '已保存',
+    saved: '设置已保存',
+    saveFailed: '保存失败',
     wizardTitle: '配置你的 AI 助手',
     wizardStep1: 'API Key',
     wizardStep2: '模型',
@@ -198,6 +201,7 @@ export default {
     sessions: '历史对话',
     noHistory: '暂无历史对话',
     noSessions: '暂无历史对话',
+      confirmDeleteAll: '确定删除所有会话？此操作不可撤销。',
     messages: '条消息',
     date: '日期',
     resume: '继续',

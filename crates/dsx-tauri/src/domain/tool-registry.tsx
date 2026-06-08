@@ -61,7 +61,7 @@ registerTool({
   toolName: 'read_file',
   icon: '📄',
   label: '读取文件',
-  autoOpen: true,
+  autoOpen: false,
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
     return <span>{sp(a.path || '')}</span>
@@ -136,7 +136,7 @@ registerTool({
   toolName: 'exec',
   icon: '>_',
   label: '执行命令',
-  autoOpen: true,
+  autoOpen: false,
   renderHeader: ctx => {
     const a = parseArgs(ctx.args)
     const cwd = a.cwd

@@ -128,10 +128,9 @@ pub fn run_agent_loop(
         let seed = agent.session.resume_seed.clone();
         let restored = lifecycle::init_session(&mut agent, seed.as_deref());
         if restored && agent.session.from_resume {
-            let turns = crate::runner::turn::build_turns_from_context(&agent);
             emit(&agent_tx, Agent2Ui::SessionRestored {
                 seed: agent.session.seed.clone(),
-                turns,
+                turns: Vec::new(),
                 tokens_used: agent.token_estimate,
                 cache_hit_pct: 0.0,
             });
@@ -203,14 +202,10 @@ pub fn run_agent_loop(
             }
 
             Ui2Agent::CreateSession => {
-                if agent.session.seed.is_empty() {
-                    lifecycle::create_session(&mut agent);
-                    emit(&agent_tx, Agent2Ui::SessionCreated {
-                        seed: agent.session.seed.clone(),
-                    });
-                } else {
-                    log::warn!("dsx-agent: CreateSession ignored — session {} already active", agent.session.seed);
-                }
+                lifecycle::create_session(&mut agent);
+                emit(&agent_tx, Agent2Ui::SessionCreated {
+                    seed: agent.session.seed.clone(),
+                });
             }
 
             Ui2Agent::Cancel => {

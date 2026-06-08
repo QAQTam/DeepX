@@ -2,8 +2,10 @@
 // State management delegated to hooks. View composition only.
 // Event handling extracted to useAgentEvents hook.
 
-import { createSignal, createEffect, onCleanup, Show, For } from 'solid-js'
+import { createSignal, createEffect, Show, For } from 'solid-js'
+import { createVirtualizer } from '@tanstack/solid-virtual'
 import { useAgent, useConfig, useSession, useBalance, useDocuments, useAgentEvents } from './hooks'
+import { LiveOutputContext } from './hooks/LiveOutputContext'
 import { api } from './bridge/tauri'
 import { ChatMessage } from './components/ChatMessage'
 import { InfoPanel } from './components/InfoPanel'
@@ -15,6 +17,27 @@ import { AskUserDialog } from './components/AskUserDialog'
 import { ReasoningBlock } from './components/chat/ReasoningBlock'
 import { useToast } from './components/shared'
 import { tt } from './i18n'
+import type { Message } from './types'
+
+// ── Heuristic: estimate message height for virtual list ──
+// Only used for brand-new items before the first sync measureElement().
+// After measurement, itemSizeCache holds the actual height.
+function estimateMessageHeight(msg: Message): number {
+  if (msg.role === 'user') {
+    return Math.max(48, Math.min(500, 32 + msg.content.length * 0.45))
+  }
+  if (msg.role === 'system') {
+    return Math.max(40, Math.min(300, 30 + msg.content.length * 0.4))
+  }
+  if (!msg.blocks) return 80
+  let h = 60
+  for (const b of msg.blocks) {
+    if (b.type === 'reasoning') h += Math.max(80, Math.min(1200, b.content.length * 0.4))
+    else if (b.type === 'text') h += Math.max(0, Math.min(1000, b.content.length * 0.45))
+    else if (b.type === 'tool') h += 90
+  }
+  return Math.max(80, Math.min(2400, h))
+}
 
 function loadPanelWidth(key: string, fallback: number): number {
   try { const v = localStorage.getItem(key); if (v) return Math.max(120, parseInt(v, 10)) } catch {}
@@ -39,10 +62,69 @@ export default function App() {
   const [rightWidth, setRightWidth] = createSignal(loadPanelWidth('dsx:rightPanelWidth', 260))
   const [dragging, setDragging] = createSignal<null | 'left' | 'right'>(null)
 
-  let resizeStartX = 0
-  let resizeStartWidth = 0
+  let scrollContainerRef!: HTMLDivElement
+
+  // ── Virtual list — directly tracks events.messages() ──
+  // No separate windowed slice: virtualizer only renders visible items in DOM.
+  // The store cap (MAX_MESSAGES=200) bounds memory; virtualizer bounds DOM nodes.
+  const virtualizer = createVirtualizer({
+    count: events.messages().length,
+    getScrollElement: () => scrollContainerRef,
+    estimateSize: (i: number) => estimateMessageHeight(events.messages()[i]),
+    overscan: 5,
+    paddingStart: 16,
+    paddingEnd: 16,
+  })
+
+  // ── Keep virtualizer count + estimate reactive ──
+  createEffect(() => {
+    const msgs = events.messages()
+    const v = virtualizer as any
+    if (v.options) {
+      v.options.count = msgs.length
+      v.options.estimateSize = (i: number) => estimateMessageHeight(msgs[i])
+      v.notify(false)
+    }
+  })
+
+  // ── After content changes (tool_results, expand/collapse),
+  //     ResizeObserver runs as a microtask and updates the cache.
+  //     This effect fires a notify AFTER ResizeObserver to reconcile
+  //     item positions with the updated measurements — all before paint.
+  let _notifyMicro: number | null = null
+  createEffect(() => {
+    events.contentVersion()
+    events.msgCount()
+    if (_notifyMicro == null) {
+      _notifyMicro = requestAnimationFrame(() => {
+        _notifyMicro = null
+        ;(virtualizer as any).notify(false)
+      })
+    }
+  })
+
+  // ── Panel drag resize ──
+  let _dragStartX = 0
+  let _dragStartW = 0
   let inputRef!: HTMLTextAreaElement
   let msgEndRef!: HTMLDivElement
+
+  const onDragMove = (e: MouseEvent) => {
+    const dir = dragging()
+    if (!dir) return
+    const dx = e.clientX - _dragStartX
+    if (dir === 'left') setLeftWidth(Math.max(120, _dragStartW + dx))
+    else setRightWidth(Math.max(120, _dragStartW - dx))
+  }
+  const onDragEnd = () => {
+    const dir = dragging()
+    if (!dir) return
+    setDragging(null)
+    try {
+      if (dir === 'left') localStorage.setItem('dsx:leftPanelWidth', String(leftWidth()))
+      else localStorage.setItem('dsx:rightPanelWidth', String(rightWidth()))
+    } catch {}
+  }
 
   // ── Sync context limit from loaded config ──
   createEffect(() => {
@@ -60,8 +142,11 @@ export default function App() {
   })
 
   // ── Auto-create or resume session after agent start ──
+  let sessionHandled = false
   createEffect(() => {
     if (agent.state.connected && !agent.state.sessionId) {
+      if (sessionHandled) return
+      sessionHandled = true
       const sessions = agent.state.sessions
       if (sessions.length > 0) {
         agent.resume(sessions[0].seed)
@@ -69,55 +154,33 @@ export default function App() {
         agent.createSession()
       }
     }
+    if (agent.state.sessionId) sessionHandled = false
   })
 
   // ── Refresh session list on connect ──
+  let lastConnected = false
   createEffect(() => {
-    if (agent.state.connected) session.refresh()
+    const connected = agent.state.connected
+    if (connected && !lastConnected) session.refresh()
+    lastConnected = connected
   })
 
-  // ── Auto-scroll chat to bottom (only near bottom) ──
+  // ── Auto-scroll chat to bottom (only when user is near bottom) ──
+  let _autoScrollRaf = 0
   createEffect(() => {
-    events.messages()
+    events.msgCount()
+    events.contentVersion()
     agent.state.streaming
-    const el = (msgEndRef as HTMLDivElement)?.parentElement
-    if (el) {
-      const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-      if (dist < 120) msgEndRef?.scrollIntoView({ behavior: 'auto' })
+    const el = scrollContainerRef
+    if (!el) return
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (dist < 300) {
+      if (_autoScrollRaf) cancelAnimationFrame(_autoScrollRaf)
+      _autoScrollRaf = requestAnimationFrame(() => {
+        _autoScrollRaf = 0
+        msgEndRef?.scrollIntoView({ block: 'end' })
+      })
     }
-  })
-
-  // ── Auto-focus input on connect ──
-  createEffect(() => {
-    if (agent.state.connected) inputRef?.focus()
-  })
-
-  // ── Panel resize drag ──
-  createEffect(() => {
-    const side = dragging()
-    if (!side) return
-    const isLeft = side === 'left'
-    const onMove = (e: MouseEvent) => {
-      e.preventDefault()
-      const delta = isLeft ? e.clientX - resizeStartX : resizeStartX - e.clientX
-      const w = Math.max(isLeft ? 160 : 200, Math.min(isLeft ? 400 : 480, resizeStartWidth + delta))
-      if (isLeft) setLeftWidth(w); else setRightWidth(w)
-    }
-    const onUp = () => {
-      setDragging(null)
-      const w = isLeft ? leftWidth() : rightWidth()
-      try { localStorage.setItem(isLeft ? 'dsx:leftPanelWidth' : 'dsx:rightPanelWidth', String(w)) } catch {}
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp, { once: true })
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    onCleanup(() => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    })
   })
 
   // ── Send message ──
@@ -146,7 +209,7 @@ export default function App() {
     events.setAskAnswer('')
   }
 
-  // ── Loading ──
+  // ── Render ──
   return (
     <Show when={!cfg.loading} fallback={
       <div class="h-screen flex items-center justify-center bg-[var(--bg-primary)]">
@@ -168,7 +231,11 @@ export default function App() {
 
       {/* Main App */}
       <Show when={cfg.checkDone}>
-        <div class="h-screen flex flex-col bg-[var(--bg-primary)] text-[var(--text)] overflow-hidden relative">
+        <div
+          class="h-screen flex flex-col bg-[var(--bg-primary)] text-[var(--text)] overflow-hidden relative"
+          onMouseMove={onDragMove}
+          onMouseUp={onDragEnd}
+        >
           {/* Top Bar */}
           <div class="h-10 flex items-center justify-between px-3 border-b border-[var(--border)] bg-[var(--bg-secondary)] shrink-0 transition-theme">
             <div class="flex items-center gap-2 min-w-0">
@@ -209,7 +276,7 @@ export default function App() {
                   onResumeSession={seed => agent.resume(seed)}
                   onDeleteAllSessions={session.deleteAll}
                   onDeleteSession={seed => session.deleteSession(seed)}
-                  onRefreshBalance={() => cfg.config?.api_key && balance.refresh(cfg.config.api_key)}
+                  onRefreshBalance={() => cfg.config?.api_key && balance.refresh(cfg.config.api_key).catch(e => toast.addToast('Balance refresh failed: ' + String(e), 'error'))}
                 />
               </div>
             </div>
@@ -218,29 +285,46 @@ export default function App() {
             <Show when={leftOpen()}>
               <div
                 class="w-1 shrink-0 cursor-col-resize hover:bg-[var(--accent)]/40 active:bg-[var(--accent)]/60 transition-colors"
-                onMouseDown={(e) => { resizeStartX = e.clientX; resizeStartWidth = leftWidth(); setDragging('left') }}
+                onMouseDown={(e) => { _dragStartX = e.clientX; _dragStartW = leftWidth(); setDragging('left') }}
               />
             </Show>
 
             {/* Center Chat */}
+            <LiveOutputContext.Provider value={{ liveOutputs: events.liveToolOutputs, notifyResize: events.notifyResize }}>
             <div class="flex-1 flex flex-col min-w-0">
               {/* Messages */}
-              <div class="flex-1 overflow-y-auto px-4 py-3 space-y-1">
+              <div ref={scrollContainerRef} class="flex-1 overflow-y-auto px-4 py-3">
 
-                <For each={events.messages()}>{msg => <ChatMessage msg={msg} />}</For>
+                <div style={{ height: `${virtualizer.getTotalSize()}px`, width: "100%", position: "relative" }}>
+                  <For each={virtualizer.getVirtualItems()}>
+                    {(vItem) => {
+                      const msg = events.messages()[vItem.index]
+                      return (
+                        <div
+                          style={{ position: "absolute", top: `${vItem.start}px`, width: "100%" }}
+                          data-index={vItem.index}
+                          ref={(el) => { if (el && el.hasAttribute('data-index')) virtualizer.measureElement(el) }}
+                        >
+                          <ChatMessage msg={msg} />
+                        </div>
+                      )
+                    }}
+                  </For>
+                </div>
 
                 <Show when={agent.isStreaming && (events.streamingThink() || events.streamingText() || (events.streamKind() === 'tool_calling' && events.streamingToolNames().length > 0))}>
                   <div class="mb-4 pl-2">
                     <Show when={events.streamingThink()}>
                       <ReasoningBlock content={events.streamingThink()} />
                     </Show>
-                    <Show when={events.streamKind() === 'tool_calling' && events.streamingToolNames().length > 0}>
-                      <ToolCallPreview names={events.streamingToolNames()} />
-                    </Show>
+                    {/* Answer BEFORE tool calls — matches LLM output order */}
                     <Show when={events.streamingText()}>
                       <div class="max-w-[85%] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-2xl rounded-bl-md px-4 py-3 text-[15px] leading-relaxed shadow-sm">
                         <div class="whitespace-pre-wrap text-[var(--text)]">{events.streamingText()}</div>
                       </div>
+                    </Show>
+                    <Show when={events.streamKind() === 'tool_calling' && events.streamingToolNames().length > 0}>
+                      <ToolCallPreview names={events.streamingToolNames()} />
                     </Show>
                   </div>
                 </Show>
@@ -302,12 +386,13 @@ export default function App() {
                 </div>
               </div>
             </div>
+            </LiveOutputContext.Provider>
 
             {/* Right resize handle */}
             <Show when={rightOpen()}>
               <div
                 class="w-1 shrink-0 cursor-col-resize hover:bg-[var(--accent)]/40 active:bg-[var(--accent)]/60 transition-colors"
-                onMouseDown={(e) => { resizeStartX = e.clientX; resizeStartWidth = rightWidth(); setDragging('right') }}
+                onMouseDown={(e) => { _dragStartX = e.clientX; _dragStartW = rightWidth(); setDragging('right') }}
               />
             </Show>
 
@@ -355,7 +440,7 @@ function ToolCallPreview(props: { names: string[] }) {
         </svg>
       </div>
       <div class="inline-block max-w-[85%] rounded-2xl px-4 py-2.5 text-sm bg-[var(--bg-secondary)] border border-[var(--accent)]/30 rounded-bl-md shadow-[0_0_12px_rgba(124,58,237,0.12)] transition-theme">
-        <div class="text-[var(--accent)] font-medium mb-1.5">工具调用准备中... <Show when={more() > 0}><span class="text-[var(--muted)]">(+{more()})</span></Show></div>
+        <div class="text-[var(--accent)] font-medium mb-1.5">{tt('chat.toolPreparing')} <Show when={more() > 0}><span class="text-[var(--muted)]">(+{more()})</span></Show></div>
         <div class="flex flex-wrap gap-1.5">
           <For each={visible()}>{(n, i) => (
             <span

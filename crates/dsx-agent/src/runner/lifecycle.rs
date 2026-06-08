@@ -51,8 +51,14 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 }
 
 pub fn create_session(agent: &mut AgentState) {
+    agent.ctx = crate::assembly::ContextAssembler::new();
     agent.session.seed = session::generate_seed();
     agent.session.start = session::now_epoch();
+    agent.session.tokens = 0;
+    agent.token_estimate = 0;
+    agent.api_usage = None;
+    agent.tool_results.clear();
+    agent.turn.reset();
     dsx_log::set_session(&agent.session.seed);
     tools::set_current_session(&agent.session.seed);
     session::save_live_snapshot(

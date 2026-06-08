@@ -30,7 +30,7 @@ export type AgentAction =
   | { type: 'TURN_START'; turn_id: string; user_text: string }
   | { type: 'TURN_END'; turn_id: string }
   | { type: 'CANCEL' }
-  | { type: 'RESTORE_SESSION'; seed: string; turns?: unknown[] }
+  | { type: 'RESTORE_SESSION'; seed: string }
 
 // ── Initial state ──
 

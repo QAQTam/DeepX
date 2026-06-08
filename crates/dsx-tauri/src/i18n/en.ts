@@ -48,6 +48,7 @@ export default {
     toolFailure: 'Failure',
     toolPending: 'Running',
     toolDone: 'Done',
+    toolPreparing: 'Preparing tool calls...',
     turnEnd: 'Turn ended',
     done: 'Done',
     cancelled: 'Cancelled',
@@ -62,6 +63,7 @@ export default {
     stop: 'Stop',
     newSession: 'New Session',
     useReasoning: 'Use Reasoning',
+    loadMore: 'Load earlier messages',
   },
 
   askUser: {
@@ -133,7 +135,8 @@ export default {
     baseUrl: 'API URL',
     context7Key: 'Context7 API Key',
     saving: 'Saving...',
-    saved: 'Saved',
+    saved: 'Settings saved.',
+    saveFailed: 'Save failed',
     wizardTitle: 'Configure your AI assistant',
     wizardStep1: 'API Key',
     wizardStep2: 'Model',
@@ -198,6 +201,7 @@ export default {
     sessions: 'Sessions',
     noHistory: 'No history',
     noSessions: 'No sessions',
+      confirmDeleteAll: 'Delete ALL sessions? This cannot be undone.',
     messages: 'messages',
     date: 'Date',
     resume: 'Resume',

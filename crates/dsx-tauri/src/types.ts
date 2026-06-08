@@ -1,8 +1,12 @@
+export type MessageBlock =
+  | { type: 'reasoning'; content: string }
+  | { type: 'text';      content: string }
+  | { type: 'tool';      card: ToolCardEntry }
+
 export interface Message {
   role: 'user' | 'assistant' | 'system'
   content: string
-  reasoning?: string
-  tool_cards?: ToolCardEntry[]
+  blocks?: MessageBlock[]
 }
 
 export interface ToolCardEntry {

@@ -2,7 +2,7 @@
 
 use std::sync::mpsc;
 
-use dsx_proto::{Agent2Ui, ToolCallDef, ToolResultDef, TurnData, RoundData};
+use dsx_proto::{Agent2Ui, RoundBlock, ToolCallDef, ToolResultDef, TurnData, RoundData};
 use dsx_types::{ContentBlock, ToolCall};
 
 use crate::agent::{AgentState, ToolResultAppender};
@@ -49,10 +49,9 @@ fn init_session_on_first_message(
         if agent.session.seed.is_empty() {
             super::lifecycle::init_session(agent, Some(seed));
             if agent.session.from_resume {
-                let turns = build_turns_from_context(agent);
                 emit(&agent_tx, Agent2Ui::SessionRestored {
                     seed: agent.session.seed.clone(),
-                    turns,
+                    turns: Vec::new(),
                     tokens_used: agent.token_estimate,
                     cache_hit_pct: 0.0,
                 });
@@ -62,6 +61,7 @@ fn init_session_on_first_message(
 }
 
 /// Reconstruct TurnData from the existing context (for session resume).
+#[allow(dead_code)]
 pub(super) fn build_turns_from_context(agent: &AgentState) -> Vec<TurnData> {
     let mut turns = Vec::new();
     for (ti, turn) in agent.ctx.turns().iter().enumerate() {
@@ -249,6 +249,33 @@ pub fn handle_user_input(
 
         let assistant_msg = build_and_push_assistant(agent, &content, &reasoning_content, &parsed);
 
+        // Build ordered blocks from ContentBlock sequence (preserves LLM output order)
+        let mut round_blocks: Vec<RoundBlock> = Vec::new();
+        for cb in &assistant_msg.content {
+            match cb {
+                ContentBlock::Reasoning { reasoning } if !reasoning.is_empty() => {
+                    round_blocks.push(RoundBlock::Reasoning { content: reasoning.clone() });
+                }
+                ContentBlock::Text { text } if !text.is_empty() => {
+                    round_blocks.push(RoundBlock::Text { content: text.clone() });
+                }
+                ContentBlock::ToolUse { id, name, input } => {
+                    if name != "ask_user" {
+                        let (display, _) = super::ui_emit::format_tool_display(name, &input.to_string());
+                        round_blocks.push(RoundBlock::Tool {
+                            card: ToolCallDef {
+                                id: id.clone(),
+                                name: name.clone(),
+                                args_display: display,
+                                args_json: input.to_string(),
+                            }
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Build tool call defs for RoundComplete
         let tool_call_defs: Vec<ToolCallDef> = parsed.iter()
             .filter(|tc| tc.function.name != "ask_user")
@@ -256,12 +283,16 @@ pub fn handle_user_input(
             .collect();
 
         // Send RoundComplete
+        // Always include the answer text, even when tool calls are present.
+        // The LLM may output explanatory text before deciding to call tools.
+        // Filtering it out caused the streaming preview answer to vanish on round_complete.
         emit(&agent_tx, Agent2Ui::RoundComplete {
             turn_id: turn_id.clone(),
             round_num,
             thinking: reasoning_content.clone().filter(|r| !r.is_empty()),
-            answer: if has_tools { None } else { Some(content.clone()) },
+            answer: Some(content.clone()).filter(|c| !c.is_empty()),
             tool_calls: tool_call_defs.clone(),
+            blocks: round_blocks,
             is_final: !has_tools,
         });
 

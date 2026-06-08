@@ -115,6 +115,15 @@ pub struct TurnData {
     pub rounds: Vec<RoundData>,
 }
 
+/// One block in a round, preserving the LLM's output order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RoundBlock {
+    Reasoning { content: String },
+    Text { content: String },
+    Tool { card: ToolCallDef },
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Agent → UI (v5 — round-based)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -171,6 +180,9 @@ pub enum Agent2Ui {
         answer: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ToolCallDef>,
+        /// Ordered blocks matching LLM output sequence (preferred).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        blocks: Vec<RoundBlock>,
         /// true = this is the final round of the turn
         is_final: bool,
     },

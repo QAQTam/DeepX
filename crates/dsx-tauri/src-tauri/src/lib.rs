@@ -101,7 +101,7 @@ fn scan_sessions() -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
-fn load_session_messages(seed: String) -> Result<serde_json::Value, String> {
+fn load_session_messages(seed: String, offset: Option<usize>, limit: Option<usize>) -> Result<serde_json::Value, String> {
     let dir = data_dir().join("sessions");
     if !dir.is_dir() { return Err("No sessions directory".into()); }
 
@@ -135,10 +135,18 @@ fn load_session_messages(seed: String) -> Result<serde_json::Value, String> {
     }
 
     let data = file_data.ok_or_else(|| format!("Session not found: {seed}"))?;
-    let file: dsx_types::SessionFile = toml::from_str(&data)
+    let mut file: dsx_types::SessionFile = toml::from_str(&data)
         .or_else(|_| serde_json::from_str(&data))
         .map_err(|e| format!("Parse session: {e}"))?;
-    Ok(serde_json::json!({ "messages": session_to_frontend(&file) }))
+    let total = file.messages.len();
+    // Paginate: default to last 50 messages (most recent)
+    let limit = limit.unwrap_or(50);
+    let start = offset.unwrap_or_else(|| total.saturating_sub(limit));
+    let end = (start + limit).min(total);
+    if start > 0 || end < total {
+        file.messages = file.messages[start..end].to_vec();
+    }
+    Ok(serde_json::json!({ "messages": session_to_frontend(&file), "total": total, "offset": start }))
 }
 
 fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
@@ -156,31 +164,31 @@ fn session_to_frontend(file: &dsx_types::SessionFile) -> serde_json::Value {
             "assistant" => {
                 let mut content = String::new();
                 let mut reasoning = String::new();
-                let mut reasoning_segs: Vec<String> = Vec::new();
                 let mut tool_calls: Vec<serde_json::Value> = Vec::new();
                 for block in &msg.content {
                     match block {
                         ContentBlock::Text { text } => content.push_str(text),
                         ContentBlock::Reasoning { reasoning: r } => {
                             reasoning.push_str(r);
-                            reasoning_segs.push(r.clone());
                         }
                         ContentBlock::ToolUse { id, name, input } => {
                             tool_calls.push(serde_json::json!({
                                 "id": id, "name": name,
-                                "args": input.clone(),
+                                "args": input.to_string(),
                                 "output": "",
                             }));
                         }
                         _ => {}
                     }
                 }
-                ui.push(serde_json::json!({
+                let mut obj = serde_json::json!({
                     "role": "assistant", "content": content,
-                    "reasoning": if reasoning.is_empty() { serde_json::Value::Null } else { serde_json::json!(reasoning) },
-                    "reasoningSegments": reasoning_segs,
-                        "tool_cards": if tool_calls.is_empty() { serde_json::Value::Null } else { serde_json::json!(tool_calls) },
-                }));
+                    "tool_cards": if tool_calls.is_empty() { serde_json::Value::Null } else { serde_json::json!(tool_calls) },
+                });
+                if !reasoning.is_empty() {
+                    obj["reasoning"] = serde_json::json!(reasoning);
+                }
+                ui.push(obj);
             }
             "tool" => {
                 for block in &msg.content {

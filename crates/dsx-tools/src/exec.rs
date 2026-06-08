@@ -45,10 +45,17 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
             c
         }
     } else {
-        let mut c = Command::new("sh");
-        c.args(["-c", &command])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        // Prefer bash -i (reads .bashrc for nvm/fnm/rbenv etc)
+        let mut c = if which("bash") {
+            let mut c = Command::new("bash");
+            c.args(["-i", "-c", &command]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", &command]);
+            c
+        };
+        c.stdout(Stdio::piped()).stderr(Stdio::piped());
         c
     };
 

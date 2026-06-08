@@ -24,7 +24,7 @@ mod agent_protocol;
 
 // ── Re-exports ──────────────────────────────────────────────────────────
 
-pub use agent_protocol::{Agent2Ui, DocInfo, FileSnapshotInfo, RoundData, RoundDeltaKind, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent};
+pub use agent_protocol::{Agent2Ui, DocInfo, FileSnapshotInfo, RoundBlock, RoundData, RoundDeltaKind, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent};
 
 // ── InterruptRequest (tool → agent interrupt flow) ──────────────────────
 
