@@ -1,0 +1,46 @@
+import type { I18nStrings } from "./en";
+
+const zh: I18nStrings = {
+  app: { title: "DeepX", subtitle: "AI 编程助手" },
+  nav: { chat: "对话", settings: "设置" },
+  chat: {
+    placeholder: "向 DeepX 提问…",
+    send: "发送",
+    stop: "停止",
+    newSession: "新会话",
+    thinking: "思考中…",
+    toolCalling: "调用工具…",
+    answering: "回复中…",
+    toolBlocked: "工具被安全门控拦截",
+    cancelled: "已取消",
+    error: "错误",
+    modelLabel: "模型",
+    tokens: "令牌",
+    context: "上下文",
+  },
+  settings: {
+    title: "设置",
+    provider: "服务商",
+    endpoint: "端点",
+    apiKey: "API 密钥",
+    apiKeyHint: "API 密钥仅存储在本地，仅发送至所选服务商 API。",
+    model: "模型",
+    baseUrl: "API 地址",
+    maxTokens: "最大令牌数",
+    contextLimit: "上下文限制",
+    reasoningEffort: "推理强度",
+    language: "语言",
+    save: "保存",
+    saved: "已保存",
+    cancel: "取消",
+  },
+  session: {
+    resume: "恢复会话",
+    new: "新会话",
+    noSessions: "未找到历史会话。",
+    lastActive: "上次活跃",
+    messages: "条消息",
+  },
+};
+
+export default zh;

@@ -1,0 +1,45 @@
+const en = {
+  app: { title: "DeepX", subtitle: "AI Coding Agent" },
+  nav: { chat: "Chat", settings: "Settings" },
+  chat: {
+    placeholder: "Ask DeepX to code...",
+    send: "Send",
+    stop: "Stop",
+    newSession: "New Session",
+    thinking: "Thinking…",
+    toolCalling: "Calling tools…",
+    answering: "Answering…",
+    toolBlocked: "Tool blocked by safety gate",
+    cancelled: "Cancelled",
+    error: "Error",
+    modelLabel: "Model",
+    tokens: "tokens",
+    context: "context",
+  },
+  settings: {
+    title: "Settings",
+    provider: "Provider",
+    endpoint: "Endpoint",
+    apiKey: "API Key",
+    apiKeyHint: "Your API key is stored locally and never sent anywhere except to the provider API.",
+    model: "Model",
+    baseUrl: "Base URL",
+    maxTokens: "Max Tokens",
+    contextLimit: "Context Limit",
+    reasoningEffort: "Reasoning Effort",
+    language: "Language",
+    save: "Save",
+    saved: "Saved",
+    cancel: "Cancel",
+  },
+  session: {
+    resume: "Resume Session",
+    new: "New Session",
+    noSessions: "No previous sessions found.",
+    lastActive: "Last active",
+    messages: "messages",
+  },
+};
+
+export default en;
+export type I18nStrings = typeof en;

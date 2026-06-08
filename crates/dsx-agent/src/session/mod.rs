@@ -16,6 +16,7 @@ mod restore;
 // ── Re-exports ──
 pub use persist::{
     finalize_session,
+    load_index,
     load_session,
     load_session_or_live,
     save_live_snapshot,
@@ -59,12 +60,8 @@ pub fn sessions_dir() -> Option<PathBuf> {
     Some(dsx_types::platform::sessions_dir())
 }
 
-/// Directory for a single session's data.
-/// For new sessions: creates path with today's date.
-/// For existing sessions: finds the existing directory matching seed prefix.
 pub fn session_dir(seed: &str) -> Option<PathBuf> {
     let base = sessions_dir()?;
-    // 1. Look for existing directory matching {seed}-*
     if let Ok(entries) = std::fs::read_dir(&base) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -73,7 +70,6 @@ pub fn session_dir(seed: &str) -> Option<PathBuf> {
             }
         }
     }
-    // 2. New session: create with today's date
     let date = chrono_date();
     Some(base.join(format!("{}-{}", seed, date)))
 }
@@ -81,11 +77,8 @@ pub fn session_dir(seed: &str) -> Option<PathBuf> {
 pub fn session_path(seed: &str) -> Option<PathBuf> {
     let dir = session_dir(seed)?;
     let new_path = dir.join("session.toml");
-
     let base = sessions_dir()?;
     let _ = std::fs::create_dir_all(&base);
-
-    // Legacy migration: move old .json flat files into new directory format
     let old_json = base.join(format!("{}.json", seed));
     let old_toml = base.join(format!("{}.toml", seed));
     for old_path in [&old_json, &old_toml] {
@@ -98,7 +91,6 @@ pub fn session_path(seed: &str) -> Option<PathBuf> {
             }
         }
     }
-
     Some(new_path)
 }
 
@@ -106,11 +98,8 @@ pub fn live_path(seed: &str) -> Option<PathBuf> {
     session_path(seed)
 }
 
-/// Find an existing session file on disk without creating new directories.
-/// Returns None if no session file exists for this seed.
 pub fn find_existing_session_path(seed: &str) -> Option<PathBuf> {
     let base = sessions_dir()?;
-    // 1. Look for {seed}-{date}/session.toml
     if let Ok(entries) = std::fs::read_dir(&base) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -120,7 +109,6 @@ pub fn find_existing_session_path(seed: &str) -> Option<PathBuf> {
             }
         }
     }
-    // 2. Legacy flat files
     for ext in ["toml", "json"] {
         let old = base.join(format!("{}.{}", seed, ext));
         if old.exists() { return Some(old); }
@@ -131,8 +119,6 @@ pub fn find_existing_session_path(seed: &str) -> Option<PathBuf> {
 pub fn index_path() -> Option<PathBuf> {
     sessions_dir().map(|d| d.join("index.toml"))
 }
-
-// ── Shared helpers (crate-internal) ──
 
 pub(crate) fn extract_last_summary(messages: &[Message]) -> String {
     messages.iter()
@@ -155,5 +141,5 @@ pub(crate) fn extract_last_summary(messages: &[Message]) -> String {
 pub(crate) fn safe_truncate(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes { return s.to_string(); }
     let end = s.floor_char_boundary(max_bytes);
-    format!("{}…", &s[..end])
+    format!("{}..", &s[..end])
 }
