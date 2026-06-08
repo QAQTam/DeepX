@@ -103,6 +103,7 @@ fn migrate_legacy_session(data: &str, seed: &str) -> Option<SessionFile> {
         effort: v.get("effort").and_then(|e| e.as_str()).map(String::from),
         messages: new_msgs,
         last_summary: v.get("last_summary").and_then(|l| l.as_str()).unwrap_or("").to_string(),
+        checksum: None,
     })
 }
 
@@ -135,6 +136,7 @@ pub fn save_session(
         effort: effort.map(|s| s.to_string()),
         messages: messages.to_vec(),
         last_summary,
+        checksum: None,
     };
 
     let serialized = toml::to_string_pretty(&file).unwrap_or_default();
@@ -182,6 +184,7 @@ pub(super) fn update_index_entry(file: &SessionFile) {
         effort: file.effort.clone(),
         message_count: file.messages.len(),
         last_summary: file.last_summary.clone(),
+        checksum: file.checksum.clone(),
     };
     if let Some(existing) = metas.iter_mut().find(|m| m.seed == meta.seed) {
         *existing = meta;

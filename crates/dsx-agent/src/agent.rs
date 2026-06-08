@@ -2,7 +2,7 @@
 
 use crate::config;
 use crate::assembly::ContextAssembler;
-use crate::session;
+
 use dsx_types::{Message, UsageInfo};
 
 pub mod result;
@@ -194,7 +194,7 @@ impl AgentState {
         if self.ctx.has_pending_tools() { return; }
         let msgs = self.ctx.to_vec();
         if msgs.len() > 1 && !self.session.seed.is_empty() {
-            session::finalize_session(
+            dsx_session::SessionManager::global().save(
                 &self.session.seed,
                 &msgs,
                 &self.config.model,

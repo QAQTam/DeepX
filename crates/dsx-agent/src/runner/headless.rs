@@ -23,21 +23,15 @@ pub fn run() {
         .windows(2)
         .find(|w| w[0] == "--session")
         .and_then(|w| Some(w[1].clone()));
-    if let Some(ref seed) = resume_seed {
-        eprintln!("dsx-agent: resume request for session {seed}");
-    }
 
     let mut agent = AgentState::init("pipe");
-    agent.session.resume_seed = resume_seed;
-    eprintln!("dsx-agent: tools → {}", agent.tool_defs.len());
+    let active = dsx_session::SessionManager::global().active_seed();
+    agent.session.resume_seed = active.or(resume_seed);
 
-    let lives = crate::session::find_live_sessions();
-    if !lives.is_empty() {
-        eprintln!(
-            "dsx-agent: {} live session(s) available for resume",
-            lives.len()
-        );
+    if let Some(ref seed) = agent.session.resume_seed {
+        eprintln!("dsx-agent: resume seed {seed}");
     }
+    eprintln!("dsx-agent: tools -> {}", agent.tool_defs.len());
 
     let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
     let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();

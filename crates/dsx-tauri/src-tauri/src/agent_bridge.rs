@@ -25,9 +25,10 @@ impl AgentBridge {
     /// Initialize the agent and start the event-forwarding loop.
     /// Called once during Tauri app setup.
     pub fn init(app: &AppHandle) -> Self {
-        let mut agent = dsx_agent::agent::AgentState::init("tauri");
+        dsx_session::SessionManager::init(dsx_types::platform::data_dir());
+    let mut agent = dsx_agent::agent::AgentState::init("tauri");
 
-        // Check for a resume seed in the session directory
+        // Init session manager + check for resume seed in the session directory
         if let Some(seed) = active_or_latest_seed() {
             agent.session.resume_seed = Some(seed);
         }
@@ -211,14 +212,14 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
 /// List all sessions with metadata.
 #[tauri::command]
 pub fn cmd_list_sessions() -> Result<String, String> {
-    let metas = dsx_agent::session::load_index();
+    let metas = dsx_session::SessionManager::global().list();
     serde_json::to_string(&metas).map_err(|e| format!("serialize: {e}"))
 }
 
 /// Load full session data (messages) by seed.
 #[tauri::command]
 pub fn cmd_load_session(seed: String) -> Result<String, String> {
-    let session = dsx_agent::session::load_session(&seed)
+    let session = dsx_session::SessionManager::global().load(&seed)
         .ok_or_else(|| format!("Session not found: {seed}"))?;
     serde_json::to_string(&session).map_err(|e| format!("serialize: {e}"))
 }
@@ -226,9 +227,12 @@ pub fn cmd_load_session(seed: String) -> Result<String, String> {
 /// Set the active session seed for next app restart.
 #[tauri::command]
 pub fn cmd_set_active_session(seed: String) -> Result<(), String> {
-    let path = dsx_types::platform::data_dir().join(".active_session");
-    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
-    std::fs::write(&path, &seed).map_err(|e| format!("write: {e}"))
+    if seed.is_empty() {
+        dsx_session::SessionManager::global().clear_active();
+    } else {
+        dsx_session::SessionManager::global().set_active_seed(&seed);
+    }
+    Ok(())
 }
 /// Read .active_session file if present, else fall back to latest from index.
 fn active_or_latest_seed() -> Option<String> {

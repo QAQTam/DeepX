@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
+dsx-session = { path = "../../dsx-session" }
 dsx-types = { path = "../../dsx-types" }
 dsx-agent = { path = "../../dsx-agent" }
 dsx-proto = { path = "../../dsx-proto" }

@@ -829,6 +829,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dsx-proto",
+ "dsx-session",
  "dsx-tools",
  "dsx-types",
  "log",
@@ -849,12 +850,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsx-session"
+version = "4.2.0"
+dependencies = [
+ "dsx-types",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "dsx-tauri"
 version = "4.2.0"
 dependencies = [
  "anyhow",
  "dsx-agent",
  "dsx-proto",
+ "dsx-session",
  "dsx-types",
  "log",
  "serde",
@@ -889,6 +903,7 @@ dependencies = [
  "crossterm",
  "dsx-agent",
  "dsx-proto",
+ "dsx-session",
  "dsx-tools",
  "dsx-types",
  "ratatui",

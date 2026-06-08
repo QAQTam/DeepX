@@ -2,13 +2,13 @@
 
 use crate::agent::AgentState;
 use crate::dsx_log;
-use crate::session;
 use crate::tools;
+use dsx_session::SessionManager;
 
 pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool {
     let seed = match restore_seed {
         Some(s) => {
-            if let Some(file) = session::load_session(s) {
+            if let Some(file) = SessionManager::global().load(s) {
                 agent.session.seed = file.seed.clone();
                 agent.session.start = file.created_at;
                 let (ctx, repairs) = crate::assembly::ContextAssembler::from_legacy(file.messages);
@@ -37,10 +37,10 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     };
 
     agent.session.seed = seed;
-    agent.session.start = session::now_epoch();
+    agent.session.start = SessionManager::now_epoch();
     dsx_log::set_session(&agent.session.seed);
     tools::set_current_session(&agent.session.seed);
-    session::save_live_snapshot(
+    SessionManager::global().save(
         &agent.session.seed,
         &agent.ctx.to_vec(),
         &agent.config.model,
@@ -52,8 +52,8 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 
 pub fn create_session(agent: &mut AgentState) {
     agent.ctx = crate::assembly::ContextAssembler::new();
-    agent.session.seed = session::generate_seed();
-    agent.session.start = session::now_epoch();
+    agent.session.seed = SessionManager::generate_seed();
+    agent.session.start = SessionManager::now_epoch();
     agent.session.tokens = 0;
     agent.token_estimate = 0;
     agent.api_usage = None;
@@ -61,7 +61,7 @@ pub fn create_session(agent: &mut AgentState) {
     agent.turn.reset();
     dsx_log::set_session(&agent.session.seed);
     tools::set_current_session(&agent.session.seed);
-    session::save_live_snapshot(
+    SessionManager::global().save(
         &agent.session.seed,
         &agent.ctx.to_vec(),
         &agent.config.model,

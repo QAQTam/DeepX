@@ -12,6 +12,7 @@ path = "src/lib.rs"
 dsx-types = { path = "../dsx-types" }
 dsx-proto = { path = "../dsx-proto" }
 dsx-agent = { path = "../dsx-agent" }
+dsx-session = { path = "../dsx-session" }
 dsx-tools = { path = "../dsx-tools" }
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 crossterm = { version = "0.29", features = ["bracketed-paste"] }
