@@ -19,7 +19,6 @@ dsx-msglp = { path = "../../dsx-msglp" }
 deepx-config = { path = "../../deepx-config" }
 dsx-session = { path = "../../dsx-session" }
 dsx-types = { path = "../../dsx-types" }
-dsx-agent = { path = "../../dsx-agent" }
 dsx-proto = { path = "../../dsx-proto" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

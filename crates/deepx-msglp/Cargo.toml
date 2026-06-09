@@ -2,7 +2,7 @@
 name = "dsx-msglp"
 version.workspace = true
 edition.workspace = true
-description = "DSX minimal message loop driver — dispatches user input to gate, delegates everything else"
+description = "DSX minimal message loop driver"
 
 [dependencies]
 deepx-gate = { path = "../deepx-gate" }

@@ -9,8 +9,9 @@ name = "dsx-tools"
 path = "src/main.rs"
 
 [dependencies]
-dsx-types = { path = "../dsx-types" }
+dsx-message = { path = "../dsx-message" }
 dsx-proto = { path = "../dsx-proto" }
+dsx-types = { path = "../dsx-types" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
