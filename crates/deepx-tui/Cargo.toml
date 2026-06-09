@@ -1,20 +1,20 @@
 [package]
-name = "dsx-tui"
+name = "deepx-tui"
 version.workspace = true
 edition.workspace = true
 description = "DeepX terminal user interface"
 
 [lib]
-name = "dsx_tui"
+name = "deepx_tui"
 path = "src/lib.rs"
 
 [dependencies]
-dsx-types = { path = "../dsx-types" }
-dsx-proto = { path = "../dsx-proto" }
-dsx-msglp = { path = "../dsx-msglp" }
+deepx-types = { path = "../deepx-types" }
+deepx-proto = { path = "../deepx-proto" }
+deepx-msglp = { path = "../deepx-msglp" }
 deepx-config = { path = "../deepx-config" }
-dsx-session = { path = "../dsx-session" }
-dsx-tools = { path = "../dsx-tools" }
+deepx-session = { path = "../deepx-session" }
+deepx-tools = { path = "../deepx-tools" }
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 crossterm = { version = "0.29", features = ["bracketed-paste"] }
 serde = "1"

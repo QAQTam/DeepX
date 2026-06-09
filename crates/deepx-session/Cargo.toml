@@ -1,11 +1,11 @@
 [package]
-name = "dsx-session"
+name = "deepx-session"
 version.workspace = true
 edition.workspace = true
-description = "DSX session manager — singleton, list/load/save/active"
+description = "DeepX session manager — singleton, list/load/save/active"
 
 [dependencies]
-dsx-types = { path = "../dsx-types" }
+deepx-types = { path = "../deepx-types" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

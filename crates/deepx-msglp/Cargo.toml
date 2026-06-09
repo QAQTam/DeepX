@@ -1,5 +1,5 @@
 [package]
-name = "dsx-msglp"
+name = "deepx-msglp"
 version.workspace = true
 edition.workspace = true
 description = "DSX minimal message loop driver"
@@ -7,11 +7,11 @@ description = "DSX minimal message loop driver"
 [dependencies]
 deepx-gate = { path = "../deepx-gate" }
 deepx-config = { path = "../deepx-config" }
-dsx-session = { path = "../dsx-session" }
-dsx-message = { path = "../dsx-message" }
-dsx-tools = { path = "../dsx-tools" }
-dsx-proto = { path = "../dsx-proto" }
-dsx-types = { path = "../dsx-types" }
+deepx-session = { path = "../deepx-session" }
+deepx-message = { path = "../deepx-message" }
+deepx-tools = { path = "../deepx-tools" }
+deepx-proto = { path = "../deepx-proto" }
+deepx-types = { path = "../deepx-types" }
 serde_json = "1"
 log = "0.4"
 

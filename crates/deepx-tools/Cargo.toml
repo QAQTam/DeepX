@@ -1,17 +1,17 @@
 [package]
-name = "dsx-tools"
+name = "deepx-tools"
 version.workspace = true
 edition.workspace = true
 description = "DSX tool execution — library + standalone binary"
 
 [[bin]]
-name = "dsx-tools"
+name = "deepx-tools"
 path = "src/main.rs"
 
 [dependencies]
-dsx-message = { path = "../dsx-message" }
-dsx-proto = { path = "../dsx-proto" }
-dsx-types = { path = "../dsx-types" }
+deepx-message = { path = "../deepx-message" }
+deepx-proto = { path = "../deepx-proto" }
+deepx-types = { path = "../deepx-types" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"

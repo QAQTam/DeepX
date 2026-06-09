@@ -1,5 +1,5 @@
 [package]
-name = "dsx-types"
+name = "deepx-types"
 version.workspace = true
 edition.workspace = true
 description = "DSX shared type definitions"

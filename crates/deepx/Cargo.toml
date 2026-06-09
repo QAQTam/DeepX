@@ -1,14 +1,14 @@
 [package]
-name = "dsx"
+name = "deepx"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-dsx-types = { path = "../dsx-types" }
-dsx-tui = { path = "../dsx-tui" }
+deepx-types = { path = "../deepx-types" }
+deepx-tui = { path = "../deepx-tui" }
 deepx-config = { path = "../deepx-config" }
-dsx-msglp = { path = "../dsx-msglp" }
-dsx-tauri = { path = "../dsx-tauri/src-tauri" }
+deepx-msglp = { path = "../deepx-msglp" }
+deepx-tauri = { path = "../deepx-tauri/src-tauri" }
 
 [lints]
 workspace = true

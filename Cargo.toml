@@ -3,15 +3,15 @@ resolver = "2"
 members = [
     "crates/deepx-gate",
     "crates/deepx-config",
-    "crates/dsx-msglp",
-    "crates/dsx-message",
-    "crates/dsx-types",
-    "crates/dsx-proto",
-    "crates/dsx",
-    "crates/dsx-tools",
-    "crates/dsx-tui",
-    "crates/dsx-session",
-    "crates/dsx-tauri/src-tauri",
+    "crates/deepx-msglp",
+    "crates/deepx-message",
+    "crates/deepx-types",
+    "crates/deepx-proto",
+    "crates/deepx",
+    "crates/deepx-tools",
+    "crates/deepx-tui",
+    "crates/deepx-session",
+    "crates/deepx-tauri/src-tauri",
 ]
 
 [workspace.package]

@@ -5,7 +5,7 @@ edition.workspace = true
 description = "DeepX configuration: provider registry, prompts, config load/save"
 
 [dependencies]
-dsx-types = { path = "../dsx-types" }
+deepx-types = { path = "../deepx-types" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json", "tls"] }
