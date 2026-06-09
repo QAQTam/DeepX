@@ -1,15 +1,12 @@
 //! AgentState: the core agent session state, shared between TUI and agent loop.
 
 use crate::config;
-use crate::assembly::ContextAssembler;
 
 use dsx_types::Message;
 
-pub mod result;
 pub mod file_tracker;
 pub mod turn_state;
 pub mod session_meta;
-pub use result::ToolResultAppender;
 pub use file_tracker::FileTracker;
 pub use turn_state::TurnState;
 pub use session_meta::SessionMeta;
@@ -18,7 +15,7 @@ pub use session_meta::SessionMeta;
 
 pub struct AgentState {
     /// Canonical conversation context with strict alternation guarantees.
-    pub ctx: ContextAssembler,
+    pub msg: dsx_message::MessageStore,
 
     // ── Configuration ──
     pub config: crate::config::Config,
@@ -50,11 +47,11 @@ pub struct AgentState {
 impl AgentState {
     pub fn new(config: crate::config::Config) -> Self {
         let prompt = config::system_prompt();
-        let mut ctx = ContextAssembler::new();
-        ctx.push_system(Message::system(&prompt));
+        let mut msg = dsx_message::MessageStore::new("init");
+        msg.push_system(Message::system(&prompt));
 
         let state = Self {
-            ctx,
+            msg,
             config,
             files: FileTracker::new(),
             tool_results: Vec::new(),
@@ -118,58 +115,23 @@ impl AgentState {
     /// Layer 1: System prompt (static — KV cached).
     /// Layer 2: Conversation history.
     /// Turn annotations appended to the last user message.
-    pub fn build_context(&mut self) -> Vec<Message> {
-        let mut messages: Vec<Message>;
+    pub fn build_context(&mut self) -> Vec<dsx_types::Message> {
+        let mut sys = String::new();
 
-        if self.session.from_resume {
-            messages = self.ctx.system_messages().to_vec();
-        } else {
-            let mut sys = String::new();
-
+        if !self.session.from_resume {
             if self.config.reasoning_effort == "max" {
                 sys.push_str(crate::prompt::THINK_MAX);
                 sys.push('\n');
             }
-
             sys.push_str(&crate::config::system_prompt());
             sys.push_str("\n\n");
-
             if self.config.provider_id == "deepseek" {
                 sys.push_str(crate::prompt::DSML_SCHEMA);
             }
-
-            messages = vec![Message::system(&sys)];
         }
 
-        let mut conv = self.ctx.build();
-
-        let mut dyn_suffix = String::new();
-        if !self.turn.annotations.is_empty() {
-            let ann = self.turn.annotations.join("\n");
-            dyn_suffix.push_str("\n\n## Notes\n");
-            dyn_suffix.push_str(&ann);
-        }
-
-        if !dyn_suffix.is_empty() {
-            if let Some(last_user) = conv.iter_mut().rev().find(|m| m.role == "user") {
-                let existing = last_user.content.iter_mut().find_map(|b| {
-                    if let dsx_types::ContentBlock::Text { ref mut text } = b {
-                        Some(text)
-                    } else {
-                        None
-                    }
-                });
-                if let Some(text) = existing {
-                    text.push_str(&dyn_suffix);
-                } else {
-                    last_user.content.push(dsx_types::ContentBlock::text(&dyn_suffix));
-                }
-            }
-        }
-
-        messages.extend(conv);
-        self.turn.annotations.clear();
-        messages
+        let annotations: Vec<String> = self.turn.annotations.drain(..).collect();
+        self.msg.build_context_for_gate(&sys, &annotations)
     }
 
 
@@ -177,16 +139,8 @@ impl AgentState {
 
     /// Save session to disk if seeded and non-empty, AND no pending tool calls.
     pub fn maybe_save_session(&mut self) {
-        if self.ctx.has_pending_tools() { return; }
-        let msgs = self.ctx.to_vec();
-        if msgs.len() > 1 && !self.session.seed.is_empty() {
-            dsx_session::SessionManager::global().save(
-                &self.session.seed,
-                &msgs,
-                &self.config.model,
-                Some(&self.config.reasoning_effort),
-            );
-        }
+        if self.msg.has_pending_tools() { return; }
+        self.msg.snapshot(&self.config.model, &self.config.reasoning_effort);
     }
 
     // ── Task progress injection ──

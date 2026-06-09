@@ -14,7 +14,7 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
     let is_explore = tool_name == "explore" || (tool_name == "exec" && action == "explore");
     if is_read || is_write {
         if !state.files.has_explored {
-            state.ctx.push_tool_result(tc_id, &format!("[ERROR] '{}' blocked: you haven't explored the project yet.\n[HINT] Call explore() first.", tool_name));
+            state.msg.push_tool_result(tc_id, &format!("[ERROR] '{}' blocked: you haven't explored the project yet.\n[HINT] Call explore() first.", tool_name));
             return true;
         }
         if is_write {
@@ -29,7 +29,7 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
             if let Some(ref path) = parse_file_arg(args) {
                 if state.is_file_stale(path) {
                     let read_at = state.files.file_read_at.get(path).copied().unwrap_or(0);
-                    state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'file edit' blocked: file '{}' last read at turn {}. Stale.\n[HINT] Call read_file(path=\"{}\") first.", path, read_at, path));
+                    state.msg.push_tool_result(tc_id, &format!("[ERROR] 'file edit' blocked: file '{}' last read at turn {}. Stale.\n[HINT] Call read_file(path=\"{}\") first.", path, read_at, path));
                     return true;
                 }
             }
@@ -37,7 +37,7 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
     }
     if is_exec {
         if !state.files.has_explored {
-            state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'exec execute' blocked: you haven't explored yet.\n[HINT] Call explore() first."));
+            state.msg.push_tool_result(tc_id, &format!("[ERROR] 'exec execute' blocked: you haven't explored yet.\n[HINT] Call explore() first."));
             return true;
         }
         let cmd = parse_cmd_arg(args).unwrap_or_else(|| "?".into());
@@ -53,7 +53,7 @@ pub fn explore_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
                     .map(|a| cmd.contains(a.to_string_lossy().as_ref()))
                     .unwrap_or(false);
             if written_matches && classify_path(written) != PathTrust::Trusted {
-                state.ctx.push_tool_result(tc_id, &format!("[ERROR] 'exec' blocked: '{}' was written this turn.\n[HINT] Explain what the script does and run it NEXT turn.", written));
+                state.msg.push_tool_result(tc_id, &format!("[ERROR] 'exec' blocked: '{}' was written this turn.\n[HINT] Explain what the script does and run it NEXT turn.", written));
                 return true;
             }
         }
@@ -79,7 +79,7 @@ pub fn re_read_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
         state.files.re_read_required = None;
         return false;
     }
-    state.ctx.push_tool_result(tc_id, &format!(
+    state.msg.push_tool_result(tc_id, &format!(
         "[ERROR] '{}' blocked: must re-read '{}' after write/edit to prevent hallucination.\n[HINT] Call read_file(path=\"{}\") first.",
         tool_name, required_path, required_path
     ));
@@ -87,7 +87,7 @@ pub fn re_read_gate(state: &mut AgentState, tool_name: &str, tc_id: &str, args: 
 }
 
 fn last_assistant_mentions(state: &AgentState, path: &str) -> bool {
-    if let Some(last) = state.ctx.to_vec().iter().rev().find(|m| m.role == "assistant" && !m.content.is_empty()) {
+    if let Some(last) = state.msg.to_vec().iter().rev().find(|m| m.role == "assistant" && !m.content.is_empty()) {
         last.content.iter().any(|b| matches!(b, dsx_types::ContentBlock::Text { text } if text.contains(path)))
     } else {
         false

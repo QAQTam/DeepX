@@ -5,7 +5,6 @@
 pub mod runner;
 
 pub mod config;
-pub mod assembly;
 pub mod dsx_log;
 pub mod prompt;
 // ── Core modules ──

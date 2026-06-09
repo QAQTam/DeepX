@@ -44,7 +44,7 @@ pub fn build_and_push_assistant(
         content: blocks,
     };
 
-    agent.ctx.push_assistant(assistant_msg.clone());
+    agent.msg.push_assistant(assistant_msg.clone());
 
     assistant_msg
 }

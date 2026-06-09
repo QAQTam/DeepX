@@ -194,8 +194,7 @@ impl MessageStore {
         turn.steps.push(step);
 
         if has_tools {
-            self.execute_tools_batch();
-            Effect::None
+            Effect::NeedTools
         } else {
             Effect::TurnComplete
         }
@@ -372,7 +371,17 @@ impl MessageStore {
             self.push_tool_result_inner(&tc_id, &content);
         }
 
-        // Tools executed; caller re-evaluates (build context → gate → push_assistant)
+        if let Some(turn) = self.turns.last() {
+            if let Some(step) = turn.steps.last() {
+                if step.all_tools_satisfied() {
+                    return if step.pending_tools().is_empty() {
+                        Effect::TurnComplete
+                    } else {
+                        Effect::None
+                    };
+                }
+            }
+        }
         Effect::None
     }
 

@@ -1,11 +1,9 @@
-//! dsx-agent runner — main event loop and headless adapter.
+//! dsx-agent runner — main event loop.
 
 pub mod lifecycle;
 pub mod ui_emit;
 pub mod api_turn;
 pub mod turn;
-pub mod headless;
-pub use headless::run;
 
 use std::sync::mpsc;
 
@@ -22,7 +20,7 @@ pub(super) fn emit(tx: &mpsc::Sender<Agent2Ui>, event: Agent2Ui) {
     }
 }
 
-pub(super) fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
+pub fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
     let mut docs: Vec<DocInfo> = agent.files.file_read_at.iter()
         .filter(|(path, _)| agent.is_file_stale(path))
         .map(|(path, &read_at)| {
@@ -39,7 +37,7 @@ pub(super) fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
     docs
 }
 
-pub(super) fn build_recent_edits(agent: &AgentState) -> Vec<String> {
+pub fn build_recent_edits(agent: &AgentState) -> Vec<String> {
     agent.tool_results.iter().rev()
         .filter(|(name, _)| matches!(name.as_str(), "write_file" | "edit_file" | "delete_file"))
         .take(10)
@@ -50,7 +48,7 @@ pub(super) fn build_recent_edits(agent: &AgentState) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
+pub fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
     if agent.session.seed.is_empty() { return Vec::new(); }
     let sessions_dir = std::path::PathBuf::from(dsx_types::platform::sessions_dir());
     let mut tasks = Vec::new();
@@ -250,7 +248,7 @@ pub fn run_agent_loop(
           session_title: agent.session.title.clone(),
           usage: None,                  });
                 if cmd == "dump_context" {
-                    let json = serde_json::to_string_pretty(&agent.ctx.to_vec())
+                    let json = serde_json::to_string_pretty(&agent.msg.to_vec())
                         .unwrap_or_default();
                     emit(&agent_tx, Agent2Ui::Error {
                         message: format!("[CONTEXT_DUMP]\n{}", json),
@@ -269,7 +267,7 @@ pub fn run_agent_loop(
     log::info!(
         "dsx-agent: shutdown complete (session {}, {} turns, {} tokens)",
         agent.session.seed,
-        agent.ctx.turn_count(),
+        agent.msg.turn_count(),
         agent.session.tokens
     );
 }

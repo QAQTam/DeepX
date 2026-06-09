@@ -5,13 +5,12 @@ use std::sync::mpsc;
 use dsx_proto::{Agent2Ui, RoundBlock, ToolCallDef, ToolResultDef, TurnData, RoundData};
 use dsx_types::{ContentBlock, ToolCall};
 
-use crate::agent::{AgentState, ToolResultAppender};
-use crate::orchestrator::{learning, tracker};
-use crate::session;
+use crate::agent::AgentState;
+use crate::orchestrator::learning;
 use crate::tool_parser;
 
 use super::api_turn::run_api_turn;
-use super::ui_emit::{build_and_push_assistant, make_tool_def, make_tool_result};
+use super::ui_emit::{build_and_push_assistant, make_tool_def};
 use super::{build_documents, build_recent_edits, build_tasks, emit};
 
 /// Per-turn outcome: usage + tool stats for Dashboard.
@@ -33,12 +32,12 @@ fn truncate_exec_for_model(output: &str) -> String {
     format!("{head_part}\n--- {skipped} lines omitted (exec output truncated for context) ---\n{tail_part}")
 }
 
-/// Push `text` to the ContextAssembler (auto-repairs cancellation deadlocks).
+/// Push `text` to the MessageStore (auto-repairs cancellation deadlocks).
 /// Reconstruct TurnData from the existing context (for session resume).
 #[allow(dead_code)]
 pub(super) fn build_turns_from_context(agent: &AgentState) -> Vec<TurnData> {
     let mut turns = Vec::new();
-    for (ti, turn) in agent.ctx.turns().iter().enumerate() {
+    for (ti, turn) in agent.msg.turns().iter().enumerate() {
         let mut rounds = Vec::new();
         let mut round_num = 0u32;
         for step in &turn.steps {
@@ -128,8 +127,7 @@ pub fn handle_user_input(
         user_text: text.to_string(),
     });
 
-    let mut tool_failures: u32 = 0;
-    let mut tool_calls_total: u32 = 0;
+    // Tool stats sourced from ToolManager
     agent.turn.stream_cancelled = false;
     agent.files.files_written_this_turn.clear();
     dsx_tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -162,7 +160,7 @@ pub fn handle_user_input(
         let mut parsed: Vec<ToolCall> = tool_parser::parse_tool_calls(&tool_calls_raw);
         let mut content = content;
         let mut dsml_detected = false;
-        let mut dsml_source: Vec<bool> = Vec::new();
+        let mut _dsml_source: Vec<bool> = Vec::new();
 
         if parsed.is_empty() && tool_parser::has_dsml(&stripped) {
             dsml_detected = true;
@@ -171,7 +169,7 @@ pub fn handle_user_input(
             if !dsml_tcs.is_empty() {
                 content = cleaned;
                 parsed = dsml_tcs;
-                dsml_source = vec![true; parsed.len()];
+                _dsml_source = vec![true; parsed.len()];
             } else {
                 emit(&agent_tx, Agent2Ui::ToolNotice {
                     message: "DSML detected but no valid tool calls found.".into(),
@@ -195,7 +193,7 @@ pub fn handle_user_input(
             content = cleaned;
             parsed = xml_tcs;
             if dsml_detected {
-                dsml_source = vec![false; parsed.len()];
+                _dsml_source = vec![false; parsed.len()];
             }
         }
 
@@ -265,7 +263,7 @@ pub fn handle_user_input(
                     stop_reason,
                     usage: usage.clone(),
                 });
-                return TurnOutcome { usage, tool_calls: tool_calls_total, tool_failures };
+                let stats = crate::tools::global_stats(); return TurnOutcome { usage, tool_calls: stats.calls_total, tool_failures: stats.failures };
             }
 
             if stop_reason.as_deref() == Some("length") {
@@ -292,7 +290,7 @@ pub fn handle_user_input(
                 stop_reason,
                 usage: usage.clone(),
             });
-            return TurnOutcome { usage, tool_calls: tool_calls_total, tool_failures };
+            let stats = crate::tools::global_stats(); return TurnOutcome { usage, tool_calls: stats.calls_total, tool_failures: stats.failures };
         }
 
         save_snapshot(agent);
@@ -306,163 +304,51 @@ pub fn handle_user_input(
             }
         }
 
-        // Execute tools and collect results (with interrupt support)
-        let results: Vec<(String, String, String, crate::tools::ToolExecResult)> =
-            if parsed.len() > 1 {
-                use std::thread;
-                let mut handles = Vec::new();
-                for tc in &parsed {
-                    let name = tc.function.name.clone();
-                    let args = tc.function.arguments.clone();
-                    let id = tc.id.clone();
-                    let agent_tx = agent_tx.clone();
-                    handles.push(thread::spawn(move || {
-                        let (ptx, prx) = if name == "exec" {
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            (Some(tx), Some(rx))
-                        } else {
-                            (None, None)
-                        };
-                        let result =
-                            crate::tools::execute_tool_with_id_full(&name, "", &args, &id, ptx);
-                        if let Some(rx) = prx {
-                            while let Ok(delta) = rx.recv() {
-                                let _ = agent_tx.send(Agent2Ui::ToolExecDelta {
-                                    tool_call_id: id.clone(),
-                                    delta,
-                                });
-                            }
-                        }
-                        (name, id, args, result)
-                    }));
+        // Execute tools via ToolManager (parallel, with cancel + exec streaming)
+        let tools: Vec<dsx_message::ToolExecRequest> = parsed.iter()
+            .filter(|tc| tc.function.name != "ask_user")
+            .map(|tc| {
+                let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                dsx_message::ToolExecRequest {
+                    id: tc.id.clone(),
+                    name: tc.function.name.clone(),
+                    args,
                 }
-                handles.into_iter().map(|h| h.join().unwrap_or_else(|e| {
-                    let msg = format!("[ERROR] tool thread panicked: {:?}", e.downcast_ref::<&str>().unwrap_or(&"unknown"));
-                    (String::new(), String::new(), String::new(), crate::tools::ToolExecResult { content: msg, success: false, meta: dsx_tools::ToolExecMeta { name: String::new(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() } })
-                })).collect()
-            } else {
-                parsed.iter().map(|tc| {
-                    let (ptx, prx) = if tc.function.name == "exec" {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        (Some(tx), Some(rx))
-                    } else {
-                        (None, None)
-                    };
-                    let result =
-                        crate::tools::execute_tool_with_id_full(&tc.function.name, "", &tc.function.arguments, &tc.id, ptx);
-                    if let Some(rx) = prx {
-                        while let Ok(delta) = rx.recv() {
-                            let _ = agent_tx.send(Agent2Ui::ToolExecDelta {
-                                tool_call_id: tc.id.clone(),
-                                delta,
-                            });
-                        }
-                    }
-                    (tc.function.name.clone(), tc.id.clone(), tc.function.arguments.clone(), result)
-                }).collect()
-            };
+            })
+            .collect();
 
-        let mut tool_result_defs: Vec<ToolResultDef> = Vec::new();
+        let reports = crate::tools::execute_tools_parallel(
+            tools,
+            None,
+            Some(agent_tx),
+        );
 
-        for (tc_idx, (name, id, args, tr_result)) in results.iter().enumerate() {
-            if dsx_tools::CANCEL.compare_exchange(
-                true, false,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            ).is_ok()
-            {
-                let msg = "[CANCELLED] Tool execution cancelled by user.";
-                let mut appender = ToolResultAppender::new(agent);
-                appender.append(name, id, args, msg);
-                tool_result_defs.push(make_tool_result(id, msg, false, None));
-                for remaining_idx in tc_idx + 1..results.len() {
-                    let (rn, ri, ra, _) = &results[remaining_idx];
-                    let mut appender = ToolResultAppender::new(agent);
-                    appender.append(rn, ri, ra, msg);
-                    tool_result_defs.push(make_tool_result(ri, msg, false, None));
-                }
-                break;
-            }
-
-            let tr_content = &tr_result.content;
-            let tr_success =
-                !tr_content.starts_with("[ERROR]") && !tr_content.starts_with("[FAIL]");
+        for (tc_id, report) in &reports {
+            let tr_content = &report.content;
 
             if tr_content.contains("tools IPC") || tr_content.contains("not initialised") {
                 ipc_broken = true;
             }
 
-            let failed = !tr_success;
-            tool_calls_total += 1;
-            if failed {
-                tool_failures += 1;
-            }
-
+            // Truncate exec output for model context, push to message
             {
-                let ctx_content = if name == "exec" {
+                let ctx_content = if parsed.iter().any(|tc| tc.id == *tc_id && tc.function.name == "exec") {
                     truncate_exec_for_model(tr_content)
                 } else {
                     tr_content.clone()
                 };
-                let mut appender = ToolResultAppender::new(agent);
-                appender.append(name, id, args, &ctx_content);
+                agent.msg.push_tool_result(tc_id, &ctx_content);
             }
-            tool_result_defs.push(make_tool_result(id, tr_content, tr_success, None));
-
-            // Emit audit record for InfoPanel real-time tool log
-            let summary = tr_content.lines().next().unwrap_or(tr_content);
-            emit(&agent_tx, Agent2Ui::AuditRecord {
-                tool_name: name.clone(),
-                result_summary: summary.chars().take(120).collect(),
-                success: tr_success,
-            });
-
-            if tc_idx < dsml_source.len() && dsml_source[tc_idx] {
-                if tr_success {
-                    agent.dsml_compat_count += 1;
-                } else {
-                    let short = tr_content.chars().take(120).collect::<String>();
-                    emit(&agent_tx, Agent2Ui::ToolNotice {
-                        message: format!("DSML tool '{name}' failed: {short}"),
-                        level: "error".into(),
-                    });
-                }
-            }
-
-            if !failed && name == "write_file" {
-                tracker::track_file_written(agent, args);
-            }
-            if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                if matches!(name.as_str(), "write_file" | "edit_file") {
-                    agent.mark_file_written(&path);
-                } else {
-                    agent.touch_file(&path);
-                }
-            }
-            if name == "delete_file" {
-                if let Some(path) = dsx_types::arg::parse_file_arg(args) {
-                    agent.files.file_read_at.remove(&path);
-                    agent.files.file_written_at.remove(&path);
-                }
-            }
-        }
-
-        // Send collected tool results
-        if !tool_result_defs.is_empty() {
-            emit(&agent_tx, Agent2Ui::ToolResults {
-                turn_id: turn_id.clone(),
-                round_num,
-                results: tool_result_defs,
-            });
         }
 
         // Emit real-time debug snapshot
+        let stats = crate::tools::global_stats();
         emit(&agent_tx, Agent2Ui::Dashboard {
             hp_connected: true,
             session_seed: agent.session.seed.clone(),
             context_limit: agent.config.context_limit,
-            tool_calls_total,
-            tool_failures,
+            tool_calls_total: stats.calls_total,
+            tool_failures: stats.failures,
             current_phase: "tool_batch".to_string(),
             streaming: false,
             dsml_compat_count: agent.dsml_compat_count,
@@ -474,13 +360,12 @@ pub fn handle_user_input(
             
         });
 
-        if tool_failures >= 3 {
-            log::warn!("safety gate: 3 cumulative tool failures");
-            agent.turn.annotations.push(
-                "[System] 3 consecutive tool failures. Respond with analysis — do not call more tools."
-                    .to_string(),
-            );
-            tool_failures = 0;
+        {
+            let stats = crate::tools::global_stats();
+            if stats.failures >= 3 {
+                log::warn!("safety gate: {} cumulative tool failures", stats.failures);
+                agent.turn.annotations.push("[System] Multiple tool failures. Respond with analysis — do not call more tools.".into());
+            }
         }
 
         round_num += 1;
@@ -492,7 +377,7 @@ pub fn handle_user_input(
             stop_reason: Some("error".to_string()),
             usage: None,
         });
-        return TurnOutcome { usage: None, tool_calls: tool_calls_total, tool_failures };
+        return TurnOutcome { usage: None, tool_calls: 0, tool_failures: 0 };
     }
 
     save_snapshot(agent);
@@ -502,15 +387,10 @@ pub fn handle_user_input(
         stop_reason: Some("interrupted".to_string()),
         usage: last_usage.clone(),
     });
-    TurnOutcome { usage: last_usage, tool_calls: tool_calls_total, tool_failures }
+    let stats = crate::tools::global_stats(); TurnOutcome { usage: last_usage, tool_calls: stats.calls_total, tool_failures: stats.failures }
 }
 
 /// Save the current session snapshot to disk (crash recovery).
 fn save_snapshot(agent: &AgentState) {
-    session::save_live_snapshot(
-        &agent.session.seed,
-        &agent.ctx.to_vec(),
-        &agent.config.model,
-        Some(&agent.config.reasoning_effort),
-    );
+    agent.msg.snapshot(&agent.config.model, &agent.config.reasoning_effort);
 }

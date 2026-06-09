@@ -11,8 +11,8 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
             if let Some(file) = SessionManager::global().load(s) {
                 agent.session.seed = file.seed.clone();
                 agent.session.start = file.created_at;
-                let (ctx, repairs) = crate::assembly::ContextAssembler::from_legacy(file.messages);
-                agent.ctx = ctx;
+                let (msg, repairs) = dsx_message::MessageStore::from_session(&file);
+                agent.msg = msg;
                 agent.session.from_resume = true;
                 agent.session.tokens = 0;
 
@@ -22,7 +22,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 log::info!(
                     "dsx-agent: restored session {} ({} msgs, {} tokens)",
                     agent.session.seed,
-                    agent.ctx.message_count(),
+                    agent.msg.message_count(),
                     agent.session.tokens
                 );
                 if !repairs.is_empty() {
@@ -42,7 +42,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     tools::set_current_session(&agent.session.seed);
     SessionManager::global().save(
         &agent.session.seed,
-        &agent.ctx.to_vec(),
+        &agent.msg.to_vec(),
         &agent.config.model,
         Some(&agent.config.reasoning_effort),
     );
@@ -51,7 +51,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 }
 
 pub fn create_session(agent: &mut AgentState) {
-    agent.ctx = crate::assembly::ContextAssembler::new();
+    agent.msg = dsx_message::MessageStore::new(&agent.session.seed);
     agent.session.seed = SessionManager::generate_seed();
     agent.session.start = SessionManager::now_epoch();
     agent.session.tokens = 0;
@@ -62,7 +62,7 @@ pub fn create_session(agent: &mut AgentState) {
     tools::set_current_session(&agent.session.seed);
     SessionManager::global().save(
         &agent.session.seed,
-        &agent.ctx.to_vec(),
+        &agent.msg.to_vec(),
         &agent.config.model,
         Some(&agent.config.reasoning_effort),
     );

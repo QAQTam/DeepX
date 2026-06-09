@@ -127,6 +127,122 @@ pub fn set_workspace(path: &str) {
     dsx_tools::set_workspace(path);
 }
 
+/// Execute a batch of tools in parallel (threaded).
+/// Each tool gets its own thread; the Mutex serializes ToolManager access.
+/// Returns (tool_call_id, ToolExecReport) pairs.
+/// Simple tool executor — wraps ToolManager::handle_req for dsx-message callback.
+pub fn execute_tool_simple(req: &dsx_message::ToolExecRequest) -> dsx_message::ToolExecReport {
+    let result = with_mgr(|mgr| {
+        mgr.handle_req(req.id.clone(), &req.name, "", req.args.clone(), Some(60), None)
+    });
+    match result {
+        Some(r) => dsx_message::ToolExecReport { content: r.content, success: r.success, files_affected: r.files_affected },
+        None => dsx_message::ToolExecReport { content: "[ERROR] ToolManager not initialised".into(), success: false, files_affected: Vec::new() },
+    }
+}
+
+pub fn execute_tools_parallel(
+    tools: Vec<dsx_message::ToolExecRequest>,
+    progress_tx: Option<&std::sync::mpsc::Sender<String>>,
+    agent_tx: Option<&std::sync::mpsc::Sender<dsx_proto::Agent2Ui>>,
+) -> Vec<(String, dsx_message::ToolExecReport)> {
+    if tools.len() <= 1 {
+        return tools.into_iter().map(|req| {
+            let report = execute_tool_simple(&req);
+            (req.id, report)
+        }).collect();
+    }
+
+    use std::thread;
+    let handles: Vec<_> = tools.into_iter().map(|req| {
+        let agent_tx = agent_tx.cloned();
+        let progress_tx = progress_tx.cloned();
+        thread::spawn(move || {
+            let (ptx, prx) = if req.name == "exec" {
+                let (tx, rx) = std::sync::mpsc::channel();
+                (Some(tx), Some(rx))
+            } else { (None, None) };
+
+            let result = with_mgr(|mgr| {
+                mgr.handle_req(req.id.clone(), &req.name, "", req.args.clone(), Some(60), ptx)
+            });
+
+            let report = match result {
+                Some(r) => dsx_message::ToolExecReport {
+                    content: r.content, success: r.success, files_affected: Vec::new(),
+                },
+                None => dsx_message::ToolExecReport {
+                    content: "[ERROR] ToolManager not initialised".into(),
+                    success: false, files_affected: Vec::new(),
+                },
+            };
+
+            // Stream exec output to UI
+            if let (Some(rx), Some(atx)) = (prx, agent_tx) {
+                while let Ok(delta) = rx.recv() {
+                    let _ = atx.send(dsx_proto::Agent2Ui::ToolExecDelta {
+                        tool_call_id: req.id.clone(), delta,
+                    });
+                }
+            }
+
+            (req.id, report)
+        })
+    }).collect();
+
+    let reports: Vec<(String, dsx_message::ToolExecReport)> = handles.into_iter().map(|h| {
+        h.join().unwrap_or_else(|e| {
+            let msg = format!("[ERROR] tool thread panicked: {:?}",
+                e.downcast_ref::<&str>().unwrap_or(&"unknown"));
+            ("unknown".into(), dsx_message::ToolExecReport {
+                content: msg, success: false, files_affected: Vec::new(),
+            })
+        })
+    }).collect();
+
+    // Emit AuditRecord + ToolResults directly to frontend
+    if let Some(atx) = agent_tx {
+        let mut tool_defs = Vec::new();
+        for (tc_id, report) in &reports {
+            let summary = report.content.lines().next().unwrap_or(&report.content);
+            let _ = atx.send(dsx_proto::Agent2Ui::AuditRecord {
+                tool_name: tc_id.clone(),
+                result_summary: summary.chars().take(120).collect(),
+                success: report.success,
+            });
+            tool_defs.push(dsx_proto::ToolResultDef {
+                tool_call_id: tc_id.clone(),
+                output: report.content.clone(),
+                success: report.success,
+                file: None,
+            });
+        }
+        if !tool_defs.is_empty() {
+            let _ = atx.send(dsx_proto::Agent2Ui::ToolResults {
+                turn_id: "tool_batch".into(),
+                round_num: 0,
+                results: tool_defs,
+            });
+        }
+    }
+
+    reports
+}
+
+
+/// Query cumulative tool stats from ToolManager.
+pub fn global_stats() -> dsx_tools::ToolStats {
+    with_mgr(|mgr| mgr.stats()).unwrap_or_default()
+}
+
+pub fn files_read() -> Vec<String> {
+    with_mgr(|mgr| mgr.stats().files_read).unwrap_or_default()
+}
+
+pub fn files_written() -> Vec<String> {
+    with_mgr(|mgr| mgr.stats().files_written).unwrap_or_default()
+}
+
 // ── Wrap helper ──
 
 pub fn wrap_tool_result(name: &str, raw: &str) -> String {

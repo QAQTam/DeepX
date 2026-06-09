@@ -10,6 +10,7 @@ dsx-message = { path = "../dsx-message" }
 dsx-tools = { path = "../dsx-tools" }
 dsx-proto = { path = "../dsx-proto" }
 dsx-types = { path = "../dsx-types" }
+serde_json = "1"
 log = "0.4"
 
 [lints]

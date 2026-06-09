@@ -18,7 +18,7 @@ pub fn track_file_written(state: &mut AgentState, args: &str) {
 
 /// Get the last assistant message text content (for intent gate).
 pub fn last_assistant_content(state: &AgentState) -> String {
-    state.ctx.to_vec().iter().rev()
+    state.msg.to_vec().iter().rev()
         .find(|m| m.role == "assistant" && !m.content.is_empty())
         .and_then(|m| {
             m.content.iter().find_map(|b| {

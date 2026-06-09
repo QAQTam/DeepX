@@ -4,7 +4,27 @@
 //! stale-edit blocking, and caches file hashes for change detection.
 
 use std::collections::HashMap;
-use super::result::FileSnapshot;
+
+#[derive(Debug, Clone)]
+pub struct FileSnapshot {
+    pub lines: usize,
+    pub hash: u64,
+    pub last_read_turn: u32,
+}
+
+impl FileSnapshot {
+    pub(crate) fn hash_of(path: &str) -> u64 {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        if let Ok(meta) = std::fs::metadata(path) {
+            std::hash::Hash::hash(&meta.len(), &mut h);
+            if let Ok(m) = meta.modified() {
+                std::hash::Hash::hash(&m, &mut h);
+            }
+        }
+        h.finish()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FileTracker {

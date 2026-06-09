@@ -1,2 +1,29 @@
 [1781012464] DRYRUN | D:\Project\DeepX\crates\dsx-agent\Cargo.toml | line 11 | old ["dsx-session"] -> new ["dsx-test"]
 [1781012464] READ | D:\Project\DeepX\Cargo.toml | lines=1-5 | 
+[1781013550] READ | D:\Project\codex-main\codex-rs\shell-command\src\lib.rs | lines=1-80 | 
+[1781013559] READ | D:\Project\codex-main\codex-rs\shell-command\src\shell_detect.rs | lines=1-120 | 
+[1781013564] READ | D:\Project\codex-main\codex-rs\exec\src\lib.rs | lines=1-40 | 
+[1781013571] READ | D:\Project\codex-main\codex-rs\message-history\src\lib.rs | lines=1-60 | 
+[1781013571] READ | D:\Project\codex-main\codex-rs\protocol\src\lib.rs | lines=1-40 | 
+[1781013820] READ | D:\Project\codex-main\codex-rs\terminal-detection\src\lib.rs | lines=1-120 | 
+[1781013839] READ | D:\Project\codex-main\codex-rs\config\src\lib.rs | lines=1-50 | 
+[1781013849] READ | D:\Project\codex-main\codex-rs\config\src\types.rs | lines=1-80 | 
+[1781013877] READ | D:\Project\codex-main\codex-rs\execpolicy\src\lib.rs | lines=1-60 | 
+[1781013939] READ | D:\Project\codex-main\codex-rs\exec-server\src\protocol.rs | lines=75-95 | 
+[1781013962] READ | D:\Project\codex-main\codex-rs\exec-server\src\environment.rs | lines=460-520 | 
+[1781013987] READ | D:\Project\codex-main\codex-rs\shell-command\src\shell_detect.rs | lines=265-340 | 
+[1781014080] READ | D:\Project\codex-main\codex-rs\shell-command\src\shell_detect.rs | lines=246-265 | 
+[1781014175] READ | D:\Project\run\src\main.rs | lines=1-342 | 
+[1781014224] READ | D:\Project\run\Cargo.toml | lines=1-9 | 
+[1781014311] READ | D:\Project\run\src\main.rs | lines=245-280 | 
+[1781014343] DRYRUN | D:\Project\run\src\main.rs | line 234 | old=["            '\\'' => {"] -> new=["            '\\'' => {"]
+[1781014356] LINES | D:\Project\run\src\main.rs | lines 234-245 -> 14 lines | old: 12 lines
+[1781014408] LINES | D:\Project\run\src\main.rs | lines 247-247 -> 1 lines | old: 1 lines
+[1781015785] WRITE | D:\Project\DeepX\testq.txt | 1 lines (new) | prev: 0 bytes
+[1781016344] READ | D:\Project\DeepX\crates\dsx-agent\src\agent.rs | lines=48-70 | 
+[1781016345] READ | D:\Project\DeepX\crates\dsx-agent\src\runner\lifecycle.rs | lines=1-70 | 
+[1781016515] READ | D:\Project\DeepX\crates\dsx-message\src\store.rs | lines=1-581 | 
+[1781016848] READ | D:\Project\DeepX\crates\dsx-msglp\src\lib.rs | lines=1-100 | 
+[1781017170] READ | D:\Project\DeepX\crates\dsx-msglp\src\lib.rs | lines=1-200 | 
+[1781017178] READ | D:\Project\DeepX\crates\dsx-msglp\src\lib.rs | lines=200-430 | 
+[1781017182] READ | D:\Project\DeepX\crates\dsx-msglp\src\lib.rs | lines=430-500 | 

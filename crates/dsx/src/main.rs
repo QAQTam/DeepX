@@ -16,7 +16,7 @@ fn main() {
             }
         }
         "--agent" => {
-            dsx_agent::runner::run();
+            eprintln!("headless mode removed — use dsx-msglp");
         }
         "config" | "init" => {
             run_config();

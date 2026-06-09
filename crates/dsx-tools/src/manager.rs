@@ -27,12 +27,15 @@ pub struct ToolExecReport {
     pub content: String,
     pub success: bool,
     pub meta: ToolExecMeta,
+    pub files_affected: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct ToolStats {
     pub calls_total: u32,
     pub failures: u32,
+    pub files_read: Vec<String>,
+    pub files_written: Vec<String>,
 }
 
 pub struct ToolManager {
@@ -41,6 +44,8 @@ pub struct ToolManager {
     inflight_tasks: BTreeMap<String, Arc<AtomicBool>>,
     stats_total: u32,
     stats_failures: u32,
+    files_read: Vec<String>,
+    files_written: Vec<String>,
 }
 
 impl ToolManager {
@@ -51,6 +56,8 @@ impl ToolManager {
             inflight_tasks: BTreeMap::new(),
             stats_total: 0,
             stats_failures: 0,
+            files_read: Vec::new(),
+            files_written: Vec::new(),
         }
     }
 
@@ -99,7 +106,7 @@ impl ToolManager {
 
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                let msg = format!("[ERROR] Tool '{}' not in allowed list", name); return ToolExecReport { success: false, content: msg.clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } };
+                let msg = format!("[ERROR] Tool '{}' not in allowed list", name); return ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new().clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } };
             }
         }
 
@@ -108,7 +115,7 @@ impl ToolManager {
             None => {
                 match self.handlers.iter().find(|(k, _)| k.name == name) {
                     Some((_, h)) => h,
-                    None => { let msg = format!("[ERROR] Unknown tool: {}/{}", name, action); return ToolExecReport { success: false, content: msg.clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } }; },
+                    None => { let msg = format!("[ERROR] Unknown tool: {}/{}", name, action); return ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new().clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } }; },
                 }
             }
         };
@@ -120,7 +127,7 @@ impl ToolManager {
         match (handler.safety)(&ctx) {
             SafetyVerdict::Block(reason) => {
                 let msg = format!("[ERROR] {}", reason);
-                return ToolExecReport { success: false, content: msg.clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } };
+                return ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new().clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } };
             }
             SafetyVerdict::Allow => {}
         }
@@ -159,17 +166,31 @@ impl ToolManager {
         self.stats_total += 1;
         if !success { self.stats_failures += 1; }
         let args_summary = audit_args_summary(&tool_name, &audit_args);
+        let files_affected = extract_files_affected(&tool_name, &audit_args);
+        if success {
+            match tool_name.as_str() {
+                "read_file" | "search" | "grep" | "glob" | "explore" | "list_dir" | "diff" => {
+                    for f in &files_affected { if !self.files_read.contains(f) { self.files_read.push(f.clone()); } }
+                }
+                "write_file" | "edit_file" | "edit_file_diff" | "delete_file" | "copy_file" | "move_file" => {
+                    for f in &files_affected { if !self.files_written.contains(f) { self.files_written.push(f.clone()); } }
+                }
+                _ => {}
+            }
+        }
         let meta = ToolExecMeta { name: tool_name, elapsed_ms, output_size, success, args_summary };
-        ToolExecReport { success, content, meta }
+        ToolExecReport { success, content, meta, files_affected }
     }
 
     pub fn stats(&self) -> ToolStats {
-        ToolStats { calls_total: self.stats_total, failures: self.stats_failures }
+        ToolStats { calls_total: self.stats_total, failures: self.stats_failures, files_read: self.files_read.clone(), files_written: self.files_written.clone() }
     }
 
     pub fn reset_stats(&mut self) {
         self.stats_total = 0;
         self.stats_failures = 0;
+        self.files_read.clear();
+        self.files_written.clear();
     }
 
     pub fn cancel_tool(&mut self, id: Option<&str>) {
@@ -187,6 +208,29 @@ impl ToolManager {
             }
         }
     }
+}
+
+/// Extract file paths from tool args.
+fn extract_files_affected(_tool_name: &str, args: &serde_json::Value) -> Vec<String> {
+    let obj = match args.as_object() {
+        Some(o) => o,
+        None => return Vec::new(),
+    };
+    let mut files = Vec::new();
+    if let Some(v) = obj.get("path").and_then(|v| v.as_str()) {
+        files.push(v.to_string());
+    }
+    if let Some(arr) = obj.get("paths").and_then(|v| v.as_array()) {
+        for v in arr {
+            if let Some(s) = v.as_str() { files.push(s.to_string()); }
+        }
+    }
+    for key in ["file_a", "file_b", "dest", "target"] {
+        if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
+            files.push(v.to_string());
+        }
+    }
+    files
 }
 
 /// Compact args summary for audit log — path and key values only.

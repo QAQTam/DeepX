@@ -796,6 +796,7 @@ name = "dsx"
 version = "4.2.0"
 dependencies = [
  "dsx-agent",
+ "dsx-msglp",
  "dsx-tauri",
  "dsx-tui",
  "dsx-types",
@@ -842,6 +843,7 @@ dependencies = [
  "dsx-tools",
  "dsx-types",
  "log",
+ "serde_json",
 ]
 
 [[package]]

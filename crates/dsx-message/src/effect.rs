@@ -8,8 +8,6 @@ pub enum Effect {
     None,
     /// Call the gate with this context.
     CallGate { messages: Vec<Message> },
-    /// Tools are ready — runner must call execute_tools_batch().
-    NeedTools,
     /// Turn finished — save snapshot, return to idle.
     TurnComplete,
 }
