@@ -7,6 +7,8 @@ pub mod explore;
 pub mod file_read;
 pub mod file_write;
 pub mod file_edit;
+pub mod sed;
+pub mod grep;
 pub mod file_edit_diff;
 pub mod file_list_dir;
 pub mod file_search;
@@ -25,7 +27,7 @@ pub mod mcp_bridge;
 
 pub use web::set_c7_key;
 pub use safety::SafetyVerdict;
-pub use manager::ToolManager;
+pub use manager::{ToolManager, ToolExecMeta, ToolExecReport, ToolStats};
 
 /// Default tool safety check: always allow.
 pub fn default_allow(_: &ToolCallCtx) -> SafetyVerdict {

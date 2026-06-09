@@ -13,7 +13,7 @@ use dsx_proto::{self, Agent2Ui, DocInfo, TaskInfo, Ui2Agent};
 
 use crate::agent::AgentState;
 use crate::orchestrator::learning;
-use crate::runner::turn::TurnOutcome;
+use super::turn::TurnOutcome;
 
 /// Emit an Agent2Ui event, logging errors instead of silently dropping.
 pub(super) fn emit(tx: &mpsc::Sender<Agent2Ui>, event: Agent2Ui) {

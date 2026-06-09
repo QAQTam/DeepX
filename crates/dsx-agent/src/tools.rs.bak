@@ -85,11 +85,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     log::info!("tool [{source}] call: {name} (id={call_id})");
 
     if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-        return ToolExecResult {
-            content: "[CANCELLED]".to_string(),
-            success: false,
-            meta: dsx_tools::ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
-        };
+        return ToolExecResult { content: "[CANCELLED]".to_string() };
     }
 
     let result = with_mgr(|mgr| {
@@ -98,11 +94,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
 
     match result {
         Some(r) => ToolExecResult { content: r.content, success: r.success, meta: r.meta },
-        None => ToolExecResult {
-            content: "[ERROR] tool manager not initialised — call init_tools() first".to_string(),
-            success: false,
-            meta: dsx_tools::ToolExecMeta { name: String::new(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
-        },
+        None => ToolExecResult { content: "[ERROR] tool manager not initialised — call init_tools() first".to_string() },
     }
 }
 
@@ -145,3 +137,4 @@ pub fn shutdown_tools() {
     dsx_tools::mcp_bridge::shutdown_mcp_servers();
     log::info!("dsx: tool manager shut down");
 }
+

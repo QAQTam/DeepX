@@ -1,15 +1,46 @@
 //! ToolManager: tool registration, lookup, routing, and cancellation.
+//!
+//! Since v5: per-call execution metadata (ToolExecMeta) and cumulative
+//! stats (ToolStats) are returned to the caller instead of being lost
+//! to stderr. The caller (agent tools.rs) acts as a forwarding layer
+//! that pushes these into UI events.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::{ToolKey, ToolHandler, ToolCallCtx, CANCEL, SafetyVerdict, ToolResult};
+use crate::{ToolKey, ToolHandler, ToolCallCtx, CANCEL, SafetyVerdict};
+
+// ── Execution metadata ──
+
+#[derive(Clone, Debug)]
+pub struct ToolExecMeta {
+    pub name: String,
+    pub elapsed_ms: u64,
+    pub output_size: usize,
+    pub success: bool,
+    pub args_summary: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolExecReport {
+    pub content: String,
+    pub success: bool,
+    pub meta: ToolExecMeta,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ToolStats {
+    pub calls_total: u32,
+    pub failures: u32,
+}
 
 pub struct ToolManager {
     pub(crate) handlers: BTreeMap<ToolKey, ToolHandler>,
     allowed: Option<Vec<String>>,
     inflight_tasks: BTreeMap<String, Arc<AtomicBool>>,
+    stats_total: u32,
+    stats_failures: u32,
 }
 
 impl ToolManager {
@@ -18,6 +49,8 @@ impl ToolManager {
             handlers: BTreeMap::new(),
             allowed: None,
             inflight_tasks: BTreeMap::new(),
+            stats_total: 0,
+            stats_failures: 0,
         }
     }
 
@@ -61,12 +94,12 @@ impl ToolManager {
         }
     }
 
-    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<String>>) -> ToolResult {
+    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<String>>) -> ToolExecReport {
         let t0 = std::time::Instant::now();
 
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                return ToolResult { success: false, content: format!("[ERROR] Tool '{}' not in allowed list", name) };
+                let msg = format!("[ERROR] Tool '{}' not in allowed list", name); return ToolExecReport { success: false, content: msg.clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } };
             }
         }
 
@@ -75,7 +108,7 @@ impl ToolManager {
             None => {
                 match self.handlers.iter().find(|(k, _)| k.name == name) {
                     Some((_, h)) => h,
-                    None => return ToolResult { success: false, content: format!("[ERROR] Unknown tool: {}/{}", name, action) },
+                    None => { let msg = format!("[ERROR] Unknown tool: {}/{}", name, action); return ToolExecReport { success: false, content: msg.clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } }; },
                 }
             }
         };
@@ -86,7 +119,8 @@ impl ToolManager {
         };
         match (handler.safety)(&ctx) {
             SafetyVerdict::Block(reason) => {
-                return ToolResult { success: false, content: format!("[ERROR] {}", reason) };
+                let msg = format!("[ERROR] {}", reason);
+                return ToolExecReport { success: false, content: msg.clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } };
             }
             SafetyVerdict::Allow => {}
         }
@@ -121,12 +155,21 @@ impl ToolManager {
         let elapsed_ms = t0.elapsed().as_millis() as u64;
         let output_size = content.len();
 
-        // Audit log
-        let status = if success { "OK" } else { "FAIL" };
+        // Accumulate stats (caller retrieves via stats())
+        self.stats_total += 1;
+        if !success { self.stats_failures += 1; }
         let args_summary = audit_args_summary(&tool_name, &audit_args);
-        eprintln!("[AUDIT] {tool_name}  {status}  {elapsed_ms}ms  {output_size}chars  args={{{args_summary}}}");
+        let meta = ToolExecMeta { name: tool_name, elapsed_ms, output_size, success, args_summary };
+        ToolExecReport { success, content, meta }
+    }
 
-        ToolResult { success, content }
+    pub fn stats(&self) -> ToolStats {
+        ToolStats { calls_total: self.stats_total, failures: self.stats_failures }
+    }
+
+    pub fn reset_stats(&mut self) {
+        self.stats_total = 0;
+        self.stats_failures = 0;
     }
 
     pub fn cancel_tool(&mut self, id: Option<&str>) {

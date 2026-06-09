@@ -1,0 +1,5 @@
+// test file for dsx-tools
+
+fn main() {
+    println!("hello from dsx-tools");
+}

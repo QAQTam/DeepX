@@ -1,0 +1,4 @@
+crates/dsx-tauri/src-tauri/binaries/grep.exe
+crates/dsx-tauri/src-tauri/binaries/sed.exe
+crates/dsx-tools/src/grep.rs
+crates/dsx-tools/src/sed.rs
