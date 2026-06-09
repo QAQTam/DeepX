@@ -8,7 +8,6 @@ members = [
     "crates/dsx-types",
     "crates/dsx-proto",
     "crates/dsx",
-    "crates/dsx-agent",
     "crates/dsx-tools",
     "crates/dsx-tui",
     "crates/dsx-session",

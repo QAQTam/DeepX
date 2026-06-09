@@ -2,27 +2,47 @@
 //!
 //! Submodules register handlers via `pub fn register(mgr: &mut ToolManager)`.
 
+pub mod bridge;
 pub mod exec;
+pub mod bridge;
 pub mod explore;
+pub mod bridge;
 pub mod file_read;
+pub mod bridge;
 pub mod file_write;
+pub mod bridge;
 pub mod file_edit;
+pub mod bridge;
 pub mod sed;
+pub mod bridge;
 pub mod grep;
+pub mod bridge;
 pub mod file_edit_diff;
+pub mod bridge;
 pub mod file_list_dir;
+pub mod bridge;
 pub mod file_search;
+pub mod bridge;
 pub mod file_delete;
+pub mod bridge;
 pub mod file_move;
+pub mod bridge;
 pub mod file_glob;
+pub mod bridge;
 pub mod file_diff;
+pub mod bridge;
 pub mod file_shared;
 mod safety;
 mod web;
+pub mod bridge;
 pub mod task;
+pub mod bridge;
 pub mod registration;
+pub mod bridge;
 pub mod persistence;
+pub mod bridge;
 pub mod manager;
+pub mod bridge;
 pub mod mcp_bridge;
 
 pub use web::set_c7_key;

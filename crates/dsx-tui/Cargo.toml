@@ -11,8 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 dsx-types = { path = "../dsx-types" }
 dsx-proto = { path = "../dsx-proto" }
+dsx-msglp = { path = "../dsx-msglp" }
 deepx-config = { path = "../deepx-config" }
-dsx-agent = { path = "../dsx-agent" }
 dsx-session = { path = "../dsx-session" }
 dsx-tools = { path = "../dsx-tools" }
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }

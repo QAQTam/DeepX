@@ -21,15 +21,15 @@ use std::thread;
 fn spawn_agent_inproc(
     resume_seed: Option<&str>,
 ) -> anyhow::Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, thread::JoinHandle<()>)> {
-    let mut agent = dsx_agent::agent::AgentState::init("tui");
+    let mut agent = dsx_msglp::agent::AgentState::init("tui");
     agent.session.resume_seed = resume_seed.map(String::from);
 
     let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
     let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
 
     let handle = thread::spawn(move || {
-        dsx_agent::runner::run_agent_loop(agent, tui_rx, agent_tx);
-        dsx_agent::tools::shutdown_tools();
+        dsx_msglp::Loop::new(agent, tui_rx, agent_tx).run();
+        dsx_tools::bridge::shutdown_tools();
     });
 
     Ok((tui_tx, agent_rx, handle))

@@ -26,7 +26,7 @@ impl AgentBridge {
     /// Called once during Tauri app setup.
     pub fn init(app: &AppHandle) -> Self {
         dsx_session::SessionManager::init(dsx_types::platform::data_dir());
-    let mut agent = dsx_agent::agent::AgentState::init("tauri");
+    let mut agent = dsx_msglp::agent::AgentState::init("tauri");
 
         // Init session manager + check for resume seed in the session directory
         if let Some(seed) = active_or_latest_seed() {
@@ -38,8 +38,8 @@ impl AgentBridge {
 
         // Spawn the agent event loop in a background thread
         let agent_handle = std::thread::spawn(move || {
-            dsx_agent::runner::run_agent_loop(agent, rx, agent_tx);
-            dsx_agent::tools::shutdown_tools();
+            dsx_msglp::Loop::new(agent, rx, agent_tx).run();
+            dsx_tools::bridge::shutdown_tools();
         });
 
         // Forward Agent2Ui events to the Tauri frontend

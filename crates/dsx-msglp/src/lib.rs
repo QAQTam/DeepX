@@ -10,8 +10,12 @@ use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use dsx_agent::agent::AgentState;
-use dsx_agent::runner::lifecycle;
+mod agent;
+use agent::AgentState;
+mod lifecycle;
+mod dashboard;
+use dashboard::{build_documents, build_recent_edits, build_tasks};
+use lifecycle::{init_session, create_session};
 use dsx_message::{Effect, ToolExecRequest, ToolExecReport};
 use dsx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
 
@@ -86,7 +90,7 @@ impl Loop {
         self.agent.msg.set_ui_tx(self.ui_tx.clone());
         self.agent.msg.set_cancel(self.cancel.arc());
         self.agent.msg.set_tool_executor(Box::new(|req: ToolExecRequest| {
-            let result = dsx_agent::tools::execute_tool_with_id(&req.name, "", &req.args.to_string(), &req.id);
+            let result = dsx_tools::execute_tool_with_id(&req.name, "", &req.args.to_string(), &req.id);
             let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");
             ToolExecReport { content: result, success, files_affected: Vec::new() }
         }));
@@ -125,12 +129,12 @@ impl Loop {
                     // 1. ALWAYS abort gate HTTP first
                     self.cancel.set();
                     dsx_tools::CANCEL.store(true, Ordering::SeqCst);
-                    self.agent.turn.stream_cancelled = true;
+                    // turn_state deleted — cancel handled by CancelToken
 
                     // 2. Then abort whatever else is running
                     match self.phase {
                         LoopPhase::ToolsRunning => {
-                            dsx_agent::tools::cancel_current_tool();
+                            dsx_tools::cancel_current_tool();
                         }
                         _ => {}
                     }
@@ -157,10 +161,10 @@ impl Loop {
                         self.agent.config.context_limit = cfg.context_limit;
                         if let Some(ref key) = cfg.context7_api_key {
                             if !key.is_empty() {
-                                dsx_agent::tools::set_context7_key(key);
+                                dsx_tools::set_context7_key(key);
                             }
                         }
-                        dsx_agent::tools::load_workspace(&self.agent.session.seed);
+                        dsx_tools::load_workspace(&self.agent.session.seed);
                     }
                 }
 
@@ -171,7 +175,7 @@ impl Loop {
                 }
 
                 Ui2Agent::ToolCall { id, name, action, args } => {
-                    let result = dsx_agent::tools::execute_tool_with_id(&name, &action, &args.to_string(), &id);
+                    let result = dsx_tools::execute_tool_with_id(&name, &action, &args.to_string(), &id);
                     let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");
                     let _ = self.ui_tx.send(Agent2Ui::ToolResults {
                         turn_id: "headless".into(),
@@ -189,7 +193,7 @@ impl Loop {
             }
         }
 
-        dsx_agent::tools::shutdown_tools();
+        dsx_tools::shutdown_tools();
         self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
         log::info!(
             "dsx-msglp: shutdown complete (session {}, {} turns, {} tokens)",
@@ -210,10 +214,9 @@ impl Loop {
         }
 
         self.cancel.clear();
-        self.agent.turn.stream_cancelled = false;
+        // turn_state deleted — cancel handled by CancelToken
         dsx_tools::CANCEL.store(false, Ordering::SeqCst);
-        self.agent.refresh_progress_context();
-
+        
         self.agent.msg.push_user(text);
 
         let turn_id = format!("t{}", self.agent.msg.turn_count());
@@ -377,9 +380,9 @@ impl Loop {
             current_phase: "single".into(),
             streaming: false,
             dsml_compat_count: self.agent.dsml_compat_count,
-            documents: dsx_agent::runner::build_documents(&self.agent),
-            recent_edits: dsx_agent::runner::build_recent_edits(&self.agent),
-            tasks: dsx_agent::runner::build_tasks(&self.agent),
+            documents: build_documents(&self.agent),
+            recent_edits: build_recent_edits(&self.agent),
+            tasks: build_tasks(&self.agent),
             session_title: self.agent.session.title.clone(),
             usage: None,
         });
@@ -394,17 +397,17 @@ fn parse_tool_calls_from_response(
     content: &str, _reasoning: &str, tool_calls_raw: &serde_json::Value,
     agent: &AgentState,
 ) -> Vec<dsx_types::ToolCall> {
-    let mut parsed = dsx_agent::tool_parser::parse_tool_calls(tool_calls_raw);
+    let mut parsed = deepx_gate::tool_parser::parse_tool_calls(tool_calls_raw);
     if parsed.is_empty() {
-        let stripped = dsx_agent::tool_parser::strip_fenced_code(content);
-        if dsx_agent::tool_parser::has_dsml(&stripped) {
-            let (_, dsml) = dsx_agent::tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
+        let stripped = deepx_gate::tool_parser::strip_fenced_code(content);
+        if deepx_gate::tool_parser::has_dsml(&stripped) {
+            let (_, dsml) = deepx_gate::tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
             if !dsml.is_empty() { parsed = dsml; }
         }
         if parsed.is_empty() && has_xml(content) {
             let names: Vec<String> = agent.tool_defs.iter().map(|t| t.function.name.clone()).collect();
-            let stripped2 = dsx_agent::tool_parser::strip_fenced_code(content);
-            let (_, xml) = dsx_agent::tool_parser::parse_xml_tool_calls(&stripped2, &names);
+            let stripped2 = deepx_gate::tool_parser::strip_fenced_code(content);
+            let (_, xml) = deepx_gate::tool_parser::parse_xml_tool_calls(&stripped2, &names);
             if !xml.is_empty() { parsed = xml; }
         }
     }

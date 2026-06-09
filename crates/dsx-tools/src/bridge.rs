@@ -10,21 +10,21 @@ use std::sync::{mpsc, Mutex, OnceLock};
 pub struct ToolExecResult {
     pub content: String,
     pub success: bool,
-    pub meta: dsx_tools::ToolExecMeta,
+    pub meta: crate::ToolExecMeta,
 }
 
 // ── Global state ──
 
-static TOOL_MANAGER: OnceLock<Mutex<dsx_tools::ToolManager>> = OnceLock::new();
+static TOOL_MANAGER: OnceLock<Mutex<crate::ToolManager>> = OnceLock::new();
 
 /// Initialize the in-process tool manager.
 /// Must be called once at startup, before any tool execution.
-pub fn init_tools(session_seed: &str, mcp_servers: &[dsx_tools::mcp_bridge::McpServerConfig]) {
-    let mut mgr = dsx_tools::registration::build_tool_manager();
+pub fn init_tools(session_seed: &str, mcp_servers: &[crate::mcp_bridge::McpServerConfig]) {
+    let mut mgr = crate::registration::build_tool_manager();
     mgr.apply_init(vec![], session_seed);
 
     if !mcp_servers.is_empty() {
-        if let Err(e) = dsx_tools::mcp_bridge::register_mcp_servers(&mut mgr, mcp_servers) {
+        if let Err(e) = crate::mcp_bridge::register_mcp_servers(&mut mgr, mcp_servers) {
             log::warn!("dsx: failed to register MCP servers: {e}");
         }
     }
@@ -34,12 +34,12 @@ pub fn init_tools(session_seed: &str, mcp_servers: &[dsx_tools::mcp_bridge::McpS
 }
 
 pub fn set_context7_key(key: &str) {
-    dsx_tools::set_c7_key(key);
+    crate::set_c7_key(key);
 }
 
 fn with_mgr<F, R>(f: F) -> Option<R>
 where
-    F: FnOnce(&mut dsx_tools::ToolManager) -> R,
+    F: FnOnce(&mut crate::ToolManager) -> R,
 {
     let mut guard = TOOL_MANAGER.get()?.lock().ok()?;
     Some(f(&mut guard))
@@ -84,11 +84,11 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     };
     log::info!("tool [{source}] call: {name} (id={call_id})");
 
-    if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+    if crate::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
         return ToolExecResult {
             content: "[CANCELLED]".to_string(),
             success: false,
-            meta: dsx_tools::ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
+            meta: crate::ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
         };
     }
 
@@ -101,7 +101,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
         None => ToolExecResult {
             content: "[ERROR] tool manager not initialised — call init_tools() first".to_string(),
             success: false,
-            meta: dsx_tools::ToolExecMeta { name: String::new(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
+            meta: crate::ToolExecMeta { name: String::new(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
         },
     }
 }
@@ -109,7 +109,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
 // ── Session ──
 
 pub fn set_current_session(seed: &str) {
-    dsx_tools::set_current_session(seed);
+    crate::set_current_session(seed);
 }
 
 pub fn load_workspace(seed: &str) {
@@ -117,14 +117,14 @@ pub fn load_workspace(seed: &str) {
     let ws = std::fs::read_to_string(dir.join("workspace.txt")).unwrap_or_default();
     let ws = ws.trim();
     if !ws.is_empty() {
-        dsx_tools::set_workspace(ws);
+        crate::set_workspace(ws);
     } else {
-        dsx_tools::set_workspace(".");
+        crate::set_workspace(".");
     }
 }
 
 pub fn set_workspace(path: &str) {
-    dsx_tools::set_workspace(path);
+    crate::set_workspace(path);
 }
 
 /// Execute a batch of tools in parallel (threaded).
@@ -231,7 +231,7 @@ pub fn execute_tools_parallel(
 
 
 /// Query cumulative tool stats from ToolManager.
-pub fn global_stats() -> dsx_tools::ToolStats {
+pub fn global_stats() -> crate::ToolStats {
     with_mgr(|mgr| mgr.stats()).unwrap_or_default()
 }
 
@@ -258,6 +258,6 @@ pub fn cancel_current_tool() {
 // ── Shutdown ──
 
 pub fn shutdown_tools() {
-    dsx_tools::mcp_bridge::shutdown_mcp_servers();
+    crate::mcp_bridge::shutdown_mcp_servers();
     log::info!("dsx: tool manager shut down");
 }

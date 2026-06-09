@@ -29,3 +29,4 @@
 [1781017182] READ | D:\Project\DeepX\crates\dsx-msglp\src\lib.rs | lines=430-500 | 
 [1781019892] READ | D:\Project\DeepX\crates\dsx-agent\src\dsx_log.rs | lines=1-83 | 
 [1781019963] READ | D:\Project\DeepX\crates\dsx-agent\src\agent\turn_state.rs | lines=1-44 | 
+[1781022545] FAIL | D:\Project\DeepX\crates\dsx-msglp\src\dashboard.rs | not found | needle: pub(super) fn

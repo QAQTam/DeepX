@@ -1,8 +1,7 @@
 //! Session lifecycle: initialization, health status.
 
 use crate::agent::AgentState;
-use crate::dsx_log;
-use crate::tools;
+use dsx_tools;
 use dsx_session::SessionManager;
 
 pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool {
@@ -16,8 +15,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 agent.session.from_resume = true;
                 agent.session.tokens = 0;
 
-                dsx_log::set_session(&agent.session.seed);
-                tools::set_current_session(&agent.session.seed);
+                                tools::set_current_session(&agent.session.seed);
                 tools::load_workspace(&agent.session.seed);
                 log::info!(
                     "dsx-agent: restored session {} ({} msgs, {} tokens)",
@@ -38,8 +36,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 
     agent.session.seed = seed;
     agent.session.start = SessionManager::now_epoch();
-    dsx_log::set_session(&agent.session.seed);
-    tools::set_current_session(&agent.session.seed);
+        tools::set_current_session(&agent.session.seed);
     SessionManager::global().save(
         &agent.session.seed,
         &agent.msg.to_vec(),
@@ -57,9 +54,7 @@ pub fn create_session(agent: &mut AgentState) {
     agent.session.tokens = 0;
     // token_estimate / api_usage removed (tracked via session.tokens only)
     agent.tool_results.clear();
-    agent.turn.reset();
-    dsx_log::set_session(&agent.session.seed);
-    tools::set_current_session(&agent.session.seed);
+            tools::set_current_session(&agent.session.seed);
     SessionManager::global().save(
         &agent.session.seed,
         &agent.msg.to_vec(),

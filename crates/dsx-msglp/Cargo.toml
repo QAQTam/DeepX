@@ -7,7 +7,7 @@ description = "DSX minimal message loop driver — dispatches user input to gate
 [dependencies]
 deepx-gate = { path = "../deepx-gate" }
 deepx-config = { path = "../deepx-config" }
-dsx-agent = { path = "../dsx-agent" }
+dsx-session = { path = "../dsx-session" }
 dsx-message = { path = "../dsx-message" }
 dsx-tools = { path = "../dsx-tools" }
 dsx-proto = { path = "../dsx-proto" }

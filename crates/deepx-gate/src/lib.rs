@@ -4,6 +4,7 @@
 
 mod types;
 mod openai;
+pub mod tool_parser;
 
 pub use types::{ProviderConfig, ProviderKind, StreamEvent};
 pub use openai::query_balance;
