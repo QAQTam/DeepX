@@ -1,0 +1,16 @@
+[package]
+name = "dsx-message"
+version.workspace = true
+edition.workspace = true
+description = "DSX message store with state-machine lifecycle"
+
+[dependencies]
+dsx-types = { path = "../dsx-types" }
+dsx-proto = { path = "../dsx-proto" }
+dsx-session = { path = "../dsx-session" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+
+[lints]
+workspace = true

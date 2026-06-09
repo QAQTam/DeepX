@@ -1,0 +1,16 @@
+[package]
+name = "dsx-msglp"
+version.workspace = true
+edition.workspace = true
+description = "DSX minimal message loop driver — dispatches user input to gate, delegates everything else"
+
+[dependencies]
+dsx-agent = { path = "../dsx-agent" }
+dsx-message = { path = "../dsx-message" }
+dsx-tools = { path = "../dsx-tools" }
+dsx-proto = { path = "../dsx-proto" }
+dsx-types = { path = "../dsx-types" }
+log = "0.4"
+
+[lints]
+workspace = true

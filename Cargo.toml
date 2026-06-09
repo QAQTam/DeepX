@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/dsx-msglp",
+    "crates/dsx-message",
     "crates/dsx-types",
     "crates/dsx-proto",
     "crates/dsx",
