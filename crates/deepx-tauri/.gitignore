@@ -5,3 +5,4 @@ target/
 .env
 node_modules/
 .dsx-trash/
+dist
