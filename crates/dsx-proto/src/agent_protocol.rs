@@ -17,6 +17,12 @@ pub enum Ui2Agent {
     #[serde(rename = "user_input")]
     UserInput { text: String },
 
+    #[serde(rename = "ask_user_reply")]
+    AskUserReply {
+        tool_call_id: String,
+        text: String,
+    },
+
     #[serde(rename = "tool_call")]
     ToolCall {
         id: String,
@@ -149,9 +155,6 @@ pub enum Agent2Ui {
         stop_reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<dsx_types::UsageInfo>,
-        context_tokens: u32,
-        context_limit: u32,
-        session_tokens: u64,
     },
 
     // ── Streaming preview (optional, additive) ──
@@ -251,11 +254,10 @@ pub enum Agent2Ui {
         currency: String,
     },
 
-    #[serde(rename = "debug_snapshot")]
-    DebugSnapshot {
+    #[serde(rename = "dashboard")]
+    Dashboard {
         hp_connected: bool,
         session_seed: String,
-        context_tokens: u32,
         tool_calls_total: u32,
         tool_failures: u32,
         current_phase: String,
@@ -270,10 +272,10 @@ pub enum Agent2Ui {
         tasks: Vec<TaskInfo>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<dsx_types::UsageInfo>,
         #[serde(default)]
-        prompt_cache_hit_tokens: u32,
-        #[serde(default)]
-        prompt_cache_miss_tokens: u32,
+        context_limit: u32,
     },
 
     #[serde(rename = "done")]

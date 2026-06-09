@@ -28,7 +28,7 @@ fn truncate_exec_for_model(output: &str) -> String {
 
 /// Process a pending ask_user reply, pushes the user's text as a tool result.
 fn process_ask_user_response(agent: &mut AgentState, text: &str) -> bool {
-    if let Some(tool_call_id) = agent.pending_ask_user.take() {
+    if let Some(tool_call_id) = agent.pending_round.take() {
         agent.ctx.replace_tool_result(&tool_call_id, text);
         true
     } else {
@@ -305,9 +305,6 @@ pub fn handle_user_input(
                     turn_id: turn_id.clone(),
                     stop_reason,
                     usage,
-                    context_tokens: agent.token_estimate,
-                    context_limit: agent.config.context_limit,
-                    session_tokens: agent.session.tokens,
                 });
                 return;
             }
@@ -335,9 +332,6 @@ pub fn handle_user_input(
                 turn_id: turn_id.clone(),
                 stop_reason,
                 usage,
-                context_tokens: agent.token_estimate,
-                context_limit: agent.config.context_limit,
-                session_tokens: agent.session.tokens,
             });
             return;
         }
@@ -504,10 +498,10 @@ pub fn handle_user_input(
         }
 
         // Emit real-time debug snapshot
-        emit(&agent_tx, Agent2Ui::DebugSnapshot {
+        emit(&agent_tx, Agent2Ui::Dashboard {
             hp_connected: true,
             session_seed: agent.session.seed.clone(),
-            context_tokens: agent.token_estimate,
+            context_limit: agent.config.context_limit,
             tool_calls_total: agent.turn.tool_calls_this_turn,
             tool_failures: agent.turn.tool_failures as u32,
             current_phase: "tool_batch".to_string(),
@@ -517,8 +511,8 @@ pub fn handle_user_input(
             recent_edits: build_recent_edits(agent),
             tasks: build_tasks(agent),
             session_title: agent.session.title.clone(),
-            prompt_cache_hit_tokens: cache_tokens(agent).0,
-            prompt_cache_miss_tokens: cache_tokens(agent).1,
+            usage: agent.api_usage.clone(),
+            
         });
 
         // ── Generic interrupt: any tool can request user input ──
@@ -531,12 +525,12 @@ pub fn handle_user_input(
                     question: ir.prompt.clone(),
                     options: options_field,
                 });
-                agent.pending_ask_user = Some(id.clone());
+                agent.pending_round = Some(id.clone());
                 break;
             }
         }
 
-        if agent.pending_ask_user.is_some() {
+        if agent.pending_round.is_some() {
             break;
         }
 
@@ -552,7 +546,7 @@ pub fn handle_user_input(
         round_num += 1;
     }
 
-    if agent.pending_ask_user.is_some() {
+    if agent.pending_round.is_some() {
         return;
     }
 
@@ -561,9 +555,6 @@ pub fn handle_user_input(
             turn_id: turn_id.clone(),
             stop_reason: Some("error".to_string()),
             usage: None,
-            context_tokens: agent.token_estimate,
-            context_limit: agent.config.context_limit,
-            session_tokens: agent.session.tokens,
         });
         return;
     }
@@ -574,9 +565,6 @@ pub fn handle_user_input(
         turn_id: turn_id.clone(),
         stop_reason: Some("interrupted".to_string()),
         usage: agent.api_usage.clone(),
-        context_tokens: agent.token_estimate,
-        context_limit: agent.config.context_limit,
-        session_tokens: agent.session.tokens,
     });
 }
 

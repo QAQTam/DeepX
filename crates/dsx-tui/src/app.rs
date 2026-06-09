@@ -1143,7 +1143,7 @@ impl App {
                 self.scroll_offset = 0;
                 self.finalize_last_message();
             }
-            Agent2Ui::DebugSnapshot { hp_connected, session_seed, context_tokens,
+            Agent2Ui::Dashboard { hp_connected, session_seed, context_tokens,
                 tool_calls_total, tool_failures, current_phase: _, streaming, dsml_compat_count, documents, .. } => {
                 self.debug.hp_connected = hp_connected;
                 self.debug.session_seed = session_seed;

@@ -14,6 +14,16 @@ pub use file_tracker::FileTracker;
 pub use turn_state::TurnState;
 pub use session_meta::SessionMeta;
 
+// ── PendingRound (interrupt/resume) ──
+
+/// Saved round loop state when a tool requests user input (interrupt).
+/// Restored when the user replies via AskUserReply.
+#[derive(Debug, Clone)]
+pub struct PendingRound {
+    pub turn_id: String,
+    pub round_num: u32,
+}
+
 // ── AgentState ──
 
 pub struct AgentState {
@@ -45,8 +55,8 @@ pub struct AgentState {
     // ── Registered tool definitions (from dsx-tools) ──
     pub tool_defs: Vec<dsx_types::ToolDef>,
 
-    // ── ask_user flow ──
-    pub pending_ask_user: Option<String>,
+    // ── Interrupt / resume support ──
+    pub pending_round: Option<PendingRound>,
 
     /// Monotonic turn counter (incremented after each completed turn).
     pub turn_count: u32,
@@ -69,7 +79,7 @@ impl AgentState {
             turn: TurnState::new(),
             dsml_compat_count: 0,
             tool_defs: Vec::new(),
-            pending_ask_user: None,
+            pending_round: None,
             turn_count: 0,
         };
 

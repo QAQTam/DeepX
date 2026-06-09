@@ -4,7 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { createChatStore, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
 import ChatView from "./components/ChatView";
 import SettingsView from "./components/SettingsView";
-import StatusBar from "./components/StatusBar";
+import InfoBar from "./components/InfoBar";
+import StatusPanel from "./components/StatusPanel";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
 
@@ -44,6 +45,10 @@ export default function App() {
   }
 
   onMount(async () => {
+    // Load model from config
+      try { const raw = await invoke<string>("cmd_load_config"); const cfg = JSON.parse(raw); if (cfg.model) { chat.sessionInfo.model = cfg.model; } } catch (_) {}
+      // Sync lang from config.toml (source of truth) on startup
+    try { const raw = await invoke<string>("cmd_load_config"); const cfg = JSON.parse(raw); if (cfg.lang && (cfg.lang === "en" || cfg.lang === "zh")) { const cl = cfg.lang as Lang; i18n.setLang(cl); setConfigLang(cl); localStorage.setItem("dsx:lang", cl); } } catch (_) {}
     // Set up event listener FIRST
     try { unlisten = await listen<Record<string, unknown>>("agent-event", (e) => {
       const p = e.payload;
@@ -55,10 +60,11 @@ export default function App() {
         case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); break;
         case "session_created": chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); refreshSessions(); break;
         case "session_restored": if (p.seed) { chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); } break;
-        case "debug_snapshot": chat.handleDebugSnapshot(p); break;
+        case "dashboard": chat.handleDashboard(p); break;
         case "done": chat.setInputDisabled(false); break;
         case "cancelled": chat.handleCancelled(); break;
         case "error": chat.handleError((p.message ?? "Unknown error") as string); break;
+        case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, result_summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean }); break;
       }
     }); } catch (e) { console.error(e); }
 
@@ -83,7 +89,7 @@ export default function App() {
   onCleanup(() => unlisten?.());
 
   const t = () => i18n.t() ?? en;
-  function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("dsx:lang", l); }
+  function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("dsx:lang", l); invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l }).catch(console.error); }
 
   const isActive = (seed: string) => chat.sessionInfo.seed === seed;
 
@@ -122,9 +128,10 @@ export default function App() {
         <main class="main-content">
           <Show when={view() === "chat"} fallback={<SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} />}>
             <ChatView chat={chat} />
+            <StatusPanel tasks={chat.tasks} recentEdits={chat.recentEdits} activityLog={chat.activityLog} />
           </Show>
         </main>
-        <StatusBar model={t().chat.modelLabel} sessionSeed={chat.sessionInfo.seed} contextTokens={chat.sessionInfo.contextTokens} contextLimit={chat.sessionInfo.contextLimit} sessionTokens={chat.sessionInfo.sessionTokens} isStreaming={chat.isStreaming()} error={chat.error()} />
+        
       </div>
     </I18nCtx.Provider>
   );

@@ -107,10 +107,10 @@ pub fn run_agent_loop(
     tui_rx: mpsc::Receiver<Ui2Agent>,
     agent_tx: mpsc::Sender<Agent2Ui>,
 ) {
-    emit(&agent_tx, Agent2Ui::DebugSnapshot {
+    emit(&agent_tx, Agent2Ui::Dashboard {
         hp_connected: true,
         session_seed: agent.session.seed.clone(),
-        context_tokens: agent.token_estimate,
+        context_limit: agent.config.context_limit,
         tool_calls_total: agent.turn.tool_calls_this_turn,
         tool_failures: agent.turn.tool_failures as u32,
         current_phase: "single".to_string(),
@@ -120,9 +120,7 @@ pub fn run_agent_loop(
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
         session_title: agent.session.title.clone(),
-        prompt_cache_hit_tokens: cache_tokens(&agent).0,
-        prompt_cache_miss_tokens: cache_tokens(&agent).1,
-    });
+        usage: agent.api_usage.clone(),    });
 
     if agent.session.seed.is_empty() && agent.session.resume_seed.is_some() {
         let seed = agent.session.resume_seed.clone();
@@ -160,10 +158,10 @@ pub fn run_agent_loop(
                     || turn::handle_user_input(&mut agent, &text, &agent_tx),
                 ));
 
-                emit(&agent_tx, Agent2Ui::DebugSnapshot {
+                emit(&agent_tx, Agent2Ui::Dashboard {
                     hp_connected: true,
                     session_seed: agent.session.seed.clone(),
-                    context_tokens: agent.token_estimate,
+                    context_limit: agent.config.context_limit,
                     tool_calls_total: agent.turn.tool_calls_this_turn,
                     tool_failures: agent.turn.tool_failures as u32,
                     current_phase: "single".to_string(),
@@ -173,9 +171,7 @@ pub fn run_agent_loop(
                     recent_edits: build_recent_edits(&agent),
                     tasks: build_tasks(&agent),
                     session_title: agent.session.title.clone(),
-                    prompt_cache_hit_tokens: cache_tokens(&agent).0,
-                    prompt_cache_miss_tokens: cache_tokens(&agent).1,
-                });
+                    usage: agent.api_usage.clone(),                });
                 emit(&agent_tx, Agent2Ui::Done);
             }
 
@@ -209,7 +205,7 @@ pub fn run_agent_loop(
             }
 
             Ui2Agent::Cancel => {
-                agent.pending_ask_user = None;
+                agent.pending_round = None;
                 dsx_tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
                 agent.turn.stream_cancelled = true;
                 crate::tools::cancel_current_tool();
@@ -244,10 +240,10 @@ pub fn run_agent_loop(
             }
 
             Ui2Agent::DebugCommand { cmd } => {
-                emit(&agent_tx, Agent2Ui::DebugSnapshot {
+                emit(&agent_tx, Agent2Ui::Dashboard {
                     hp_connected: true,
                     session_seed: agent.session.seed.clone(),
-                    context_tokens: agent.token_estimate,
+                    context_limit: agent.config.context_limit,
                     tool_calls_total: agent.turn.tool_calls_this_turn,
                     tool_failures: agent.turn.tool_failures as u32,
                     current_phase: "single".to_string(),
@@ -257,9 +253,7 @@ pub fn run_agent_loop(
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
           session_title: agent.session.title.clone(),
-          prompt_cache_hit_tokens: cache_tokens(&agent).0,
-          prompt_cache_miss_tokens: cache_tokens(&agent).1,
-                  });
+          usage: agent.api_usage.clone(),                  });
                 if cmd == "dump_context" {
                     let json = serde_json::to_string_pretty(&agent.ctx.to_vec())
                         .unwrap_or_default();

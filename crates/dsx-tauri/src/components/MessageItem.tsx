@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, Switch, Match } from "solid-js";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolCallCard from "./ToolCallCard";
 import type { Round } from "../store/chat";
@@ -22,18 +22,34 @@ export default function MessageItem(props: MessageItemProps) {
             <For each={props.rounds}>
               {(round) => (
                 <div class={`msg-round ${props.status === "streaming" ? "streaming" : ""}`}>
-                  <Show when={round.thinking}>
-                    <ThinkingBlock content={round.thinking!} />
+                  <Show when={round.blocks && round.blocks.length > 0}
+                    fallback={
+                      <>
+                        <Show when={round.thinking}><ThinkingBlock content={round.thinking!} /></Show>
+                        <Show when={round.answer}><div class="msg-text">{round.answer}</div></Show>
+                        <For each={round.toolCalls}>{(tc) => {
+                          const r = round.toolResults.find((x) => x.tool_call_id === tc.id);
+                          return <ToolCallCard call={tc} result={r} />;
+                        }}</For>
+                      </>
+                    }
+                  >
+                    <For each={round.blocks}>
+                      {(block) => (
+                        <Switch>
+                          <Match when={block.type === "reasoning"}>
+                            <ThinkingBlock content={block.content!} />
+                          </Match>
+                          <Match when={block.type === "text"}>
+                            <div class="msg-text">{block.content!}</div>
+                          </Match>
+                          <Match when={block.type === "tool"}>
+                            <ToolCallCard call={block.card!} result={round.toolResults.find((x) => x.tool_call_id === block.card!.id)} />
+                          </Match>
+                        </Switch>
+                      )}
+                    </For>
                   </Show>
-                  <Show when={round.answer}>
-                    <div class="msg-text">{round.answer}</div>
-                  </Show>
-                  <For each={round.toolCalls}>
-                    {(tc) => {
-                      const result = round.toolResults.find((r) => r.tool_call_id === tc.id);
-                      return <ToolCallCard call={tc} result={result} />;
-                    }}
-                  </For>
                 </div>
               )}
             </For>

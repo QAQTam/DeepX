@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import MessageList from "./MessageList";
 import InputBar from "./InputBar";
+import InfoBar from "./InfoBar";
 
 interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; }
 
@@ -25,6 +26,7 @@ export default function ChatView(props: ChatViewProps) {
 
   return (
     <div class="chat-view">
+      <InfoBar model={chat.sessionInfo.model} seed={chat.sessionInfo.seed} contextTokens={chat.sessionInfo.contextTokens} contextLimit={chat.sessionInfo.contextLimit} totalTokens={chat.sessionInfo.totalTokens} promptCacheHit={chat.sessionInfo.promptCacheHit} promptCacheMiss={chat.sessionInfo.promptCacheMiss} />
       <MessageList turns={chat.turns} isStreaming={chat.isStreaming} />
       <InputBar
         onSend={handleSend}

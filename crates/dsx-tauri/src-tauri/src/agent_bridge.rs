@@ -93,6 +93,17 @@ pub fn cmd_send_message(
     state.send(Ui2Agent::UserInput { text })
 }
 
+/// Reply to an ask_user interrupt. The response is injected as a tool result,
+/// and the turn loop resumes from the next round.
+#[tauri::command]
+pub fn cmd_ask_user_reply(
+    state: tauri::State<'_, AgentBridge>,
+    tool_call_id: String,
+    text: String,
+) -> Result<(), String> {
+    state.send(Ui2Agent::AskUserReply { tool_call_id, text })
+}
+
 /// Create a new session.
 #[tauri::command]
 pub fn cmd_create_session(
@@ -129,6 +140,7 @@ pub fn cmd_save_config(
     max_tokens: u32,
     context_limit: u32,
     reasoning_effort: String,
+    lang: String,
 ) -> Result<(), String> {
     let mut cfg = dsx_agent::config::Config::load().unwrap_or_default();
     if !api_key.is_empty() { cfg.api_key = api_key; }
@@ -139,6 +151,7 @@ pub fn cmd_save_config(
     if max_tokens > 0 { cfg.max_tokens = max_tokens; }
     if context_limit > 0 { cfg.context_limit = context_limit; }
     if !reasoning_effort.is_empty() { cfg.reasoning_effort = reasoning_effort; }
+    if !lang.is_empty() { cfg.lang = Some(lang); }
     cfg.save();
     state.send(Ui2Agent::ReloadConfig)
 }
@@ -199,7 +212,7 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
         Agent2Ui::Error { .. } => "error",
         Agent2Ui::ToolNotice { .. } => "tool_notice",
         Agent2Ui::Balance { .. } => "balance",
-        Agent2Ui::DebugSnapshot { .. } => "debug_snapshot",
+        Agent2Ui::Dashboard { .. } => "dashboard",
         Agent2Ui::Done => "done",
         Agent2Ui::Cancelled => "cancelled",
         Agent2Ui::ShutdownAck => "shutdown_ack",

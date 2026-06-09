@@ -6,15 +6,20 @@ export interface ToolResultDef { tool_call_id: string; output: string; success: 
 export interface RoundBlock { type: "reasoning" | "text" | "tool"; content?: string; card?: ToolCallDef; }
 export interface Round { roundNum: number; thinking?: string; answer?: string; blocks: RoundBlock[]; toolCalls: ToolCallDef[]; toolResults: ToolResultDef[]; }
 export interface Turn { turnId: string; userText: string; rounds: Round[]; status: "streaming" | "complete"; stopReason?: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; }
-export interface SessionInfo { seed: string; tokensUsed: number; contextTokens: number; contextLimit: number; sessionTokens: number; promptCacheHit: number; promptCacheMiss: number; }
+export interface SessionInfo { seed: string; model: string; contextTokens: number; contextLimit: number; totalTokens: number; promptCacheHit: number; promptCacheMiss: number; }
 export interface SessionMeta { seed: string; model: string; created_at: number; updated_at: number; message_count: number; last_summary: string; }
+export interface TaskInfo { id: string; subject: string; description: string; status: string; }
+export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
 
 export function createChatStore() {
   const [turns, setTurns] = createStore<Turn[]>([]);
-  const [sessionInfo, setSessionInfo] = createStore<SessionInfo>({ seed: "", tokensUsed: 0, contextTokens: 0, contextLimit: 0, sessionTokens: 0, promptCacheHit: 0, promptCacheMiss: 0 });
+  const [sessionInfo, setSessionInfo] = createStore<SessionInfo>({ seed: "", model: "", contextTokens: 0, contextLimit: 0, totalTokens: 0, promptCacheHit: 0, promptCacheMiss: 0 });
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [inputDisabled, setInputDisabled] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [tasks, setTasks] = createSignal<TaskInfo[]>([]);
+  const [recentEdits, setRecentEdits] = createSignal<string[]>([]);
+  const [activityLog, setActivityLog] = createSignal<ActivityEntry[]>([]);
   let streamBuffer = { thinking: "", answer: "" };
 
   function resetStreamBuffer() { streamBuffer = { thinking: "", answer: "" }; }
@@ -54,23 +59,29 @@ export function createChatStore() {
   function handleTurnEnd(turnId: string, data: Record<string, unknown>) {
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer();
     setTurns((t) => t.turnId === turnId, produce((turn) => { turn.status = "complete"; turn.stopReason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
-    if (data.session_tokens != null) setSessionInfo("sessionTokens", data.session_tokens as number);
+    if (data.usage != null) { const u = data.usage as Record<string, unknown>; if (u.total_tokens != null) setSessionInfo("totalTokens", u.total_tokens as number); }
     if (data.context_tokens != null) { setSessionInfo("contextTokens", data.context_tokens as number); setSessionInfo("contextLimit", (data.context_limit as number) ?? 0); }
   }
 
   function handleSessionCreated(seed: string) { setSessionInfo("seed", seed); }
-  function handleDebugSnapshot(data: Record<string, unknown>) {
+  function handleDashboard(data: Record<string, unknown>) {
     if (data.session_seed) setSessionInfo("seed", data.session_seed as string);
     if (data.context_tokens != null) setSessionInfo("contextTokens", data.context_tokens as number);
-    if (data.context_limit != null) setSessionInfo("contextLimit", data.context_limit as number);
-    if (data.session_tokens != null) setSessionInfo("sessionTokens", data.session_tokens as number);
     if (data.prompt_cache_hit_tokens != null) setSessionInfo("promptCacheHit", data.prompt_cache_hit_tokens as number);
     if (data.prompt_cache_miss_tokens != null) setSessionInfo("promptCacheMiss", data.prompt_cache_miss_tokens as number);
+    if (data.tasks != null) setTasks(data.tasks as TaskInfo[]);
+    if (data.recent_edits != null) setRecentEdits(data.recent_edits as string[]);
   }
 
   function handleCancelled() { setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); }
   function handleError(message: string) { setError(message); setIsStreaming(false); setInputDisabled(false); }
-  function clear() { setTurns([]); setError(null); resetStreamBuffer(); }
+  function handleAuditRecord(data: { tool_name: string; result_summary: string; success: boolean }) {
+    setActivityLog((prev) => {
+      const next = [{ tool_name: data.tool_name, summary: data.result_summary, success: data.success, time: Date.now() }, ...prev];
+      return next.length > 50 ? next.slice(0, 50) : next;
+    });
+  }
+  function clear() { setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]); resetStreamBuffer(); }
 
   // Load session data from disk (for resume / refresh restore)
   function loadSessionFromData(sessionJson: string) {
@@ -127,5 +138,5 @@ export function createChatStore() {
     }
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, error, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDebugSnapshot, handleCancelled, handleError, clear, setInputDisabled, loadSessionFromData };
+  return { turns, sessionInfo, isStreaming, inputDisabled, error, tasks, recentEdits, activityLog, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clear, setInputDisabled, loadSessionFromData };
 }
