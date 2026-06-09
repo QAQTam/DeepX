@@ -11,8 +11,8 @@ mod ui;
 use app::{App, Screen};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::event::EnableBracketedPaste;
-use dsx_proto::{Agent2Ui, Ui2Agent};
-use dsx_types::{ConfigStore, SessionMeta};
+use deepx_proto::{Agent2Ui, Ui2Agent};
+use deepx_types::{ConfigStore, SessionMeta};
 use ratatui::DefaultTerminal;
 use std::sync::mpsc;
 use std::thread;
@@ -21,15 +21,15 @@ use std::thread;
 fn spawn_agent_inproc(
     resume_seed: Option<&str>,
 ) -> anyhow::Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, thread::JoinHandle<()>)> {
-    let mut agent = dsx_msglp::agent::AgentState::init("tui");
+    let mut agent = deepx_msglp::agent::AgentState::init("tui");
     agent.session.resume_seed = resume_seed.map(String::from);
 
     let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
     let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
 
     let handle = thread::spawn(move || {
-        dsx_msglp::Loop::new(agent, tui_rx, agent_tx).run();
-        dsx_tools::bridge::shutdown_tools();
+        deepx_msglp::Loop::new(agent, tui_rx, agent_tx).run();
+        deepx_tools::bridge::shutdown_tools();
     });
 
     Ok((tui_tx, agent_rx, handle))
@@ -60,11 +60,11 @@ pub fn run_tui() -> anyhow::Result<()> {
         match spawn_agent_inproc(app.resume_seed.as_deref()) {
             Ok((mut tui_tx, agent_rx, handle)) => {
                 if app.resume_seed.is_none() {
-                    let _ = tui_tx.send(dsx_proto::Ui2Agent::CreateSession);
+                    let _ = tui_tx.send(deepx_proto::Ui2Agent::CreateSession);
                 }
                 let result = run_chat(terminal, &mut app, &mut tui_tx, &agent_rx,
                     |tx, frame| { let _ = tx.send(frame.clone()); });
-                let _ = tui_tx.send(dsx_proto::Ui2Agent::Shutdown);
+                let _ = tui_tx.send(deepx_proto::Ui2Agent::Shutdown);
                 handle.join().ok();
                 result
             }
@@ -83,7 +83,7 @@ pub fn run_tui() -> anyhow::Result<()> {
 
 fn load_sessions(app: &mut App) {
     use std::fs;
-    let dir = dsx_types::platform::sessions_dir();
+    let dir = deepx_types::platform::sessions_dir();
     let index_path = dir.join("index.toml");
     if let Ok(data) = fs::read_to_string(&index_path) {
         let metas: Option<Vec<SessionMeta>> = toml::from_str(&data).ok()
@@ -162,7 +162,7 @@ fn run_setup(
                         app.status = format!(
                             "{} {}",
                             app.setup.lang.t_config_saved(),
-                            dsx_types::platform::config_path().display()
+                            deepx_types::platform::config_path().display()
                         );
                         return Ok(());
                     }
@@ -283,7 +283,7 @@ fn run_chat(
                             }
                         } else { continue };
                         if !reply.is_empty() {
-                            send(tui_tx, &dsx_proto::Ui2Agent::UserInput { text: reply });
+                            send(tui_tx, &deepx_proto::Ui2Agent::UserInput { text: reply });
                         }
                         app.ask = None;
                     }
@@ -317,7 +317,7 @@ fn run_chat(
                     if agent_dead { continue; }
                     let menu = crate::app::MenuState::new(app);
                     run_menu(terminal, app, menu)?;
-                    send(tui_tx, &dsx_proto::Ui2Agent::ReloadConfig);
+                    send(tui_tx, &deepx_proto::Ui2Agent::ReloadConfig);
                 }
                 (KeyModifiers::NONE, KeyCode::F(12)) => {
                     app.show_debug = !app.show_debug;
@@ -332,7 +332,7 @@ fn run_chat(
                 | (_, KeyCode::F(3)) => return Ok(()),
                 (_, KeyCode::Esc) => {
                     if !agent_dead {
-                        send(tui_tx, &dsx_proto::Ui2Agent::Cancel);
+                        send(tui_tx, &deepx_proto::Ui2Agent::Cancel);
                     }
                     app.status = app.setup.lang.t_chat_cancelled().to_string();
                 }
@@ -357,7 +357,7 @@ fn run_chat(
                         }
                         app.status = app.setup.lang.t_chat_thinking().to_string();
                         app.busy = true;
-                        send(tui_tx, &dsx_proto::Ui2Agent::UserInput { text });
+                        send(tui_tx, &deepx_proto::Ui2Agent::UserInput { text });
                     }
                 }
                 (_, KeyCode::Backspace) => {

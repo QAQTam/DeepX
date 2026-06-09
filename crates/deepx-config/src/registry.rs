@@ -8,7 +8,7 @@
 //! Backward compat: old provider_id "deepseek-openai"/"deepseek-anthropic" are
 //! auto-migrated to provider_id="deepseek" + endpoint="openai".
 
-use dsx_types::{EndpointSpec, ProviderSpec, UserSendMode};
+use deepx_types::{EndpointSpec, ProviderSpec, UserSendMode};
 
 // ── Static registry ──
 

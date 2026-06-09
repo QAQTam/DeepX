@@ -10,7 +10,7 @@ fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
         "--tui" => {
-            if let Err(e) = dsx_tui::run_tui() {
+            if let Err(e) = deepx_tui::run_tui() {
                 eprintln!("dsx-tui: {e}");
                 std::process::exit(1);
             }
@@ -23,7 +23,7 @@ fn main() {
         }
         _ => {
             // Default: Tauri GUI (handles its own arg parsing)
-            dsx_tauri_lib::run();
+            deepx_tauri_lib::run();
         }
     }
 }
@@ -32,9 +32,9 @@ fn main() {
 fn run_config() {
     use std::io::Write;
 
-    let store = dsx_types::ConfigStore::default_location();
+    let store = deepx_types::ConfigStore::default_location();
     let _ = std::fs::create_dir_all(
-        dsx_types::platform::data_dir(),
+        deepx_types::platform::data_dir(),
     );
 
     let mut api_key = String::new();
@@ -89,7 +89,7 @@ fn run_config() {
         }
     }
 
-    let pc = dsx_types::PersistentConfig {
+    let pc = deepx_types::PersistentConfig {
         api_key: Some(api_key),
         base_url: Some(base_url),
         model: Some(model),
@@ -99,7 +99,7 @@ fn run_config() {
 
     if store.save(&pc) {
         println!();
-        println!("Config saved to {}", dsx_types::platform::config_path().display());
+        println!("Config saved to {}", deepx_types::platform::config_path().display());
         println!("Run `dsx` to start.");
     } else {
         eprintln!("Error saving config");

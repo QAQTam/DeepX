@@ -108,12 +108,12 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let exit_status = loop {
         if crate::CANCEL.load(Ordering::SeqCst) {
-            dsx_types::platform::kill_process(pid);
+            deepx_types::platform::kill_process(pid);
             return "[CANCELLED] Command execution cancelled by user.".into();
         }
         let remaining = deadline.checked_duration_since(std::time::Instant::now()).unwrap_or_default();
         if remaining.is_zero() {
-            dsx_types::platform::kill_process(pid);
+            deepx_types::platform::kill_process(pid);
             return format!("[ERROR] exec timed out after {}s\n[HINT] Increase timeout_secs or check if the command is stuck.", timeout_secs);
         }
         match child.try_wait() {
@@ -165,7 +165,7 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
 }
 
 
-use dsx_types::arg::{parse_opt, parse_opt_u64};
+use deepx_types::arg::{parse_opt, parse_opt_u64};
 
 // ── 注册入口 ──
 

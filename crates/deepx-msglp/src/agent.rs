@@ -2,27 +2,27 @@
 
 use deepx_config::Config;
 
-use dsx_message::MessageStore;
-
+use deepx_message::MessageStore;
+use deepx_tools::bridge;
 
 #[derive(Debug)]
 pub struct AgentState {
-    pub msg: dsx_message::MessageStore,
+    pub msg: deepx_message::MessageStore,
     pub config: deepx_config::Config,
-    pub session: dsx_session::SessionMeta,
+    pub session: deepx_session::SessionMeta,
     pub tool_results: Vec<(String, String)>,
-    pub tool_defs: Vec<dsx_types::ToolDef>,
+    pub tool_defs: Vec<deepx_types::ToolDef>,
     pub dsml_compat_count: u32,
     pub turn_count: u32,
 }
 
 impl AgentState {
     pub fn new(config: deepx_config::Config) -> Self {
-        let mut msg = dsx_message::MessageStore::new("init");
-        msg.push_system(dsx_types::Message::system(&deepx_config::prompt::system_prompt()));
+        let mut msg = deepx_message::MessageStore::new("init");
+        msg.push_system(deepx_types::Message::system(&deepx_config::prompt::system_prompt()));
         Self {
             msg, config,
-            session: SessionMeta::new(),
+            session: deepx_session::SessionMeta::new(),
             tool_results: Vec::new(),
             tool_defs: Vec::new(),
             dsml_compat_count: 0,
@@ -32,16 +32,16 @@ impl AgentState {
 
     pub fn init(caller: &str) -> Self {
         let config = Config::load().unwrap_or_default();
-        dsx_tools::init_tools(caller, &[]);
+        bridge::init_tools(caller, &[]);
         if let Some(ref key) = config.context7_api_key {
-            if !key.is_empty() { dsx_tools::set_context7_key(key); }
+            if !key.is_empty() { bridge::set_context7_key(key); }
         }
         let mut agent = Self::new(config);
-        agent.tool_defs = dsx_tools::all_tools();
+        agent.tool_defs = bridge::all_tools();
         agent
     }
 
-    pub fn build_context(&mut self) -> Vec<dsx_types::Message> {
+    pub fn build_context(&mut self) -> Vec<deepx_types::Message> {
         let mut sys = String::new();
         if !self.session.from_resume {
             if self.config.reasoning_effort == "max" {

@@ -1,7 +1,7 @@
-use dsx_types::Message;
+use deepx_types::Message;
 use crate::effect::{Effect, PendingTool, ToolExecRequest, ToolExecutorFn};
-use dsx_session::SessionManager;
-use dsx_types::SessionFile;
+use deepx_session::SessionManager;
+use deepx_types::SessionFile;
 
 #[derive(Debug, Clone)]
 pub struct Step {
@@ -17,7 +17,7 @@ impl Step {
     pub fn assistant_tool_ids(&self) -> Vec<String> {
         self.assistant.content.iter()
             .filter_map(|b| {
-                if let dsx_types::ContentBlock::ToolUse { id, .. } = b {
+                if let deepx_types::ContentBlock::ToolUse { id, .. } = b {
                     Some(id.clone())
                 } else {
                     None
@@ -29,7 +29,7 @@ impl Step {
     pub fn tool_result_has_id(&self, id: &str) -> bool {
         self.tool_results.iter().any(|tr| {
             tr.content.iter().any(|b| {
-                matches!(b, dsx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id)
+                matches!(b, deepx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id)
             })
         })
     }
@@ -47,7 +47,7 @@ impl Step {
     pub fn pending_tools(&self) -> Vec<PendingTool> {
         self.assistant.content.iter()
             .filter_map(|b| {
-                if let dsx_types::ContentBlock::ToolUse { id, name, input } = b {
+                if let deepx_types::ContentBlock::ToolUse { id, name, input } = b {
                     Some(PendingTool {
                         id: id.clone(),
                         name: name.clone(),
@@ -61,7 +61,7 @@ impl Step {
     }
 
     fn has_tool_use(&self) -> bool {
-        self.assistant.content.iter().any(|b| matches!(b, dsx_types::ContentBlock::ToolUse { .. }))
+        self.assistant.content.iter().any(|b| matches!(b, deepx_types::ContentBlock::ToolUse { .. }))
     }
 }
 
@@ -89,7 +89,7 @@ pub struct MessageStore {
     gate_cursor: usize,
     cancelled: bool,
     tool_executor: Option<ToolExecutorFn>,
-    ui_tx: Option<std::sync::mpsc::Sender<dsx_proto::Agent2Ui>>,
+    ui_tx: Option<std::sync::mpsc::Sender<deepx_proto::Agent2Ui>>,
     cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
@@ -261,7 +261,7 @@ impl MessageStore {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
                 step.tool_results.retain(|tr| {
                     !tr.content.iter().any(|b| {
-                        matches!(b, dsx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == tool_call_id)
+                        matches!(b, deepx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == tool_call_id)
                     })
                 });
                 step.tool_results.push(Message::tool(tool_call_id, result));
@@ -293,7 +293,7 @@ impl MessageStore {
             let ann_text = annotations.join("\n");
             if let Some(last_user) = full.iter_mut().rev().find(|m| m.role == "user") {
                 let existing = last_user.content.iter_mut().find_map(|b| {
-                    if let dsx_types::ContentBlock::Text { ref mut text } = b {
+                    if let deepx_types::ContentBlock::Text { ref mut text } = b {
                         Some(text)
                     } else {
                         None
@@ -303,7 +303,7 @@ impl MessageStore {
                     text.push_str("\n\n## Notes\n");
                     text.push_str(&ann_text);
                 } else {
-                    last_user.content.push(dsx_types::ContentBlock::text(&ann_text));
+                    last_user.content.push(deepx_types::ContentBlock::text(&ann_text));
                 }
             }
         }
@@ -384,12 +384,12 @@ impl MessageStore {
         let mut results = Vec::new();
         for tr in &step.tool_results {
             if let Some(tb) = tr.content.iter().find_map(|b| {
-                if let dsx_types::ContentBlock::ToolResult { tool_use_id, content } = b {
+                if let deepx_types::ContentBlock::ToolResult { tool_use_id, content } = b {
                     Some((tool_use_id.clone(), content.clone()))
                 } else { None }
             }) {
                 let tool_name = step.assistant.content.iter().find_map(|b| {
-                    if let dsx_types::ContentBlock::ToolUse { id, name, .. } = b {
+                    if let deepx_types::ContentBlock::ToolUse { id, name, .. } = b {
                         if id == &tb.0 { Some(name.clone()) } else { None }
                     } else { None }
                 }).unwrap_or_default();
@@ -403,7 +403,7 @@ impl MessageStore {
     pub fn tool_call_args(&self, tool_call_id: &str) -> Option<serde_json::Value> {
         let step = self.turns.last().and_then(|t| t.steps.last())?;
         step.assistant.content.iter().find_map(|b| {
-            if let dsx_types::ContentBlock::ToolUse { id, input, .. } = b {
+            if let deepx_types::ContentBlock::ToolUse { id, input, .. } = b {
                 if id == tool_call_id { Some(input.clone()) } else { None }
             } else { None }
         })
@@ -449,7 +449,7 @@ impl MessageStore {
         self.tool_executor = Some(executor);
     }
 
-    pub fn set_ui_tx(&mut self, tx: std::sync::mpsc::Sender<dsx_proto::Agent2Ui>) {
+    pub fn set_ui_tx(&mut self, tx: std::sync::mpsc::Sender<deepx_proto::Agent2Ui>) {
         self.ui_tx = Some(tx);
     }
 
@@ -479,7 +479,7 @@ impl MessageStore {
             match msgs[i].role.as_str() {
                 "user" => {
                     let text = msgs[i].content.iter().find_map(|b| {
-                        if let dsx_types::ContentBlock::Text { text } = b {
+                        if let deepx_types::ContentBlock::Text { text } = b {
                             Some(text.clone())
                         } else { None }
                     }).unwrap_or_default();
@@ -492,7 +492,7 @@ impl MessageStore {
                 }
                 "tool" => {
                     let (tc_id, result) = msgs[i].content.iter().find_map(|b| {
-                        if let dsx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = b {
+                        if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = b {
                             Some((tool_use_id.clone(), content.clone()))
                         } else { None }
                     }).unwrap_or_default();
@@ -511,7 +511,7 @@ impl MessageStore {
                         .filter(|id| !step.tool_result_has_id(id))
                         .map(|id| {
                             let name = step.assistant.content.iter().find_map(|b| {
-                                if let dsx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
+                                if let deepx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
                                     if tid == id { Some(name.clone()) } else { None }
                                 } else { None }
                             }).unwrap_or_default();
@@ -553,7 +553,7 @@ fn auto_complete_unfulfilled(step: &mut Step, reason: &str) {
             .filter(|id| !step.tool_result_has_id(id))
             .map(|id| {
                 let name = step.assistant.content.iter().find_map(|b| {
-                    if let dsx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
+                    if let deepx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
                         if tid == id { Some(name.clone()) } else { None }
                     } else { None }
                 }).unwrap_or_default();

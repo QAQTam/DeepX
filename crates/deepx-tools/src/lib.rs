@@ -77,7 +77,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use dsx_types::ToolDef;
+use deepx_types::ToolDef;
 
 // ── Global state ──
 
@@ -155,15 +155,15 @@ impl ToolResult {
 // ── parse helpers ──
 
 pub fn parse_arg(args: &str, key: &str) -> String {
-    dsx_types::arg::parse_arg(args, key).unwrap_or_default()
+    deepx_types::arg::parse_arg(args, key).unwrap_or_default()
 }
 
 pub fn parse_arg_or(args: &str, key: &str, default: &str) -> String {
-    dsx_types::arg::parse_arg_or(args, key, default)
+    deepx_types::arg::parse_arg_or(args, key, default)
 }
 
 pub fn parse_opt(args: &str, key: &str) -> Option<String> {
-    dsx_types::arg::parse_arg(args, key)
+    deepx_types::arg::parse_arg(args, key)
 }
 
 pub fn parse_opt_bool(args: &str, key: &str) -> Option<bool> {
@@ -188,7 +188,7 @@ impl ToolHandler {
     pub fn to_tool_def(&self) -> ToolDef {
         ToolDef {
             call_type: "function".into(),
-            function: dsx_types::ToolFunction {
+            function: deepx_types::ToolFunction {
                 name: self.key.name.to_string(),
                 description: self.description.to_string(),
                 parameters: self.input_schema.clone(),

@@ -756,6 +756,7 @@ dependencies = [
  "deepx-msglp",
  "deepx-proto",
  "deepx-session",
+ "deepx-tools",
  "deepx-types",
  "log",
  "serde",

@@ -81,7 +81,7 @@ impl ToolManager {
         crate::set_current_session(session_seed);
     }
 
-    pub fn all_defs(&self) -> Vec<dsx_types::ToolDef> {
+    pub fn all_defs(&self) -> Vec<deepx_types::ToolDef> {
         let mut seen = std::collections::HashSet::new();
         let mut defs = Vec::new();
         for (key, handler) in &self.handlers {
@@ -92,7 +92,7 @@ impl ToolManager {
         defs
     }
 
-    pub fn filtered_defs(&self) -> Vec<dsx_types::ToolDef> {
+    pub fn filtered_defs(&self) -> Vec<deepx_types::ToolDef> {
         match &self.allowed {
             Some(allowed) => self.all_defs().into_iter()
                 .filter(|d| allowed.contains(&d.function.name))

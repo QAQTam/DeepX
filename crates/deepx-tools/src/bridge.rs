@@ -3,7 +3,7 @@
 //! ToolManager is linked directly into the agent process, eliminating
 //! IPC failures, respawn complexity, and serialization overhead.
 
-use dsx_types::ToolDef;
+use deepx_types::ToolDef;
 use std::sync::{mpsc, Mutex, OnceLock};
 
 /// Return type for tool execution with interrupt support.
@@ -113,7 +113,7 @@ pub fn set_current_session(seed: &str) {
 }
 
 pub fn load_workspace(seed: &str) {
-    let dir = dsx_types::platform::sessions_dir().join(seed);
+    let dir = deepx_types::platform::sessions_dir().join(seed);
     let ws = std::fs::read_to_string(dir.join("workspace.txt")).unwrap_or_default();
     let ws = ws.trim();
     if !ws.is_empty() {
@@ -131,21 +131,21 @@ pub fn set_workspace(path: &str) {
 /// Each tool gets its own thread; the Mutex serializes ToolManager access.
 /// Returns (tool_call_id, ToolExecReport) pairs.
 /// Simple tool executor — wraps ToolManager::handle_req for dsx-message callback.
-pub fn execute_tool_simple(req: &dsx_message::ToolExecRequest) -> dsx_message::ToolExecReport {
+pub fn execute_tool_simple(req: &deepx_message::ToolExecRequest) -> deepx_message::ToolExecReport {
     let result = with_mgr(|mgr| {
         mgr.handle_req(req.id.clone(), &req.name, "", req.args.clone(), Some(60), None)
     });
     match result {
-        Some(r) => dsx_message::ToolExecReport { content: r.content, success: r.success, files_affected: r.files_affected },
-        None => dsx_message::ToolExecReport { content: "[ERROR] ToolManager not initialised".into(), success: false, files_affected: Vec::new() },
+        Some(r) => deepx_message::ToolExecReport { content: r.content, success: r.success, files_affected: r.files_affected },
+        None => deepx_message::ToolExecReport { content: "[ERROR] ToolManager not initialised".into(), success: false, files_affected: Vec::new() },
     }
 }
 
 pub fn execute_tools_parallel(
-    tools: Vec<dsx_message::ToolExecRequest>,
+    tools: Vec<deepx_message::ToolExecRequest>,
     progress_tx: Option<&std::sync::mpsc::Sender<String>>,
-    agent_tx: Option<&std::sync::mpsc::Sender<dsx_proto::Agent2Ui>>,
-) -> Vec<(String, dsx_message::ToolExecReport)> {
+    agent_tx: Option<&std::sync::mpsc::Sender<deepx_proto::Agent2Ui>>,
+) -> Vec<(String, deepx_message::ToolExecReport)> {
     if tools.len() <= 1 {
         return tools.into_iter().map(|req| {
             let report = execute_tool_simple(&req);
@@ -168,10 +168,10 @@ pub fn execute_tools_parallel(
             });
 
             let report = match result {
-                Some(r) => dsx_message::ToolExecReport {
+                Some(r) => deepx_message::ToolExecReport {
                     content: r.content, success: r.success, files_affected: Vec::new(),
                 },
-                None => dsx_message::ToolExecReport {
+                None => deepx_message::ToolExecReport {
                     content: "[ERROR] ToolManager not initialised".into(),
                     success: false, files_affected: Vec::new(),
                 },
@@ -180,7 +180,7 @@ pub fn execute_tools_parallel(
             // Stream exec output to UI
             if let (Some(rx), Some(atx)) = (prx, agent_tx) {
                 while let Ok(delta) = rx.recv() {
-                    let _ = atx.send(dsx_proto::Agent2Ui::ToolExecDelta {
+                    let _ = atx.send(deepx_proto::Agent2Ui::ToolExecDelta {
                         tool_call_id: req.id.clone(), delta,
                     });
                 }
@@ -190,11 +190,11 @@ pub fn execute_tools_parallel(
         })
     }).collect();
 
-    let reports: Vec<(String, dsx_message::ToolExecReport)> = handles.into_iter().map(|h| {
+    let reports: Vec<(String, deepx_message::ToolExecReport)> = handles.into_iter().map(|h| {
         h.join().unwrap_or_else(|e| {
             let msg = format!("[ERROR] tool thread panicked: {:?}",
                 e.downcast_ref::<&str>().unwrap_or(&"unknown"));
-            ("unknown".into(), dsx_message::ToolExecReport {
+            ("unknown".into(), deepx_message::ToolExecReport {
                 content: msg, success: false, files_affected: Vec::new(),
             })
         })
@@ -205,12 +205,12 @@ pub fn execute_tools_parallel(
         let mut tool_defs = Vec::new();
         for (tc_id, report) in &reports {
             let summary = report.content.lines().next().unwrap_or(&report.content);
-            let _ = atx.send(dsx_proto::Agent2Ui::AuditRecord {
+            let _ = atx.send(deepx_proto::Agent2Ui::AuditRecord {
                 tool_name: tc_id.clone(),
                 result_summary: summary.chars().take(120).collect(),
                 success: report.success,
             });
-            tool_defs.push(dsx_proto::ToolResultDef {
+            tool_defs.push(deepx_proto::ToolResultDef {
                 tool_call_id: tc_id.clone(),
                 output: report.content.clone(),
                 success: report.success,
@@ -218,7 +218,7 @@ pub fn execute_tools_parallel(
             });
         }
         if !tool_defs.is_empty() {
-            let _ = atx.send(dsx_proto::Agent2Ui::ToolResults {
+            let _ = atx.send(deepx_proto::Agent2Ui::ToolResults {
                 turn_id: "tool_batch".into(),
                 round_num: 0,
                 results: tool_defs,

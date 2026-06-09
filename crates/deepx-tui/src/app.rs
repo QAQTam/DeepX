@@ -1,5 +1,5 @@
-use dsx_proto::{Agent2Ui, DocInfo, RoundBlock, RoundDeltaKind, TurnData};
-use dsx_types::{ConfigStore, PersistentConfig, SessionMeta};
+use deepx_proto::{Agent2Ui, DocInfo, RoundBlock, RoundDeltaKind, TurnData};
+use deepx_types::{ConfigStore, PersistentConfig, SessionMeta};
 use crate::markdown::MarkdownRenderer;
 
 // ── Active screen ──
@@ -323,7 +323,7 @@ pub struct MenuState {
     pub editing: bool,
     pub edit_buf: String,
     pub status: String,
-    pub profiles: std::collections::HashMap<String, dsx_types::ProfileConfig>,
+    pub profiles: std::collections::HashMap<String, deepx_types::ProfileConfig>,
     pub lang: crate::i18n::Lang,
     session_seed: String,
 }
@@ -383,7 +383,7 @@ impl MenuState {
         let ws_root = if session_seed.is_empty() {
             ".".to_string()
         } else {
-            let ws_path = dsx_types::platform::sessions_dir().join(&session_seed).join("workspace.txt");
+            let ws_path = deepx_types::platform::sessions_dir().join(&session_seed).join("workspace.txt");
             std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
         };
         let ws_root_display = if ws_root.is_empty() { "." } else { &ws_root };
@@ -671,7 +671,7 @@ impl MenuState {
 
     fn save_workspace(&self, path: &str) -> bool {
         if self.session_seed.is_empty() { return false; }
-        let dir = dsx_types::platform::sessions_dir().join(&self.session_seed);
+        let dir = deepx_types::platform::sessions_dir().join(&self.session_seed);
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("workspace.txt"), path).is_ok()
     }
@@ -820,7 +820,7 @@ impl App {
         if self.debug.session_seed.is_empty() {
             return Vec::new();
         }
-        let path = dsx_types::platform::sessions_dir()
+        let path = deepx_types::platform::sessions_dir()
             .join(&self.debug.session_seed)
             .join("tasks.md");
         let content = std::fs::read_to_string(&path).unwrap_or_default();

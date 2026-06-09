@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::time::Duration;
 
-use dsx_types::{ContentBlock, Message, ToolDef, UsageInfo};
+use deepx_types::{ContentBlock, Message, ToolDef, UsageInfo};
 
 use super::types::{ProviderConfig, StreamEvent};
 
@@ -395,7 +395,7 @@ fn build_chat_url(base_url: &str) -> String {
 
 // ── Balance query ──
 
-pub fn query_balance(api_key: &str, base_url: &str) -> Option<dsx_types::BalanceInfo> {
+pub fn query_balance(api_key: &str, base_url: &str) -> Option<deepx_types::BalanceInfo> {
     let balance_url = base_url.trim_end_matches('/').trim_end_matches("/v1").to_string() + "/user/balance";
     let resp = ureq::get(&balance_url)
         .set("Authorization", &format!("Bearer {}", api_key))
@@ -410,7 +410,7 @@ pub fn query_balance(api_key: &str, base_url: &str) -> Option<dsx_types::Balance
     let currency = first.get("currency").and_then(|v| v.as_str()).unwrap_or("CNY").to_string();
     let total_balance = first.get("total_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
 
-    Some(dsx_types::BalanceInfo {
+    Some(deepx_types::BalanceInfo {
         is_available,
         currency,
         total_balance,
@@ -437,7 +437,7 @@ fn http_error_description(status: u16) -> &'static str {
 // ── Debug logging ──
 
 fn log_dir() -> std::path::PathBuf {
-    let mut p = dsx_types::platform::data_dir();
+    let mut p = deepx_types::platform::data_dir();
     p.push("logs");
     p
 }

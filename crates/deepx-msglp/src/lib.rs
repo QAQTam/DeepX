@@ -10,14 +10,14 @@ use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-mod agent;
+pub mod agent;
 use agent::AgentState;
 mod lifecycle;
 mod dashboard;
 use dashboard::{build_documents, build_recent_edits, build_tasks};
 use lifecycle::{init_session, create_session};
-use dsx_message::{Effect, ToolExecRequest, ToolExecReport};
-use dsx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
+use deepx_message::{Effect, ToolExecRequest, ToolExecReport};
+use deepx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
 
 // ═══════════════════════════════════════════════════════
 // CancelToken — shared abort flag
@@ -90,7 +90,7 @@ impl Loop {
         self.agent.msg.set_ui_tx(self.ui_tx.clone());
         self.agent.msg.set_cancel(self.cancel.arc());
         self.agent.msg.set_tool_executor(Box::new(|req: ToolExecRequest| {
-            let result = dsx_tools::execute_tool_with_id(&req.name, "", &req.args.to_string(), &req.id);
+            let result = deepx_tools::bridge::execute_tool_with_id(&req.name, "", &req.args.to_string(), &req.id);
             let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");
             ToolExecReport { content: result, success, files_affected: Vec::new() }
         }));
@@ -128,13 +128,13 @@ impl Loop {
                 Ui2Agent::Cancel => {
                     // 1. ALWAYS abort gate HTTP first
                     self.cancel.set();
-                    dsx_tools::CANCEL.store(true, Ordering::SeqCst);
+                    deepx_tools::CANCEL.store(true, Ordering::SeqCst);
                     // turn_state deleted — cancel handled by CancelToken
 
                     // 2. Then abort whatever else is running
                     match self.phase {
                         LoopPhase::ToolsRunning => {
-                            dsx_tools::cancel_current_tool();
+                            deepx_tools::bridge::cancel_current_tool();
                         }
                         _ => {}
                     }
@@ -161,10 +161,10 @@ impl Loop {
                         self.agent.config.context_limit = cfg.context_limit;
                         if let Some(ref key) = cfg.context7_api_key {
                             if !key.is_empty() {
-                                dsx_tools::set_context7_key(key);
+                                deepx_tools::bridge::set_context7_key(key);
                             }
                         }
-                        dsx_tools::load_workspace(&self.agent.session.seed);
+                        deepx_tools::bridge::load_workspace(&self.agent.session.seed);
                     }
                 }
 
@@ -175,12 +175,12 @@ impl Loop {
                 }
 
                 Ui2Agent::ToolCall { id, name, action, args } => {
-                    let result = dsx_tools::execute_tool_with_id(&name, &action, &args.to_string(), &id);
+                    let result = deepx_tools::bridge::execute_tool_with_id(&name, &action, &args.to_string(), &id);
                     let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");
                     let _ = self.ui_tx.send(Agent2Ui::ToolResults {
                         turn_id: "headless".into(),
                         round_num: 0,
-                        results: vec![dsx_proto::ToolResultDef {
+                        results: vec![deepx_proto::ToolResultDef {
                             tool_call_id: id,
                             output: result,
                             success,
@@ -193,7 +193,7 @@ impl Loop {
             }
         }
 
-        dsx_tools::shutdown_tools();
+        deepx_tools::bridge::shutdown_tools();
         self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
         log::info!(
             "dsx-msglp: shutdown complete (session {}, {} turns, {} tokens)",
@@ -215,7 +215,7 @@ impl Loop {
 
         self.cancel.clear();
         // turn_state deleted — cancel handled by CancelToken
-        dsx_tools::CANCEL.store(false, Ordering::SeqCst);
+        deepx_tools::CANCEL.store(false, Ordering::SeqCst);
         
         self.agent.msg.push_user(text);
 
@@ -233,10 +233,10 @@ impl Loop {
         );
 
         let mut round_num = 0u32;
-        let mut last_usage: Option<dsx_types::UsageInfo> = None;
+        let mut last_usage: Option<deepx_types::UsageInfo> = None;
 
         loop {
-            if self.cancel.is_set() || dsx_tools::CANCEL.load(Ordering::SeqCst) {
+            if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                 self.agent.msg.remove_last_step_if_incomplete();
                 break;
             }
@@ -283,9 +283,9 @@ impl Loop {
                             let mut blocks: Vec<serde_json::Value> = Vec::new();
                             for block in &raw_message.content {
                                 match block {
-                                    dsx_types::ContentBlock::Text { text } => content.push_str(text),
-                                    dsx_types::ContentBlock::Reasoning { reasoning: r } => reasoning.push_str(r),
-                                    dsx_types::ContentBlock::ToolUse { id, name, input } => {
+                                    deepx_types::ContentBlock::Text { text } => content.push_str(text),
+                                    deepx_types::ContentBlock::Reasoning { reasoning: r } => reasoning.push_str(r),
+                                    deepx_types::ContentBlock::ToolUse { id, name, input } => {
                                         blocks.push(serde_json::json!({
                                             "id": id,
                                             "name": name,
@@ -325,7 +325,7 @@ impl Loop {
                     let results = self.agent.msg.last_step_tool_results();
                     let mut tool_defs = Vec::new();
                     for (tc_id, tool_name, result_content, success) in &results {
-                        tool_defs.push(dsx_proto::ToolResultDef {
+                        tool_defs.push(deepx_proto::ToolResultDef {
                             tool_call_id: tc_id.clone(),
                             output: result_content.clone(),
                             success: *success,
@@ -396,7 +396,7 @@ impl Loop {
 fn parse_tool_calls_from_response(
     content: &str, _reasoning: &str, tool_calls_raw: &serde_json::Value,
     agent: &AgentState,
-) -> Vec<dsx_types::ToolCall> {
+) -> Vec<deepx_types::ToolCall> {
     let mut parsed = deepx_gate::tool_parser::parse_tool_calls(tool_calls_raw);
     if parsed.is_empty() {
         let stripped = deepx_gate::tool_parser::strip_fenced_code(content);
@@ -419,9 +419,9 @@ fn has_xml(s: &str) -> bool {
 }
 
 fn build_assistant_message(
-    content: &str, reasoning: &str, parsed: &[dsx_types::ToolCall],
-) -> dsx_types::Message {
-    use dsx_types::{ContentBlock, Message};
+    content: &str, reasoning: &str, parsed: &[deepx_types::ToolCall],
+) -> deepx_types::Message {
+    use deepx_types::{ContentBlock, Message};
     let mut blocks = Vec::new();
     if !reasoning.is_empty() {
         blocks.push(ContentBlock::Reasoning { reasoning: reasoning.to_string() });
@@ -438,27 +438,27 @@ fn build_assistant_message(
 
 fn emit_round_complete(
     _agent: &AgentState, ui_tx: &mpsc::Sender<Agent2Ui>,
-    turn_id: &str, round_num: u32, assistant_msg: &dsx_types::Message,
-    content: &str, reasoning: &str, _parsed: &[dsx_types::ToolCall],
+    turn_id: &str, round_num: u32, assistant_msg: &deepx_types::Message,
+    content: &str, reasoning: &str, _parsed: &[deepx_types::ToolCall],
 ) {
-    use dsx_types::ContentBlock;
+    use deepx_types::ContentBlock;
     let mut blocks = Vec::new();
     let mut tool_calls = Vec::new();
     for cb in &assistant_msg.content {
         match cb {
             ContentBlock::Reasoning { reasoning } if !reasoning.is_empty() => {
-                blocks.push(dsx_proto::RoundBlock::Reasoning { content: reasoning.clone() });
+                blocks.push(deepx_proto::RoundBlock::Reasoning { content: reasoning.clone() });
             }
             ContentBlock::Text { text } if !text.is_empty() => {
-                blocks.push(dsx_proto::RoundBlock::Text { content: text.clone() });
+                blocks.push(deepx_proto::RoundBlock::Text { content: text.clone() });
             }
             ContentBlock::ToolUse { id, name, input } if name != "ask_user" => {
-                tool_calls.push(dsx_proto::ToolCallDef {
+                tool_calls.push(deepx_proto::ToolCallDef {
                     id: id.clone(), name: name.clone(),
                     args_display: name.clone(), args_json: input.to_string(),
                 });
-                blocks.push(dsx_proto::RoundBlock::Tool {
-                    card: dsx_proto::ToolCallDef {
+                blocks.push(deepx_proto::RoundBlock::Tool {
+                    card: deepx_proto::ToolCallDef {
                         id: id.clone(), name: name.clone(),
                         args_display: name.clone(), args_json: input.to_string(),
                     },
@@ -478,8 +478,8 @@ fn emit_round_complete(
     });
 }
 
-fn build_turns_from_context(agent: &AgentState) -> Vec<dsx_proto::TurnData> {
-    use dsx_types::ContentBlock;
+fn build_turns_from_context(agent: &AgentState) -> Vec<deepx_proto::TurnData> {
+    use deepx_types::ContentBlock;
     let mut turns = Vec::new();
     for (ti, turn) in agent.msg.turns().iter().enumerate() {
         let mut rounds = Vec::new();
@@ -490,32 +490,32 @@ fn build_turns_from_context(agent: &AgentState) -> Vec<dsx_proto::TurnData> {
             let answer = step.assistant.content.iter().find_map(|b| {
                 if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
             });
-            let tcs: Vec<dsx_proto::ToolCallDef> = step.assistant.content.iter().filter_map(|b| {
+            let tcs: Vec<deepx_proto::ToolCallDef> = step.assistant.content.iter().filter_map(|b| {
                 if let ContentBlock::ToolUse { id, name, input } = b {
-                    Some(dsx_proto::ToolCallDef {
+                    Some(deepx_proto::ToolCallDef {
                         id: id.clone(), name: name.clone(),
                         args_display: name.clone(), args_json: input.to_string(),
                     })
                 } else { None }
             }).collect();
-            let trs: Vec<dsx_proto::ToolResultDef> = step.tool_results.iter().filter_map(|tr| {
+            let trs: Vec<deepx_proto::ToolResultDef> = step.tool_results.iter().filter_map(|tr| {
                 tr.content.iter().find_map(|b| {
                     if let ContentBlock::ToolResult { tool_use_id, content } = b {
-                        Some(dsx_proto::ToolResultDef {
+                        Some(deepx_proto::ToolResultDef {
                             tool_call_id: tool_use_id.clone(),
                             output: content.clone(), success: true, file: None,
                         })
                     } else { None }
                 })
             }).collect();
-            rounds.push(dsx_proto::RoundData {
+            rounds.push(deepx_proto::RoundData {
                 round_num: ri as u32, thinking, answer, tool_calls: tcs, tool_results: trs,
             });
         }
         let user_text = turn.user.content.iter().find_map(|b| {
             if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
         }).unwrap_or_default();
-        turns.push(dsx_proto::TurnData {
+        turns.push(deepx_proto::TurnData {
             turn_id: format!("t{}", ti + 1), user_text, rounds,
         });
     }

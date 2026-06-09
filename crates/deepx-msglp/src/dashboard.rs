@@ -1,9 +1,9 @@
 use crate::agent::AgentState;
-use dsx_proto::DocInfo;
-use dsx_proto::TaskInfo;
+use deepx_proto::DocInfo;
+use deepx_proto::TaskInfo;
 
 pub fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
-    let files_read = dsx_tools::bridge::files_read();
+    let files_read = deepx_tools::bridge::files_read();
     let mut docs: Vec<DocInfo> = files_read
         .iter()
         .map(|path| {
@@ -21,7 +21,7 @@ pub fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
 }
 
 pub fn build_recent_edits(_agent: &AgentState) -> Vec<String> {
-    let files = dsx_tools::bridge::files_written();
+    let files = deepx_tools::bridge::files_written();
     files.iter().take(10).map(|f| format!("edit: {}", f)).collect()
 }
 

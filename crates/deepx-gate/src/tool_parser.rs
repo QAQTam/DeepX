@@ -1,4 +1,4 @@
-use dsx_types::{ToolCall, FunctionCall, ToolDef};
+use deepx_types::{ToolCall, FunctionCall, ToolDef};
 
 pub fn has_dsml(content: &str) -> bool {
     let lower = content.to_lowercase();
@@ -419,7 +419,7 @@ pub fn parse_tool_calls(tcs: &serde_json::Value) -> Vec<ToolCall> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsx_types::{ToolFunction, ToolDef};
+    use deepx_types::{ToolFunction, ToolDef};
 
     #[test]
     fn test_parse_invoke_inside_tool_calls() {

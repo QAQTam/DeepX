@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use dsx_types::{SessionFile, SessionMeta};
+use deepx_types::{SessionFile, SessionMeta};
 use sha2::{Sha256, Digest};
 
 static INSTANCE: OnceLock<SessionManager> = OnceLock::new();
@@ -82,7 +82,7 @@ impl SessionManager {
     }
 
     /// Save session data and update index.
-    pub fn save(&self, seed: &str, messages: &[dsx_types::Message], model: &str, effort: Option<&str>) {
+    pub fn save(&self, seed: &str, messages: &[deepx_types::Message], model: &str, effort: Option<&str>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -183,7 +183,7 @@ impl SessionManager {
 
 
     /// Compute an integrity checksum for a set of messages.
-    fn compute_checksum(seed: &str, messages: &[dsx_types::Message]) -> String {
+    fn compute_checksum(seed: &str, messages: &[deepx_types::Message]) -> String {
         let msg_toml = toml::to_string(messages).unwrap_or_default();
         let input = format!("{}:{}", seed, msg_toml);
         let hash = Sha256::digest(input.as_bytes());
@@ -264,11 +264,11 @@ impl SessionManager {
         }
     }
 
-    fn extract_summary(messages: &[dsx_types::Message]) -> String {
+    fn extract_summary(messages: &[deepx_types::Message]) -> String {
         messages.iter().rev()
             .find(|m| m.role == "assistant" && !m.content.is_empty())
             .and_then(|m| m.content.iter().find_map(|b| {
-                if let dsx_types::ContentBlock::Text { text } = b {
+                if let deepx_types::ContentBlock::Text { text } = b {
                     Some(text.lines().next().unwrap_or(text))
                 } else { None }
             }))

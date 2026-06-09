@@ -9,7 +9,7 @@ pub mod tool_parser;
 pub use types::{ProviderConfig, ProviderKind, StreamEvent};
 pub use openai::query_balance;
 
-use dsx_types::{Message, ToolDef};
+use deepx_types::{Message, ToolDef};
 
 /// Send a chat completion request with SSE streaming.
 pub fn chat_stream(

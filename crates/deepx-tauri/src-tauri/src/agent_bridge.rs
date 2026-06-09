@@ -12,7 +12,7 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter};
 
-use dsx_proto::{Agent2Ui, Ui2Agent};
+use deepx_proto::{Agent2Ui, Ui2Agent};
 
 /// Managed Tauri state that owns the sender side of the agent channel.
 pub struct AgentBridge {
@@ -25,8 +25,8 @@ impl AgentBridge {
     /// Initialize the agent and start the event-forwarding loop.
     /// Called once during Tauri app setup.
     pub fn init(app: &AppHandle) -> Self {
-        dsx_session::SessionManager::init(dsx_types::platform::data_dir());
-    let mut agent = dsx_msglp::agent::AgentState::init("tauri");
+        deepx_session::SessionManager::init(deepx_types::platform::data_dir());
+    let mut agent = deepx_msglp::agent::AgentState::init("tauri");
 
         // Init session manager + check for resume seed in the session directory
         if let Some(seed) = active_or_latest_seed() {
@@ -38,8 +38,8 @@ impl AgentBridge {
 
         // Spawn the agent event loop in a background thread
         let agent_handle = std::thread::spawn(move || {
-            dsx_msglp::Loop::new(agent, rx, agent_tx).run();
-            dsx_tools::bridge::shutdown_tools();
+            deepx_msglp::Loop::new(agent, rx, agent_tx).run();
+            deepx_tools::bridge::shutdown_tools();
         });
 
         // Forward Agent2Ui events to the Tauri frontend
@@ -213,14 +213,14 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
 /// List all sessions with metadata.
 #[tauri::command]
 pub fn cmd_list_sessions() -> Result<String, String> {
-    let metas = dsx_session::SessionManager::global().list();
+    let metas = deepx_session::SessionManager::global().list();
     serde_json::to_string(&metas).map_err(|e| format!("serialize: {e}"))
 }
 
 /// Load full session data (messages) by seed.
 #[tauri::command]
 pub fn cmd_load_session(seed: String) -> Result<String, String> {
-    let session = dsx_session::SessionManager::global().load(&seed)
+    let session = deepx_session::SessionManager::global().load(&seed)
         .ok_or_else(|| format!("Session not found: {seed}"))?;
     serde_json::to_string(&session).map_err(|e| format!("serialize: {e}"))
 }
@@ -229,19 +229,19 @@ pub fn cmd_load_session(seed: String) -> Result<String, String> {
 #[tauri::command]
 pub fn cmd_set_active_session(seed: String) -> Result<(), String> {
     if seed.is_empty() {
-        dsx_session::SessionManager::global().clear_active();
+        deepx_session::SessionManager::global().clear_active();
     } else {
-        dsx_session::SessionManager::global().set_active_seed(&seed);
+        deepx_session::SessionManager::global().set_active_seed(&seed);
     }
     Ok(())
 }
 /// Read .active_session file if present, else fall back to latest from index.
 fn active_or_latest_seed() -> Option<String> {
-    let dir = dsx_types::platform::sessions_dir();
+    let dir = deepx_types::platform::sessions_dir();
     let index_path = dir.join("index.toml");
     let data = std::fs::read_to_string(&index_path).ok()?;
     // Try parsing as array of SessionMeta
-    if let Ok(metas) = toml::from_str::<Vec<dsx_types::SessionMeta>>(&data) {
+    if let Ok(metas) = toml::from_str::<Vec<deepx_types::SessionMeta>>(&data) {
         metas.into_iter()
             .max_by_key(|m| m.updated_at)
             .map(|m| m.seed)

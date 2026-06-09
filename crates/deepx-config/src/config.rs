@@ -1,6 +1,6 @@
 
 
-use dsx_types::{ConfigStore, PersistentConfig};
+use deepx_types::{ConfigStore, PersistentConfig};
 use std::collections::HashMap; // still used by profiles
 
 #[derive(Debug, Clone)]
@@ -13,7 +13,7 @@ pub struct Config {
     pub provider_id: String,
     pub endpoint: String,
     pub reasoning_effort: String,
-    pub profiles: HashMap<String, dsx_types::ProfileConfig>,
+    pub profiles: HashMap<String, deepx_types::ProfileConfig>,
     pub active_profile: String,
     pub context7_api_key: Option<String>,
     pub lang: Option<String>,
@@ -27,7 +27,7 @@ impl Default for Config {
         let model = crate::registry::default_model_for(&provider_id, &endpoint);
 
         let mut profiles = HashMap::new();
-        profiles.insert("default".into(), dsx_types::ProfileConfig {
+        profiles.insert("default".into(), deepx_types::ProfileConfig {
             model: model.clone(), max_tokens: 16384,
             effort: Some("high".into()), context_limit: 1_000_000,
             base_url: base_url.clone(),
@@ -120,7 +120,7 @@ impl Config {
         }
 
         if !cfg.profiles.contains_key("default") {
-            cfg.profiles.insert("default".into(), dsx_types::ProfileConfig {
+            cfg.profiles.insert("default".into(), deepx_types::ProfileConfig {
                 model: cfg.model.clone(), max_tokens: cfg.max_tokens,
                 effort: Some(cfg.reasoning_effort.clone()), context_limit: cfg.context_limit,
                 base_url: cfg.base_url.clone(),
@@ -134,7 +134,7 @@ impl Config {
     pub fn save(&self) {
         let store = ConfigStore::default_location();
         let mut profiles = self.profiles.clone();
-        profiles.insert(self.active_profile.clone(), dsx_types::ProfileConfig {
+        profiles.insert(self.active_profile.clone(), deepx_types::ProfileConfig {
             model: self.model.clone(), max_tokens: self.max_tokens,
             effort: Some(self.reasoning_effort.clone()), context_limit: self.context_limit,
             base_url: self.base_url.clone(),
@@ -181,7 +181,7 @@ impl Config {
     }
 
     pub fn save_profile(&mut self, name: &str) {
-        self.profiles.insert(name.to_string(), dsx_types::ProfileConfig {
+        self.profiles.insert(name.to_string(), deepx_types::ProfileConfig {
             model: self.model.clone(), max_tokens: self.max_tokens,
             effort: Some(self.reasoning_effort.clone()), context_limit: self.context_limit,
             base_url: self.base_url.clone(),

@@ -148,7 +148,7 @@ pub enum Agent2Ui {
         #[serde(skip_serializing_if = "Option::is_none")]
         stop_reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        usage: Option<dsx_types::UsageInfo>,
+        usage: Option<deepx_types::UsageInfo>,
     },
 
     // ── Streaming preview (optional, additive) ──
@@ -259,7 +259,7 @@ pub enum Agent2Ui {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        usage: Option<dsx_types::UsageInfo>,
+        usage: Option<deepx_types::UsageInfo>,
         #[serde(default)]
         context_limit: u32,
     },

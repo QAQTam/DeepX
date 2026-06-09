@@ -1,4 +1,4 @@
-use dsx_types::Message;
+use deepx_types::Message;
 
 /// Returned by MessageStore::push_* methods.
 /// Tells external actors (runner) what to do next.

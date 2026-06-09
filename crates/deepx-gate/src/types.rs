@@ -1,6 +1,6 @@
 //! Shared gate types — provider config and unified stream events.
 
-use dsx_types::Message;
+use deepx_types::Message;
 
 // ── Provider ──
 
@@ -21,11 +21,11 @@ pub struct ProviderConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
-    pub user_id_mode: Option<dsx_types::UserSendMode>,
+    pub user_id_mode: Option<deepx_types::UserSendMode>,
 }
 
 impl ProviderConfig {
-    pub fn openai(base_url: &str, api_key: &str, model: &str, user_id_mode: Option<dsx_types::UserSendMode>) -> Self {
+    pub fn openai(base_url: &str, api_key: &str, model: &str, user_id_mode: Option<deepx_types::UserSendMode>) -> Self {
         Self {
             kind: ProviderKind::OpenAi,
             base_url: base_url.to_string(),
@@ -50,7 +50,7 @@ pub enum StreamEvent {
     },
     Done {
         raw_message: Message,
-        usage: Option<dsx_types::UsageInfo>,
+        usage: Option<deepx_types::UsageInfo>,
         stop_reason: Option<String>,
     },
     Balance {

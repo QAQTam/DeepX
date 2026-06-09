@@ -176,7 +176,7 @@ fn exec_context7_query(args: &str) -> String {
 // ── Web fetch ──
 
 fn exec_web_fetch(args: &str) -> String {
-    let url = dsx_types::arg::parse_arg(args, "url").unwrap_or_default();
+    let url = deepx_types::arg::parse_arg(args, "url").unwrap_or_default();
     let url_lower = url.to_lowercase();
     if url_lower.starts_with("http://localhost")
         || url_lower.starts_with("https://localhost")
@@ -220,7 +220,7 @@ fn exec_web_fetch(args: &str) -> String {
                         let end = find_char_boundary(&readable, 100_000);
                         format!("{}... [truncated: {} total chars]", &readable[..end], readable.len())
                     } else { readable.clone() };
-                    let output_path = dsx_types::arg::parse_arg(args, "output");
+                    let output_path = deepx_types::arg::parse_arg(args, "output");
                     let saved = if let Some(ref path) = output_path {
                         if let Some(parent) = std::path::Path::new(path).parent() {
                             let _ = std::fs::create_dir_all(parent);
@@ -248,7 +248,7 @@ fn find_char_boundary(s: &str, max: usize) -> usize {
 // ── Web search ──
 
 fn exec_web_search(args: &str) -> String {
-    let query = dsx_types::arg::parse_arg(args, "query").unwrap_or_default();
+    let query = deepx_types::arg::parse_arg(args, "query").unwrap_or_default();
     let url = format!("https://cn.bing.com/search?q={}&setlang=zh-cn", urlencoding(&query));
     let body = match (|| -> Result<String, String> {
         let resp = ureq::get(&url)

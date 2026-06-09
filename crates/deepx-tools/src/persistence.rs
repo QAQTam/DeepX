@@ -4,7 +4,7 @@
 //! (same paths as dsx-agent), avoiding IPC round-trips for simple
 //! read/write operations.
 
-use dsx_types;
+use deepx_types;
 use std::path::PathBuf;
 
 // ── Path resolution (same as dsx-agent::session) ──
@@ -39,7 +39,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 }
 
 fn sessions_dir() -> Option<PathBuf> {
-    Some(dsx_types::platform::sessions_dir())
+    Some(deepx_types::platform::sessions_dir())
 }
 
 fn session_dir(seed: &str) -> Option<PathBuf> {
