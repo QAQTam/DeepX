@@ -983,11 +983,10 @@ impl App {
                 self.push_msg(ChatRole::User, &user_text);
                 self.scroll_offset = 0;
             }
-            Agent2Ui::TurnEnd { turn_id: _, stop_reason: _, usage, context_tokens, context_limit, session_tokens } => {
-                self.context_tokens = context_tokens;
-                self.session_tokens = session_tokens;
-                self.context_limit = context_limit;
-                if let Some(u) = usage {
+            Agent2Ui::TurnEnd { turn_id: _, stop_reason: _, usage } => {
+                if let Some(u) = &usage {
+                    self.context_tokens = u.prompt_tokens;
+                    self.session_tokens += u.total_tokens as u64;
                     self.cache_hit = u.prompt_cache_hit_tokens;
                     self.cache_miss = u.prompt_cache_miss_tokens;
                     self.update_cache(u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens);
@@ -1143,27 +1142,19 @@ impl App {
                 self.scroll_offset = 0;
                 self.finalize_last_message();
             }
-            Agent2Ui::Dashboard { hp_connected, session_seed, context_tokens,
+            Agent2Ui::Dashboard { hp_connected, session_seed, usage, context_limit,
                 tool_calls_total, tool_failures, current_phase: _, streaming, dsml_compat_count, documents, .. } => {
                 self.debug.hp_connected = hp_connected;
                 self.debug.session_seed = session_seed;
-                self.debug.context_tokens = context_tokens;
+                self.debug.context_tokens = usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+                self.context_limit = context_limit;
                 self.debug.tool_calls_total = tool_calls_total;
                 self.debug.tool_failures = tool_failures;
                 self.debug.streaming = streaming;
                 self.debug.dsml_compat_count = dsml_compat_count;
                 self.debug.documents = documents;
             }
-            Agent2Ui::AskUser { question, options, .. } => {
-                let mut opts = options.unwrap_or_default();
-                opts.push(String::new());
-                self.ask = Some(AskState {
-                    question,
-                    options: opts,
-                    selected: 0,
-                    custom_input: String::new(),
-                });
-            }
+            // AskUser variant removed — no longer in proto
             Agent2Ui::Balance { is_available, total_balance, currency } => {
                 let status = if is_available { "✓" } else { "✗" };
                 self.balance = format!("{} {}{} {}", status, if currency == "CNY" { "¥" } else { "$" }, total_balance, currency);

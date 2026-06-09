@@ -27,29 +27,6 @@ fn truncate_exec_for_model(output: &str) -> String {
 }
 
 /// Push `text` to the ContextAssembler (auto-repairs cancellation deadlocks).
-fn push_user_message_with_repair(agent: &mut AgentState, text: &str) {
-    agent.ctx.push_user(text);
-}
-
-fn init_session_on_first_message(
-    agent: &mut AgentState,
-    agent_tx: &mpsc::Sender<Agent2Ui>,
-) {
-    if let Some(ref seed) = agent.session.resume_seed.clone() {
-        if agent.session.seed.is_empty() {
-            super::lifecycle::init_session(agent, Some(seed));
-            if agent.session.from_resume {
-                emit(&agent_tx, Agent2Ui::SessionRestored {
-                    seed: agent.session.seed.clone(),
-                    turns: Vec::new(),
-                    tokens_used: agent.token_estimate,
-                    cache_hit_pct: 0.0,
-                });
-            }
-        }
-    }
-}
-
 /// Reconstruct TurnData from the existing context (for session resume).
 #[allow(dead_code)]
 pub(super) fn build_turns_from_context(agent: &AgentState) -> Vec<TurnData> {
@@ -134,9 +111,10 @@ pub fn handle_user_input(
     agent: &mut AgentState,
     text: &str,
     agent_tx: &mpsc::Sender<Agent2Ui>,
-) {
+) -> Option<dsx_types::UsageInfo> {
         let turn_num = agent.turn_count.to_string();
     let turn_id = format!("t{}", turn_num);
+    let mut last_usage: Option<dsx_types::UsageInfo> = None;
 
     emit(&agent_tx, Agent2Ui::TurnStart {
         turn_id: turn_id.clone(),
@@ -170,7 +148,7 @@ pub fn handle_user_input(
         let (content, reasoning_content, tool_calls_raw, usage, stop_reason) =
             match run_api_turn(agent, agent_tx, &turn_id, round_num, true) {
                 Ok(v) => v,
-                Err(()) => return,
+                Err(()) => return None,
             };
 
         let stripped = tool_parser::strip_fenced_code(&content);
@@ -217,9 +195,8 @@ pub fn handle_user_input(
         let has_tools = !parsed.is_empty();
 
         if let Some(ref u) = usage {
-            agent.api_usage = Some(u.clone());
             agent.session.tokens += u.total_tokens as u64;
-            agent.token_estimate = u.prompt_tokens;
+            last_usage = Some(u.clone());
         }
 
         let assistant_msg = build_and_push_assistant(agent, &content, &reasoning_content, &parsed);
@@ -279,9 +256,9 @@ pub fn handle_user_input(
                 emit(&agent_tx, Agent2Ui::TurnEnd {
                     turn_id: turn_id.clone(),
                     stop_reason,
-                    usage,
+                    usage: usage.clone(),
                 });
-                return;
+                return usage;
             }
 
             if stop_reason.as_deref() == Some("length") {
@@ -306,9 +283,9 @@ pub fn handle_user_input(
             emit(&agent_tx, Agent2Ui::TurnEnd {
                 turn_id: turn_id.clone(),
                 stop_reason,
-                usage,
+                usage: usage.clone(),
             });
-            return;
+            return usage;
         }
 
         save_snapshot(agent);
@@ -486,7 +463,7 @@ pub fn handle_user_input(
             recent_edits: build_recent_edits(agent),
             tasks: build_tasks(agent),
             session_title: agent.session.title.clone(),
-            usage: agent.api_usage.clone(),
+            usage: last_usage.clone(),
             
         });
 
@@ -508,7 +485,7 @@ pub fn handle_user_input(
             stop_reason: Some("error".to_string()),
             usage: None,
         });
-        return;
+        return None;
     }
 
     save_snapshot(agent);
@@ -516,8 +493,9 @@ pub fn handle_user_input(
     emit(&agent_tx, Agent2Ui::TurnEnd {
         turn_id: turn_id.clone(),
         stop_reason: Some("interrupted".to_string()),
-        usage: agent.api_usage.clone(),
+        usage: last_usage.clone(),
     });
+    last_usage
 }
 
 /// Save the current session snapshot to disk (crash recovery).

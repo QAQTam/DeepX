@@ -115,7 +115,7 @@ pub fn run_agent_loop(
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
         session_title: agent.session.title.clone(),
-        usage: agent.api_usage.clone(),    });
+        usage: None,    });
 
     if agent.session.seed.is_empty() && agent.session.resume_seed.is_some() {
         let seed = agent.session.resume_seed.clone();
@@ -124,7 +124,7 @@ pub fn run_agent_loop(
             emit(&agent_tx, Agent2Ui::SessionRestored {
                 seed: agent.session.seed.clone(),
                 turns: Vec::new(),
-                tokens_used: agent.token_estimate,
+                tokens_used: 0  /* was token_estimate */,
                 cache_hit_pct: 0.0,
             });
         }
@@ -149,9 +149,9 @@ pub fn run_agent_loop(
                     });
                     continue;
                 }
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                let last_usage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                     || turn::handle_user_input(&mut agent, &text, &agent_tx),
-                ));
+                )).unwrap_or(None);
 
                 emit(&agent_tx, Agent2Ui::Dashboard {
                     hp_connected: true,
@@ -166,7 +166,7 @@ pub fn run_agent_loop(
                     recent_edits: build_recent_edits(&agent),
                     tasks: build_tasks(&agent),
                     session_title: agent.session.title.clone(),
-                    usage: agent.api_usage.clone(),                });
+                    usage: last_usage.clone(),                });
                 emit(&agent_tx, Agent2Ui::Done);
             }
 
@@ -247,7 +247,7 @@ pub fn run_agent_loop(
         recent_edits: build_recent_edits(&agent),
         tasks: build_tasks(&agent),
           session_title: agent.session.title.clone(),
-          usage: agent.api_usage.clone(),                  });
+          usage: None,                  });
                 if cmd == "dump_context" {
                     let json = serde_json::to_string_pretty(&agent.ctx.to_vec())
                         .unwrap_or_default();

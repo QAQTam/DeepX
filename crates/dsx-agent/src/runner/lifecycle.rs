@@ -55,8 +55,7 @@ pub fn create_session(agent: &mut AgentState) {
     agent.session.seed = SessionManager::generate_seed();
     agent.session.start = SessionManager::now_epoch();
     agent.session.tokens = 0;
-    agent.token_estimate = 0;
-    agent.api_usage = None;
+    // token_estimate / api_usage removed (tracked via session.tokens only)
     agent.tool_results.clear();
     agent.turn.reset();
     dsx_log::set_session(&agent.session.seed);

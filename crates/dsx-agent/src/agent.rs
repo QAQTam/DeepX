@@ -3,7 +3,7 @@
 use crate::config;
 use crate::assembly::ContextAssembler;
 
-use dsx_types::{Message, UsageInfo};
+use dsx_types::Message;
 
 pub mod result;
 pub mod file_tracker;
@@ -22,10 +22,6 @@ pub struct AgentState {
 
     // ── Configuration ──
     pub config: crate::config::Config,
-
-    // ── Token tracking ──
-    pub token_estimate: u32,
-    pub api_usage: Option<UsageInfo>,
 
     // ── Explore-before-read state machine ──
     pub files: FileTracker,
@@ -60,8 +56,6 @@ impl AgentState {
         let state = Self {
             ctx,
             config,
-            token_estimate: 0,
-            api_usage: None,
             files: FileTracker::new(),
             tool_results: Vec::new(),
             session: SessionMeta::new(),
@@ -88,12 +82,6 @@ impl AgentState {
         let mut agent = Self::new(config);
         agent.tool_defs = crate::tools::all_tools();
         agent
-    }
-
-    // ── Token helpers ──
-
-    pub fn tokens_used(&self) -> u32 {
-        self.api_usage.as_ref().map(|u| u.total_tokens).unwrap_or(self.token_estimate)
     }
 
     // ── Convenience delegators for FileTracker ──
