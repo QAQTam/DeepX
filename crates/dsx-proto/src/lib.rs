@@ -26,17 +26,6 @@ mod agent_protocol;
 
 pub use agent_protocol::{Agent2Ui, DocInfo, FileSnapshotInfo, RoundBlock, RoundData, RoundDeltaKind, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent};
 
-// ── InterruptRequest (tool → agent interrupt flow) ──────────────────────
-
-/// A request for user input injected as a tool_result by the agent.
-/// When a tool returns this, the agent pauses the turn loop and asks the user.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InterruptRequest {
-    pub prompt: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<String>,
-}
-
 // ── Redacted (prevents API key leaks in debug logs) ─────────────────────
 
 /// Wrapper that serializes normally but redacts in Debug output.

@@ -141,14 +141,14 @@ fn mcp_tool_handler(ctx: ToolCallCtx) -> ToolResult {
     let sessions = match guard.as_ref() {
         Some(s) => s,
         None => return ToolResult {
-            interrupt: None, success: false,
+            success: false,
             content: "[ERROR] MCP sessions not initialized".to_string(),
         },
     };
     let session = match sessions.get(&ctx.name) {
         Some(s) => s.clone(),
         None => return ToolResult {
-            interrupt: None, success: false,
+            success: false,
             content: format!("[ERROR] MCP tool '{}' — session not found", ctx.name),
         },
     };
@@ -171,7 +171,7 @@ fn mcp_tool_handler(ctx: ToolCallCtx) -> ToolResult {
             ToolResult::ok(content)
         }
         Err(e) => ToolResult {
-            interrupt: None, success: false,
+            success: false,
             content: format!("[ERROR] MCP tool '{}' failed: {}", ctx.name, e),
         },
     }

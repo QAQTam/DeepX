@@ -26,16 +26,6 @@ fn truncate_exec_for_model(output: &str) -> String {
     format!("{head_part}\n--- {skipped} lines omitted (exec output truncated for context) ---\n{tail_part}")
 }
 
-/// Process a pending ask_user reply, pushes the user's text as a tool result.
-fn process_ask_user_response(agent: &mut AgentState, text: &str) -> bool {
-    if let Some(tool_call_id) = agent.pending_round.take() {
-        agent.ctx.replace_tool_result(&tool_call_id, text);
-        true
-    } else {
-        false
-    }
-}
-
 /// Push `text` to the ContextAssembler (auto-repairs cancellation deadlocks).
 fn push_user_message_with_repair(agent: &mut AgentState, text: &str) {
     agent.ctx.push_user(text);
@@ -145,23 +135,11 @@ pub fn handle_user_input(
     text: &str,
     agent_tx: &mpsc::Sender<Agent2Ui>,
 ) {
-    let is_ask_reply = process_ask_user_response(agent, text);
-
-    if !is_ask_reply {
-        if text.is_empty() {
-            return;
-        }
-
-        init_session_on_first_message(agent, agent_tx);
-
-        push_user_message_with_repair(agent, text);
-    }
-
-    let turn_num = agent.turn_count.to_string();
+        let turn_num = agent.turn_count.to_string();
     let turn_id = format!("t{}", turn_num);
 
     // Only send TurnStart for new turns (not ask_user replies)
-    if !is_ask_reply {
+    if text.is_empty() { return; } if !is_ask_reply {
         emit(&agent_tx, Agent2Ui::TurnStart {
             turn_id: turn_id.clone(),
             user_text: text.to_string(),
@@ -349,7 +327,7 @@ pub fn handle_user_input(
 
         // Execute tools and collect results (with interrupt support)
         let results: Vec<(String, String, String, crate::tools::ToolExecResult)> =
-            if parsed.len() > 1 && !parsed.iter().any(|tc| tc.function.name == "ask_user") {
+            if parsed.len() > 1 {
                 use std::thread;
                 let mut handles = Vec::new();
                 for tc in &parsed {
@@ -515,25 +493,6 @@ pub fn handle_user_input(
             
         });
 
-        // ── Generic interrupt: any tool can request user input ──
-        // Check all results for interrupt requests (not just ask_user).
-        for (_name, id, _args, tr_result) in results.iter() {
-            if let Some(ir) = &tr_result.interrupt {
-                let options_field = if ir.options.is_empty() { None } else { Some(ir.options.clone()) };
-                emit(&agent_tx, Agent2Ui::AskUser {
-                    id: id.clone(),
-                    question: ir.prompt.clone(),
-                    options: options_field,
-                });
-                agent.pending_round = Some(id.clone());
-                break;
-            }
-        }
-
-        if agent.pending_round.is_some() {
-            break;
-        }
-
         if agent.turn.tool_failures >= 3 {
             log::warn!("safety gate: 3 cumulative tool failures");
             agent.turn.annotations.push(
@@ -546,11 +505,7 @@ pub fn handle_user_input(
         round_num += 1;
     }
 
-    if agent.pending_round.is_some() {
-        return;
-    }
-
-    if ipc_broken {
+        if ipc_broken {
         emit(&agent_tx, Agent2Ui::TurnEnd {
             turn_id: turn_id.clone(),
             stop_reason: Some("error".to_string()),

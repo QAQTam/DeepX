@@ -93,17 +93,6 @@ pub fn cmd_send_message(
     state.send(Ui2Agent::UserInput { text })
 }
 
-/// Reply to an ask_user interrupt. The response is injected as a tool result,
-/// and the turn loop resumes from the next round.
-#[tauri::command]
-pub fn cmd_ask_user_reply(
-    state: tauri::State<'_, AgentBridge>,
-    tool_call_id: String,
-    text: String,
-) -> Result<(), String> {
-    state.send(Ui2Agent::AskUserReply { tool_call_id, text })
-}
-
 /// Create a new session.
 #[tauri::command]
 pub fn cmd_create_session(

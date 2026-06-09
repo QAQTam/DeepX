@@ -66,7 +66,7 @@ impl ToolManager {
 
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                return ToolResult { success: false, content: format!("[ERROR] Tool '{}' not in allowed list", name), interrupt: None };
+                return ToolResult { success: false, content: format!("[ERROR] Tool '{}' not in allowed list", name) };
             }
         }
 
@@ -75,7 +75,7 @@ impl ToolManager {
             None => {
                 match self.handlers.iter().find(|(k, _)| k.name == name) {
                     Some((_, h)) => h,
-                    None => return ToolResult { success: false, content: format!("[ERROR] Unknown tool: {}/{}", name, action), interrupt: None },
+                    None => return ToolResult { success: false, content: format!("[ERROR] Unknown tool: {}/{}", name, action) },
                 }
             }
         };
@@ -86,7 +86,7 @@ impl ToolManager {
         };
         match (handler.safety)(&ctx) {
             SafetyVerdict::Block(reason) => {
-                return ToolResult { success: false, content: format!("[ERROR] {}", reason), interrupt: None };
+                return ToolResult { success: false, content: format!("[ERROR] {}", reason) };
             }
             SafetyVerdict::Allow => {}
         }
@@ -108,13 +108,13 @@ impl ToolManager {
 
         self.inflight_tasks.remove(&id);
 
-        let (content, success, interrupt) = match result {
-            Ok(tr) => (tr.content, tr.success, tr.interrupt),
+        let (content, success) = match result {
+            Ok(tr) => (tr.content, tr.success),
             Err(panic_info) => {
                 let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
                     else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
                     else { "unknown panic".to_string() };
-                (format!("[ERROR] Tool panicked: {}", msg), false, None)
+                (format!("[ERROR] Tool panicked: {}", msg), false)
             }
         };
 
@@ -126,7 +126,7 @@ impl ToolManager {
         let args_summary = audit_args_summary(&tool_name, &audit_args);
         eprintln!("[AUDIT] {tool_name}  {status}  {elapsed_ms}ms  {output_size}chars  args={{{args_summary}}}");
 
-        ToolResult { success, content, interrupt }
+        ToolResult { success, content }
     }
 
     pub fn cancel_tool(&mut self, id: Option<&str>) {

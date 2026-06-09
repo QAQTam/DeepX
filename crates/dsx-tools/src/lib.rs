@@ -17,7 +17,6 @@ pub mod file_diff;
 pub mod file_shared;
 mod safety;
 mod web;
-mod ask;
 pub mod task;
 pub mod registration;
 pub mod persistence;
@@ -43,7 +42,7 @@ macro_rules! handler {
                 Ok(a) => a,
                 Err(e) => {
                     log::error!("handler {}: serialize args failed: {e}", stringify!($name));
-                    return ToolResult { interrupt: None, success: false, content: format!("[ERROR] bad arguments: {e}") };
+                    return ToolResult { success: false, content: format!("[ERROR] bad arguments: {e}") };
                 }
             };
             ToolResult::ok($exec(&args))
@@ -116,30 +115,17 @@ impl ToolCallCtx {
     }
 }
 
-use dsx_proto::InterruptRequest;
-
 // ── ToolResult ──
 
 #[derive(Clone, Debug)]
 pub struct ToolResult {
     pub success: bool,
     pub content: String,
-    /// When set, the agent pauses the turn loop and sends this to the UI.
-    /// The user's next message is injected as the tool_result.
-    pub interrupt: Option<InterruptRequest>,
 }
 
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
-        Self { success: true, content: content.into(), interrupt: None }
-    }
-    /// A tool result that requests user input before continuing.
-    pub fn interrupt(prompt: impl Into<String>, options: Vec<String>) -> Self {
-        Self {
-            success: true,
-            content: String::new(),
-            interrupt: Some(InterruptRequest { prompt: prompt.into(), options }),
-        }
+        Self { success: true, content: content.into() }
     }
 }
 

@@ -17,12 +17,6 @@ pub enum Ui2Agent {
     #[serde(rename = "user_input")]
     UserInput { text: String },
 
-    #[serde(rename = "ask_user_reply")]
-    AskUserReply {
-        tool_call_id: String,
-        text: String,
-    },
-
     #[serde(rename = "tool_call")]
     ToolCall {
         id: String,
@@ -228,14 +222,6 @@ pub enum Agent2Ui {
     },
 
     // ── System events ──
-
-    #[serde(rename = "ask_user")]
-    AskUser {
-        id: String,
-        question: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        options: Option<Vec<String>>,
-    },
 
     #[serde(rename = "error")]
     Error { message: String },

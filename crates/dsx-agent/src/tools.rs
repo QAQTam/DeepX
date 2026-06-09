@@ -85,7 +85,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     log::info!("tool [{source}] call: {name} (id={call_id})");
 
     if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-        return ToolExecResult { content: "[CANCELLED]".to_string(), interrupt: None };
+        return ToolExecResult { content: "[CANCELLED]".to_string(),  };
     }
 
     let result = with_mgr(|mgr| {
@@ -93,8 +93,8 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     });
 
     match result {
-        Some(r) => ToolExecResult { content: r.content, interrupt: r.interrupt },
-        None => ToolExecResult { content: "[ERROR] tool manager not initialised — call init_tools() first".to_string(), interrupt: None },
+        Some(r) => ToolExecResult { content: r.content,  },
+        None => ToolExecResult { content: "[ERROR] tool manager not initialised — call init_tools() first".to_string(),  },
     }
 }
 

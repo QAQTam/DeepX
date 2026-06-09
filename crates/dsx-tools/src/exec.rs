@@ -161,7 +161,7 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     });
     let result = exec_command(&args.to_string(), ctx.tx_progress);
     let success = result.starts_with("[OK]");
-    ToolResult { interrupt: None, success, content: result }
+    ToolResult { success, content: result }
 }
 
 
