@@ -197,7 +197,6 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
         Agent2Ui::ToolExecDelta { .. } => "tool_exec_delta",
         Agent2Ui::SessionRestored { .. } => "session_restored",
         Agent2Ui::SessionCreated { .. } => "session_created",
-        Agent2Ui::AskUser { .. } => "ask_user",
         Agent2Ui::Error { .. } => "error",
         Agent2Ui::ToolNotice { .. } => "tool_notice",
         Agent2Ui::Balance { .. } => "balance",

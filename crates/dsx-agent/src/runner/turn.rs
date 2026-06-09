@@ -12,7 +12,7 @@ use crate::tool_parser;
 
 use super::api_turn::run_api_turn;
 use super::ui_emit::{build_and_push_assistant, make_tool_def, make_tool_result};
-use super::{build_documents, build_recent_edits, build_tasks, cache_tokens, emit};
+use super::{build_documents, build_recent_edits, build_tasks, emit};
 
 fn truncate_exec_for_model(output: &str) -> String {
     if output.len() <= 8192 { return output.to_string(); }
@@ -354,7 +354,7 @@ pub fn handle_user_input(
                 }
                 handles.into_iter().map(|h| h.join().unwrap_or_else(|e| {
                     let msg = format!("[ERROR] tool thread panicked: {:?}", e.downcast_ref::<&str>().unwrap_or(&"unknown"));
-                    (String::new(), String::new(), String::new(), crate::tools::ToolExecResult { content: msg, interrupt: None })
+                    (String::new(), String::new(), String::new(), crate::tools::ToolExecResult { content: msg })
                 })).collect()
             } else {
                 parsed.iter().map(|tc| {

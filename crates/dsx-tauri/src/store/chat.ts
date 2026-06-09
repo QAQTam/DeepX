@@ -59,16 +59,19 @@ export function createChatStore() {
   function handleTurnEnd(turnId: string, data: Record<string, unknown>) {
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer();
     setTurns((t) => t.turnId === turnId, produce((turn) => { turn.status = "complete"; turn.stopReason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
-    if (data.usage != null) { const u = data.usage as Record<string, unknown>; if (u.total_tokens != null) setSessionInfo("totalTokens", u.total_tokens as number); }
-    if (data.context_tokens != null) { setSessionInfo("contextTokens", data.context_tokens as number); setSessionInfo("contextLimit", (data.context_limit as number) ?? 0); }
-  }
+    }
 
   function handleSessionCreated(seed: string) { setSessionInfo("seed", seed); }
   function handleDashboard(data: Record<string, unknown>) {
     if (data.session_seed) setSessionInfo("seed", data.session_seed as string);
-    if (data.context_tokens != null) setSessionInfo("contextTokens", data.context_tokens as number);
-    if (data.prompt_cache_hit_tokens != null) setSessionInfo("promptCacheHit", data.prompt_cache_hit_tokens as number);
-    if (data.prompt_cache_miss_tokens != null) setSessionInfo("promptCacheMiss", data.prompt_cache_miss_tokens as number);
+    if (data.context_limit != null) setSessionInfo("contextLimit", data.context_limit as number);
+    if (data.usage != null) {
+      const u = data.usage as Record<string, unknown>;
+      if (u.prompt_tokens != null) setSessionInfo("contextTokens", u.prompt_tokens as number);
+      if (u.total_tokens != null) setSessionInfo("totalTokens", u.total_tokens as number);
+      if (u.prompt_cache_hit_tokens != null) setSessionInfo("promptCacheHit", u.prompt_cache_hit_tokens as number);
+      if (u.prompt_cache_miss_tokens != null) setSessionInfo("promptCacheMiss", u.prompt_cache_miss_tokens as number);
+    }
     if (data.tasks != null) setTasks(data.tasks as TaskInfo[]);
     if (data.recent_edits != null) setRecentEdits(data.recent_edits as string[]);
   }

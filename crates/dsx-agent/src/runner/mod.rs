@@ -96,11 +96,6 @@ pub(super) fn build_tasks(agent: &AgentState) -> Vec<TaskInfo> {
     tasks
 }
 
-pub(super) fn cache_tokens(agent: &AgentState) -> (u32, u32) {
-    agent.api_usage.as_ref()
-        .map(|u| (u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens))
-        .unwrap_or((0, 0))
-}
 
 pub fn run_agent_loop(
     mut agent: AgentState,
@@ -205,7 +200,6 @@ pub fn run_agent_loop(
             }
 
             Ui2Agent::Cancel => {
-                agent.pending_round = None;
                 dsx_tools::CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
                 agent.turn.stream_cancelled = true;
                 crate::tools::cancel_current_tool();
