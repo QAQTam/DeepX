@@ -38,9 +38,9 @@ fn run_config() {
     );
 
     let mut api_key = String::new();
-    let (pid, ep) = dsx_agent::gate::registry::first_provider_endpoint();
-    let mut base_url = dsx_agent::gate::registry::base_url_for(&pid, &ep);
-    let mut model = dsx_agent::gate::registry::default_model_for(&pid, &ep);
+    let (pid, ep) = deepx_config::registry::first_provider_endpoint();
+    let mut base_url = deepx_config::registry::base_url_for(&pid, &ep);
+    let mut model = deepx_config::registry::default_model_for(&pid, &ep);
     let mut context_limit = 1_000_000u32;
 
     if let Some(existing) = store.load_value() {

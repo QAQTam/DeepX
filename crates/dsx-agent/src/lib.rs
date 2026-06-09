@@ -11,7 +11,7 @@ pub mod prompt;
 pub mod agent;
 pub mod tools;
 
-pub mod orchestrator;
+// pub mod orchestrator;  // deleted — safety layer TBD
 pub mod session;
 pub mod tool_parser;
 pub mod gate;

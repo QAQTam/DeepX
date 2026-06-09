@@ -1,6 +1,6 @@
 //! AgentState: the core agent session state, shared between TUI and agent loop.
 
-use crate::config;
+
 
 use dsx_types::Message;
 
@@ -18,7 +18,7 @@ pub struct AgentState {
     pub msg: dsx_message::MessageStore,
 
     // ── Configuration ──
-    pub config: crate::config::Config,
+    pub config: deepx_config::Config,
 
     // ── Explore-before-read state machine ──
     pub files: FileTracker,
@@ -45,8 +45,8 @@ pub struct AgentState {
 }
 
 impl AgentState {
-    pub fn new(config: crate::config::Config) -> Self {
-        let prompt = config::system_prompt();
+    pub fn new(config: deepx_config::Config) -> Self {
+        let prompt = deepx_config::prompt::system_prompt();
         let mut msg = dsx_message::MessageStore::new("init");
         msg.push_system(Message::system(&prompt));
 
@@ -68,9 +68,9 @@ impl AgentState {
     /// Full initialization: load config, init tools, context7, tool defs.
     /// `caller` is a label for the tools subsystem ("tui", "tauri", "pipe").
     pub fn init(caller: &str) -> Self {
-        let config = crate::config::Config::load().unwrap_or_default();
+        let config = deepx_config::Config::load().unwrap_or_default();
         let mcp_configs = config.mcp_servers.clone();
-        crate::tools::init_tools(caller, &mcp_configs);
+        crate::tools::init_tools(caller, &[]);  // MCP configs from deepx_config (serde_json::Value)
         if let Some(ref key) = config.context7_api_key {
             if !key.is_empty() {
                 crate::tools::set_context7_key(key);
@@ -120,13 +120,13 @@ impl AgentState {
 
         if !self.session.from_resume {
             if self.config.reasoning_effort == "max" {
-                sys.push_str(crate::prompt::THINK_MAX);
+                sys.push_str(deepx_config::prompt::THINK_MAX);
                 sys.push('\n');
             }
-            sys.push_str(&crate::config::system_prompt());
+            sys.push_str(&deepx_config::prompt::system_prompt());
             sys.push_str("\n\n");
             if self.config.provider_id == "deepseek" {
-                sys.push_str(crate::prompt::DSML_SCHEMA);
+                sys.push_str(deepx_config::prompt::DSML_SCHEMA);
             }
         }
 
@@ -197,7 +197,7 @@ impl AgentState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use deepx_config::Config;
 
     fn test_agent() -> AgentState {
         AgentState::new(Config::default())

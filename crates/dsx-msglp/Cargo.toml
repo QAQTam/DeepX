@@ -5,6 +5,8 @@ edition.workspace = true
 description = "DSX minimal message loop driver — dispatches user input to gate, delegates everything else"
 
 [dependencies]
+deepx-gate = { path = "../deepx-gate" }
+deepx-config = { path = "../deepx-config" }
 dsx-agent = { path = "../dsx-agent" }
 dsx-message = { path = "../dsx-message" }
 dsx-tools = { path = "../dsx-tools" }

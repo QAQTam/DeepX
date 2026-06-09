@@ -7,6 +7,8 @@ description = "DSX agent core — orchestrator, memory, session, context"
 [dependencies]
 dsx-types = { path = "../dsx-types" }
 dsx-proto = { path = "../dsx-proto" }
+deepx-gate = { path = "../deepx-gate" }
+deepx-config = { path = "../deepx-config" }
 dsx-message = { path = "../dsx-message" }
 dsx-session = { path = "../dsx-session" }
 dsx-tools = { path = "../dsx-tools" }

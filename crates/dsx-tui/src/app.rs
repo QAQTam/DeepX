@@ -28,9 +28,9 @@ pub struct SetupState {
 
 impl SetupState {
     pub fn new() -> Self {
-        let (pid, ep) = dsx_agent::gate::registry::first_provider_endpoint();
-        let def_model = dsx_agent::gate::registry::default_model_for(&pid, &ep);
-        let model_list = dsx_agent::gate::registry::find_endpoint(&pid, &ep)
+        let (pid, ep) = deepx_config::registry::first_provider_endpoint();
+        let def_model = deepx_config::registry::default_model_for(&pid, &ep);
+        let model_list = deepx_config::registry::find_endpoint(&pid, &ep)
             .map(|e| if e.models.is_empty() { vec![e.default_model.clone()] } else { e.models.clone() })
             .unwrap_or_else(|| vec![def_model.clone()]);
         let model_index = model_list.iter().position(|m| m == &def_model).unwrap_or(0);
@@ -152,9 +152,9 @@ impl SetupState {
         if key.is_empty() {
             return false;
         }
-        let ep_id = dsx_agent::gate::registry::first_endpoint_for(provider_id)
+        let ep_id = deepx_config::registry::first_endpoint_for(provider_id)
             .map(|e| e.id).unwrap_or_else(|| "openai".into());
-        let url = match dsx_agent::gate::registry::models_url_for(provider_id, &ep_id) {
+        let url = match deepx_config::registry::models_url_for(provider_id, &ep_id) {
             Some(u) => u,
             None => return false,
         };
@@ -196,8 +196,8 @@ impl SetupState {
     }
 
     pub fn to_persistent_config(&self) -> PersistentConfig {
-        let (pid, ep) = dsx_agent::gate::registry::first_provider_endpoint();
-        let base_url = dsx_agent::gate::registry::base_url_for(&pid, &ep);
+        let (pid, ep) = deepx_config::registry::first_provider_endpoint();
+        let base_url = deepx_config::registry::base_url_for(&pid, &ep);
         PersistentConfig {
             api_key: Some(self.api_key.trim().to_string()),
             model: Some(self.model.trim().to_string()),
@@ -362,16 +362,16 @@ impl MenuState {
             api_key.clone()
         };
 
-        let (default_pid, default_ep) = dsx_agent::gate::registry::first_provider_endpoint();
-        let default_base = dsx_agent::gate::registry::base_url_for(&default_pid, &default_ep);
-        let default_model = dsx_agent::gate::registry::default_model_for(&default_pid, &default_ep);
+        let (default_pid, default_ep) = deepx_config::registry::first_provider_endpoint();
+        let default_base = deepx_config::registry::base_url_for(&default_pid, &default_ep);
+        let default_model = deepx_config::registry::default_model_for(&default_pid, &default_ep);
 
         let model = config.as_ref().and_then(|c| c.model.clone()).unwrap_or_else(|| default_model.clone());
         let context_limit = config.as_ref().and_then(|c| c.context_limit).unwrap_or(1_000_000);
         let max_tokens = config.as_ref().and_then(|c| c.max_tokens).unwrap_or(16384);
         let provider_id = config.as_ref().and_then(|c| c.provider_id.clone()).unwrap_or_else(|| default_pid.clone());
         let endpoint = config.as_ref().and_then(|c| c.endpoint.clone()).unwrap_or_else(|| default_ep.clone());
-        let protocol = dsx_agent::gate::registry::protocol_for(&provider_id, &endpoint);
+        let protocol = deepx_config::registry::protocol_for(&provider_id, &endpoint);
         let reasoning_effort = config.as_ref().and_then(|c| c.reasoning_effort.clone()).unwrap_or_else(|| "high".into());
         let base_url = config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_else(|| default_base);
         let active_profile = config.as_ref().and_then(|c| c.active_profile.clone()).unwrap_or_else(|| "default".into());
@@ -480,7 +480,7 @@ impl MenuState {
 
         // Pre-compute endpoint cycling for the "endpoint" toggle
         let (_endpoints_list, next_endpoint) = if current_key == "endpoint" {
-            let providers = dsx_agent::gate::registry::all_providers();
+            let providers = deepx_config::registry::all_providers();
             let eps: Vec<String> = providers.iter()
                 .find(|p| p.id == pid_value)
                 .map(|p| p.endpoints.iter().map(|e| e.id.clone()).collect())
@@ -501,17 +501,17 @@ impl MenuState {
 
         match item.key.as_str() {
             "provider_id" => {
-                let providers = dsx_agent::gate::registry::all_providers();
+                let providers = deepx_config::registry::all_providers();
                 let ids: Vec<&str> = providers.iter().map(|p| p.id.as_str()).collect();
                 if let Some(cur) = ids.iter().position(|&p| p == item.value) {
                     item.value = ids[(cur + 1) % ids.len()].to_string();
                 }
                 let new_pid = &item.value;
-                let ep = dsx_agent::gate::registry::first_endpoint_for(new_pid)
+                let ep = deepx_config::registry::first_endpoint_for(new_pid)
                     .map(|e| e.id).unwrap_or_else(|| "openai".into());
-                let proto = dsx_agent::gate::registry::protocol_for(new_pid, &ep);
-                let burl = dsx_agent::gate::registry::base_url_for(new_pid, &ep);
-                let def_model = dsx_agent::gate::registry::default_model_for(new_pid, &ep);
+                let proto = deepx_config::registry::protocol_for(new_pid, &ep);
+                let burl = deepx_config::registry::base_url_for(new_pid, &ep);
+                let def_model = deepx_config::registry::default_model_for(new_pid, &ep);
                 if let Some(e) = self.items.iter_mut().find(|i| i.key == "endpoint") {
                     e.value = ep;
                 }
@@ -527,8 +527,8 @@ impl MenuState {
             }
             "endpoint" => {
                 item.value = next_endpoint.clone();
-                let proto = dsx_agent::gate::registry::protocol_for(&pid_value, &next_endpoint);
-                let burl = dsx_agent::gate::registry::base_url_for(&pid_value, &next_endpoint);
+                let proto = deepx_config::registry::protocol_for(&pid_value, &next_endpoint);
+                let burl = deepx_config::registry::base_url_for(&pid_value, &next_endpoint);
                 if let Some(proto_item) = self.items.iter_mut().find(|i| i.key == "protocol") {
                     proto_item.value = format!("{} (auto)", proto);
                 }
@@ -542,11 +542,11 @@ impl MenuState {
                 item.value = if item.value == "high" { "max".into() } else { "high".into() };
             }
             "model" => {
-                let ep = dsx_agent::gate::registry::find_endpoint(&pid_value, "");
+                let ep = deepx_config::registry::find_endpoint(&pid_value, "");
                 let models: Vec<String> = ep
                     .map(|e| if e.models.is_empty() { vec![e.default_model.clone()] } else { e.models })
                     .unwrap_or_else(|| {
-                        let def = dsx_agent::gate::registry::default_model_for(&pid_value, "");
+                        let def = deepx_config::registry::default_model_for(&pid_value, "");
                         vec![def]
                     });
                 let current = item.value.as_str();

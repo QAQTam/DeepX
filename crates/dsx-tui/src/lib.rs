@@ -142,7 +142,7 @@ fn run_setup(
                         app.validating = true;
                         terminal.draw(|frame| ui::render_setup(frame, app))?;
 
-                        let (pid, _) = dsx_agent::gate::registry::first_provider_endpoint();
+                        let (pid, _) = deepx_config::registry::first_provider_endpoint();
                         let ok = app.setup.fetch_models(&pid);
                         app.validating = false;
                         if ok {

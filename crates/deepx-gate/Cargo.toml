@@ -1,0 +1,17 @@
+[package]
+name = "deepx-gate"
+version.workspace = true
+edition.workspace = true
+description = "DeepX LLM API gateway — HTTP streaming, message conversion"
+
+[dependencies]
+dsx-types = { path = "../dsx-types" }
+deepx-config = { path = "../deepx-config" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", features = ["json", "tls"] }
+anyhow = "1"
+log = "0.4"
+
+[lints]
+workspace = true

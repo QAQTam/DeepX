@@ -131,7 +131,7 @@ pub fn cmd_save_config(
     reasoning_effort: String,
     lang: String,
 ) -> Result<(), String> {
-    let mut cfg = dsx_agent::config::Config::load().unwrap_or_default();
+    let mut cfg = deepx_config::Config::load().unwrap_or_default();
     if !api_key.is_empty() { cfg.api_key = api_key; }
     if !model.is_empty() { cfg.model = model; }
     if !base_url.is_empty() { cfg.base_url = base_url; }
@@ -148,9 +148,9 @@ pub fn cmd_save_config(
 /// Load the current config and return it as JSON.
 #[tauri::command]
 pub fn cmd_load_config() -> Result<String, String> {
-    let cfg = dsx_agent::config::Config::load()
+    let cfg = deepx_config::Config::load()
         .map_err(|e| format!("load config: {e}"))?;
-    let providers: Vec<serde_json::Value> = dsx_agent::gate::registry::all_providers()
+    let providers: Vec<serde_json::Value> = deepx_config::registry::all_providers()
         .into_iter()
         .map(|p| {
             serde_json::json!({

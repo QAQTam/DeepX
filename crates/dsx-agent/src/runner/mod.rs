@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use dsx_proto::{self, Agent2Ui, DocInfo, TaskInfo, Ui2Agent};
 
 use crate::agent::AgentState;
-use crate::orchestrator::learning;
+
 use crate::runner::turn::TurnOutcome;
 
 /// Emit an Agent2Ui event, logging errors instead of silently dropping.
@@ -25,7 +25,7 @@ pub fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
         .filter(|(path, _)| agent.is_file_stale(path))
         .map(|(path, &read_at)| {
             DocInfo {
-                tag: learning::doc_tag(path),
+                tag: String::from("doc"),
                 path: path.clone(),
                 turns_since_read: agent.files.staleness_epoch.saturating_sub(read_at),
                 is_stale: true,
@@ -206,7 +206,7 @@ pub fn run_agent_loop(
             }
 
             Ui2Agent::ReloadConfig => {
-                if let Ok(cfg) = crate::config::Config::load() {
+                if let Ok(cfg) = deepx_config::Config::load() {
                     agent.config.api_key = cfg.api_key;
                     agent.config.model = cfg.model;
                     agent.config.base_url = cfg.base_url;

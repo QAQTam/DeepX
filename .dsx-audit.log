@@ -27,3 +27,5 @@
 [1781017170] READ | D:\Project\DeepX\crates\dsx-msglp\src\lib.rs | lines=1-200 | 
 [1781017178] READ | D:\Project\DeepX\crates\dsx-msglp\src\lib.rs | lines=200-430 | 
 [1781017182] READ | D:\Project\DeepX\crates\dsx-msglp\src\lib.rs | lines=430-500 | 
+[1781019892] READ | D:\Project\DeepX\crates\dsx-agent\src\dsx_log.rs | lines=1-83 | 
+[1781019963] READ | D:\Project\DeepX\crates\dsx-agent\src\agent\turn_state.rs | lines=1-44 | 

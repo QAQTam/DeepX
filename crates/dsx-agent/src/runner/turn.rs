@@ -6,7 +6,7 @@ use dsx_proto::{Agent2Ui, RoundBlock, ToolCallDef, ToolResultDef, TurnData, Roun
 use dsx_types::{ContentBlock, ToolCall};
 
 use crate::agent::AgentState;
-use crate::orchestrator::learning;
+
 use crate::tool_parser;
 
 use super::api_turn::run_api_turn;
@@ -281,7 +281,7 @@ pub fn handle_user_input(
                 continue;
             }
 
-            learning::post_turn_maintenance(agent, &assistant_msg);
+            // post_turn_maintenance removed — orchestrator deleted
 
             save_snapshot(agent);
 

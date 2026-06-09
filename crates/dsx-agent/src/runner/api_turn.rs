@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use dsx_proto::{Agent2Ui, RoundDeltaKind};
 
 use crate::agent::AgentState;
-use crate::gate;
+use deepx_gate::{self as gate, ProviderConfig, StreamEvent};
 
 use super::emit;
 
@@ -42,7 +42,7 @@ pub(super) fn run_api_turn(
 > {
     let messages = agent.build_context();
 
-    let user_id_mode = gate::registry::find_endpoint(&agent.config.provider_id, &agent.config.endpoint)
+    let user_id_mode = deepx_config::registry::find_endpoint(&agent.config.provider_id, &agent.config.endpoint)
         .and_then(|ep| ep.user_id_mode);
 
     let provider = gate::ProviderConfig::openai(

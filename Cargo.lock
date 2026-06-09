@@ -644,6 +644,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepx-config"
+version = "4.2.0"
+dependencies = [
+ "dsx-types",
+ "log",
+ "serde",
+ "serde_json",
+ "ureq 2.12.1",
+]
+
+[[package]]
+name = "deepx-gate"
+version = "4.2.0"
+dependencies = [
+ "anyhow",
+ "deepx-config",
+ "dsx-types",
+ "log",
+ "serde",
+ "serde_json",
+ "ureq 2.12.1",
+]
+
+[[package]]
 name = "deltae"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -795,6 +819,7 @@ dependencies = [
 name = "dsx"
 version = "4.2.0"
 dependencies = [
+ "deepx-config",
  "dsx-agent",
  "dsx-msglp",
  "dsx-tauri",
@@ -808,6 +833,8 @@ version = "4.2.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "deepx-config",
+ "deepx-gate",
  "dsx-message",
  "dsx-proto",
  "dsx-session",
@@ -837,6 +864,8 @@ dependencies = [
 name = "dsx-msglp"
 version = "4.2.0"
 dependencies = [
+ "deepx-config",
+ "deepx-gate",
  "dsx-agent",
  "dsx-message",
  "dsx-proto",
@@ -872,6 +901,7 @@ name = "dsx-tauri"
 version = "4.2.0"
 dependencies = [
  "anyhow",
+ "deepx-config",
  "dsx-agent",
  "dsx-proto",
  "dsx-session",
@@ -907,6 +937,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "crossterm",
+ "deepx-config",
  "dsx-agent",
  "dsx-proto",
  "dsx-session",

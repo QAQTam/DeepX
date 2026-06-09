@@ -47,6 +47,19 @@ impl CancelToken {
 }
 
 // ═══════════════════════════════════════════════════════
+// LoopPhase — what's currently running
+// ═══════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LoopPhase {
+    Idle,
+    GateRunning,
+    ToolsRunning,
+}
+
+// ═══════════════════════════════════════════════════════
+// Loop — the minimal driver
+// ═══════════════════════════════════════════════════════
 // Loop — the minimal driver
 // ═══════════════════════════════════════════════════════
 
@@ -55,6 +68,7 @@ pub struct Loop {
     ui_rx: mpsc::Receiver<Ui2Agent>,
     ui_tx: mpsc::Sender<Agent2Ui>,
     cancel: CancelToken,
+    phase: LoopPhase,
 }
 
 impl Loop {
@@ -64,7 +78,7 @@ impl Loop {
         ui_tx: mpsc::Sender<Agent2Ui>,
     ) -> Self {
         let cancel = CancelToken::new();
-        Self { agent, ui_rx, ui_tx, cancel }
+        Self { agent, ui_rx, ui_tx, cancel, phase: LoopPhase::Idle }
     }
 
     pub fn run(&mut self) {
@@ -108,10 +122,19 @@ impl Loop {
                 }
 
                 Ui2Agent::Cancel => {
+                    // 1. ALWAYS abort gate HTTP first
                     self.cancel.set();
                     dsx_tools::CANCEL.store(true, Ordering::SeqCst);
                     self.agent.turn.stream_cancelled = true;
-                    dsx_agent::tools::cancel_current_tool();
+
+                    // 2. Then abort whatever else is running
+                    match self.phase {
+                        LoopPhase::ToolsRunning => {
+                            dsx_agent::tools::cancel_current_tool();
+                        }
+                        _ => {}
+                    }
+                    self.phase = LoopPhase::Idle;
                     let _ = self.ui_tx.send(Agent2Ui::Cancelled);
                 }
 
@@ -123,7 +146,7 @@ impl Loop {
                 }
 
                 Ui2Agent::ReloadConfig => {
-                    if let Ok(cfg) = dsx_agent::config::Config::load() {
+                    if let Ok(cfg) = deepx_config::Config::load() {
                         self.agent.config.api_key = cfg.api_key;
                         self.agent.config.model = cfg.model;
                         self.agent.config.base_url = cfg.base_url;
@@ -199,7 +222,7 @@ impl Loop {
             user_text: text.to_string(),
         });
 
-        let provider = dsx_agent::gate::ProviderConfig::openai(
+        let provider = deepx_gate::ProviderConfig::openai(
             &self.agent.config.base_url,
             &self.agent.config.api_key,
             &self.agent.config.model,
@@ -223,7 +246,8 @@ impl Loop {
             let mut tool_calls_raw = serde_json::Value::Null;
             let mut had_error = false;
 
-            let result = dsx_agent::gate::chat_stream(
+            self.phase = LoopPhase::GateRunning;
+        let result = deepx_gate::chat_stream(
                 &provider,
                 messages,
                 tools,
@@ -232,7 +256,7 @@ impl Loop {
                 Some(self.agent.session.seed.clone()),
                 &mut |event| {
                     match event {
-                        dsx_agent::gate::StreamEvent::ContentDelta(d) => {
+                        deepx_gate::StreamEvent::ContentDelta(d) => {
                             if self.cancel.is_set() { return; }
                             content.push_str(&d);
                             let _ = self.ui_tx.send(Agent2Ui::RoundDelta {
@@ -242,11 +266,11 @@ impl Loop {
                                 delta: d,
                             });
                         }
-                        dsx_agent::gate::StreamEvent::ReasoningDelta(r) => {
+                        deepx_gate::StreamEvent::ReasoningDelta(r) => {
                             if self.cancel.is_set() { return; }
                             reasoning.push_str(&r);
                         }
-                        dsx_agent::gate::StreamEvent::Done { raw_message, usage, .. } => {
+                        deepx_gate::StreamEvent::Done { raw_message, usage, .. } => {
                             if let Some(ref u) = usage {
                                 self.agent.session.tokens += u.total_tokens as u64;
                                 last_usage = usage.clone();
@@ -272,7 +296,7 @@ impl Loop {
                                 tool_calls_raw = serde_json::Value::Array(blocks);
                             }
                         }
-                        dsx_agent::gate::StreamEvent::Error(msg) => {
+                        deepx_gate::StreamEvent::Error(msg) => {
                             let _ = self.ui_tx.send(Agent2Ui::Error { message: msg });
                             had_error = true;
                         }
@@ -293,6 +317,7 @@ impl Loop {
 
             match effect {
                 Effect::None => {
+                    self.phase = LoopPhase::ToolsRunning;
                     self.agent.msg.execute_tools_batch();
                     let results = self.agent.msg.last_step_tool_results();
                     let mut tool_defs = Vec::new();
