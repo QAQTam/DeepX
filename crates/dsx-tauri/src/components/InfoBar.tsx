@@ -22,31 +22,31 @@ export default function InfoBar(props: {
     props.contextTokens > 0 ? Math.round((props.promptCacheHit / props.contextTokens) * 100) : 0;
 
   const hitLabel = () => {
-    if (!props.contextTokens) return "\u2014";
+    if (!props.contextTokens) return "—";
     return `${hitPct()}%`;
   };
 
   return (
     <div class="info-bar">
       <div class="info-item">
-        <span class="info-label">\u6a21\u578b</span>
-        <span class="info-value">{props.model || "\u2014"}</span>
+        <span class="info-label">模型</span>
+        <span class="info-value">{props.model || "—"}</span>
       </div>
       <Show when={props.seed}>
         <div class="info-item">
-          <span class="info-label">\u4f1a\u8bdd</span>
+          <span class="info-label">会话</span>
           <span class="info-value mono">{seedShort()}</span>
         </div>
       </Show>
       <div class="info-item">
-        <span class="info-label">\u4e0a\u4e0b\u6587</span>
+        <span class="info-label">上下文</span>
         <span class="info-value mono">{FMT(props.totalTokens)} / {FMT(props.contextLimit)}</span>
         <Show when={props.contextLimit > 0}>
           <span class="info-bar-pct" style={`--pct: ${ctxPct()}%`} />
         </Show>
       </div>
       <div class="info-item">
-        <span class="info-label">\u7f13\u5b58</span>
+        <span class="info-label">缓存</span>
         <span class="info-value mono">{hitLabel()}</span>
         <Show when={props.contextTokens > 0}>
           <span class="info-bar-pct" style={`--pct: ${hitPct()}%`} />
