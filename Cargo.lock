@@ -807,6 +807,7 @@ version = "4.2.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dsx-message",
  "dsx-proto",
  "dsx-session",
  "dsx-tools",
@@ -817,6 +818,30 @@ dependencies = [
  "simplelog",
  "toml 0.8.2",
  "ureq 2.12.1",
+]
+
+[[package]]
+name = "dsx-message"
+version = "4.2.0"
+dependencies = [
+ "dsx-proto",
+ "dsx-session",
+ "dsx-types",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dsx-msglp"
+version = "4.2.0"
+dependencies = [
+ "dsx-agent",
+ "dsx-message",
+ "dsx-proto",
+ "dsx-tools",
+ "dsx-types",
+ "log",
 ]
 
 [[package]]
