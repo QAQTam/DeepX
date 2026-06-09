@@ -138,13 +138,10 @@ pub fn handle_user_input(
         let turn_num = agent.turn_count.to_string();
     let turn_id = format!("t{}", turn_num);
 
-    // Only send TurnStart for new turns (not ask_user replies)
-    if text.is_empty() { return; } if !is_ask_reply {
-        emit(&agent_tx, Agent2Ui::TurnStart {
-            turn_id: turn_id.clone(),
-            user_text: text.to_string(),
-        });
-    }
+    emit(&agent_tx, Agent2Ui::TurnStart {
+        turn_id: turn_id.clone(),
+        user_text: text.to_string(),
+    });
 
     agent.turn.tool_failures = 0;
     agent.turn.tool_calls_this_turn = 0;

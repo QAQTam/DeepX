@@ -3,14 +3,13 @@
 //! ToolManager is linked directly into the agent process, eliminating
 //! IPC failures, respawn complexity, and serialization overhead.
 
-use dsx_proto::InterruptRequest;
 use dsx_types::ToolDef;
 use std::sync::{mpsc, Mutex, OnceLock};
 
 /// Return type for tool execution with interrupt support.
 pub struct ToolExecResult {
     pub content: String,
-    pub interrupt: Option<InterruptRequest>,
+    
 }
 
 // ── Global state ──
@@ -85,7 +84,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     log::info!("tool [{source}] call: {name} (id={call_id})");
 
     if dsx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-        return ToolExecResult { content: "[CANCELLED]".to_string(),  };
+        return ToolExecResult { content: "[CANCELLED]".to_string() };
     }
 
     let result = with_mgr(|mgr| {
@@ -93,8 +92,8 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     });
 
     match result {
-        Some(r) => ToolExecResult { content: r.content,  },
-        None => ToolExecResult { content: "[ERROR] tool manager not initialised — call init_tools() first".to_string(),  },
+        Some(r) => ToolExecResult { content: r.content },
+        None => ToolExecResult { content: "[ERROR] tool manager not initialised — call init_tools() first".to_string() },
     }
 }
 
