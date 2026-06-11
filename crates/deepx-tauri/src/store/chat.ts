@@ -64,6 +64,7 @@ export function createChatStore() {
   function handleSessionCreated(seed: string) { setSessionInfo("seed", seed); }
   function handleDashboard(data: Record<string, unknown>) {
     if (data.session_seed) setSessionInfo("seed", data.session_seed as string);
+    if (data.model) setSessionInfo("model", data.model as string);
     if (data.context_limit != null) setSessionInfo("contextLimit", data.context_limit as number);
     if (data.usage != null) {
       const u = data.usage as Record<string, unknown>;
@@ -141,5 +142,25 @@ export function createChatStore() {
     }
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, error, tasks, recentEdits, activityLog, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clear, setInputDisabled, loadSessionFromData };
+  // Load turns from SessionRestored agent event (authoritative restored state).
+  function loadTurnsFromRestore(turnsData: Array<{
+    turn_id: string; user_text: string; rounds: Array<{
+      round_num: number; thinking?: string; answer?: string;
+      tool_calls: ToolCallDef[]; tool_results: ToolResultDef[];
+    }>;
+  }>) {
+    const loaded: Turn[] = turnsData.map((td) => {
+      const rounds: Round[] = td.rounds.map((rd) => {
+        const blocks: RoundBlock[] = [];
+        if (rd.thinking) blocks.push({ type: "reasoning", content: rd.thinking });
+        if (rd.answer) blocks.push({ type: "text", content: rd.answer });
+        for (const tc of rd.tool_calls) blocks.push({ type: "tool", card: tc });
+        return { roundNum: rd.round_num, thinking: rd.thinking, answer: rd.answer, blocks, toolCalls: rd.tool_calls, toolResults: rd.tool_results };
+      });
+      return { turnId: td.turn_id, userText: td.user_text, rounds, status: "complete" };
+    });
+    setTurns(loaded);
+  }
+
+  return { turns, sessionInfo, isStreaming, inputDisabled, error, tasks, recentEdits, activityLog, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clear, setInputDisabled, loadSessionFromData, loadTurnsFromRestore };
 }

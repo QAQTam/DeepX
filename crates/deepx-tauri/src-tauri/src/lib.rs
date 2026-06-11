@@ -23,6 +23,7 @@ pub fn run() {
             agent_bridge::cmd_list_sessions,
             agent_bridge::cmd_load_session,
             agent_bridge::cmd_set_active_session,
+            agent_bridge::cmd_delete_session,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

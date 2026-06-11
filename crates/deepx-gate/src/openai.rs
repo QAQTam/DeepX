@@ -1,4 +1,5 @@
 //! OpenAI Chat Completions API streaming client — sync (ureq).
+//! Includes retry with exponential backoff for transient errors (429, 500, 503, transport).
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -7,6 +8,18 @@ use std::time::Duration;
 use deepx_types::{ContentBlock, Message, ToolDef, UsageInfo};
 
 use super::types::{ProviderConfig, StreamEvent};
+
+const MAX_RETRIES: u32 = 3;
+const BASE_DELAY_SECS: u64 = 1;
+
+fn is_retryable(status: u16) -> bool {
+    matches!(status, 429 | 500 | 503)
+}
+
+fn backoff_delay(attempt: u32) -> Duration {
+    let secs = BASE_DELAY_SECS * 2u64.pow(attempt.saturating_sub(1));
+    Duration::from_secs(secs.min(30))
+}
 
 /// Send a chat completion request and stream SSE events via `on_event`.
 pub fn chat_stream_openai(
@@ -58,36 +71,66 @@ pub fn chat_stream_openai(
     let body = serde_json::Value::Object(body_map);
     let url = build_chat_url(&provider.base_url);
 
-    dump_api_request(user_id.as_deref(), &body);
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        dump_api_request(user_id.as_deref(), &body);
 
-    // Send request
-    let resp = ureq::post(&url)
-        .set("Authorization", &format!("Bearer {}", provider.api_key))
-        .set("Content-Type", "application/json")
-        .timeout(Duration::from_secs(900))
-        .send_json(&body);
+        let resp = ureq::post(&url)
+            .set("Authorization", &format!("Bearer {}", provider.api_key))
+            .set("Content-Type", "application/json")
+            .timeout(Duration::from_secs(900))
+            .send_json(&body);
 
-    let resp = match resp {
-        Ok(r) => r,
-        Err(ureq::Error::Status(code, resp)) => {
-            let text = resp.into_string().unwrap_or_default();
-            dump_api_error(user_id.as_deref(), code as u16, &text);
-            let code_desc = http_error_description(code);
-            let msg = format!("OpenAI API HTTP {} ({})", code, code_desc);
-            on_event(StreamEvent::Error(format!("{}: {}", msg, text)));
-            return Err(anyhow::anyhow!("{}", msg));
+        match resp {
+            Ok(resp) => {
+                return stream_sse(resp, provider, user_id.as_deref(), on_event);
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                let text = resp.into_string().unwrap_or_default();
+                dump_api_error(user_id.as_deref(), code as u16, &text);
+                let code_desc = http_error_description(code);
+
+                if attempt >= MAX_RETRIES || !is_retryable(code as u16) {
+                    let msg = format!("OpenAI API HTTP {} ({})", code, code_desc);
+                    on_event(StreamEvent::Error(format!("{}: {}", msg, text)));
+                    return Err(anyhow::anyhow!("{}", msg));
+                }
+
+                let delay = backoff_delay(attempt);
+                on_event(StreamEvent::Retrying {
+                    attempt, max_retries: MAX_RETRIES,
+                    delay_secs: delay.as_secs(),
+                    error: format!("HTTP {} ({})", code, code_desc),
+                });
+                std::thread::sleep(delay);
+            }
+            Err(ureq::Error::Transport(e)) => {
+                if attempt >= MAX_RETRIES {
+                    let msg = format!("HTTP transport error: {e}");
+                    on_event(StreamEvent::Error(msg.clone()));
+                    return Err(anyhow::anyhow!("{}", msg));
+                }
+
+                let delay = backoff_delay(attempt);
+                on_event(StreamEvent::Retrying {
+                    attempt, max_retries: MAX_RETRIES,
+                    delay_secs: delay.as_secs(),
+                    error: format!("{e}"),
+                });
+                std::thread::sleep(delay);
+            }
         }
-        Err(ureq::Error::Transport(e)) => {
-            let msg = format!("HTTP transport error: {e}");
-            on_event(StreamEvent::Error(msg.clone()));
-            return Err(anyhow::anyhow!("{}", msg));
-        }
-    };
+    }
+}
 
-    // Balance query (non-blocking best-effort; run after stream or asynchronously)
-    // We query it after the stream to avoid blocking the first token.
+fn stream_sse(
+    resp: ureq::Response,
+    provider: &ProviderConfig,
+    _user_id: Option<&str>,
+    on_event: &mut dyn FnMut(StreamEvent),
+) -> anyhow::Result<()> {
     let mut balance_queried = false;
-
     let mut reader = resp.into_reader();
     let mut sse_buf = String::new();
     let mut byte_buf = [0u8; 4096];

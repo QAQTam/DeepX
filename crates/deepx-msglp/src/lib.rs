@@ -15,8 +15,7 @@ use agent::AgentState;
 mod lifecycle;
 mod dashboard;
 use dashboard::{build_documents, build_recent_edits, build_tasks};
-use lifecycle::{init_session, create_session};
-use deepx_message::{Effect, ToolExecRequest, ToolExecReport};
+use deepx_message::Effect;
 use deepx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
 
 // ═══════════════════════════════════════════════════════
@@ -87,13 +86,7 @@ impl Loop {
 
     pub fn run(&mut self) {
         // ── Inject UI sender + cancel + tool executor into MessageStore ──
-        self.agent.msg.set_ui_tx(self.ui_tx.clone());
-        self.agent.msg.set_cancel(self.cancel.arc());
-        self.agent.msg.set_tool_executor(Box::new(|req: ToolExecRequest| {
-            let result = deepx_tools::bridge::execute_tool_with_id(&req.name, "", &req.args.to_string(), &req.id);
-            let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");
-            ToolExecReport { content: result, success, files_affected: Vec::new() }
-        }));
+        self.agent.rebind_store(self.ui_tx.clone(), self.cancel.arc());
 
         // ── Emit initial dashboard ──
         self.emit_dashboard();
@@ -104,6 +97,7 @@ impl Loop {
         {
             let seed = self.agent.session.resume_seed.clone();
             if lifecycle::init_session(&mut self.agent, seed.as_deref()) {
+                self.agent.rebind_store(self.ui_tx.clone(), self.cancel.arc());
                 let _ = self.ui_tx.send(Agent2Ui::SessionRestored {
                     seed: self.agent.session.seed.clone(),
                     turns: build_turns_from_context(&self.agent),
@@ -114,6 +108,7 @@ impl Loop {
         }
 
         // ── Main event loop ──
+        eprintln!("[AGENT] entering main event loop, waiting for Ui2Agent...");
         loop {
             let frame = match self.ui_rx.recv() {
                 Ok(f) => f,
@@ -144,6 +139,7 @@ impl Loop {
 
                 Ui2Agent::CreateSession => {
                     lifecycle::create_session(&mut self.agent);
+                    self.agent.rebind_store(self.ui_tx.clone(), self.cancel.arc());
                     let _ = self.ui_tx.send(Agent2Ui::SessionCreated {
                         seed: self.agent.session.seed.clone(),
                     });
@@ -238,6 +234,7 @@ impl Loop {
         loop {
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                 self.agent.msg.remove_last_step_if_incomplete();
+                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 break;
             }
 
@@ -299,6 +296,10 @@ impl Loop {
                                 tool_calls_raw = serde_json::Value::Array(blocks);
                             }
                         }
+                        deepx_gate::StreamEvent::Retrying { attempt, max_retries, delay_secs, error } => {
+                            let msg = format!("API error, retrying ({attempt}/{max_retries}) in {delay_secs}s: {error}");
+                            let _ = self.ui_tx.send(Agent2Ui::Error { message: msg });
+                        }
                         deepx_gate::StreamEvent::Error(msg) => {
                             let _ = self.ui_tx.send(Agent2Ui::Error { message: msg });
                             had_error = true;
@@ -309,6 +310,7 @@ impl Loop {
             );
 
             if had_error || result.is_err() {
+                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 break;
             }
 
@@ -345,12 +347,10 @@ impl Loop {
                         });
                     }
 
-                    if self.agent.msg.has_pending_tools() {
-                        round_num += 1;
-                        continue;
-                    }
+                    round_num += 1;
+                    continue;
                 }
-                Effect::TurnComplete | Effect::None => {}
+                Effect::TurnComplete => {}
                 _ => {}
             }
 

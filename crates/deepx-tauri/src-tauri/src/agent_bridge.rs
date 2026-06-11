@@ -9,6 +9,7 @@
 
 use std::sync::mpsc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use tauri::{AppHandle, Emitter};
 
@@ -19,6 +20,16 @@ pub struct AgentBridge {
     sender: mpsc::Sender<Ui2Agent>,
     /// Whether the agent has been shut down.
     shutdown: Mutex<bool>,
+}
+
+/// Global BRIDGE â bypasses Tauri state management issues.
+static BRIDGE: OnceLock<AgentBridge> = OnceLock::new();
+
+/// Send a frame to the agent using the global BRIDGE.
+fn send_command(frame: Ui2Agent) -> Result<(), String> {
+    BRIDGE.get()
+        .ok_or_else(|| "AgentBridge not initialized".into())
+        .and_then(|bridge| bridge.send(frame))
 }
 
 impl AgentBridge {
@@ -47,6 +58,7 @@ impl AgentBridge {
         std::thread::spawn(move || {
             while let Ok(event) = agent_rx.recv() {
                 let event_type = agent2ui_event_name(&event);
+                eprintln!("[BRIDGE] got event: {}", event_type);
                 let payload = serde_json::to_value(&event).unwrap_or_default();
                 if app_handle.emit("agent-event", payload.clone()).is_err() {
                     break;
@@ -58,10 +70,12 @@ impl AgentBridge {
             drop(agent_handle);
         });
 
-        Self {
+        let bridge = Self {
             sender: tx,
             shutdown: Mutex::new(false),
-        }
+        };
+        let _ = BRIDGE.set(bridge);
+        Self { sender: mpsc::channel::<Ui2Agent>().0, shutdown: Mutex::new(false) }
     }
 
     /// Send a frame to the agent. Returns Ok(()) or an error string.
@@ -87,40 +101,37 @@ impl AgentBridge {
 /// Send a user text message to the agent.
 #[tauri::command]
 pub fn cmd_send_message(
-    state: tauri::State<'_, AgentBridge>,
     text: String,
 ) -> Result<(), String> {
-    state.send(Ui2Agent::UserInput { text })
+    eprintln!("[BRIDGE] cmd_send_message: {}", &text[..text.len().min(50)]);
+    send_command(Ui2Agent::UserInput { text })
 }
 
 /// Create a new session.
 #[tauri::command]
 pub fn cmd_create_session(
-    state: tauri::State<'_, AgentBridge>,
 ) -> Result<(), String> {
-    state.send(Ui2Agent::CreateSession)
+    eprintln!("[BRIDGE] cmd_create_session");
+    send_command(Ui2Agent::CreateSession)
 }
 
 /// Cancel the current operation.
 #[tauri::command]
 pub fn cmd_cancel(
-    state: tauri::State<'_, AgentBridge>,
 ) -> Result<(), String> {
-    state.send(Ui2Agent::Cancel)
+    send_command(Ui2Agent::Cancel)
 }
 
 /// Request a debug snapshot from the agent.
 #[tauri::command]
 pub fn cmd_get_debug_snapshot(
-    state: tauri::State<'_, AgentBridge>,
 ) -> Result<(), String> {
-    state.send(Ui2Agent::DebugCommand { cmd: "snapshot".into() })
+    send_command(Ui2Agent::DebugCommand { cmd: "snapshot".into() })
 }
 
 /// Save configuration and reload the agent.
 #[tauri::command]
 pub fn cmd_save_config(
-    state: tauri::State<'_, AgentBridge>,
     api_key: String,
     model: String,
     base_url: String,
@@ -142,12 +153,13 @@ pub fn cmd_save_config(
     if !reasoning_effort.is_empty() { cfg.reasoning_effort = reasoning_effort; }
     if !lang.is_empty() { cfg.lang = Some(lang); }
     cfg.save();
-    state.send(Ui2Agent::ReloadConfig)
+    send_command(Ui2Agent::ReloadConfig)
 }
 
 /// Load the current config and return it as JSON.
 #[tauri::command]
 pub fn cmd_load_config() -> Result<String, String> {
+    eprintln!("[BRIDGE] cmd_load_config called");
     let cfg = deepx_config::Config::load()
         .map_err(|e| format!("load config: {e}"))?;
     let providers: Vec<serde_json::Value> = deepx_config::registry::all_providers()
@@ -235,12 +247,20 @@ pub fn cmd_set_active_session(seed: String) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Delete a session by seed.
+#[tauri::command]
+pub fn cmd_delete_session(seed: String) -> Result<(), String> {
+    deepx_session::SessionManager::global().delete(&seed)
+}
 /// Read .active_session file if present, else fall back to latest from index.
 fn active_or_latest_seed() -> Option<String> {
+    if let Some(seed) = deepx_session::SessionManager::global().active_seed() {
+        return Some(seed);
+    }
     let dir = deepx_types::platform::sessions_dir();
     let index_path = dir.join("index.toml");
     let data = std::fs::read_to_string(&index_path).ok()?;
-    // Try parsing as array of SessionMeta
     if let Ok(metas) = toml::from_str::<Vec<deepx_types::SessionMeta>>(&data) {
         metas.into_iter()
             .max_by_key(|m| m.updated_at)

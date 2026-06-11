@@ -164,6 +164,9 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 .session-info { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .session-summary { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta { font-size: 10px; color: var(--text-muted); }
+.session-delete-btn { opacity: 0; margin-left: auto; padding: 2px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 3px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: opacity var(--transition), color var(--transition), background var(--transition); }
+.sidebar-session-item:hover .session-delete-btn { opacity: 1; }
+.session-delete-btn:hover { color: var(--red); background: var(--bg-hover); }
 
 /* ── Settings ── */
 .settings-view { max-width: none; padding: 0 48px; padding: 0 24px; height: 100%; display: flex; flex-direction: column; overflow: hidden; }

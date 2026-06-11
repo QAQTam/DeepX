@@ -38,6 +38,18 @@ export default function App() {
     } catch (e) { console.error(e); }
   }
 
+  async function deleteSession(seed: string) {
+    try {
+      await invoke("cmd_delete_session", { seed });
+      if (chat.sessionInfo.seed === seed) {
+        localStorage.removeItem(LS_KEY);
+        await invoke("cmd_set_active_session", { seed: "" });
+        await invoke("cmd_create_session");
+      }
+      await refreshSessions();
+    } catch (e) { console.error(e); }
+  }
+
   async function newSession() {
     localStorage.removeItem(LS_KEY);
     try { await invoke("cmd_set_active_session", { seed: "" }); } catch (_) {}
@@ -46,7 +58,7 @@ export default function App() {
 
   onMount(async () => {
     // Load model from config
-      try { const raw = await invoke<string>("cmd_load_config"); const cfg = JSON.parse(raw); if (cfg.model) { chat.sessionInfo.model = cfg.model; } } catch (_) {}
+      try { const raw = await invoke<string>("cmd_load_config"); const cfg = JSON.parse(raw); if (cfg.model) { chat.handleDashboard({ model: cfg.model }); } } catch (_) {}
       // Sync lang from config.toml (source of truth) on startup
     try { const raw = await invoke<string>("cmd_load_config"); const cfg = JSON.parse(raw); if (cfg.lang && (cfg.lang === "en" || cfg.lang === "zh")) { const cl = cfg.lang as Lang; i18n.setLang(cl); setConfigLang(cl); localStorage.setItem("dsx:lang", cl); } } catch (_) {}
     // Set up event listener FIRST
@@ -59,7 +71,7 @@ export default function App() {
         case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
         case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); break;
         case "session_created": chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); refreshSessions(); break;
-        case "session_restored": if (p.seed) { chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); } break;
+        case "session_restored": if (p.seed) { chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); if (p.turns) { chat.loadTurnsFromRestore(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); } } break;
         case "dashboard": chat.handleDashboard(p); break;
         case "done": chat.setInputDisabled(false); break;
         case "cancelled": chat.handleCancelled(); break;
@@ -118,6 +130,15 @@ export default function App() {
                     <span class="session-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
                     <span class="session-meta">{formatDate(s.updated_at)} · {s.message_count} {t().session.messages}</span>
                   </span>
+                  <button
+                    class="session-delete-btn"
+                    onClick={(e) => { e.stopPropagation(); deleteSession(s.seed); }}
+                    title="Delete session"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                  </button>
                 </button>
               )}
             </For>

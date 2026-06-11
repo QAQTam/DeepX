@@ -66,7 +66,23 @@ impl SessionManager {
         metas
     }
 
-    // ── Session CRUD ──
+    /// Delete a session: removes the session directory and its index entry.
+    pub fn delete(&self, seed: &str) -> Result<(), String> {
+        let dir = self.session_dir(seed)
+            .ok_or_else(|| format!("Session not found: {seed}"))?;
+
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| format!("Failed to delete session: {e}"))?;
+
+        let mut index = self.load_index();
+        index.retain(|m| m.seed != seed);
+        self.save_index(&index);
+
+        log::info!("SessionManager: deleted session {seed}");
+        Ok(())
+    }
+
+    // ── Session CRUD (continued) ──
 
     /// Load full session data from disk. Verifies integrity if checksum present.
     pub fn load(&self, seed: &str) -> Option<SessionFile> {
@@ -240,18 +256,25 @@ impl SessionManager {
     }
 
     fn session_path(&self, seed: &str) -> PathBuf {
-        // Reuse existing directory if present
+        if let Some(dir) = self.session_dir(seed) {
+            return dir.join("session.toml");
+        }
+        let date = chrono_date();
+        self.sessions_dir.join(format!("{}-{}", seed, date)).join("session.toml")
+    }
+
+    fn session_dir(&self, seed: &str) -> Option<PathBuf> {
         if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
             for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
+                let path = entry.path();
+                if !path.is_dir() { continue; }
+                let name = path.file_name()?.to_string_lossy();
                 if name.starts_with(&format!("{}-", seed)) {
-                    return entry.path().join("session.toml");
+                    return Some(path);
                 }
             }
         }
-        // New: create with today's date
-        let date = chrono_date();
-        self.sessions_dir.join(format!("{}-{}", seed, date)).join("session.toml")
+        None
     }
 
     fn existing_created_at(&self, seed: &str) -> Option<u64> {
@@ -273,7 +296,10 @@ impl SessionManager {
                 } else { None }
             }))
             .map(|s| {
-                if s.len() <= 80 { s.to_string() } else { format!("{}..", &s[..80]) }
+                if s.len() <= 80 { return s.to_string(); }
+                let mut end = 80;
+                while !s.is_char_boundary(end) { end -= 1; }
+                format!("{}..", &s[..end])
             })
             .unwrap_or_default()
     }

@@ -86,7 +86,6 @@ pub struct MessageStore {
     seed: String,
     system_messages: Vec<Message>,
     turns: Vec<Turn>,
-    gate_cursor: usize,
     cancelled: bool,
     tool_executor: Option<ToolExecutorFn>,
     ui_tx: Option<std::sync::mpsc::Sender<deepx_proto::Agent2Ui>>,
@@ -98,7 +97,6 @@ impl std::fmt::Debug for MessageStore {
         f.debug_struct("MessageStore")
             .field("seed", &self.seed)
             .field("turns", &self.turns.len())
-            .field("gate_cursor", &self.gate_cursor)
             .field("cancelled", &self.cancelled)
             .field("has_executor", &self.tool_executor.is_some())
             .finish()
@@ -111,7 +109,6 @@ impl Clone for MessageStore {
             seed: self.seed.clone(),
             system_messages: self.system_messages.clone(),
             turns: self.turns.clone(),
-            gate_cursor: self.gate_cursor,
             cancelled: self.cancelled,
             tool_executor: None,
             ui_tx: None,
@@ -126,7 +123,6 @@ impl MessageStore {
             seed: seed.to_string(),
             system_messages: Vec::new(),
             turns: Vec::new(),
-            gate_cursor: 0,
             cancelled: false,
             tool_executor: None,
             ui_tx: None,
@@ -142,7 +138,6 @@ impl MessageStore {
         self.seed = new_seed.to_string();
         self.system_messages.clear();
         self.turns.clear();
-        self.gate_cursor = 0;
         self.cancelled = false;
     }
 
@@ -170,7 +165,6 @@ impl MessageStore {
                 auto_complete_unfulfilled(step, "[CANCELLED] Tool was not executed (user interrupted).");
             }
         }
-        self.gate_cursor = 0;
         self.turns.push(Turn::new(Message::user(text)));
         Effect::None
     }
@@ -308,20 +302,7 @@ impl MessageStore {
             }
         }
 
-        let result = if self.gate_cursor == 0 {
-            self.gate_cursor = full.len();
-            full
-        } else if self.gate_cursor < full.len() {
-            let new_msgs: Vec<Message> = full[self.gate_cursor..].to_vec();
-            self.gate_cursor = full.len();
-            let mut out = vec![Message::system("[continue]")];
-            out.extend(new_msgs);
-            out
-        } else {
-            Vec::new()
-        };
-
-        result
+        full
     }
 
     pub fn execute_tools_batch(&mut self) -> Effect {

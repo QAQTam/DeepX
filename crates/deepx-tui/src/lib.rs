@@ -217,6 +217,20 @@ fn run_session_screen(
                         break;
                     }
                 }
+                (_, KeyCode::Delete) => {
+                    let total = app.sessions.len();
+                    if app.session_index < total {
+                        let seed = app.sessions[app.session_index].seed.clone();
+                        let _ = deepx_session::SessionManager::global().delete(&seed);
+                        load_sessions(app);
+                        if app.resume_seed.as_deref() == Some(&seed) {
+                            app.resume_seed = None;
+                        }
+                        if app.session_index >= app.sessions.len() {
+                            app.session_index = app.sessions.len().saturating_sub(1);
+                        }
+                    }
+                }
                 _ => {}
             }
         }

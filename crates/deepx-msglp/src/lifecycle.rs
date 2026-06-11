@@ -52,7 +52,7 @@ pub fn create_session(agent: &mut AgentState) {
     agent.session.seed = SessionManager::generate_seed();
     agent.session.start = SessionManager::now_epoch();
     agent.session.tokens = 0;
-    // token_estimate / api_usage removed (tracked via session.tokens only)
+    agent.session.from_resume = false;
     agent.tool_results.clear();
         deepx_tools::bridge::set_current_session(&agent.session.seed);
     SessionManager::global().save(
