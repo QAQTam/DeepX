@@ -3,7 +3,7 @@ import MessageItem from "./MessageItem";
 import type { Turn } from "../store/chat";
 import { useI18n } from "../i18n";
 
-interface MessageListProps { turns: Turn[]; isStreaming: () => boolean; }
+interface MessageListProps { turns: Turn[]; isStreaming: () => boolean; onUndo: (turnId: string) => void; }
 
 export default function MessageList(props: MessageListProps) {
   const { t } = useI18n();
@@ -47,7 +47,7 @@ export default function MessageList(props: MessageListProps) {
         <For each={props.turns}>
           {(turn) => (
             <>
-              <MessageItem role="user" text={turn.userText} />
+              <MessageItem role="user" text={turn.userText} turnId={turn.turnId} onUndo={props.onUndo} />
               <MessageItem role="assistant" rounds={turn.rounds} status={turn.status} />
             </>
           )}

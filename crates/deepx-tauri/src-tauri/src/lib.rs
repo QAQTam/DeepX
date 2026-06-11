@@ -1,10 +1,10 @@
-//! dsx-tauri library — exposed for the unified dsx binary.
+//! deepx-tauri library — exposed for the unified deepx binary.
 
 mod agent_bridge;
 
 use tauri::Manager;
 
-/// Entry point called by the `dsx` binary when run without flags.
+/// Entry point called by the `deepx` binary when run without flags.
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -24,6 +24,7 @@ pub fn run() {
             agent_bridge::cmd_load_session,
             agent_bridge::cmd_set_active_session,
             agent_bridge::cmd_delete_session,
+            agent_bridge::cmd_undo_turn,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

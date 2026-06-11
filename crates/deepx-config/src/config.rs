@@ -131,7 +131,7 @@ impl Config {
         Ok(cfg)
     }
 
-    pub fn save(&self) {
+    pub fn save(&self) -> Result<(), String> {
         let store = ConfigStore::default_location();
         let mut profiles = self.profiles.clone();
         profiles.insert(self.active_profile.clone(), deepx_types::ProfileConfig {
@@ -155,9 +155,11 @@ impl Config {
             lang: self.lang.clone(),
             context7_api_key: self.context7_api_key.clone(),
             mcp_servers: mcp_val,
-    };
+        };
         if !store.save(&pc) {
-            log::error!("Failed to save config");
+            Err(format!("Failed to save config to {}", deepx_types::platform::config_path().display()))
+        } else {
+            Ok(())
         }
     }
 
@@ -176,7 +178,7 @@ impl Config {
             }
         }
         self.active_profile = name.to_string();
-        self.save();
+        let _ = self.save();
         Some(name.to_string())
     }
 
@@ -188,13 +190,13 @@ impl Config {
             endpoint: Some(self.endpoint.clone()),
         });
         self.active_profile = name.to_string();
-        self.save();
+        let _ = self.save();
     }
 
     pub fn delete_profile(&mut self, name: &str) -> bool {
         if name == "default" { return false; }
         if self.profiles.remove(name).is_some() {
-            self.save();
+            let _ = self.save();
             true
         } else { false }
     }

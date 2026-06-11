@@ -1,6 +1,6 @@
-//! dsx-session — unified session manager singleton.
+//! deepx-session — unified session manager singleton.
 //!
-//! Follows the same pattern as dsx-tools::ToolManager.
+//! Follows the same pattern as deepx-tools::ToolManager.
 
 pub mod manager;
 pub mod session_meta;

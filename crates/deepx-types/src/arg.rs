@@ -1,6 +1,6 @@
 //! Unified JSON argument parsing for tool call arguments.
 //!
-//! All DSX crates should use these functions instead of duplicating
+//! All deepx crates should use these functions instead of duplicating
 //! serde_json parsing for the common fields (action, path, command, ...).
 
 use serde_json::Value;

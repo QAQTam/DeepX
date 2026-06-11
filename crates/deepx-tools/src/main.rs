@@ -1,10 +1,10 @@
-//! Standalone dsx-tools binary — run individual tools from CLI.
+//! Standalone deepx-tools binary — run individual tools from CLI.
 //!
 //! Usage:
-//!   dsx-tools <tool_name> [json_args]
-//!   dsx-tools explore
-//!   dsx-tools read_file '{"path":"src/main.rs","start_line":1,"end_line":50}'
-//!   dsx-tools list
+//!   deepx-tools <tool_name> [json_args]
+//!   deepx-tools explore
+//!   deepx-tools read_file '{"path":"src/main.rs","start_line":1,"end_line":50}'
+//!   deepx-tools list
 
 use std::env;
 
@@ -17,8 +17,8 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: dsx-tools <tool> [json_args]");
-        eprintln!("       dsx-tools list");
+    eprintln!("Usage: deepx-tools <tool> [json_args]");
+    eprintln!("       deepx-tools list");
         std::process::exit(1);
     }
 

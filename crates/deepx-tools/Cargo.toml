@@ -2,7 +2,7 @@
 name = "deepx-tools"
 version.workspace = true
 edition.workspace = true
-description = "DSX tool execution — library + standalone binary"
+description = "DeepX tool execution — library + standalone binary"
 
 [[bin]]
 name = "deepx-tools"

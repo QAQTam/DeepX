@@ -11,41 +11,41 @@ pub fn home_dir() -> PathBuf {
     }
 }
 
-/// DSX data directory (config, sessions, plans).
-/// - Windows: `%USERPROFILE%\.dsx`
-/// - Unix: `$XDG_CONFIG_HOME/dsx` or `$HOME/.config/dsx`
+/// deepx data directory (config, sessions, plans).
+/// - Windows: `%USERPROFILE%\.deepx`
+/// - Unix: `$XDG_CONFIG_HOME/deepx` or `$HOME/.config/deepx`
 pub fn data_dir() -> PathBuf {
     if cfg!(target_os = "windows") {
-        home_dir().join(".dsx")
+        home_dir().join(".deepx")
     } else {
         std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| home_dir().join(".config"))
-            .join("dsx")
+            .join("deepx")
     }
 }
 
-/// DSX config file path.
+/// deepx config file path.
 pub fn config_path() -> PathBuf {
     data_dir().join("config.toml")
 }
 
-/// DSX HP port file path.
+/// deepx HP port file path.
 pub fn hp_port_path() -> PathBuf {
     data_dir().join("hp.port")
 }
 
-/// DSX sessions directory.
+/// deepx sessions directory.
 pub fn sessions_dir() -> PathBuf {
     data_dir().join("sessions")
 }
 
-/// DSX plans directory.
+/// deepx plans directory.
 pub fn plans_dir() -> PathBuf {
     data_dir().join("plans")
 }
 
-/// DSX workspace path file.
+/// deepx workspace path file.
 pub fn workspace_path() -> PathBuf {
     data_dir().join("workspace.txt")
 }

@@ -1,4 +1,4 @@
-//! DSX message protocol — shared frame definitions for agent communication.
+//! deepx message protocol — shared frame definitions for agent communication.
 //!
 //! Every frame is a single-line JSON object (`\n` delimited), tagged with `"type"`.
 //!

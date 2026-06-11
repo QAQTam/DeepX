@@ -10,6 +10,7 @@ export default function ChatView(props: ChatViewProps) {
 
   async function handleSend(text: string) {
     try {
+      chat.clearError();
       await invoke("cmd_send_message", { text });
     } catch (e) {
       console.error("send_message error:", e);
@@ -26,13 +27,25 @@ export default function ChatView(props: ChatViewProps) {
 
   return (
     <div class="chat-view">
-      <InfoBar model={chat.sessionInfo.model} seed={chat.sessionInfo.seed} contextTokens={chat.sessionInfo.contextTokens} contextLimit={chat.sessionInfo.contextLimit} totalTokens={chat.sessionInfo.totalTokens} promptCacheHit={chat.sessionInfo.promptCacheHit} promptCacheMiss={chat.sessionInfo.promptCacheMiss} />
-      <MessageList turns={chat.turns} isStreaming={chat.isStreaming} />
+      <InfoBar
+        model={chat.sessionInfo.model}
+        seed={chat.sessionInfo.seed}
+        contextTokens={chat.sessionInfo.contextTokens}
+        contextLimit={chat.sessionInfo.contextLimit}
+        totalTokens={chat.sessionInfo.totalTokens}
+        promptCacheHit={chat.sessionInfo.promptCacheHit}
+        promptCacheMiss={chat.sessionInfo.promptCacheMiss}
+        isStreaming={chat.isStreaming()}
+        error={chat.error()}
+        onDismissError={() => chat.clearError()}
+      />
+      <MessageList turns={chat.turns} isStreaming={chat.isStreaming} onUndo={(id) => chat.undoTurn(id)} />
       <InputBar
         onSend={handleSend}
         onStop={handleStop}
         isStreaming={chat.isStreaming}
         disabled={chat.inputDisabled()}
+        restoreText={chat.restoreText}
       />
     </div>
   );

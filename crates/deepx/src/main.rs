@@ -1,22 +1,22 @@
-//! DSX — single binary for all roles.
+//! deepx — single binary for all roles.
 //!
 //! Usage:
-//!   dsx              → Tauri GUI (default, double-click)
-//!   dsx --tui         → Terminal UI
-//!   dsx --agent       → Headless agent (stdin/stdout JSON-LP)
-//!   dsx config|init   → Setup wizard
+//!   deepx              → Tauri GUI (default, double-click)
+//!   deepx --tui         → Terminal UI
+//!   deepx --agent       → Headless agent (stdin/stdout JSON-LP)
+//!   deepx config|init   → Setup wizard
 
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
         "--tui" => {
             if let Err(e) = deepx_tui::run_tui() {
-                eprintln!("dsx-tui: {e}");
+                eprintln!("deepx-tui: {e}");
                 std::process::exit(1);
             }
         }
         "--agent" => {
-            eprintln!("headless mode removed — use dsx-msglp");
+            eprintln!("headless mode removed — use deepx-msglp");
         }
         "config" | "init" => {
             run_config();
@@ -28,7 +28,7 @@ fn main() {
     }
 }
 
-/// Interactive setup wizard: writes ~/.config/dsx/config.toml
+/// Interactive setup wizard: writes config.toml
 fn run_config() {
     use std::io::Write;
 
@@ -52,7 +52,7 @@ fn run_config() {
 
     println!();
     println!("╔══════════════════════════════════════╗");
-    println!("║   DSX — AI coding assistant setup    ║");
+        println!("║   deepx — AI coding assistant setup    ║");
     println!("╚══════════════════════════════════════╝");
     println!("(leave blank to keep current value)");
     println!();
@@ -100,7 +100,7 @@ fn run_config() {
     if store.save(&pc) {
         println!();
         println!("Config saved to {}", deepx_types::platform::config_path().display());
-        println!("Run `dsx` to start.");
+        println!("Run `deepx` to start.");
     } else {
         eprintln!("Error saving config");
     }

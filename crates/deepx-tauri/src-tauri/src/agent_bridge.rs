@@ -1,7 +1,7 @@
-//! Agent bridge: runs the dsx-agent in a background thread and bridges
+//! Agent bridge: runs the deepx-agent in a background thread and bridges
 //! mpsc channels to Tauri commands (frontend → agent) and events (agent → frontend).
 //!
-//! Architecture mirrors dsx-tui's spawn_agent_inproc:
+//! Architecture mirrors deepx-tui's spawn_agent_inproc:
 //!   1. AgentState::init("tauri") — init tools, config, tool defs
 //!   2. Spawn run_agent_loop in a background thread
 //!   3. Forward Ui2Agent frames from Tauri commands via mpsc sender
@@ -152,7 +152,7 @@ pub fn cmd_save_config(
     if context_limit > 0 { cfg.context_limit = context_limit; }
     if !reasoning_effort.is_empty() { cfg.reasoning_effort = reasoning_effort; }
     if !lang.is_empty() { cfg.lang = Some(lang); }
-    cfg.save();
+    cfg.save()?;
     send_command(Ui2Agent::ReloadConfig)
 }
 
@@ -252,6 +252,12 @@ pub fn cmd_set_active_session(seed: String) -> Result<(), String> {
 #[tauri::command]
 pub fn cmd_delete_session(seed: String) -> Result<(), String> {
     deepx_session::SessionManager::global().delete(&seed)
+}
+
+/// Undo a turn and all subsequent content.
+#[tauri::command]
+pub fn cmd_undo_turn(turn_id: String) -> Result<(), String> {
+    send_command(Ui2Agent::UndoTurn { turn_id })
 }
 /// Read .active_session file if present, else fall back to latest from index.
 fn active_or_latest_seed() -> Option<String> {

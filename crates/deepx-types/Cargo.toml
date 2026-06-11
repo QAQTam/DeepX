@@ -2,7 +2,7 @@
 name = "deepx-types"
 version.workspace = true
 edition.workspace = true
-description = "DSX shared type definitions"
+description = "DeepX shared type definitions"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

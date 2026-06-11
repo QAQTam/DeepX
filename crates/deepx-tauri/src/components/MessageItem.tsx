@@ -4,7 +4,14 @@ import ToolCallCard from "./ToolCallCard";
 import type { Round } from "../store/chat";
 import { useI18n } from "../i18n";
 
-interface MessageItemProps { role: "user" | "assistant"; text?: string; rounds?: Round[]; status?: "streaming" | "complete"; }
+interface MessageItemProps {
+  role: "user" | "assistant";
+  text?: string;
+  rounds?: Round[];
+  status?: "streaming" | "complete";
+  turnId?: string;
+  onUndo?: (turnId: string) => void;
+}
 
 export default function MessageItem(props: MessageItemProps) {
   const { t } = useI18n();
@@ -13,7 +20,16 @@ export default function MessageItem(props: MessageItemProps) {
     <div class="msg-item">
       <div class={`msg-avatar ${props.role}`}>{isUser ? "U" : "X"}</div>
       <div class="msg-body">
-        <div class="msg-role">{isUser ? "You" : "DeepX"}</div>
+        <div class="msg-role">
+          {isUser ? "You" : "DeepX"}
+          <Show when={isUser && props.turnId && props.onUndo}>
+            <span class="msg-undo" onClick={() => props.onUndo!(props.turnId!)} title="Undo from here">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 10h10a5 5 0 0 1 0 10H11" /><path d="M7 6l-4 4 4 4" />
+              </svg>
+            </span>
+          </Show>
+        </div>
         <Show when={props.text}>
           <div class="msg-text">{props.text}</div>
         </Show>

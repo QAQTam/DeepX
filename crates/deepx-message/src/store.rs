@@ -149,10 +149,6 @@ impl MessageStore {
         self.cancelled
     }
 
-    fn is_cancelled_by_flag(&self) -> bool {
-        self.cancelled || self.cancel_flag.as_ref().map_or(false, |f| f.load(std::sync::atomic::Ordering::SeqCst))
-    }
-
     pub fn push_system(&mut self, msg: Message) -> Effect {
         debug_assert_eq!(msg.role, "system", "push_system requires role=system");
         self.system_messages.push(msg);
@@ -524,6 +520,16 @@ impl MessageStore {
             }
         }
         false
+    }
+
+    pub fn truncate_before_turn(&mut self, turn_id: &str) -> bool {
+        let idx: usize = match turn_id.strip_prefix('t').and_then(|n| n.parse::<usize>().ok()) {
+            Some(n) if n > 0 => n.saturating_sub(1),
+            _ => return false,
+        };
+        if idx >= self.turns.len() { return false; }
+        self.turns.truncate(idx);
+        true
     }
 }
 

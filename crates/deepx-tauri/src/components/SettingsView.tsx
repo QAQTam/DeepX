@@ -46,7 +46,7 @@ export default function SettingsView(props: SettingsViewProps) {
 
   async function save() {
     try {
-      await invoke("cmd_save_config", { apiKey: apiKey(), model: model(), baseUrl: baseUrl(), providerId: providerId(), endpoint: endpointId(), maxTokens: maxTokens(), contextLimit: contextLimit(), reasoningEffort: reasoningEffort() });
+      await invoke("cmd_save_config", { apiKey: apiKey(), model: model(), baseUrl: baseUrl(), providerId: providerId(), endpoint: endpointId(), maxTokens: maxTokens(), contextLimit: contextLimit(), reasoningEffort: reasoningEffort(), lang: props.lang() });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) { console.error(e); }

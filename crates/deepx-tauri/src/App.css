@@ -64,7 +64,10 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 .msg-avatar.user { background: var(--accent); color: #fff; }
 .msg-avatar.assistant { background: var(--bg-tertiary); color: var(--accent); font-family: var(--font-mono); }
 .msg-body { flex: 1; min-width: 0; overflow: hidden; }
-.msg-role { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; font-weight: 500; }
+.msg-role { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.msg-undo { display: inline-flex; align-items: center; opacity: 0; cursor: pointer; color: var(--text-muted); transition: opacity var(--transition), color var(--transition); }
+.msg-item:hover .msg-undo { opacity: 0.5; }
+.msg-undo:hover { opacity: 1 !important; color: var(--accent); }
 .msg-text { font-size: 14px; line-height: 1.65; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
 .msg-text code { font-family: var(--font-mono); font-size: 13px; background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--accent); }
 .msg-text pre { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow-x: auto; margin: 8px 0; font-size: 13px; position: relative; }
@@ -147,11 +150,18 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
   .sidebar { grid-row: 1; flex-direction: row; padding: 8px 16px; gap: 12px; align-items: center; border-right: none; border-bottom: 1px solid var(--border); }
   .sidebar-nav { flex-direction: row; gap: 8px; }
   .sidebar-brand { display: none; }
-  .status-bar { grid-column: 1; }
   .msg-list { padding: 12px 16px 8px; }
   .input-bar { padding: 10px 12px 12px; }
   .settings-view { max-width: none; padding: 20px 16px; }
 }
+
+/* ── Info dot / error inline ── */
+.info-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
+.info-dot.idle { background: var(--text-muted); }
+.info-dot.active { background: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
+.info-dot.error { background: var(--red); }
+.info-error { display: flex; align-items: center; width: 100%; padding: 2px 0 4px; color: var(--red); font-size: 12px; cursor: pointer; user-select: none; }
+.info-error:hover { text-decoration: line-through; }
 
 /* ── Session sidebar ── */
 .sidebar-section-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; padding: 0 8px; margin-top: 8px; }

@@ -17,8 +17,8 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 
                 deepx_tools::bridge::set_current_session(&agent.session.seed);
                 deepx_tools::bridge::load_workspace(&agent.session.seed);
-                log::info!(
-                    "dsx-agent: restored session {} ({} msgs, {} tokens)",
+                    log::info!(
+                        "deepx-agent: restored session {} ({} msgs, {} tokens)",
                     agent.session.seed,
                     agent.msg.message_count(),
                     agent.session.tokens
@@ -28,7 +28,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 }
                 return true;
             }
-            log::info!("dsx-agent: session {s} not found, creating new with same seed");
+            log::info!("deepx-agent: session {s} not found, creating new with same seed");
             s.to_string()
         }
         None => return false,
@@ -43,7 +43,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
         &agent.config.model,
         Some(&agent.config.reasoning_effort),
     );
-    log::info!("dsx-agent: new session {}", agent.session.seed);
+    log::info!("deepx-agent: new session {}", agent.session.seed);
     true
 }
 
@@ -61,5 +61,5 @@ pub fn create_session(agent: &mut AgentState) {
         &agent.config.model,
         Some(&agent.config.reasoning_effort),
     );
-    log::info!("dsx-agent: new session {}", agent.session.seed);
+    log::info!("deepx-agent: new session {}", agent.session.seed);
 }

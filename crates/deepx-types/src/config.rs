@@ -91,10 +91,20 @@ impl ConfigStore {
         };
         let tmp = self.path.with_extension("toml.tmp");
         if let Some(parent) = self.path.parent() {
-            drop(std::fs::create_dir_all(parent));
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("ConfigStore: create_dir_all({}) failed: {e}", parent.display());
+                return false;
+            }
         }
-        std::fs::write(&tmp, &content).is_ok()
-            && std::fs::rename(&tmp, &self.path).is_ok()
+        if let Err(e) = std::fs::write(&tmp, &content) {
+            eprintln!("ConfigStore: write({}) failed: {e}", tmp.display());
+            return false;
+        }
+        if let Err(e) = std::fs::rename(&tmp, &self.path) {
+            eprintln!("ConfigStore: rename({} -> {}) failed: {e}", tmp.display(), self.path.display());
+            return false;
+        }
+        true
     }
 
     pub fn load_api_key(&self) -> Option<String> {

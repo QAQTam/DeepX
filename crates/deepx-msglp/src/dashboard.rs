@@ -2,7 +2,7 @@ use crate::agent::AgentState;
 use deepx_proto::DocInfo;
 use deepx_proto::TaskInfo;
 
-pub fn build_documents(agent: &AgentState) -> Vec<DocInfo> {
+pub fn build_documents(_agent: &AgentState) -> Vec<DocInfo> {
     let files_read = deepx_tools::bridge::files_read();
     let mut docs: Vec<DocInfo> = files_read
         .iter()

@@ -2,7 +2,7 @@
 name = "deepx-msglp"
 version.workspace = true
 edition.workspace = true
-description = "DSX minimal message loop driver"
+description = "DeepX minimal message loop driver"
 
 [dependencies]
 deepx-gate = { path = "../deepx-gate" }

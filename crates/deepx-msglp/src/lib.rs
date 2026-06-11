@@ -1,4 +1,4 @@
-//! dsx-msglp: minimal message-loop driver.
+//! deepx-msglp: minimal message-loop driver.
 //!
 //! Responsibilities:
 //!   1. Receive Ui2Agent events from the frontend
@@ -185,6 +185,18 @@ impl Loop {
                     });
                 }
 
+                Ui2Agent::UndoTurn { turn_id } => {
+                    if self.agent.msg.truncate_before_turn(&turn_id) {
+                        self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                        let _ = self.ui_tx.send(Agent2Ui::SessionRestored {
+                            seed: self.agent.session.seed.clone(),
+                            turns: build_turns_from_context(&self.agent),
+                            tokens_used: 0,
+                            cache_hit_pct: 0.0,
+                        });
+                    }
+                }
+
                 _ => {}
             }
         }
@@ -192,7 +204,7 @@ impl Loop {
         deepx_tools::bridge::shutdown_tools();
         self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
         log::info!(
-            "dsx-msglp: shutdown complete (session {}, {} turns, {} tokens)",
+            "deepx-msglp: shutdown complete (session {}, {} turns, {} tokens)",
             self.agent.session.seed,
             self.agent.msg.turn_count(),
             self.agent.session.tokens

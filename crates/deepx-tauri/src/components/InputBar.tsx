@@ -1,3 +1,4 @@
+import { createEffect } from "solid-js";
 import { useI18n } from "../i18n";
 
 interface InputBarProps {
@@ -5,11 +6,22 @@ interface InputBarProps {
   onStop: () => void;
   isStreaming: () => boolean;
   disabled: boolean;
+  restoreText: () => string | null;
 }
 
 export default function InputBar(props: InputBarProps) {
   const { t } = useI18n();
   let textareaRef!: HTMLTextAreaElement;
+
+  createEffect(() => {
+    const text = props.restoreText();
+    if (text) {
+      textareaRef.value = text;
+      textareaRef.style.height = "auto";
+      textareaRef.style.height = Math.min(textareaRef.scrollHeight, 160) + "px";
+      textareaRef.focus();
+    }
+  });
 
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {

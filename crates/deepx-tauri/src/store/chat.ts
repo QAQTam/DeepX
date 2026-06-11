@@ -17,6 +17,7 @@ export function createChatStore() {
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [inputDisabled, setInputDisabled] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [restoreText, setRestoreText] = createSignal<string | null>(null);
   const [tasks, setTasks] = createSignal<TaskInfo[]>([]);
   const [recentEdits, setRecentEdits] = createSignal<string[]>([]);
   const [activityLog, setActivityLog] = createSignal<ActivityEntry[]>([]);
@@ -78,7 +79,12 @@ export function createChatStore() {
   }
 
   function handleCancelled() { setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); }
-  function handleError(message: string) { setError(message); setIsStreaming(false); setInputDisabled(false); }
+  function handleError(message: string) {
+    setError(message); setIsStreaming(false); setInputDisabled(false);
+    const lastTurn = turns[turns.length - 1];
+    if (lastTurn && lastTurn.status === "streaming") setRestoreText(lastTurn.userText);
+  }
+  function clearError() { setError(null); }
   function handleAuditRecord(data: { tool_name: string; result_summary: string; success: boolean }) {
     setActivityLog((prev) => {
       const next = [{ tool_name: data.tool_name, summary: data.result_summary, success: data.success, time: Date.now() }, ...prev];
@@ -86,6 +92,16 @@ export function createChatStore() {
     });
   }
   function clear() { setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]); resetStreamBuffer(); }
+
+  async function undoTurn(turnId: string) {
+    try {
+      await invoke("cmd_undo_turn", { turnId });
+    } catch (e) { console.error(e); }
+    const num = parseInt(turnId.replace("t", ""), 10);
+    if (!isNaN(num)) {
+      setTurns((prev) => prev.filter((t) => parseInt(t.turnId.replace("t", ""), 10) < num));
+    }
+  }
 
   // Load session data from disk (for resume / refresh restore)
   function loadSessionFromData(sessionJson: string) {
@@ -162,5 +178,5 @@ export function createChatStore() {
     setTurns(loaded);
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, error, tasks, recentEdits, activityLog, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clear, setInputDisabled, loadSessionFromData, loadTurnsFromRestore };
+  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clearError, clear, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore };
 }

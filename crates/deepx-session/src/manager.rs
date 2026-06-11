@@ -1,6 +1,6 @@
 //! SessionManager — unified singleton for session persistence and lifecycle.
 //!
-//! Pattern mirrors dsx-tools::ToolManager.
+//! Pattern mirrors deepx-tools::ToolManager.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -264,14 +264,14 @@ impl SessionManager {
     }
 
     fn session_dir(&self, seed: &str) -> Option<PathBuf> {
-        if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() { continue; }
-                let name = path.file_name()?.to_string_lossy();
-                if name.starts_with(&format!("{}-", seed)) {
-                    return Some(path);
-                }
+        let entries = std::fs::read_dir(&self.sessions_dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            let Some(name_os) = path.file_name() else { continue; };
+            let name = name_os.to_string_lossy();
+            if name.starts_with(&format!("{}-", seed)) {
+                return Some(path);
             }
         }
         None

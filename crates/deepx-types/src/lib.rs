@@ -1,4 +1,4 @@
-// ── Type definitions for DSX core types ──
+// ── Type definitions for deepx core types ──
 //
 // All type definitions are split across sub-modules below.
 // This file re-exports every public symbol so consumers can

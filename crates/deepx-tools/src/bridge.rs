@@ -1,4 +1,4 @@
-//! Tool execution — in-process via dsx-tools::ToolManager.
+//! Tool execution — in-process via deepx-tools::ToolManager.
 //!
 //! ToolManager is linked directly into the agent process, eliminating
 //! IPC failures, respawn complexity, and serialization overhead.
@@ -25,12 +25,12 @@ pub fn init_tools(session_seed: &str, mcp_servers: &[crate::mcp_bridge::McpServe
 
     if !mcp_servers.is_empty() {
         if let Err(e) = crate::mcp_bridge::register_mcp_servers(&mut mgr, mcp_servers) {
-            log::warn!("dsx: failed to register MCP servers: {e}");
+            log::warn!("deepx: failed to register MCP servers: {e}");
         }
     }
 
     let _ = TOOL_MANAGER.set(Mutex::new(mgr));
-    log::info!("dsx: tool manager inited ({} tools)", all_tools().len());
+    log::info!("deepx: tool manager inited ({} tools)", all_tools().len());
 }
 
 pub fn set_context7_key(key: &str) {
@@ -130,7 +130,7 @@ pub fn set_workspace(path: &str) {
 /// Execute a batch of tools in parallel (threaded).
 /// Each tool gets its own thread; the Mutex serializes ToolManager access.
 /// Returns (tool_call_id, ToolExecReport) pairs.
-/// Simple tool executor — wraps ToolManager::handle_req for dsx-message callback.
+/// Simple tool executor — wraps ToolManager::handle_req for deepx-message callback.
 pub fn execute_tool_simple(req: &deepx_message::ToolExecRequest) -> deepx_message::ToolExecReport {
     let result = with_mgr(|mgr| {
         mgr.handle_req(req.id.clone(), &req.name, "", req.args.clone(), Some(60), None)
@@ -156,7 +156,7 @@ pub fn execute_tools_parallel(
     use std::thread;
     let handles: Vec<_> = tools.into_iter().map(|req| {
         let agent_tx = agent_tx.cloned();
-        let progress_tx = progress_tx.cloned();
+        let _progress_tx = progress_tx.cloned();
         thread::spawn(move || {
             let (ptx, prx) = if req.name == "exec" {
                 let (tx, rx) = std::sync::mpsc::channel();
@@ -259,5 +259,5 @@ pub fn cancel_current_tool() {
 
 pub fn shutdown_tools() {
     crate::mcp_bridge::shutdown_mcp_servers();
-    log::info!("dsx: tool manager shut down");
+    log::info!("deepx: tool manager shut down");
 }

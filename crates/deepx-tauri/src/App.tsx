@@ -11,10 +11,10 @@ import en from "./i18n/en";
 
 type View = "chat" | "settings";
 
-const LS_KEY = "dsx:seed";
+const LS_KEY = "deepx:seed";
 
 export default function App() {
-  const i18n = createI18n(((localStorage.getItem("dsx:lang") ?? "en") as Lang));
+  const i18n = createI18n(((localStorage.getItem("deepx:lang") ?? "en") as Lang));
   const chat = createChatStore();
   const [view, setView] = createSignal<View>("chat");
   const [configLang, setConfigLang] = createSignal<Lang>("en");
@@ -57,10 +57,17 @@ export default function App() {
   }
 
   onMount(async () => {
-    // Load model from config
-      try { const raw = await invoke<string>("cmd_load_config"); const cfg = JSON.parse(raw); if (cfg.model) { chat.handleDashboard({ model: cfg.model }); } } catch (_) {}
-      // Sync lang from config.toml (source of truth) on startup
-    try { const raw = await invoke<string>("cmd_load_config"); const cfg = JSON.parse(raw); if (cfg.lang && (cfg.lang === "en" || cfg.lang === "zh")) { const cl = cfg.lang as Lang; i18n.setLang(cl); setConfigLang(cl); localStorage.setItem("dsx:lang", cl); } } catch (_) {}
+    try {
+      const raw = await invoke<string>("cmd_load_config");
+      const cfg = JSON.parse(raw);
+      if (cfg.model) chat.handleDashboard({ model: cfg.model });
+      if (cfg.lang && (cfg.lang === "en" || cfg.lang === "zh")) {
+        const cl = cfg.lang as Lang;
+        i18n.setLang(cl);
+        setConfigLang(cl);
+        localStorage.setItem("deepx:lang", cl);
+      }
+    } catch (_) {}
     // Set up event listener FIRST
     try { unlisten = await listen<Record<string, unknown>>("agent-event", (e) => {
       const p = e.payload;
@@ -101,7 +108,7 @@ export default function App() {
   onCleanup(() => unlisten?.());
 
   const t = () => i18n.t() ?? en;
-  function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("dsx:lang", l); invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l }).catch(console.error); }
+  async function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("deepx:lang", l); try { await invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l }); } catch (e) { console.error(e); } }
 
   const isActive = (seed: string) => chat.sessionInfo.seed === seed;
 
@@ -130,7 +137,7 @@ export default function App() {
                     <span class="session-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
                     <span class="session-meta">{formatDate(s.updated_at)} · {s.message_count} {t().session.messages}</span>
                   </span>
-                  <button
+                  <span
                     class="session-delete-btn"
                     onClick={(e) => { e.stopPropagation(); deleteSession(s.seed); }}
                     title="Delete session"
@@ -138,7 +145,7 @@ export default function App() {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M18 6L6 18M6 6l12 12" />
                     </svg>
-                  </button>
+                  </span>
                 </button>
               )}
             </For>

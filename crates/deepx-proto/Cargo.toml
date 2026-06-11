@@ -2,7 +2,7 @@
 name = "deepx-proto"
 version.workspace = true
 edition.workspace = true
-description = "DSX IPC message protocol definitions"
+description = "DeepX IPC message protocol definitions"
 
 [dependencies]
 deepx-types = { path = "../deepx-types" }

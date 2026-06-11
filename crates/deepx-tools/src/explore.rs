@@ -170,7 +170,7 @@ fn parse_workspace_deps(root: &std::path::Path) -> Vec<(String, Vec<String>)> {
                 if (t.starts_with('"') || t.starts_with("crates")) && t.contains('/') {
                     let member = t.trim_matches(',').trim_matches('"').trim_matches('\'');
                     let member_path = root.join(member);
-                    // Handle glob: "crates/*" or "crates/dsx*"
+                    // Handle glob: "crates/*" or "crates/deepx*"
                     if member.contains('*') {
                         let (pattern_dir, _) = member.rsplit_once('/').unwrap_or((".", member));
                         let full_pattern = root.join(pattern_dir);

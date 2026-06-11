@@ -405,10 +405,11 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         Constraint::Length(1),
     ]).areas(header_area);
 
-    let status_text = if app.streaming {
+    let status_text = if !app.last_error.is_empty() {
+        format!("✗ {}", &app.last_error)
+    } else if app.streaming {
         format!("{} {}", app.spinner(), &app.status)
     } else if app.busy {
-        // Waiting for model to start streaming — show animated pulse dots
         format!("{} {}", app.pulse(), &app.status)
     } else {
         app.status.clone()
@@ -427,7 +428,11 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         Span::styled(format!("Context: {} / {} ({:.0}%)", app.context_tokens, app.context_limit, ctx_pct),
             Style::new().fg(Color::Yellow)),
         Span::raw(" | "),
-        Span::styled(&status_text, Style::new().fg(if app.streaming { Color::Yellow } else { Color::Green })),
+        Span::styled(&status_text, Style::new().fg(
+            if !app.last_error.is_empty() { Color::Red }
+            else if app.streaming { Color::Yellow }
+            else { Color::Green }
+        )),
         Span::raw(""), Span::raw(""),
     ]);
     frame.render_widget(h1, header_line1);

@@ -1,13 +1,13 @@
 //! Session I/O: memory and plan persistence.
 //!
 //! Memory and plan data is persisted directly to the session filesystem
-//! (same paths as dsx-agent), avoiding IPC round-trips for simple
+//! (same paths as deepx-agent), avoiding IPC round-trips for simple
 //! read/write operations.
 
 use deepx_types;
 use std::path::PathBuf;
 
-// ── Path resolution (same as dsx-agent::session) ──
+// ── Path resolution (same as deepx-agent::session) ──
 
 fn now_epoch() -> u64 {
     std::time::SystemTime::now()

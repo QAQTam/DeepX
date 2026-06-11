@@ -30,7 +30,7 @@ pub(super) fn exec_delete_file(args: &str) -> String {
 
     match std::fs::rename(p, &trash_path) {
         Ok(_) => format!(
-            "[OK] Moved to trash: .dsx-trash/{}\n[HINT] Restore with exec(\"mv {}\" \"{}\") or exec(\"ls .dsx-trash/\") to list trash.",
+            "[OK] Moved to trash: .deepx-trash/{}\n[HINT] Restore with exec(\"mv {}\" \"{}\") or exec(\"ls .deepx-trash/\") to list trash.",
             trash_path.file_name().unwrap_or_default().to_string_lossy(),
             trash_path.display(), path
         ),
@@ -41,7 +41,7 @@ pub(super) fn exec_delete_file(args: &str) -> String {
             } else {
                 match std::fs::remove_file(p) {
                     Ok(_) => format!(
-                        "[OK] Moved to trash (cross-device): .dsx-trash/{}\n[HINT] Restore with exec(\"cp {}\" \"{}\").",
+                        "[OK] Moved to trash (cross-device): .deepx-trash/{}\n[HINT] Restore with exec(\"cp {}\" \"{}\").",
                         trash_path.file_name().unwrap_or_default().to_string_lossy(),
                         trash_path.display(), path
                     ),
@@ -60,11 +60,11 @@ fn find_trash_root() -> std::path::PathBuf {
     let mut current = cwd.as_path();
     loop {
         if current.join(".git").exists() || current.join("Cargo.toml").exists() {
-            return current.join(".dsx-trash");
+            return current.join(".deepx-trash");
         }
         match current.parent() {
             Some(p) => current = p,
-            None => return cwd.join(".dsx-trash"),
+            None => return cwd.join(".deepx-trash"),
         }
     }
 }
@@ -75,7 +75,7 @@ handler!(handle_delete_file, exec_delete_file);
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("delete_file", ""),
-        description: "Move a file to trash (.dsx-trash/) instead of permanent deletion. Use restore_file to recover.",
+        description: "Move a file to trash (.deepx-trash/) instead of permanent deletion. Use restore_file to recover.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path to delete"}},"required":["path"],"additionalProperties":false}),
         handler: handle_delete_file,
         safety: crate::default_allow,

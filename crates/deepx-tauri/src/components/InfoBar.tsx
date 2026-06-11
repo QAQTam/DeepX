@@ -11,6 +11,9 @@ export default function InfoBar(props: {
   totalTokens: number;
   promptCacheHit: number;
   promptCacheMiss: number;
+  isStreaming: boolean;
+  error: string | null;
+  onDismissError?: () => void;
 }) {
   const { t } = useI18n();
   const seedShort = () => props.seed.substring(0, 8);
@@ -28,7 +31,14 @@ export default function InfoBar(props: {
 
   return (
     <div class="info-bar">
+      <Show when={props.error}>
+        <div class="info-error" onClick={props.onDismissError}>
+          <span class="info-dot error" />
+          <span>{props.error}</span>
+        </div>
+      </Show>
       <div class="info-item">
+        <span class={`info-dot ${props.isStreaming ? "active" : props.error ? "error" : "idle"}`} />
         <span class="info-label">模型</span>
         <span class="info-value">{props.model || "—"}</span>
       </div>

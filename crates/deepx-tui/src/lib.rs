@@ -1,4 +1,4 @@
-//! DeepX TUI — terminal frontend for the dsx agent.
+//! DeepX TUI — terminal frontend for the deepx agent.
 //!
 //! Runs the agent in-process (thread) — no child process spawning.
 //! Falls back to setup wizard if no config file exists.
@@ -36,6 +36,7 @@ fn spawn_agent_inproc(
 }
 
 pub fn run_tui() -> anyhow::Result<()> {
+    deepx_session::SessionManager::init(deepx_types::platform::data_dir());
     let store = ConfigStore::default_location();
     let need_setup = !store.exists()
         || store.load_api_key().map_or(true, |k| k.is_empty());

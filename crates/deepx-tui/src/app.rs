@@ -224,6 +224,7 @@ pub struct App {
     /// Draft input saved when entering history browse mode.
     pub draft_input: String,
     pub status: String,
+    pub last_error: String,
     pub context_tokens: u32,
     pub session_tokens: u64,
     pub cache_hit: u32,
@@ -731,6 +732,7 @@ impl App {
             history_idx: None,
             draft_input: String::new(),
             status: String::new(), // will be set after setup knows lang
+            last_error: String::new(),
             context_tokens: 0,
             session_tokens: 0,
             cache_hit: 0,
@@ -979,6 +981,7 @@ impl App {
                 self.tool_batch_start = None;
                 self.tool_batch_total = 0;
                 self.tool_batch_done = 0;
+                self.last_error.clear();
                 self.push_msg(ChatRole::Divider, "");
                 self.push_msg(ChatRole::User, &user_text);
                 self.scroll_offset = 0;
@@ -1119,7 +1122,8 @@ impl App {
             Agent2Ui::Error { message } => {
                 let status_text = format!("{}: {}", self.setup.lang.t_chat_error(), message);
                 self.push_msg(ChatRole::Status, &status_text);
-                self.status = status_text;
+                self.status = status_text.clone();
+                self.last_error = status_text;
             }
             Agent2Ui::ToolNotice { ref message, ref level } => {
                 let prefix = if level == "error" { "\u{26a0}" } else { "\u{2139}" };

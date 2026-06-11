@@ -1,4 +1,4 @@
-//! dsx-message: structured conversation state with state-machine lifecycle.
+//! deepx-message: structured conversation state with state-machine lifecycle.
 //!
 //! `MessageStore` is the single source of truth for messages.
 //! Every `push_*` returns an [`Effect`] telling the caller what to do next.
