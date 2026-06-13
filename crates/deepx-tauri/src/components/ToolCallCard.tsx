@@ -5,8 +5,9 @@ export default function ToolCallCard(props: { call: ToolCallDef; result?: ToolRe
   const [open, setOpen] = createSignal(false);
   const icon = toolIcon(props.call.name);
   const hasResult = !!props.result;
+  const stateClass = () => hasResult ? (props.result!.success ? "tool-success" : "tool-error") : "tool-running";
   return (
-    <div class="tool-card">
+    <div class={`tool-card ${stateClass()}`}>
       <div class="tool-card-header" onClick={() => setOpen((o) => !o)}>
         <span class="tool-card-icon">{icon}</span>
         <span class="tool-card-name">{props.call.name}</span>

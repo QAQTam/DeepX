@@ -95,15 +95,23 @@ impl Loop {
         if self.agent.session.seed.is_empty()
             && self.agent.session.resume_seed.is_some()
         {
-            let seed = self.agent.session.resume_seed.clone();
-            if lifecycle::init_session(&mut self.agent, seed.as_deref()) {
+            let original_seed = self.agent.session.resume_seed.clone();
+            if lifecycle::init_session(&mut self.agent, original_seed.as_deref()) {
                 self.agent.rebind_store(self.ui_tx.clone(), self.cancel.arc());
-                let _ = self.ui_tx.send(Agent2Ui::SessionRestored {
-                    seed: self.agent.session.seed.clone(),
-                    turns: build_turns_from_context(&self.agent),
-                    tokens_used: 0,
-                    cache_hit_pct: 0.0,
-                });
+                let current_seed = self.agent.session.seed.clone();
+                // If seed changed, the original was corrupt — treat as new session
+                if original_seed.as_deref() == Some(current_seed.as_str()) {
+                    let _ = self.ui_tx.send(Agent2Ui::SessionRestored {
+                        seed: current_seed,
+                        turns: build_turns_from_context(&self.agent),
+                        tokens_used: 0,
+                        cache_hit_pct: 0.0,
+                    });
+                } else {
+                    let _ = self.ui_tx.send(Agent2Ui::SessionCreated {
+                        seed: current_seed,
+                    });
+                }
             }
         }
 
@@ -186,7 +194,9 @@ impl Loop {
                 }
 
                 Ui2Agent::UndoTurn { turn_id } => {
+                    eprintln!("[AGENT] UndoTurn {turn_id} — turns before: {}", self.agent.msg.turn_count());
                     if self.agent.msg.truncate_before_turn(&turn_id) {
+                        eprintln!("[AGENT] UndoTurn — truncated, turns after: {}", self.agent.msg.turn_count());
                         self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
                         let _ = self.ui_tx.send(Agent2Ui::SessionRestored {
                             seed: self.agent.session.seed.clone(),
@@ -194,6 +204,8 @@ impl Loop {
                             tokens_used: 0,
                             cache_hit_pct: 0.0,
                         });
+                    } else {
+                        eprintln!("[AGENT] UndoTurn — truncate_before_turn returned false");
                     }
                 }
 
@@ -281,6 +293,12 @@ impl Loop {
                         deepx_gate::StreamEvent::ReasoningDelta(r) => {
                             if self.cancel.is_set() { return; }
                             reasoning.push_str(&r);
+                            let _ = self.ui_tx.send(Agent2Ui::RoundDelta {
+                                turn_id: turn_id.clone(),
+                                round_num,
+                                kind: RoundDeltaKind::Thinking,
+                                delta: r,
+                            });
                         }
                         deepx_gate::StreamEvent::Done { raw_message, usage, .. } => {
                             if let Some(ref u) = usage {

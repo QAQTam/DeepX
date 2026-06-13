@@ -103,7 +103,7 @@ impl AgentBridge {
 pub fn cmd_send_message(
     text: String,
 ) -> Result<(), String> {
-    eprintln!("[BRIDGE] cmd_send_message: {}", &text[..text.len().min(50)]);
+    eprintln!("[BRIDGE] cmd_send_message: {}", &text[..text.floor_char_boundary(50)]);
     send_command(Ui2Agent::UserInput { text })
 }
 

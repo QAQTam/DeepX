@@ -1,5 +1,6 @@
 import { createStore, produce } from "solid-js/store";
 import { createSignal } from "solid-js";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface ToolCallDef { id: string; name: string; args_display: string; args_json: string; }
 export interface ToolResultDef { tool_call_id: string; output: string; success: boolean; }

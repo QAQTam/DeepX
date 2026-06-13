@@ -17,8 +17,8 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 
                 deepx_tools::bridge::set_current_session(&agent.session.seed);
                 deepx_tools::bridge::load_workspace(&agent.session.seed);
-                    log::info!(
-                        "deepx-agent: restored session {} ({} msgs, {} tokens)",
+                log::info!(
+                    "deepx-agent: restored session {} ({} msgs, {} tokens)",
                     agent.session.seed,
                     agent.msg.message_count(),
                     agent.session.tokens
@@ -28,15 +28,24 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 }
                 return true;
             }
-            log::info!("deepx-agent: session {s} not found, creating new with same seed");
-            s.to_string()
+            // Session file not found or checksum mismatch — don't reuse broken seed.
+            // Generate a fresh seed so we don't overwrite the corrupted file.
+            log::error!(
+                "deepx-agent: session {} load failed — creating fresh session",
+                s
+            );
+            SessionManager::generate_seed()
         }
         None => return false,
     };
 
-    agent.session.seed = seed;
+    // Create fresh session (either no restore_seed, or restore failed)
+    agent.session.seed = seed.clone();
     agent.session.start = SessionManager::now_epoch();
-            deepx_tools::bridge::set_current_session(&agent.session.seed);
+    agent.session.tokens = 0;
+    agent.session.from_resume = false;
+    agent.msg = deepx_message::MessageStore::new(&seed);
+    deepx_tools::bridge::set_current_session(&agent.session.seed);
     SessionManager::global().save(
         &agent.session.seed,
         &agent.msg.to_vec(),
@@ -48,13 +57,13 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 }
 
 pub fn create_session(agent: &mut AgentState) {
-    agent.msg = deepx_message::MessageStore::new(&agent.session.seed);
     agent.session.seed = SessionManager::generate_seed();
     agent.session.start = SessionManager::now_epoch();
     agent.session.tokens = 0;
     agent.session.from_resume = false;
+    agent.msg = deepx_message::MessageStore::new(&agent.session.seed);
     agent.tool_results.clear();
-        deepx_tools::bridge::set_current_session(&agent.session.seed);
+    deepx_tools::bridge::set_current_session(&agent.session.seed);
     SessionManager::global().save(
         &agent.session.seed,
         &agent.msg.to_vec(),

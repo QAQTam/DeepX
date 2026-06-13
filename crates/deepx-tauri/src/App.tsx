@@ -97,11 +97,10 @@ export default function App() {
         const raw = await invoke<string>("cmd_load_session", { seed: savedSeed });
         chat.loadSessionFromData(raw);
         chat.handleSessionCreated(savedSeed);
-      } catch (e) {
-        console.error("load session failed, keeping seed:", e);
-        chat.handleSessionCreated(savedSeed);
-        chat.setInputDisabled(false);
-      }
+        } catch (e) {
+          console.error("load session failed, server will handle recovery:", e);
+          chat.setInputDisabled(false);
+        }
     }
   });
 
@@ -115,7 +114,7 @@ export default function App() {
   return (
     <I18nCtx.Provider value={{ t: i18n.t, lang: () => i18n.lang(), setLang: switchLang }}>
       <div class="app-container">
-        <aside class="sidebar">
+        <aside class="sidebar frost-panel">
           <div class="sidebar-brand"><span class="sidebar-logo">{">"}</span><span class="sidebar-title">{t().app.title}</span></div>
           <nav class="sidebar-nav">
             <button class={`sidebar-btn ${view() === "chat" ? "active" : ""}`} onClick={() => setView("chat")} title={t().nav.chat}>

@@ -1,11 +1,12 @@
 import { defineConfig } from "vite";
 import solid from "vite-plugin-solid";
+import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "path";
 
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
-  plugins: [solid()],
+  plugins: [tailwindcss(), solid()],
   clearScreen: false,
   resolve: {
     alias: {

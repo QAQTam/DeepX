@@ -436,7 +436,7 @@ impl MessageStore {
 
     pub fn snapshot(&self, model: &str, effort: &str) {
         let msgs = self.to_vec();
-        if msgs.len() > 1 && !self.seed.is_empty() {
+        if !self.seed.is_empty() {
             SessionManager::global().save(&self.seed, &msgs, model, Some(effort));
         }
     }

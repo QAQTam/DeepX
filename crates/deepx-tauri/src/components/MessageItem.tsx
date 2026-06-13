@@ -1,4 +1,5 @@
 import { For, Show, Switch, Match } from "solid-js";
+import MarkdownBody from "./MarkdownBody";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolCallCard from "./ToolCallCard";
 import type { Round } from "../store/chat";
@@ -31,7 +32,7 @@ export default function MessageItem(props: MessageItemProps) {
           </Show>
         </div>
         <Show when={props.text}>
-          <div class="msg-text">{props.text}</div>
+          <div class="bubble-user">{props.text}</div>
         </Show>
         <Show when={props.rounds && props.rounds.length > 0}>
           <div class="msg-rounds">
@@ -41,8 +42,8 @@ export default function MessageItem(props: MessageItemProps) {
                   <Show when={round.blocks && round.blocks.length > 0}
                     fallback={
                       <>
-                        <Show when={round.thinking}><ThinkingBlock content={round.thinking!} /></Show>
-                        <Show when={round.answer}><div class="msg-text">{round.answer}</div></Show>
+                        <Show when={round.thinking}><ThinkingBlock content={round.thinking!} streaming={props.status === "streaming"} /></Show>
+                        <Show when={round.answer}><MarkdownBody class="md-body bubble-ai" content={round.answer!} /></Show>
                         <For each={round.toolCalls}>{(tc) => {
                           const r = round.toolResults.find((x) => x.tool_call_id === tc.id);
                           return <ToolCallCard call={tc} result={r} />;
@@ -57,7 +58,7 @@ export default function MessageItem(props: MessageItemProps) {
                             <ThinkingBlock content={block.content!} />
                           </Match>
                           <Match when={block.type === "text"}>
-                            <div class="msg-text">{block.content!}</div>
+                            <MarkdownBody class="md-body bubble-ai" content={block.content!} />
                           </Match>
                           <Match when={block.type === "tool"}>
                             <ToolCallCard call={block.card!} result={round.toolResults.find((x) => x.tool_call_id === block.card!.id)} />

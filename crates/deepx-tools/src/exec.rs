@@ -135,7 +135,7 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
     let exit_code = exit_status.code().unwrap_or(-1);
     let status = if exit_code == 0 { "OK" } else { "FAIL" };
     let output = if output_buf.len() > MAX_EXEC_OUTPUT {
-        output_buf[..MAX_EXEC_OUTPUT].to_string() + &format!("...[TRUNCATED: {} bytes total]", output_buf.len())
+        output_buf[..output_buf.floor_char_boundary(MAX_EXEC_OUTPUT)].to_string() + &format!("...[TRUNCATED: {} bytes total]", output_buf.len())
     } else {
         output_buf.clone()
     };

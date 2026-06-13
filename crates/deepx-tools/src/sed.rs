@@ -5,8 +5,11 @@ use std::process::Command;
 fn find_binary(name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let p = dir.join(name);
+            let p = dir.join("binaries").join(name);
             if p.exists() { return p; }
+            // fallback: try directly next to exe
+            let p2 = dir.join(name);
+            if p2.exists() { return p2; }
         }
     }
     PathBuf::from(name)
