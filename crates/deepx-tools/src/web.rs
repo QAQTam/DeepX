@@ -22,7 +22,7 @@ fn c7_key() -> String {
 fn c7_get(path: &str) -> Result<String, String> {
     let resp = ureq::get(&format!("{C7_BASE}{path}"))
         .header("Authorization", &format!("Bearer {}", c7_key()))
-            .header("User-Agent", "deepx/4.2")
+            .header("User-Agent", "deepx/0.2")
         .call()
         .map_err(|e| format!("request failed: {e}"))?;
     let status = resp.status();
@@ -197,7 +197,7 @@ fn exec_web_fetch(args: &str) -> String {
         return format!("[ERROR] Cannot fetch internal/local URL: {}\n[HINT] web_fetch only supports public URLs.", url);
     }
     let resp = match ureq::get(&url)
-            .header("User-Agent", "deepx/4.2")
+            .header("User-Agent", "deepx/0.2")
         .call()
     {
         Ok(r) => r,

@@ -6,7 +6,7 @@
 //!
 //! | Channel | Transport | Direction |
 //! |---------|-----------|-----------|
-//! | UI ↔ Agent | mpsc channels (primary) / stdin-stdout (headless) | Bidirectional |
+//! | UI ↔ Agent | stdin/stdout JSON-LP (child process) | Bidirectional |
 //! | Agent ↔ Tools | direct call (in-process) | Bidirectional |
 //! | Agent → HP | TCP localhost | Bidirectional |
 //!
@@ -69,28 +69,29 @@ impl From<String> for Redacted {
 
 // ── Frame I/O helpers ──────────────────────────────────────────────────
 
-use std::io::{self, BufRead, Write};
+use std::io::{BufRead, Write};
 
-/// Read one JSON-LP line and deserialize into `T`.
-pub fn read_frame<T: for<'de> Deserialize<'de>>(reader: &mut impl BufRead) -> io::Result<Option<T>> {
+/// Read a single JSON-LP frame (one line, parse as JSON).
+/// Returns Ok(None) on EOF or empty line.
+pub fn read_frame<T: serde::de::DeserializeOwned>(r: &mut impl BufRead) -> std::io::Result<Option<T>> {
     let mut line = String::new();
-    let n = reader.read_line(&mut line)?;
-    if n == 0 {
+    let n = r.read_line(&mut line)?;
+    if n == 0 || line.trim().is_empty() {
         return Ok(None);
     }
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    serde_json::from_str::<T>(trimmed).map(Some).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    serde_json::from_str(&line).map(Some).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+    })
 }
 
-/// Serialize `frame` and write as one JSON-LP line (append `\n` + flush).
-pub fn write_frame(writer: &mut impl Write, frame: &impl Serialize) -> io::Result<()> {
-    let json = serde_json::to_string(frame)?;
-    writeln!(writer, "{}", json)?;
-    writer.flush()?;
-    Ok(())
+/// Write a single JSON-LP frame (one JSON object per line, newline terminated).
+/// Flushes after every write for real-time streaming.
+pub fn write_frame(w: &mut impl Write, frame: &impl Serialize) -> std::io::Result<()> {
+    let json = serde_json::to_string(frame).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+    })?;
+    writeln!(w, "{}", json)?;
+    w.flush()
 }
 
 /// Convenience: write a raw string as a JSON-LP line.

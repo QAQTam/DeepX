@@ -3,7 +3,7 @@ import MessageItem from "./MessageItem";
 import type { Turn } from "../store/chat";
 import { useI18n } from "../i18n";
 
-interface MessageListProps { turns: Turn[]; isStreaming: () => boolean; onUndo: (turnId: string) => void; }
+interface MessageListProps { turns: Turn[]; isStreaming: () => boolean; onUndo: (turnId: string) => void; hasMore: boolean; onLoadMore: () => void; }
 
 export default function MessageList(props: MessageListProps) {
   const { t } = useI18n();
@@ -43,6 +43,11 @@ export default function MessageList(props: MessageListProps) {
 
   return (
     <div class="msg-list" ref={listRef} onScroll={onScroll}>
+      <Show when={props.hasMore}>
+        <div class="load-more-bar">
+          <button class="load-more-btn" onClick={props.onLoadMore}>Load earlier messages</button>
+        </div>
+      </Show>
       <Show when={props.turns.length === 0} fallback={
         <For each={props.turns}>
           {(turn) => (

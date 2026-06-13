@@ -1163,6 +1163,7 @@ impl App {
                 let status = if is_available { "✓" } else { "✗" };
                 self.balance = format!("{} {}{} {}", status, if currency == "CNY" { "¥" } else { "$" }, total_balance, currency);
             }
+            Agent2Ui::Ready => {} // Handshake frame from agent subprocess — ready to accept commands
             Agent2Ui::ShutdownAck => {
                 self.streaming = false;
                 self.debug.streaming = false;

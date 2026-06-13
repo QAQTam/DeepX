@@ -9,6 +9,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            // Spawn the agent child process and expose its stdin writer via the bridge singleton.
             let bridge = agent_bridge::AgentBridge::init(app.handle());
             app.manage(bridge);
             Ok(())
@@ -25,12 +26,14 @@ pub fn run() {
             agent_bridge::cmd_set_active_session,
             agent_bridge::cmd_delete_session,
             agent_bridge::cmd_undo_turn,
+            agent_bridge::cmd_resume_session,
+            agent_bridge::cmd_new_session,
+            agent_bridge::cmd_load_more_turns,
         ])
-        .on_window_event(|window, event| {
+        .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                if let Some(bridge) = window.try_state::<agent_bridge::AgentBridge>() {
-                    bridge.shutdown();
-                }
+                // Gracefully terminate the agent child process before the window closes.
+                agent_bridge::shutdown_agent();
             }
         })
         .run(tauri::generate_context!())

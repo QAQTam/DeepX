@@ -4,13 +4,22 @@ use crate::agent::AgentState;
 use deepx_tools;
 use deepx_session::SessionManager;
 
+/// Load session from disk via [`SessionManager`].
+///
+/// On success, restores the message store and rebinds the workspace.
+/// On failure (file missing or corrupt), generates a fresh seed and
+/// creates a new session as fallback. Returns `false` only when
+/// `restore_seed` is `None`.
 pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool {
     let seed = match restore_seed {
         Some(s) => {
+            eprintln!("[LIFECYCLE] init_session: loading seed={s}");
             if let Some(file) = SessionManager::global().load(s) {
+                eprintln!("[LIFECYCLE] loaded session file, {} messages", file.messages.len());
                 agent.session.seed = file.seed.clone();
                 agent.session.start = file.created_at;
                 let (msg, repairs) = deepx_message::MessageStore::from_session(&file);
+                eprintln!("[LIFECYCLE] from_session done, {} turns, {} repairs", msg.turn_count(), repairs.len());
                 agent.msg = msg;
                 agent.session.from_resume = true;
                 agent.session.tokens = 0;
@@ -34,6 +43,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 "deepx-agent: session {} load failed — creating fresh session",
                 s
             );
+            eprintln!("[LIFECYCLE] load failed for {s}, generating new seed");
             SessionManager::generate_seed()
         }
         None => return false,
@@ -56,6 +66,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     true
 }
 
+/// Create a brand-new session with a fresh seed, clearing all prior state.
 pub fn create_session(agent: &mut AgentState) {
     agent.session.seed = SessionManager::generate_seed();
     agent.session.start = SessionManager::now_epoch();

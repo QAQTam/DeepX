@@ -7,6 +7,7 @@ edition.workspace = true
 deepx-types = { path = "../deepx-types" }
 deepx-tui = { path = "../deepx-tui" }
 deepx-config = { path = "../deepx-config" }
+deepx-session = { path = "../deepx-session" }
 deepx-msglp = { path = "../deepx-msglp" }
 deepx-tauri = { path = "../deepx-tauri/src-tauri" }
 

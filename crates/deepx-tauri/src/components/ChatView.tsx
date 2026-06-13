@@ -3,7 +3,7 @@ import MessageList from "./MessageList";
 import InputBar from "./InputBar";
 import InfoBar from "./InfoBar";
 
-interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; }
+interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; hasMore: boolean; onLoadMore: () => void; }
 
 export default function ChatView(props: ChatViewProps) {
   const { chat } = props;
@@ -39,7 +39,7 @@ export default function ChatView(props: ChatViewProps) {
         error={chat.error()}
         onDismissError={() => chat.clearError()}
       />
-      <MessageList turns={chat.turns} isStreaming={chat.isStreaming} onUndo={(id) => chat.undoTurn(id)} />
+      <MessageList turns={chat.turns} isStreaming={chat.isStreaming} onUndo={(id) => chat.undoTurn(id)} hasMore={props.hasMore} onLoadMore={props.onLoadMore} />
       <InputBar
         onSend={handleSend}
         onStop={handleStop}

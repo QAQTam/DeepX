@@ -10,7 +10,7 @@ pub struct SessionMeta {
     /// UNIX epoch when session was created.
     pub start: u64,
 
-    /// If set, restore this session on first user message.
+    /// If set, this seed is passed as a CLI argument to the agent subprocess for auto-restore on startup.
     pub resume_seed: Option<String>,
 
     /// Cumulative tokens consumed across all turns.

@@ -1,6 +1,6 @@
 {
   "productName": "DeepX",
-  "version": "4.2.0",
+  "version": "0.2.0",
   "identifier": "com.sinyee.deepx",
   "build": {
     "frontendDist": "../dist",

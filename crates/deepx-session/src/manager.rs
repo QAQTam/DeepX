@@ -84,14 +84,16 @@ impl SessionManager {
 
     // ── Session CRUD (continued) ──
 
-    /// Load full session data from disk. Verifies integrity if checksum present.
+    /// Load full session data from disk. On checksum mismatch, logs a warning but still loads the data.
     pub fn load(&self, seed: &str) -> Option<SessionFile> {
         let file = self.load_from_disk(seed)?;
         if let Some(ref stored) = file.checksum {
             let computed = Self::compute_checksum(&file.seed, &file.messages);
             if stored != &computed {
-                log::error!("SessionManager: checksum mismatch for session {} — data may be tampered", file.seed);
-                return None;
+                log::warn!(
+                    "SessionManager: checksum mismatch for session {} — data may have been altered or serialization format changed. Loading anyway.",
+                    file.seed
+                );
             }
         }
         Some(file)

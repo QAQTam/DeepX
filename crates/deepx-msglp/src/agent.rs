@@ -1,7 +1,4 @@
-//! AgentState: core agent session state (post-modularization shell).
-
-use std::sync::{Arc, atomic::AtomicBool};
-use std::sync::mpsc;
+//! AgentState: core agent session state backing the message loop.
 
 use deepx_config::Config;
 
@@ -61,9 +58,7 @@ impl AgentState {
         self.msg.build_context_for_gate(&sys, &annotations)
     }
 
-    pub fn rebind_store(&mut self, tx: mpsc::Sender<deepx_proto::Agent2Ui>, cancel: Arc<AtomicBool>) {
-        self.msg.set_ui_tx(tx);
-        self.msg.set_cancel(cancel);
+    pub fn rebind_store(&mut self) {
         self.msg.set_tool_executor(Box::new(|req: ToolExecRequest| {
             let result = deepx_tools::bridge::execute_tool_with_id(&req.name, "", &req.args.to_string(), &req.id);
             let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");

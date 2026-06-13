@@ -1,6 +1,6 @@
 //! DeepX TUI — terminal frontend for the deepx agent.
 //!
-//! Runs the agent in-process (thread) — no child process spawning.
+//! Runs the agent as a child process communicating over stdin/stdout.
 //! Falls back to setup wizard if no config file exists.
 
 mod app;
@@ -15,26 +15,70 @@ use deepx_proto::{Agent2Ui, Ui2Agent};
 use deepx_types::{ConfigStore, SessionMeta};
 use ratatui::DefaultTerminal;
 use std::sync::mpsc;
-use std::thread;
 
-/// Spawn the agent in-process as a thread, return channels for communication.
-fn spawn_agent_inproc(
+/// Spawn the agent as a child process, communicating over stdin/stdout via bridge threads.
+fn spawn_agent_subprocess(
     resume_seed: Option<&str>,
-) -> anyhow::Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, thread::JoinHandle<()>)> {
-    let mut agent = deepx_msglp::agent::AgentState::init("tui");
-    agent.session.resume_seed = resume_seed.map(String::from);
+) -> Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, std::process::Child), String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    let exe = std::env::current_exe().map_err(|e| format!("exe path: {e}"))?;
+    let mut cmd = Command::new(&exe);
+    cmd.arg("agent");
+    if let Some(seed) = resume_seed {
+        cmd.arg("--resume-seed").arg(seed);
+    }
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("spawn agent subprocess: {e}"))?;
+
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
 
     let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
     let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
 
-    let handle = thread::spawn(move || {
-        deepx_msglp::Loop::new(agent, tui_rx, agent_tx).run();
-        deepx_tools::bridge::shutdown_tools();
+    // Writer thread: mpsc → child stdin (Ui2Agent → JSON lines)
+    std::thread::spawn(move || {
+        while let Ok(frame) = tui_rx.recv() {
+            let json = match serde_json::to_string(&frame) {
+                Ok(j) => j,
+                Err(_) => break,
+            };
+            if writeln!(stdin, "{}", json).is_err() {
+                break;
+            }
+            if stdin.flush().is_err() {
+                break;
+            }
+        }
     });
 
-    Ok((tui_tx, agent_rx, handle))
+    // Reader thread: child stdout → mpsc (JSON lines → Agent2Ui)
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if let Ok(event) = serde_json::from_str::<Agent2Ui>(&line) {
+                if agent_tx.send(event).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok((tui_tx, agent_rx, child))
 }
 
+/// Entry point for `deepx --tui`. Shows setup wizard if needed, then the session
+/// selection screen, then spawns the agent subprocess and runs the chat loop.
 pub fn run_tui() -> anyhow::Result<()> {
     deepx_session::SessionManager::init(deepx_types::platform::data_dir());
     let store = ConfigStore::default_location();
@@ -58,21 +102,34 @@ pub fn run_tui() -> anyhow::Result<()> {
         if app.should_quit { return Ok(()); }
         app.scroll_offset = 0;
         app.status = app.setup.lang.t_chat_ready().to_string();
-        match spawn_agent_inproc(app.resume_seed.as_deref()) {
-            Ok((mut tui_tx, agent_rx, handle)) => {
+        match spawn_agent_subprocess(app.resume_seed.as_deref()) {
+            Ok((mut tui_tx, agent_rx, mut child_handle)) => {
                 if app.resume_seed.is_none() {
-                    let _ = tui_tx.send(deepx_proto::Ui2Agent::CreateSession);
+                    // Wait for Ready frame before sending CreateSession
+                    loop {
+                        match agent_rx.recv() {
+                            Ok(Agent2Ui::Ready) => break,
+                            Ok(_) => continue,
+                            Err(_) => {
+                                app.status = "Agent died before ready".into();
+                                break;
+                            }
+                        }
+                    }
+                    let _ = tui_tx.send(Ui2Agent::CreateSession);
                 }
-                let result = run_chat(terminal, &mut app, &mut tui_tx, &agent_rx,
-                    |tx, frame| { let _ = tx.send(frame.clone()); });
-                let _ = tui_tx.send(deepx_proto::Ui2Agent::Shutdown);
-                handle.join().ok();
+
+                let send = |tx: &mut mpsc::Sender<Ui2Agent>, frame: &Ui2Agent| {
+                    let _ = tx.send(frame.clone());
+                };
+                let result = run_chat(terminal, &mut app, &mut tui_tx, &agent_rx, send);
+                drop(tui_tx);
+                drop(agent_rx);
+                let _ = child_handle.wait();
                 result
             }
             Err(e) => {
-                let msg = format!("{}: {}", app.setup.lang.t_failed_agent(), e);
-                app.status = app.setup.lang.t_failed_agent().to_string();
-                app.push_msg(app::ChatRole::Status, &msg);
+                app.status = format!("Agent spawn failed: {e}");
                 Ok(())
             }
         }

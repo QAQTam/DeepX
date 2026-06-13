@@ -1,4 +1,4 @@
-//! UI ↔ Agent frame definitions (channel-based, mpsc in-process).
+//! UI ↔ Agent frame definitions (JSON-LP over stdin/stdout, child process).
 //!
 //! v5: Round-based protocol. Each API call is a Round with optional
 //! streaming preview. No duplication between streaming and final content.
@@ -42,6 +42,21 @@ pub enum Ui2Agent {
 
     #[serde(rename = "undo_turn")]
     UndoTurn { turn_id: String },
+
+    #[serde(rename = "resume_session")]
+    ResumeSession { seed: String },
+
+    #[serde(rename = "new_session")]
+    NewSession,
+
+    #[serde(rename = "load_more_turns")]
+    LoadMoreTurns {
+        /// Load turns older than this turn_id.
+        before_turn_id: String,
+        /// How many turns to load.
+        #[serde(default = "default_load_count")]
+        count: u32,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -216,6 +231,20 @@ pub enum Agent2Ui {
         tokens_used: u32,
         #[serde(default)]
         cache_hit_pct: f64,
+        /// Total number of turns in this session.
+        #[serde(default)]
+        total_turns: u32,
+        /// True if there are more (older) turns beyond what's sent.
+        #[serde(default)]
+        has_more: bool,
+    },
+
+    /// Older turns loaded from history.
+    #[serde(rename = "more_turns")]
+    MoreTurns {
+        turns: Vec<TurnData>,
+        /// True if there are still more (older) turns available.
+        has_more: bool,
     },
 
     /// A new session was created (response to CreateSession).
@@ -276,6 +305,9 @@ pub enum Agent2Ui {
     #[serde(rename = "shutdown_ack")]
     ShutdownAck,
 
+    #[serde(rename = "ready")]
+    Ready,
+
     #[serde(rename = "audit_record")]
     AuditRecord {
         tool_name: String,
@@ -283,6 +315,8 @@ pub enum Agent2Ui {
         success: bool,
     },
 }
+
+fn default_load_count() -> u32 { 20 }
 
 /// Streaming block kind for RoundDelta.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -19,6 +19,7 @@ export default function App() {
   const [view, setView] = createSignal<View>("chat");
   const [configLang, setConfigLang] = createSignal<Lang>("en");
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
+  const [hasMore, setHasMore] = createSignal(false);
   let unlisten: (() => void) | undefined;
 
   async function refreshSessions() {
@@ -31,29 +32,39 @@ export default function App() {
   }
 
   async function resumeSession(seed: string) {
+    console.log("[App] resumeSession called, seed:", seed);
     try {
+      chat.clear();
       localStorage.setItem(LS_KEY, seed);
-      await invoke("cmd_set_active_session", { seed });
-      window.location.reload();
-    } catch (e) { console.error(e); }
+      console.log("[App] invoking cmd_resume_session...");
+      await invoke("cmd_resume_session", { seed });
+      console.log("[App] cmd_resume_session returned");
+    } catch (e) { console.error("[App] resumeSession error:", e); }
   }
 
   async function deleteSession(seed: string) {
     try {
       await invoke("cmd_delete_session", { seed });
       if (chat.sessionInfo.seed === seed) {
+        chat.clear();
         localStorage.removeItem(LS_KEY);
-        await invoke("cmd_set_active_session", { seed: "" });
-        await invoke("cmd_create_session");
+        await invoke("cmd_new_session");
       }
       await refreshSessions();
     } catch (e) { console.error(e); }
   }
 
+  async function loadMoreTurns() {
+    const ts = chat.turns;
+    if (ts.length === 0) return;
+    const firstId = ts[0].turnId;
+    try { await invoke("cmd_load_more_turns", { beforeTurnId: firstId }); } catch (e) { console.error(e); }
+  }
+
   async function newSession() {
+    chat.clear();
     localStorage.removeItem(LS_KEY);
-    try { await invoke("cmd_set_active_session", { seed: "" }); } catch (_) {}
-    window.location.reload();
+    try { await invoke("cmd_new_session"); } catch (e) { console.error(e); }
   }
 
   onMount(async () => {
@@ -69,16 +80,26 @@ export default function App() {
       }
     } catch (_) {}
     // Set up event listener FIRST
-    try { unlisten = await listen<Record<string, unknown>>("agent-event", (e) => {
+    try { unlisten = await listen<Record<string, unknown>>("agent-event", async (e) => {
       const p = e.payload;
       switch (p.type as string) {
+        case "ready": {
+          const savedSeed = localStorage.getItem(LS_KEY);
+          if (savedSeed) {
+            try { await invoke("cmd_resume_session", { seed: savedSeed }); } catch (e) { console.error(e); }
+          } else {
+            try { await invoke("cmd_new_session"); } catch (e) { console.error(e); }
+          }
+          break;
+        }
         case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
         case "round_delta": chat.handleRoundDelta((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.kind ?? "") as string, (p.delta ?? "") as string); break;
         case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
         case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
         case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); break;
-        case "session_created": chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); refreshSessions(); break;
-        case "session_restored": if (p.seed) { chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); if (p.turns) { chat.loadTurnsFromRestore(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); } } break;
+        case "session_created": chat.clear(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); refreshSessions(); break;
+        case "session_restored": if (p.seed) { chat.clear(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); if (p.turns) { chat.loadTurnsFromRestore(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); } setHasMore(!!p.has_more); } break;
+        case "more_turns": if (p.turns) { chat.prependTurns(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); setHasMore(!!p.has_more); } break;
         case "dashboard": chat.handleDashboard(p); break;
         case "done": chat.setInputDisabled(false); break;
         case "cancelled": chat.handleCancelled(); break;
@@ -87,21 +108,9 @@ export default function App() {
       }
     }); } catch (e) { console.error(e); }
 
-    // Load sessions + handle initial state
+    // Load session list immediately (non-blocking for session init)
     await refreshSessions();
-    const savedSeed = localStorage.getItem(LS_KEY);
-    if (!savedSeed) {
-      try { await invoke("cmd_create_session"); } catch (e) { console.error(e); }
-    } else {
-      try {
-        const raw = await invoke<string>("cmd_load_session", { seed: savedSeed });
-        chat.loadSessionFromData(raw);
-        chat.handleSessionCreated(savedSeed);
-        } catch (e) {
-          console.error("load session failed, server will handle recovery:", e);
-          chat.setInputDisabled(false);
-        }
-    }
+    // Session init is deferred to the "ready" event handler above
   });
 
   onCleanup(() => unlisten?.());
@@ -154,7 +163,7 @@ export default function App() {
         </aside>
         <main class="main-content">
           <Show when={view() === "chat"} fallback={<SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} />}>
-            <ChatView chat={chat} />
+            <ChatView chat={chat} hasMore={hasMore()} onLoadMore={loadMoreTurns} />
             <StatusPanel tasks={chat.tasks} recentEdits={chat.recentEdits} activityLog={chat.activityLog} />
           </Show>
         </main>

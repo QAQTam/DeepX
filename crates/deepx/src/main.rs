@@ -1,10 +1,10 @@
 //! deepx — single binary for all roles.
 //!
 //! Usage:
-//!   deepx              → Tauri GUI (default, double-click)
-//!   deepx --tui         → Terminal UI
-//!   deepx --agent       → Headless agent (stdin/stdout JSON-LP)
-//!   deepx config|init   → Setup wizard
+//!   deepx                → Tauri GUI (default, double-click)
+//!   deepx --tui           → Terminal UI
+//!   deepx --agent | agent → Agent subprocess (IPC over stdin/stdout JSON-LP)
+//!   deepx config|init     → Setup wizard
 
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
@@ -15,8 +15,34 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        "--agent" => {
-            eprintln!("headless mode removed — use deepx-msglp");
+        // IPC agent loop: reads Ui2Agent from stdin, writes Agent2Ui to stdout as JSON-LP.
+        "--agent" | "agent" => {
+            let mut resume_seed: Option<String> = None;
+            let args: Vec<String> = std::env::args().collect();
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--resume-seed" => {
+                        if i + 1 < args.len() {
+                            resume_seed = Some(args[i + 1].clone());
+                            i += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            deepx_session::SessionManager::init(deepx_types::platform::data_dir());
+            let mut agent = deepx_msglp::agent::AgentState::init("cli");
+            if let Some(seed) = resume_seed {
+                agent.session.resume_seed = Some(seed);
+            }
+
+            let stdin = std::io::BufReader::new(std::io::stdin());
+            let stdout = std::io::stdout();
+            let mut loop_ = deepx_msglp::Loop::new_ipc(agent, stdin, stdout);
+            loop_.run();
         }
         "config" | "init" => {
             run_config();

@@ -88,8 +88,6 @@ pub struct MessageStore {
     turns: Vec<Turn>,
     cancelled: bool,
     tool_executor: Option<ToolExecutorFn>,
-    ui_tx: Option<std::sync::mpsc::Sender<deepx_proto::Agent2Ui>>,
-    cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl std::fmt::Debug for MessageStore {
@@ -111,8 +109,6 @@ impl Clone for MessageStore {
             turns: self.turns.clone(),
             cancelled: self.cancelled,
             tool_executor: None,
-            ui_tx: None,
-            cancel_flag: None,
         }
     }
 }
@@ -125,8 +121,6 @@ impl MessageStore {
             turns: Vec::new(),
             cancelled: false,
             tool_executor: None,
-            ui_tx: None,
-            cancel_flag: None,
         }
     }
 
@@ -301,21 +295,14 @@ impl MessageStore {
         full
     }
 
+    /// Execute all pending tools in the current step. When `tool_executor` is None
+    /// (e.g. during session restore), returns early without injecting errors.
     pub fn execute_tools_batch(&mut self) -> Effect {
         let executor = match &self.tool_executor {
             Some(e) => e,
             None => {
-                log::error!("execute_tools_batch: no tool executor set — tools will not be executed");
-                if let Some(turn) = self.turns.last_mut() {
-                    if let Some(step) = turn.steps.last_mut() {
-                        for id in step.assistant_tool_ids() {
-                            if !step.tool_result_has_id(&id) {
-                                step.tool_results.push(Message::tool(&id, "[ERROR] No tool executor available."));
-                            }
-                        }
-                    }
-                }
-                return Effect::TurnComplete;
+                log::warn!("execute_tools_batch: no tool executor set — skipping tool execution");
+                return Effect::None;
             }
         };
 
@@ -426,14 +413,6 @@ impl MessageStore {
         self.tool_executor = Some(executor);
     }
 
-    pub fn set_ui_tx(&mut self, tx: std::sync::mpsc::Sender<deepx_proto::Agent2Ui>) {
-        self.ui_tx = Some(tx);
-    }
-
-    pub fn set_cancel(&mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-        self.cancel_flag = Some(flag);
-    }
-
     pub fn snapshot(&self, model: &str, effort: &str) {
         let msgs = self.to_vec();
         if !self.seed.is_empty() {
@@ -441,6 +420,8 @@ impl MessageStore {
         }
     }
 
+    /// Reconstruct the internal turn/step structure by replaying saved messages
+    /// through `push_user` / `push_assistant` / `push_tool_result`.
     pub fn from_session(session_file: &SessionFile) -> (Self, Vec<String>) {
         let mut store = Self::new(&session_file.seed);
         let msgs = &session_file.messages;

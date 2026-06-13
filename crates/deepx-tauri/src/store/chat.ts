@@ -179,5 +179,26 @@ export function createChatStore() {
     setTurns(loaded);
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clearError, clear, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore };
+  function prependTurns(turnsData: Array<{
+    turn_id: string; user_text: string; rounds: Array<{
+      round_num: number; thinking?: string; answer?: string;
+      tool_calls: ToolCallDef[]; tool_results: ToolResultDef[];
+    }>;
+  }>) {
+    const loaded: Turn[] = turnsData.map((td) => {
+      const rounds: Round[] = td.rounds.map((rd) => {
+        const blocks: RoundBlock[] = [];
+        if (rd.thinking) blocks.push({ type: "reasoning", content: rd.thinking });
+        if (rd.answer) blocks.push({ type: "text", content: rd.answer });
+        for (const tc of rd.tool_calls) blocks.push({ type: "tool", card: tc });
+        return { roundNum: rd.round_num, thinking: rd.thinking, answer: rd.answer, blocks, toolCalls: rd.tool_calls, toolResults: rd.tool_results };
+      });
+      return { turnId: td.turn_id, userText: td.user_text, rounds, status: "complete" as const };
+    });
+    setTurns(produce((prev) => {
+      prev.unshift(...loaded);
+    }));
+  }
+
+  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clearError, clear, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

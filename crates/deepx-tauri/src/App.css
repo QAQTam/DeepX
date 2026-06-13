@@ -329,3 +329,21 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
   box-shadow: 0 8px 32px rgba(0,0,0,0.12);
 }
+
+.load-more-bar {
+    text-align: center;
+    padding: 8px;
+}
+.load-more-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 4px 16px;
+    border-radius: 12px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+.load-more-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-primary);
+}

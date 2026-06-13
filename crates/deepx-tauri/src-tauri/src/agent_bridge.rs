@@ -1,13 +1,15 @@
-//! Agent bridge: runs the deepx-agent in a background thread and bridges
-//! mpsc channels to Tauri commands (frontend → agent) and events (agent → frontend).
+//! Manages the deepx-agent child process lifecycle and bridges stdin/stdout JSON-LP
+//! communication between the Tauri frontend and the agent subprocess.
 //!
-//! Architecture mirrors deepx-tui's spawn_agent_inproc:
-//!   1. AgentState::init("tauri") — init tools, config, tool defs
-//!   2. Spawn run_agent_loop in a background thread
-//!   3. Forward Ui2Agent frames from Tauri commands via mpsc sender
-//!   4. Forward Agent2Ui frames to the frontend as Tauri window events
+//! Architecture:
+//! - `AgentBridge::init()` spawns the same binary with the `agent` CLI flag as a child process,
+//!   piping stdin/stdout.
+//! - A background reader thread consumes JSON-LP lines from the child's stdout and emits them
+//!   as Tauri events to the frontend.
+//! - Tauri commands serialize `Ui2Agent` frames as JSON-LP lines written to the child's stdin.
+//! - `shutdown()` sends a `Shutdown` frame, then kills and waits for the child process.
 
-use std::sync::mpsc;
+use std::io::{BufRead, BufReader, Write};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
@@ -15,84 +17,121 @@ use tauri::{AppHandle, Emitter};
 
 use deepx_proto::{Agent2Ui, Ui2Agent};
 
-/// Managed Tauri state that owns the sender side of the agent channel.
+/// Holds the child process handle and its stdin writer for the agent subprocess.
 pub struct AgentBridge {
-    sender: mpsc::Sender<Ui2Agent>,
-    /// Whether the agent has been shut down.
+    stdin: Mutex<Box<dyn Write + Send>>,
+    child: Mutex<Option<std::process::Child>>,
     shutdown: Mutex<bool>,
 }
 
-/// Global BRIDGE â bypasses Tauri state management issues.
+/// Global singleton holding the real child process stdin handle, so Tauri commands can
+/// write JSON-LP frames to the agent subprocess from any thread.
 static BRIDGE: OnceLock<AgentBridge> = OnceLock::new();
 
-/// Send a frame to the agent using the global BRIDGE.
 fn send_command(frame: Ui2Agent) -> Result<(), String> {
-    BRIDGE.get()
-        .ok_or_else(|| "AgentBridge not initialized".into())
-        .and_then(|bridge| bridge.send(frame))
+    let bridge = BRIDGE.get().ok_or_else(|| String::from("AgentBridge not initialized"))?;
+    eprintln!("[BRIDGE] send_command dispatching to agent");
+    bridge.send(&frame)
 }
 
 impl AgentBridge {
-    /// Initialize the agent and start the event-forwarding loop.
-    /// Called once during Tauri app setup.
+    /// Spawn the agent subprocess (same binary with `agent` flag), store its handle and
+    /// stdin in the `BRIDGE` singleton, and start a background reader thread that parses
+    /// JSON-LP events from the child's stdout and emits them as Tauri events.
     pub fn init(app: &AppHandle) -> Self {
+        use std::process::{Command, Stdio};
+
         deepx_session::SessionManager::init(deepx_types::platform::data_dir());
-    let mut agent = deepx_msglp::agent::AgentState::init("tauri");
 
-        // Init session manager + check for resume seed in the session directory
-        if let Some(seed) = active_or_latest_seed() {
-            agent.session.resume_seed = Some(seed);
-        }
+        let exe = std::env::current_exe().expect("cannot get current exe path");
+        let mut child = Command::new(&exe)
+            .arg("agent")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("Failed to spawn agent subprocess");
 
-        let (tx, rx) = mpsc::channel::<Ui2Agent>();
-        let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
+        let stdin = child.stdin.take().expect("Failed to get stdin");
+        let stdout = child.stdout.take().expect("Failed to get stdout");
 
-        // Spawn the agent event loop in a background thread
-        let agent_handle = std::thread::spawn(move || {
-            deepx_msglp::Loop::new(agent, rx, agent_tx).run();
-            deepx_tools::bridge::shutdown_tools();
-        });
-
-        // Forward Agent2Ui events to the Tauri frontend
         let app_handle = app.clone();
         std::thread::spawn(move || {
-            while let Ok(event) = agent_rx.recv() {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("[BRIDGE] agent stdout read error: {e}");
+                        break;
+                    }
+                };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let event: Agent2Ui = match serde_json::from_str(&line) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("[BRIDGE] failed to parse: {} -- error: {e}", &line[..line.len().min(80)]);
+                        continue;
+                    }
+                };
                 let event_type = agent2ui_event_name(&event);
                 eprintln!("[BRIDGE] got event: {}", event_type);
                 let payload = serde_json::to_value(&event).unwrap_or_default();
                 if app_handle.emit("agent-event", payload.clone()).is_err() {
                     break;
                 }
-                // Also emit a typed event for the frontend to filter on
                 let _ = app_handle.emit(&format!("agent-{}", event_type), payload);
             }
-            // Agent thread will finish; drop the join handle
-            drop(agent_handle);
+            eprintln!("[BRIDGE] agent stdout reader thread exiting");
         });
 
         let bridge = Self {
-            sender: tx,
+            stdin: Mutex::new(Box::new(stdin)),
+            child: Mutex::new(Some(child)),
             shutdown: Mutex::new(false),
         };
         let _ = BRIDGE.set(bridge);
-        Self { sender: mpsc::channel::<Ui2Agent>().0, shutdown: Mutex::new(false) }
-    }
 
-    /// Send a frame to the agent. Returns Ok(()) or an error string.
-    fn send(&self, frame: Ui2Agent) -> Result<(), String> {
-        if *self.shutdown.lock().unwrap() {
-            return Err("Agent is shut down".into());
+        Self {
+            stdin: Mutex::new(Box::new(std::io::sink())),
+            child: Mutex::new(None),
+            shutdown: Mutex::new(false),
         }
-        self.sender.send(frame).map_err(|e| format!("send error: {e}"))
     }
 
-    /// Shut down the agent gracefully.
+    /// Write a `Ui2Agent` frame as a JSON-LP line to the child process's stdin.
+    fn send(&self, frame: &Ui2Agent) -> Result<(), String> {
+        let json = serde_json::to_string(frame).map_err(|e| format!("serialize: {e}"))?;
+        let mut stdin = self.stdin.lock().unwrap();
+        writeln!(*stdin, "{}", json).map_err(|e| format!("write: {e}"))?;
+        stdin.flush().map_err(|e| format!("flush: {e}"))
+    }
+
+    /// Send a `Shutdown` frame to the agent child process, wait 500ms for graceful
+    /// teardown, then force-kill the process if it is still running.
     pub fn shutdown(&self) {
-        let mut s = self.shutdown.lock().unwrap();
-        if !*s {
+        {
+            let mut s = self.shutdown.lock().unwrap();
+            if *s {
+                return;
+            }
             *s = true;
-            let _ = self.sender.send(Ui2Agent::Shutdown);
+        } // drop shutdown lock before calling send()
+        let _ = self.send(&Ui2Agent::Shutdown);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
         }
+    }
+}
+
+/// Public entry point for graceful agent shutdown. Called from the Tauri window-close handler.
+pub fn shutdown_agent() {
+    if let Some(bridge) = BRIDGE.get() {
+        bridge.shutdown();
     }
 }
 
@@ -159,7 +198,6 @@ pub fn cmd_save_config(
 /// Load the current config and return it as JSON.
 #[tauri::command]
 pub fn cmd_load_config() -> Result<String, String> {
-    eprintln!("[BRIDGE] cmd_load_config called");
     let cfg = deepx_config::Config::load()
         .map_err(|e| format!("load config: {e}"))?;
     let providers: Vec<serde_json::Value> = deepx_config::registry::all_providers()
@@ -208,6 +246,7 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
         Agent2Ui::ToolResults { .. } => "tool_results",
         Agent2Ui::ToolExecDelta { .. } => "tool_exec_delta",
         Agent2Ui::SessionRestored { .. } => "session_restored",
+        Agent2Ui::MoreTurns { .. } => "more_turns",
         Agent2Ui::SessionCreated { .. } => "session_created",
         Agent2Ui::Error { .. } => "error",
         Agent2Ui::ToolNotice { .. } => "tool_notice",
@@ -217,6 +256,7 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
         Agent2Ui::Cancelled => "cancelled",
         Agent2Ui::ShutdownAck => "shutdown_ack",
         Agent2Ui::AuditRecord { .. } => "audit_record",
+        Agent2Ui::Ready => "ready",
         _ => "unknown",
     }
 }
@@ -259,19 +299,24 @@ pub fn cmd_delete_session(seed: String) -> Result<(), String> {
 pub fn cmd_undo_turn(turn_id: String) -> Result<(), String> {
     send_command(Ui2Agent::UndoTurn { turn_id })
 }
-/// Read .active_session file if present, else fall back to latest from index.
-fn active_or_latest_seed() -> Option<String> {
-    if let Some(seed) = deepx_session::SessionManager::global().active_seed() {
-        return Some(seed);
-    }
-    let dir = deepx_types::platform::sessions_dir();
-    let index_path = dir.join("index.toml");
-    let data = std::fs::read_to_string(&index_path).ok()?;
-    if let Ok(metas) = toml::from_str::<Vec<deepx_types::SessionMeta>>(&data) {
-        metas.into_iter()
-            .max_by_key(|m| m.updated_at)
-            .map(|m| m.seed)
-    } else {
-        None
-    }
+
+/// Resume a specific session by seed.
+#[tauri::command]
+pub fn cmd_resume_session(seed: String) -> Result<(), String> {
+    eprintln!("[BRIDGE] cmd_resume_session called, seed={seed}");
+    deepx_session::SessionManager::global().set_active_seed(&seed);
+    send_command(Ui2Agent::ResumeSession { seed })
+}
+
+/// Create a new session (clears active marker).
+#[tauri::command]
+pub fn cmd_new_session() -> Result<(), String> {
+    deepx_session::SessionManager::global().clear_active();
+    send_command(Ui2Agent::NewSession)
+}
+
+/// Load older turns from session history (paginated, 20 at a time before the given turn).
+#[tauri::command]
+pub fn cmd_load_more_turns(before_turn_id: String) -> Result<(), String> {
+    send_command(Ui2Agent::LoadMoreTurns { before_turn_id, count: 20 })
 }
