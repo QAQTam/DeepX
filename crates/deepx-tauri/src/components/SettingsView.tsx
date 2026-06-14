@@ -44,6 +44,17 @@ export default function SettingsView(props: SettingsViewProps) {
   const currentEndpoints = (): Endpoint[] => { const p = providers().find((p: Provider) => p.id === providerId()); return p?.endpoints ?? []; };
   const currentModels = (): string[] => { const ep = currentEndpoints().find((e: Endpoint) => e.id === endpointId()); return ep?.models ?? [model()]; };
 
+  function handleProviderChange(id: string) {
+    setProviderId(id);
+    const ep = providers().find((p: Provider) => p.id === id)?.endpoints[0];
+    if (ep) { setEndpointId(ep.id); setBaseUrl(ep.base_url); setModel(ep.default_model); }
+  }
+  function handleEndpointChange(id: string) {
+    setEndpointId(id);
+    const ep = currentEndpoints().find((e: Endpoint) => e.id === id);
+    if (ep) { setBaseUrl(ep.base_url); setModel(ep.default_model); }
+  }
+
   async function save() {
     try {
       await invoke("cmd_save_config", { apiKey: apiKey(), model: model(), baseUrl: baseUrl(), providerId: providerId(), endpoint: endpointId(), maxTokens: maxTokens(), contextLimit: contextLimit(), reasoningEffort: reasoningEffort(), lang: props.lang() });
@@ -96,8 +107,8 @@ export default function SettingsView(props: SettingsViewProps) {
           {/* API subpage */}
           <Show when={subpage() === "api"}>
             <div class="settings-panel">
-              <div class="settings-field"><label>{t().settings.provider}</label><select value={providerId()} onChange={(e) => { setProviderId(e.currentTarget.value); const ep = providers().find((p: Provider) => p.id === e.currentTarget.value)?.endpoints[0]; if (ep) setEndpointId(ep.id); }}><For each={providers()}>{(p: Provider) => <option value={p.id}>{p.display}</option>}</For></select></div>
-              <div class="settings-field"><label>{t().settings.endpoint}</label><select value={endpointId()} onChange={(e) => setEndpointId(e.currentTarget.value)}><For each={currentEndpoints()}>{(ep: Endpoint) => <option value={ep.id}>{ep.display}</option>}</For></select></div>
+              <div class="settings-field"><label>{t().settings.provider}</label><select value={providerId()} onChange={(e) => handleProviderChange(e.currentTarget.value)}><For each={providers()}>{(p: Provider) => <option value={p.id}>{p.display}</option>}</For></select></div>
+              <div class="settings-field"><label>{t().settings.endpoint}</label><select value={endpointId()} onChange={(e) => handleEndpointChange(e.currentTarget.value)}><For each={currentEndpoints()}>{(ep: Endpoint) => <option value={ep.id}>{ep.display}</option>}</For></select></div>
               <div class="settings-field"><label>{t().settings.apiKey}</label><input type="password" value={apiKey()} onInput={(e) => setApiKey(e.currentTarget.value)} placeholder="sk-..." /><div class="hint">{t().settings.apiKeyHint}</div></div>
               <div class="settings-field"><label>{t().settings.model}</label><select value={model()} onChange={(e) => setModel(e.currentTarget.value)}><For each={currentModels()}>{(m: string) => <option value={m}>{m}</option>}</For></select></div>
               <div class="settings-field"><label>{t().settings.baseUrl}</label><input value={baseUrl()} onInput={(e) => setBaseUrl(e.currentTarget.value)} /></div>

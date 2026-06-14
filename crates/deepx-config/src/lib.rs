@@ -4,3 +4,4 @@ pub mod registry;
 
 pub use config::Config;
 pub use prompt::system_prompt;
+pub use prompt::full_system_prompt;

@@ -10,6 +10,7 @@ use super::file_read;
 use super::file_write;
 use super::file_edit;
 use super::sed;
+use super::red_tool;
 use super::grep;
 use super::file_edit_diff;
 use super::file_list_dir;
@@ -19,6 +20,7 @@ use super::file_move;
 use super::file_glob;
 use super::file_diff;
 use super::task;
+use super::ask_user;
 
 
 /// 构造并注册全部工具 handler，返回初始化后的 ToolManager。
@@ -35,6 +37,7 @@ pub fn build_tool_manager() -> ToolManager {
     file_write::register(&mut mgr);
     file_edit::register(&mut mgr);
     sed::register(&mut mgr);
+    red_tool::register(&mut mgr);
     grep::register(&mut mgr);
     file_edit_diff::register(&mut mgr);
     file_list_dir::register(&mut mgr);
@@ -46,6 +49,9 @@ pub fn build_tool_manager() -> ToolManager {
 
     // ── 任务 ──
     task::register(&mut mgr);
+
+    // ── 交互 ──
+    ask_user::register(&mut mgr);
 
     mgr
 }

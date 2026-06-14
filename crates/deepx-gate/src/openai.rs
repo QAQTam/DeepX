@@ -6,6 +6,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use deepx_types::{ContentBlock, Message, ToolDef, UsageInfo};
+use deepx_types::{CacheTokenField, ThinkingParamMode};
 
 use super::types::{ProviderConfig, StreamEvent};
 
@@ -53,7 +54,20 @@ pub fn chat_stream_openai(
     body_map.insert("model".into(), serde_json::json!(model));
     body_map.insert("messages".into(), serde_json::Value::Array(api_msgs));
     body_map.insert("stream".into(), serde_json::json!(true));
-    body_map.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
+    if provider.supports_thinking {
+        match provider.thinking_mode {
+            ThinkingParamMode::OpenAi => {
+                body_map.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
+            }
+            ThinkingParamMode::QwenEnableThinking => {
+                body_map.insert("enable_thinking".into(), serde_json::json!(true));
+            }
+            ThinkingParamMode::MiniMaxAdaptive => {
+                body_map.insert("thinking".into(), serde_json::json!({"type": "adaptive"}));
+                body_map.insert("reasoning_split".into(), serde_json::json!(true));
+            }
+        }
+    }
     body_map.insert("max_tokens".into(), serde_json::json!(max_tokens));
 
     if let Some(ref e) = effort {
@@ -69,7 +83,7 @@ pub fn chat_stream_openai(
     }
 
     let body = serde_json::Value::Object(body_map);
-    let url = build_chat_url(&provider.base_url);
+    let url = build_chat_url(&provider.base_url, provider.chat_path.as_deref());
 
     let mut attempt = 0u32;
     loop {
@@ -265,8 +279,24 @@ fn stream_sse(
             if let Some(u) = ev.get("usage") {
                 let pt = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let ct = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let hit = u.get("prompt_cache_hit_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let miss = u.get("prompt_cache_miss_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let (hit, miss) = match provider.cache_field {
+                    CacheTokenField::PromptCacheHitTokens => (
+                        u.get("prompt_cache_hit_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                        u.get("prompt_cache_miss_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                    ),
+                    CacheTokenField::PromptDetailsCached => {
+                        let cached = u.get("prompt_tokens_details")
+                            .and_then(|d| d.get("cached_tokens"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        (cached, 0)
+                    }
+                    CacheTokenField::UsageCachedTokens => {
+                        let cached = u.get("cached_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        (cached, 0)
+                    }
+                    CacheTokenField::None => (0, 0),
+                };
                 let rt = u.get("completion_tokens_details")
                     .and_then(|d| d.get("reasoning_tokens"))
                     .and_then(|v| v.as_u64())
@@ -283,9 +313,9 @@ fn stream_sse(
         }
 
         // Query balance lazily after first chunk arrives
-        if !balance_queried {
+        if !balance_queried && provider.has_balance {
             balance_queried = true;
-            if let Some(info) = query_balance(&provider.api_key, &provider.base_url) {
+            if let Some(info) = query_balance(&provider.api_key, &provider.base_url, provider.balance_path.as_deref()) {
                 on_event(StreamEvent::Balance {
                     is_available: info.is_available,
                     total_balance: info.total_balance,
@@ -423,23 +453,73 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
     out
 }
 
+// ── Synchronous (non-streaming) chat ──
+
+pub fn chat_sync_openai(provider: &ProviderConfig, model: &str, messages: Vec<Message>, max_tokens: u32) -> Result<String, String> {
+    let api_msgs = convert_messages(messages, None);
+    let url = build_chat_url(&provider.base_url, provider.chat_path.as_deref());
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": api_msgs,
+        "max_tokens": max_tokens,
+        "stream": false,
+    });
+    if provider.supports_thinking {
+        let thinking = match provider.thinking_mode {
+            ThinkingParamMode::OpenAi => serde_json::json!({"type": "enabled"}),
+            ThinkingParamMode::QwenEnableThinking => serde_json::json!(true),
+            ThinkingParamMode::MiniMaxAdaptive => serde_json::json!({"type": "adaptive"}),
+        };
+        body["thinking"] = thinking;
+    }
+
+    let resp = ureq::post(&url)
+        .set("Authorization", &format!("Bearer {}", provider.api_key))
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(60))
+        .send_json(&body)
+        .map_err(|e| format!("compact request failed: {e}"))?;
+
+    let json: serde_json::Value = resp.into_json()
+        .map_err(|e| format!("compact parse failed: {e}"))?;
+
+    json["choices"][0]["message"]["content"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "compact: no content in response".to_string())
+}
+
 // ── URL builder ──
 
-fn build_chat_url(base_url: &str) -> String {
+fn build_chat_url(base_url: &str, chat_path: Option<&str>) -> String {
+    if let Some(path) = chat_path {
+        if path.starts_with("http") {
+            return path.to_string();
+        }
+        let base = base_url.trim_end_matches('/');
+        return format!("{}{}", base, path);
+    }
     let base = base_url.trim_end_matches('/');
-    if base.ends_with("/v1/chat/completions") || base.ends_with("/chat/completions") {
+    if base.ends_with("/chat/completions") {
         base.to_string()
-    } else if base.ends_with("/v1") {
-        format!("{}/chat/completions", base)
     } else {
-        format!("{}/v1/chat/completions", base)
+        format!("{}/chat/completions", base)
     }
 }
 
 // ── Balance query ──
 
-pub fn query_balance(api_key: &str, base_url: &str) -> Option<deepx_types::BalanceInfo> {
-    let balance_url = base_url.trim_end_matches('/').trim_end_matches("/v1").to_string() + "/user/balance";
+pub fn query_balance(api_key: &str, base_url: &str, balance_path: Option<&str>) -> Option<deepx_types::BalanceInfo> {
+    let balance_url = if let Some(path) = balance_path {
+        if path.starts_with("http") {
+            path.to_string()
+        } else {
+            format!("{}{}", base_url.trim_end_matches('/'), path)
+        }
+    } else {
+        base_url.trim_end_matches('/').trim_end_matches("/v1").to_string() + "/user/balance"
+    };
     let resp = ureq::get(&balance_url)
         .set("Authorization", &format!("Bearer {}", api_key))
         .timeout(Duration::from_secs(10))

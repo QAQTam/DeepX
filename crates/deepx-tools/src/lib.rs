@@ -16,6 +16,8 @@ pub mod file_edit;
 
 pub mod sed;
 
+pub mod red_tool;
+
 pub mod grep;
 
 pub mod file_edit_diff;
@@ -35,6 +37,8 @@ pub mod file_diff;
 pub mod file_shared;
 mod safety;
 mod web;
+
+pub mod ask_user;
 
 pub mod task;
 

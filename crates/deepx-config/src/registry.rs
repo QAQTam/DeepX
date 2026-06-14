@@ -8,9 +8,7 @@
 //! Backward compat: old provider_id "deepseek-openai"/"deepseek-anthropic" are
 //! auto-migrated to provider_id="deepseek" + endpoint="openai".
 
-use deepx_types::{EndpointSpec, ProviderSpec, UserSendMode};
-
-// ── Static registry ──
+use deepx_types::{CacheTokenField, EndpointSpec, ProviderSpec, ThinkingParamMode, UserSendMode};
 
 fn deepseek() -> ProviderSpec {
     ProviderSpec {
@@ -26,6 +24,76 @@ fn deepseek() -> ProviderSpec {
                 models: vec!["deepseek-v4-flash".into(), "deepseek-v4-pro".into()],
                 models_url: Some("https://api.deepseek.com".into()),
                 user_id_mode: Some(UserSendMode::Body),
+                // chat_path: None → "/chat/completions" (default)
+                // thinking_mode: OpenAi (default)
+                // cache_field: PromptCacheHitTokens (default)
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+fn qwen() -> ProviderSpec {
+    ProviderSpec {
+        id: "qwen".into(),
+        display: "Qwen (阿里百炼)".into(),
+        endpoints: vec![
+            EndpointSpec {
+                id: "openai".into(),
+                display: "OpenAI-compatible".into(),
+                protocol: "openai".into(),
+                base_url: "https://dashscope.aliyuncs.com".into(),
+                default_model: "qwen3.7-plus".into(),
+                models: vec!["qwen3.7-plus".into(), "qwen3.7-max".into()],
+                models_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".into()),
+                chat_path: Some("/compatible-mode/v1/chat/completions".into()),
+                thinking_mode: ThinkingParamMode::QwenEnableThinking,
+                cache_field: CacheTokenField::PromptDetailsCached,
+                has_balance: false,
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+fn glm() -> ProviderSpec {
+    ProviderSpec {
+        id: "glm".into(),
+        display: "GLM (智谱AI)".into(),
+        endpoints: vec![
+            EndpointSpec {
+                id: "openai".into(),
+                display: "OpenAI-compatible".into(),
+                protocol: "openai".into(),
+                base_url: "https://open.bigmodel.cn".into(),
+                default_model: "glm-5.1".into(),
+                models: vec!["glm-5.1".into(), "glm-5".into(), "glm-4.7".into()],
+                models_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
+                chat_path: Some("/api/paas/v4/chat/completions".into()),
+                cache_field: CacheTokenField::PromptDetailsCached,
+                has_balance: false,
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+fn kimi() -> ProviderSpec {
+    ProviderSpec {
+        id: "kimi".into(),
+        display: "Kimi (月之暗面)".into(),
+        endpoints: vec![
+            EndpointSpec {
+                id: "openai".into(),
+                display: "OpenAI-compatible".into(),
+                protocol: "openai".into(),
+                base_url: "https://api.moonshot.cn/v1".into(),
+                default_model: "kimi-k2.6".into(),
+                models: vec!["kimi-k2.6".into(), "kimi-k2.5".into()],
+                models_url: Some("https://api.moonshot.cn/v1".into()),
+                balance_path: Some("/users/me/balance".into()),
+                cache_field: CacheTokenField::UsageCachedTokens,
+                ..Default::default()
             },
         ],
     }
@@ -34,7 +102,7 @@ fn deepseek() -> ProviderSpec {
 fn mimo() -> ProviderSpec {
     ProviderSpec {
         id: "mimo".into(),
-        display: "Xiaomi MiMo".into(),
+        display: "MiMo (小米)".into(),
         endpoints: vec![
             EndpointSpec {
                 id: "openai".into(),
@@ -42,16 +110,79 @@ fn mimo() -> ProviderSpec {
                 protocol: "openai".into(),
                 base_url: "https://api.xiaomimimo.com/v1".into(),
                 default_model: "mimo-v2.5-pro".into(),
-                models: vec!["mimo-v2.5-pro".into(), "mimo-v2.5".into(), "mimo-v2-flash".into()],
+                models: vec!["mimo-v2.5-pro".into(), "mimo-v2.5".into(), "mimo-v2-omni".into(), "mimo-v2-flash".into()],
                 models_url: Some("https://api.xiaomimimo.com/v1".into()),
-                user_id_mode: None,
+                cache_field: CacheTokenField::None,
+                has_balance: false,
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+fn minimax() -> ProviderSpec {
+    ProviderSpec {
+        id: "minimax".into(),
+        display: "MiniMax (稀宇)".into(),
+        endpoints: vec![
+            EndpointSpec {
+                id: "openai".into(),
+                display: "OpenAI-compatible".into(),
+                protocol: "openai".into(),
+                base_url: "https://api.minimaxi.com/v1".into(),
+                default_model: "MiniMax-M3".into(),
+                models: vec!["MiniMax-M3".into(), "MiniMax-M2.7".into(), "MiniMax-M2.5".into()],
+                models_url: Some("https://api.minimaxi.com/v1".into()),
+                thinking_mode: ThinkingParamMode::MiniMaxAdaptive,
+                cache_field: CacheTokenField::None,
+                has_balance: false,
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+fn doubao() -> ProviderSpec {
+    ProviderSpec {
+        id: "doubao".into(),
+        display: "Doubao (火山方舟)".into(),
+        endpoints: vec![
+            EndpointSpec {
+                id: "openai".into(),
+                display: "OpenAI-compatible".into(),
+                protocol: "openai".into(),
+                base_url: "https://ark.cn-beijing.volces.com".into(),
+                default_model: "doubao-seed-2-0-lite-260215".into(),
+                models: vec!["doubao-seed-2-0-lite-260215".into(), "doubao-seed-2-0-260215".into(), "doubao-seed-1-8-260115".into()],
+                models_url: Some("https://ark.cn-beijing.volces.com/api/v3".into()),
+                chat_path: Some("/api/v3/chat/completions".into()),
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+fn openai() -> ProviderSpec {
+    ProviderSpec {
+        id: "openai".into(),
+        display: "OpenAI".into(),
+        endpoints: vec![
+            EndpointSpec {
+                id: "openai".into(),
+                display: "Chat Completions".into(),
+                protocol: "openai".into(),
+                base_url: "https://api.openai.com/v1".into(),
+                default_model: "gpt-5.4".into(),
+                models: vec!["gpt-5.5".into(), "gpt-5.4".into(), "gpt-5.4-mini".into()],
+                models_url: Some("https://api.openai.com/v1".into()),
+                ..Default::default()
             },
         ],
     }
 }
 
 fn providers() -> Vec<ProviderSpec> {
-    vec![deepseek(), mimo()]
+    vec![deepseek(), qwen(), glm(), kimi(), mimo(), minimax(), doubao(), openai()]
 }
 
 // ── Lookup ──
@@ -69,8 +200,6 @@ pub fn find_endpoint(provider_id: &str, endpoint_id: &str) -> Option<EndpointSpe
         .and_then(|p| p.endpoints.into_iter().find(|e| e.id == endpoint_id))
 }
 
-/// Resolve the first endpoint of a provider. Returns (endpoint, provider) tuples
-/// for the default first endpoint.
 pub fn first_endpoint_for(provider_id: &str) -> Option<EndpointSpec> {
     find_provider(provider_id)
         .and_then(|p| p.endpoints.into_iter().next())
@@ -88,7 +217,6 @@ pub fn first_provider_endpoint() -> (String, String) {
 
 // ── Model discovery ──
 
-/// Models URL for a given (provider, endpoint) pair.
 pub fn models_url_for(provider_id: &str, endpoint_id: &str) -> Option<String> {
     let ep = find_endpoint(provider_id, endpoint_id)?;
     let base = ep.models_url.as_deref().unwrap_or(&ep.base_url);
@@ -96,8 +224,6 @@ pub fn models_url_for(provider_id: &str, endpoint_id: &str) -> Option<String> {
     Some(format!("{}/models", stripped))
 }
 
-/// Fetch model list from the /models endpoint (sync, ureq).
-/// Falls back to [default_model] if the request fails.
 pub fn fetch_models(provider_id: &str, endpoint_id: &str, api_key: &str) -> Vec<String> {
     let ep = match find_endpoint(provider_id, endpoint_id) {
         Some(e) => e,
@@ -138,21 +264,18 @@ pub fn fetch_models(provider_id: &str, endpoint_id: &str, api_key: &str) -> Vec<
     }
 }
 
-/// Get the default model for a (provider, endpoint) pair.
 pub fn default_model_for(provider_id: &str, endpoint_id: &str) -> String {
     find_endpoint(provider_id, endpoint_id)
         .map(|e| e.default_model.clone())
         .unwrap_or_else(|| "deepseek-v4-flash".into())
 }
 
-/// Resolve protocol string for a (provider, endpoint) pair.
 pub fn protocol_for(provider_id: &str, endpoint_id: &str) -> String {
     find_endpoint(provider_id, endpoint_id)
         .map(|e| e.protocol.clone())
         .unwrap_or_else(|| "openai".into())
 }
 
-/// Resolve base_url for a (provider, endpoint) pair.
 pub fn base_url_for(provider_id: &str, endpoint_id: &str) -> String {
     find_endpoint(provider_id, endpoint_id)
         .map(|e| e.base_url.clone())
@@ -161,8 +284,6 @@ pub fn base_url_for(provider_id: &str, endpoint_id: &str) -> String {
 
 // ── Backward compatibility ──
 
-/// Migrate old provider_id ("deepseek-openai" / "deepseek-anthropic") to new
-/// (provider_id, endpoint) pair.
 pub fn migrate_provider_id(old_pid: &str) -> (String, String) {
     if find_provider(old_pid).is_some() {
         let ep = first_endpoint_for(old_pid)

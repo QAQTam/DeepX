@@ -1,8 +1,7 @@
 //! Shared gate types — provider config and unified stream events.
 
 use deepx_types::Message;
-
-// ── Provider ──
+use deepx_types::{CacheTokenField, ThinkingParamMode};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderKind {
@@ -22,16 +21,41 @@ pub struct ProviderConfig {
     pub api_key: String,
     pub model: String,
     pub user_id_mode: Option<deepx_types::UserSendMode>,
+
+    // ── Multi-provider adaptation fields ──
+    pub chat_path: Option<String>,
+    pub balance_path: Option<String>,
+    pub thinking_mode: ThinkingParamMode,
+    pub cache_field: CacheTokenField,
+    pub has_balance: bool,
+    pub supports_thinking: bool,
 }
 
 impl ProviderConfig {
-    pub fn openai(base_url: &str, api_key: &str, model: &str, user_id_mode: Option<deepx_types::UserSendMode>) -> Self {
+    pub fn openai(
+        base_url: &str,
+        api_key: &str,
+        model: &str,
+        user_id_mode: Option<deepx_types::UserSendMode>,
+        chat_path: Option<String>,
+        balance_path: Option<String>,
+        thinking_mode: ThinkingParamMode,
+        cache_field: CacheTokenField,
+        has_balance: bool,
+        supports_thinking: bool,
+    ) -> Self {
         Self {
             kind: ProviderKind::OpenAi,
             base_url: base_url.to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
             user_id_mode,
+            chat_path,
+            balance_path,
+            thinking_mode,
+            cache_field,
+            has_balance,
+            supports_thinking,
         }
     }
 }

@@ -80,7 +80,7 @@ handler!(handle_edit_file_diff, exec_edit_file_diff);
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("edit_file_diff", ""),
-        description: "Context/Fuzzy edit: give old_lines+new_lines+optional context. Tolerant of whitespace changes. Use INSTEAD of edit_file when exact old_string is uncertain or changing multi-line blocks.",
+        description: "Fuzzy multi-line edit via old_lines+new_lines. Tolerant of whitespace changes. Prefer edit_file for simple single-string replacements; use fuzzy_edit for multi-line blocks or when exact whitespace is uncertain.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
         safety: crate::default_allow,

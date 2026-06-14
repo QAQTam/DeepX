@@ -253,6 +253,8 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
         Agent2Ui::Balance { .. } => "balance",
         Agent2Ui::Dashboard { .. } => "dashboard",
         Agent2Ui::Done => "done",
+        Agent2Ui::CompactStart { .. } => "compact_start",
+        Agent2Ui::CompactEnd { .. } => "compact_end",
         Agent2Ui::Cancelled => "cancelled",
         Agent2Ui::ShutdownAck => "shutdown_ack",
         Agent2Ui::AuditRecord { .. } => "audit_record",
@@ -298,6 +300,13 @@ pub fn cmd_delete_session(seed: String) -> Result<(), String> {
 #[tauri::command]
 pub fn cmd_undo_turn(turn_id: String) -> Result<(), String> {
     send_command(Ui2Agent::UndoTurn { turn_id })
+}
+
+/// Compact conversation history (summarize old turns).
+#[tauri::command]
+pub fn cmd_compact() -> Result<(), String> {
+    eprintln!("[BRIDGE] cmd_compact called");
+    send_command(Ui2Agent::Compact)
 }
 
 /// Resume a specific session by seed.

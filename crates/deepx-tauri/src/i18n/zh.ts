@@ -18,6 +18,12 @@ const zh: I18nStrings = {
     tokens: "令牌",
     context: "上下文",
   },
+  infobar: {
+    model: "模型",
+    session: "会话",
+    context: "上下文",
+    cacheHit: "缓存命中率",
+  },
   settings: {
     title: "设置",
     provider: "服务商",

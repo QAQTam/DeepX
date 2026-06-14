@@ -88,6 +88,8 @@ pub struct MessageStore {
     turns: Vec<Turn>,
     cancelled: bool,
     tool_executor: Option<ToolExecutorFn>,
+    /// Number of earliest turns that have been compacted (skipped in LLM context).
+    compact_skip: usize,
 }
 
 impl std::fmt::Debug for MessageStore {
@@ -109,6 +111,7 @@ impl Clone for MessageStore {
             turns: self.turns.clone(),
             cancelled: self.cancelled,
             tool_executor: None,
+            compact_skip: self.compact_skip,
         }
     }
 }
@@ -121,6 +124,7 @@ impl MessageStore {
             turns: Vec::new(),
             cancelled: false,
             tool_executor: None,
+            compact_skip: 0,
         }
     }
 
@@ -261,9 +265,13 @@ impl MessageStore {
         annotations: &[String],
     ) -> Vec<Message> {
         let mut full: Vec<Message> = {
-            let mut v = vec![Message::system(system_prompt)];
+            let mut v = Vec::new();
+            if !system_prompt.is_empty() {
+                v.push(Message::system(system_prompt));
+            }
             v.extend(self.system_messages.clone());
-            for turn in &self.turns {
+            for (i, turn) in self.turns.iter().enumerate() {
+                if i < self.compact_skip { continue; }
                 v.push(turn.user.clone());
                 for step in &turn.steps {
                     v.push(step.assistant.clone());
@@ -511,6 +519,20 @@ impl MessageStore {
         if idx >= self.turns.len() { return false; }
         self.turns.truncate(idx);
         true
+    }
+
+    /// Compact: keep `keep` recent turns in LLM context, skip older ones.
+    /// Replaces any prior compact messages with a single consolidated summary.
+    pub fn apply_compact(&mut self, summary: &str, keep: usize) {
+        let skip = self.turns.len().saturating_sub(keep);
+        if skip == 0 { return; }
+        self.compact_skip = skip;
+        self.system_messages.retain(|m| {
+            !m.content.iter().any(|b| matches!(b, deepx_types::ContentBlock::Text { text } if text.starts_with("[COMPACT")))
+        });
+        self.system_messages.push(Message::system(
+            &format!("[COMPACT {} turns] Summary of earlier conversation:\n{summary}", skip)
+        ));
     }
 }
 

@@ -16,6 +16,12 @@ const en = {
     tokens: "tokens",
     context: "context",
   },
+  infobar: {
+    model: "Model",
+    session: "Session",
+    context: "Context",
+    cacheHit: "Cache Hit",
+  },
   settings: {
     title: "Settings",
     provider: "Provider",

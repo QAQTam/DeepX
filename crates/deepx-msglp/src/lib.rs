@@ -129,6 +129,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                 }
                 Ui2Agent::ToolCall { id, name, action, args } => { self.handle_tool_call(&id, &name, &action, &args); }
                 Ui2Agent::UndoTurn { ref turn_id } => { self.handle_undo_turn(turn_id); }
+                Ui2Agent::Compact => { self.handle_compact(); }
                 _ => {}
             }
         }
@@ -151,6 +152,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
     fn handle_create_session(&mut self) {
         lifecycle::create_session(&mut self.agent);
         self.agent.rebind_store();
+        self.emit_dashboard();
         let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::SessionCreated {
             seed: self.agent.session.seed.clone(),
         });
@@ -162,6 +164,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
         if lifecycle::init_session(&mut self.agent, Some(seed)) {
             eprintln!("[AGENT] init_session succeeded, current_seed={}", self.agent.session.seed);
             self.agent.rebind_store();
+            self.emit_dashboard();
             let current_seed = self.agent.session.seed.clone();
             if current_seed == seed {
                 let all_turns = build_turns_from_context(&self.agent);
@@ -249,6 +252,79 @@ impl<R: BufRead, W: Write> Loop<R, W> {
         }
     }
 
+    fn handle_compact(&mut self) {
+        const KEEP: usize = 5;
+        eprintln!("[AGENT] handle_compact: {} turns", self.agent.msg.turn_count());
+        if self.agent.msg.turn_count() <= KEEP {
+            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolNotice {
+                message: format!("Compact skipped: need >{} turns (have {})", KEEP, self.agent.msg.turn_count()),
+                level: "info".into(),
+            });
+            return;
+        }
+
+        let compact_count = self.agent.msg.turn_count() - KEEP;
+        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::CompactStart {
+            turns_total: self.agent.msg.turn_count() as u32,
+            turns_keeping: KEEP as u32,
+        });
+
+        let contexts: Vec<String> = {
+            let all = self.agent.msg.build_context_for_gate("", &[]);
+            all.iter()
+                .filter(|m| m.role != "system")
+                .take(compact_count * 3) // rough: ~3 msgs per turn
+                .map(|m| {
+                    let text: String = m.content.iter().filter_map(|b| match b {
+                        deepx_types::ContentBlock::Text { text } => Some(text.clone()),
+                        deepx_types::ContentBlock::ToolUse { name, input, .. } =>
+                            Some(format!("[ToolCall {} args={}]", name, input)),
+                        deepx_types::ContentBlock::ToolResult { content, .. } =>
+                            Some(format!("[ToolResult {}]", &content[..content.len().min(300)])),
+                        _ => None,
+                    }).collect::<Vec<_>>().join("\n");
+                    format!("[{}]: {}", m.role, &text[..text.len().min(1000)])
+                })
+                .collect()
+        };
+        if contexts.is_empty() { return; }
+
+        let prompt = build_compact_prompt(&contexts);
+        let provider = deepx_gate::ProviderConfig::openai(
+            &self.agent.config.base_url, &self.agent.config.api_key,
+            &self.agent.config.model, None, None, None,
+            Default::default(), Default::default(), false, false,
+        );
+        let msgs = vec![deepx_types::Message::user(&prompt)];
+        let summary = match deepx_gate::chat_sync(&provider, msgs, 2048) {
+            Ok(s) if !s.trim().is_empty() => s,
+            Ok(_) => {
+                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error {
+                    message: "Compact failed: model returned empty response. Try again.".into(),
+                });
+                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::CompactEnd { summary_chars: 0, turns_compacted: 0 });
+                return;
+            }
+            Err(e) => {
+                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error { message: e });
+                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::CompactEnd { summary_chars: 0, turns_compacted: 0 });
+                return;
+            }
+        };
+
+        let chars = summary.chars().count();
+        self.agent.msg.apply_compact(&summary, KEEP);
+        self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::CompactEnd {
+            summary_chars: chars, turns_compacted: compact_count as u32,
+        });
+        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolNotice {
+            message: format!("Compacted {} turns → {} chars summary", compact_count, chars),
+            level: "info".into(),
+        });
+        self.emit_dashboard();
+    }
+
     // ── User input handler ──
 
     fn handle_user_input(&mut self, text: &str) {
@@ -271,11 +347,18 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             user_text: text.to_string(),
         });
 
+        let ep = deepx_config::registry::find_endpoint(&self.agent.config.provider_id, &self.agent.config.endpoint);
         let provider = deepx_gate::ProviderConfig::openai(
             &self.agent.config.base_url,
             &self.agent.config.api_key,
             &self.agent.config.model,
-            None,
+            ep.as_ref().and_then(|e| e.user_id_mode.clone()),
+            ep.as_ref().and_then(|e| e.chat_path.clone()),
+            ep.as_ref().and_then(|e| e.balance_path.clone()),
+            ep.as_ref().map(|e| e.thinking_mode.clone()).unwrap_or_default(),
+            ep.as_ref().map(|e| e.cache_field.clone()).unwrap_or_default(),
+            ep.as_ref().map(|e| e.has_balance).unwrap_or(true),
+            ep.as_ref().map(|e| e.supports_thinking).unwrap_or(true),
         );
 
         let mut round_num = 0u32;
@@ -441,6 +524,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             tasks: build_tasks(&self.agent),
             session_title: self.agent.session.title.clone(),
             usage: None,
+            model: Some(self.agent.config.model.clone()),
         });
     }
 }
@@ -508,15 +592,23 @@ fn emit_round_complete(
             ContentBlock::Text { text } if !text.is_empty() => {
                 blocks.push(deepx_proto::RoundBlock::Text { content: text.clone() });
             }
-            ContentBlock::ToolUse { id, name, input } if name != "ask_user" => {
+            ContentBlock::ToolUse { id, name, input } => {
+                let display = if name == "ask_user" {
+                    input.get("question")
+                        .and_then(|v| v.as_str())
+                        .map(|q| q.to_string())
+                        .unwrap_or_else(|| name.clone())
+                } else {
+                    name.clone()
+                };
                 tool_calls.push(deepx_proto::ToolCallDef {
                     id: id.clone(), name: name.clone(),
-                    args_display: name.clone(), args_json: input.to_string(),
+                    args_display: display.clone(), args_json: input.to_string(),
                 });
                 blocks.push(deepx_proto::RoundBlock::Tool {
                     card: deepx_proto::ToolCallDef {
                         id: id.clone(), name: name.clone(),
-                        args_display: name.clone(), args_json: input.to_string(),
+                        args_display: display, args_json: input.to_string(),
                     },
                 });
             }
@@ -576,4 +668,15 @@ fn build_turns_from_context(agent: &AgentState) -> Vec<deepx_proto::TurnData> {
         });
     }
     turns
+}
+
+fn build_compact_prompt(contexts: &[String]) -> String {
+    let conv = contexts.join("\n");
+    format!(
+        "Summarize this conversation history into a compact summary.\n\
+        Keep: user intents, operations performed (tool calls + results), files changed, unfinished tasks.\n\
+        Drop: verbatim code, full tool outputs, thinking details.\n\
+        Use concise bullet points under 1500 characters.\n\n\
+        {}\n\nSummary:", conv
+    )
 }

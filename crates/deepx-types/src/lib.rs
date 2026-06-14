@@ -28,7 +28,7 @@ pub use message::{Message, ContentBlock, ToolCall, FunctionCall};
 pub use tool_def::{ToolDef, ToolFunction};
 pub use state::DebugLevel;
 pub use config::{PersistentConfig, ProfileConfig, ConfigStore, BalanceInfo};
-pub use provider::{EndpointSpec, ProviderSpec, UserSendMode};
+pub use provider::{EndpointSpec, ProviderSpec, UserSendMode, ThinkingParamMode, CacheTokenField};
 pub use session::{SessionFile, SessionMeta};
 pub use api_types::UsageInfo;
 

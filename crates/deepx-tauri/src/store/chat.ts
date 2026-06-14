@@ -11,6 +11,7 @@ export interface SessionInfo { seed: string; model: string; contextTokens: numbe
 export interface SessionMeta { seed: string; model: string; created_at: number; updated_at: number; message_count: number; last_summary: string; }
 export interface TaskInfo { id: string; subject: string; description: string; status: string; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
+export interface AskState { question: string; options: string[]; show: boolean; }
 
 export function createChatStore() {
   const [turns, setTurns] = createStore<Turn[]>([]);
@@ -22,6 +23,9 @@ export function createChatStore() {
   const [tasks, setTasks] = createSignal<TaskInfo[]>([]);
   const [recentEdits, setRecentEdits] = createSignal<string[]>([]);
   const [activityLog, setActivityLog] = createSignal<ActivityEntry[]>([]);
+  const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], show: false });
+  const [isCompacting, setIsCompacting] = createSignal(false);
+  const [compactResult, setCompactResult] = createSignal<string | null>(null);
   let streamBuffer = { thinking: "", answer: "" };
 
   function resetStreamBuffer() { streamBuffer = { thinking: "", answer: "" }; }
@@ -56,12 +60,27 @@ export function createChatStore() {
   function handleToolResults(turnId: string, roundNum: number, results: ToolResultDef[]) {
     ensureRound(turnId, roundNum);
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, "toolResults", produce((tr) => tr.push(...results)));
+    for (const r of results) {
+      if (r.success && r.output.startsWith("[USER_QUERY] ")) {
+        try {
+          const json = JSON.parse(r.output.slice(13));
+          setAskState({ question: json.question || "", options: json.options || [], show: true });
+        } catch {}
+      }
+    }
   }
 
   function handleTurnEnd(turnId: string, data: Record<string, unknown>) {
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer();
     setTurns((t) => t.turnId === turnId, produce((turn) => { turn.status = "complete"; turn.stopReason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
+    const u = data.usage as Record<string, unknown> | undefined;
+    if (u) {
+      if (u.prompt_tokens != null) setSessionInfo("contextTokens", u.prompt_tokens as number);
+      if (u.total_tokens != null) setSessionInfo("totalTokens", (s) => s + (u.total_tokens as number));
+      if (u.prompt_cache_hit_tokens != null) setSessionInfo("promptCacheHit", u.prompt_cache_hit_tokens as number);
+      if (u.prompt_cache_miss_tokens != null) setSessionInfo("promptCacheMiss", u.prompt_cache_miss_tokens as number);
     }
+  }
 
   function handleSessionCreated(seed: string) { setSessionInfo("seed", seed); }
   function handleDashboard(data: Record<string, unknown>) {
@@ -102,6 +121,26 @@ export function createChatStore() {
     if (!isNaN(num)) {
       setTurns((prev) => prev.filter((t) => parseInt(t.turnId.replace("t", ""), 10) < num));
     }
+  }
+
+  function handleCompactStart(_data: Record<string, unknown>) {
+    setIsCompacting(true);
+    setCompactResult(null);
+  }
+  function handleCompactEnd(data: Record<string, unknown>) {
+    setIsCompacting(false);
+    const chars = data.summary_chars as number;
+    const turns = data.turns_compacted as number;
+    if (chars > 0) {
+      setCompactResult(`Compacted ${turns} turns → ${chars} char summary`);
+      setTimeout(() => setCompactResult(null), 4000);
+    }
+  }
+
+  function handleToolNotice(data: Record<string, unknown>) {
+    const msg = (data.message ?? "") as string;
+    setCompactResult(msg);
+    setTimeout(() => setCompactResult(null), 4000);
   }
 
   // Load session data from disk (for resume / refresh restore)
@@ -200,5 +239,14 @@ export function createChatStore() {
     }));
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clearError, clear, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  async function submitAskAnswer(answer: string) {
+    setAskState({ question: "", options: [], show: false });
+    try {
+      await invoke("cmd_send_message", { text: answer });
+    } catch (e) { console.error(e); }
+  }
+
+  function dismissAsk() { setAskState({ question: "", options: [], show: false }); }
+
+  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clearError, clear, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

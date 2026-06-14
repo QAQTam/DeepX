@@ -1102,6 +1102,22 @@ impl App {
                         }
                         msg.lines = new_lines;
                     }
+                    if r.success {
+                        if let Some(json_str) = r.output.strip_prefix("[USER_QUERY] ") {
+                            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                let question = payload.get("question").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let options: Vec<String> = payload.get("options").and_then(|v| v.as_array())
+                                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                    .unwrap_or_default();
+                                self.ask = Some(AskState {
+                                    question,
+                                    options,
+                                    selected: 0,
+                                    custom_input: String::new(),
+                                });
+                            }
+                        }
+                    }
                 }
                 // Advance tool batch progress for elapsed / gauge animation
                 self.tool_batch_done += results.len() as u32;

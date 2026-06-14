@@ -18,8 +18,7 @@ pub struct AgentState {
 
 impl AgentState {
     pub fn new(config: deepx_config::Config) -> Self {
-        let mut msg = deepx_message::MessageStore::new("init");
-        msg.push_system(deepx_types::Message::system(&deepx_config::prompt::system_prompt()));
+        let msg = deepx_message::MessageStore::new("init");
         Self {
             msg, config,
             session: deepx_session::SessionMeta::new(),
@@ -42,20 +41,8 @@ impl AgentState {
     }
 
     pub fn build_context(&mut self) -> Vec<deepx_types::Message> {
-        let mut sys = String::new();
-        if !self.session.from_resume {
-            if self.config.reasoning_effort == "max" {
-                sys.push_str(deepx_config::prompt::THINK_MAX);
-                sys.push('\n');
-            }
-            sys.push_str(&deepx_config::prompt::system_prompt());
-            sys.push_str("\n\n");
-            if self.config.provider_id == "deepseek" {
-                sys.push_str(deepx_config::prompt::DSML_SCHEMA);
-            }
-        }
         let annotations: Vec<String> = Vec::new();
-        self.msg.build_context_for_gate(&sys, &annotations)
+        self.msg.build_context_for_gate("", &annotations)
     }
 
     pub fn rebind_store(&mut self) {

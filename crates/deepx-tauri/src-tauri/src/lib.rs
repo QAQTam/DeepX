@@ -26,6 +26,7 @@ pub fn run() {
             agent_bridge::cmd_set_active_session,
             agent_bridge::cmd_delete_session,
             agent_bridge::cmd_undo_turn,
+            agent_bridge::cmd_compact,
             agent_bridge::cmd_resume_session,
             agent_bridge::cmd_new_session,
             agent_bridge::cmd_load_more_turns,

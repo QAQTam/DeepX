@@ -43,6 +43,9 @@ pub enum Ui2Agent {
     #[serde(rename = "undo_turn")]
     UndoTurn { turn_id: String },
 
+    #[serde(rename = "compact")]
+    Compact,
+
     #[serde(rename = "resume_session")]
     ResumeSession { seed: String },
 
@@ -294,10 +297,18 @@ pub enum Agent2Ui {
         usage: Option<deepx_types::UsageInfo>,
         #[serde(default)]
         context_limit: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
 
     #[serde(rename = "done")]
     Done,
+
+    #[serde(rename = "compact_start")]
+    CompactStart { turns_total: u32, turns_keeping: u32 },
+
+    #[serde(rename = "compact_end")]
+    CompactEnd { summary_chars: usize, turns_compacted: u32 },
 
     #[serde(rename = "cancelled")]
     Cancelled,

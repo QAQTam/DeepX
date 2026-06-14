@@ -1,4 +1,5 @@
-import { Show } from "solid-js";
+import { Show, createSignal, createEffect } from "solid-js";
+import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
 
 const FMT = (n: number) => n.toLocaleString();
@@ -8,18 +9,19 @@ export default function InfoBar(props: {
   seed: string;
   contextTokens: number;
   contextLimit: number;
-  totalTokens: number;
   promptCacheHit: number;
   promptCacheMiss: number;
   isStreaming: boolean;
   error: string | null;
   onDismissError?: () => void;
+  isCompacting: () => boolean;
+  compactResult: () => string | null;
 }) {
   const { t } = useI18n();
   const seedShort = () => props.seed.substring(0, 8);
 
   const ctxPct = () =>
-    props.contextLimit > 0 ? Math.round((props.totalTokens / props.contextLimit) * 100) : 0;
+    props.contextLimit > 0 ? Math.round((props.contextTokens / props.contextLimit) * 100) : 0;
 
   const hitPct = () =>
     props.contextTokens > 0 ? Math.round((props.promptCacheHit / props.contextTokens) * 100) : 0;
@@ -28,6 +30,34 @@ export default function InfoBar(props: {
     if (!props.contextTokens) return "—";
     return `${hitPct()}%`;
   };
+
+  const [compactPct, setCompactPct] = createSignal(0);
+  let compactTimer: ReturnType<typeof setInterval> | null = null;
+
+  createEffect(() => {
+    if (props.isCompacting()) {
+      setCompactPct(0);
+      compactTimer = setInterval(() => {
+        setCompactPct((p) => {
+          if (p >= 90) return 90;
+          const step = Math.max(1, Math.floor((90 - p) * 0.08));
+          return p + step;
+        });
+      }, 200);
+    } else {
+      if (compactTimer) { clearInterval(compactTimer); compactTimer = null; }
+      if (props.compactResult()) {
+        setCompactPct(100);
+        setTimeout(() => setCompactPct(0), 2500);
+      } else {
+        setCompactPct(0);
+      }
+    }
+  });
+
+  async function handleCompact() {
+    try { await invoke("cmd_compact"); } catch (e) { console.error(e); }
+  }
 
   return (
     <div class="info-bar">
@@ -39,29 +69,52 @@ export default function InfoBar(props: {
       </Show>
       <div class="info-item">
         <span class={`info-dot ${props.isStreaming ? "active" : props.error ? "error" : "idle"}`} />
-        <span class="info-label">模型</span>
+        <span class="info-label">{t().infobar.model}</span>
         <span class="info-value">{props.model || "—"}</span>
       </div>
       <Show when={props.seed}>
         <div class="info-item">
-          <span class="info-label">会话</span>
+          <span class="info-label">{t().infobar.session}</span>
           <span class="info-value mono">{seedShort()}</span>
         </div>
       </Show>
       <div class="info-item">
-        <span class="info-label">上下文</span>
-        <span class="info-value mono">{FMT(props.totalTokens)} / {FMT(props.contextLimit)}</span>
+        <span class="info-label">{t().infobar.context}</span>
+        <span class="info-value mono">{FMT(props.contextTokens)} / {FMT(props.contextLimit)}</span>
         <Show when={props.contextLimit > 0}>
           <span class="info-bar-pct" style={`--pct: ${ctxPct()}%`} />
         </Show>
       </div>
       <div class="info-item">
-        <span class="info-label">缓存</span>
+        <span class="info-label">{t().infobar.cacheHit}</span>
         <span class="info-value mono">{hitLabel()}</span>
         <Show when={props.contextTokens > 0}>
           <span class="info-bar-pct" style={`--pct: ${hitPct()}%`} />
         </Show>
       </div>
+      <div class="info-item">
+        <Show when={props.isCompacting() || compactPct() > 0}
+          fallback={
+            <button class="info-compact-btn" onClick={handleCompact} title="Compact history">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </button>
+          }
+        >
+          <div class="compact-progress">
+            <div class="compact-bar-bg">
+              <div class="compact-bar-fill" style={`width: ${compactPct()}%`} />
+            </div>
+            <span class="compact-label">{props.isCompacting() ? `${compactPct()}%` : "✓"}</span>
+          </div>
+        </Show>
+      </div>
+      <Show when={props.compactResult()}>
+        <div class="compact-toast">{props.compactResult()}</div>
+      </Show>
     </div>
   );
 }

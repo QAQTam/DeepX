@@ -55,6 +55,9 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     agent.session.tokens = 0;
     agent.session.from_resume = false;
     agent.msg = deepx_message::MessageStore::new(&seed);
+    agent.msg.push_system(deepx_types::Message::system(
+        &deepx_config::prompt::full_system_prompt()
+    ));
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     SessionManager::global().save(
         &agent.session.seed,
@@ -73,6 +76,9 @@ pub fn create_session(agent: &mut AgentState) {
     agent.session.tokens = 0;
     agent.session.from_resume = false;
     agent.msg = deepx_message::MessageStore::new(&agent.session.seed);
+    agent.msg.push_system(deepx_types::Message::system(
+        &deepx_config::prompt::full_system_prompt()
+    ));
     agent.tool_results.clear();
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     SessionManager::global().save(

@@ -105,6 +105,9 @@ export default function App() {
         case "cancelled": chat.handleCancelled(); break;
         case "error": chat.handleError((p.message ?? "Unknown error") as string); break;
         case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, result_summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean }); break;
+        case "compact_start": chat.handleCompactStart(p); break;
+        case "compact_end": chat.handleCompactEnd(p); break;
+        case "tool_notice": chat.handleToolNotice(p); break;
       }
     }); } catch (e) { console.error(e); }
 

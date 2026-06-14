@@ -26,3 +26,8 @@ pub fn chat_stream(
         max_tokens, effort, user_id, on_event,
     )
 }
+
+/// Synchronous (non-streaming) chat for internal use (compact, etc.).
+pub fn chat_sync(provider: &ProviderConfig, messages: Vec<Message>, max_tokens: u32) -> Result<String, String> {
+    openai::chat_sync_openai(provider, &provider.model, messages, max_tokens)
+}
