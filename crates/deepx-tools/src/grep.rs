@@ -31,11 +31,30 @@ pub(super) fn exec_grep(args: &str) -> String {
     match cmd.output() {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            if !out.status.success() && stdout.is_empty() {
-                format!("[OK] grep: no matches for {pattern}")
-            } else {
-                stdout
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let success = out.status.success();
+            let code = out.status.code().unwrap_or(-1);
+
+            if !success && code >= 2 {
+                // error (bad pattern, missing file, etc.)
+                let err_msg = stderr.trim().to_string();
+                return format!("[ERROR] grep: {err_msg}");
             }
+            if stdout.is_empty() {
+                return format!("[OK] grep: no matches for {pattern}");
+            }
+            // strip CR (Windows), truncate to 200 lines
+            let cleaned: String = stdout
+                .lines()
+                .take(200)
+                .collect::<Vec<&str>>()
+                .join("\n");
+            let truncated = if stdout.lines().count() > 200 {
+                format!("\n... ({} more matches)", stdout.lines().count() - 200)
+            } else {
+                String::new()
+            };
+            cleaned + &truncated
         }
         Err(e) => format!("[ERROR] grep: {e}"),
     }

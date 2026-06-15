@@ -53,7 +53,7 @@ pub(super) fn exec_red(args: &str) -> String {
     if posix { cmd.arg("--posix"); }
     if sandbox { cmd.arg("--sandbox"); }
     if null_data { cmd.arg("-z"); }
-    if in_place { cmd.arg("-i").arg(""); }
+    if in_place { cmd.arg("-i"); }
     if !exprs.is_empty() {
         for e in &exprs {
             cmd.arg("-e").arg(e);

@@ -46,7 +46,7 @@ pub(super) fn exec_sed(args: &str) -> String {
     let sed_path = find_binary("sed.exe");
     let mut cmd = Command::new(&sed_path);
     if quiet { cmd.arg("-n"); }
-    if in_place { cmd.arg("-i").arg(""); }
+    if in_place { cmd.arg("-i"); }
     if !exprs.is_empty() {
         for e in &exprs {
             cmd.arg("-e").arg(e);
@@ -70,7 +70,7 @@ pub(super) fn exec_sed(args: &str) -> String {
                 };
                 format!("[OK] sed {desc} applied to {path}")
             } else {
-                stdout
+                stdout.replace('\r', "")
             }
         }
         Err(e) => format!("[ERROR] sed: {e}"),

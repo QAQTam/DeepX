@@ -10,7 +10,6 @@ use super::file_read;
 use super::file_write;
 use super::file_edit;
 use super::sed;
-use super::red_tool;
 use super::grep;
 use super::file_edit_diff;
 use super::file_list_dir;
@@ -37,7 +36,6 @@ pub fn build_tool_manager() -> ToolManager {
     file_write::register(&mut mgr);
     file_edit::register(&mut mgr);
     sed::register(&mut mgr);
-    red_tool::register(&mut mgr);
     grep::register(&mut mgr);
     file_edit_diff::register(&mut mgr);
     file_list_dir::register(&mut mgr);

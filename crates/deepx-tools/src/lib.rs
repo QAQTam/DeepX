@@ -16,8 +16,6 @@ pub mod file_edit;
 
 pub mod sed;
 
-pub mod red_tool;
-
 pub mod grep;
 
 pub mod file_edit_diff;
