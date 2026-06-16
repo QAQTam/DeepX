@@ -361,8 +361,15 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             ep.as_ref().map(|e| e.supports_thinking).unwrap_or(true),
         );
 
-        let mut round_num = 0u32;
-        let mut last_usage: Option<deepx_types::UsageInfo> = None;
+          let mut round_num = 0u32;
+          let mut last_usage: Option<deepx_types::UsageInfo> = None;
+
+          // Delta batching: accumulate deltas and flush every ~30ms
+          let mut answer_buf = String::new();
+          let mut think_buf = String::new();
+          let mut last_flush = std::time::Instant::now();
+          const FLUSH_INTERVAL_MS: u64 = 30;
+          const FLUSH_CHAR_THRESHOLD: usize = 20;
 
         loop {
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
@@ -392,24 +399,67 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                         deepx_gate::StreamEvent::ContentDelta(d) => {
                             if self.cancel.is_set() { return; }
                             content.push_str(&d);
-                            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
-                                turn_id: turn_id.clone(),
-                                round_num,
-                                kind: RoundDeltaKind::Answering,
-                                delta: d,
-                            });
+                            answer_buf.push_str(&d);
+                            if last_flush.elapsed().as_millis() as u64 >= FLUSH_INTERVAL_MS
+                                || answer_buf.len() >= FLUSH_CHAR_THRESHOLD
+                            {
+                                if !think_buf.is_empty() {
+                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                        turn_id: turn_id.clone(), round_num,
+                                        kind: RoundDeltaKind::Thinking,
+                                        delta: std::mem::take(&mut think_buf),
+                                    });
+                                }
+                                if !answer_buf.is_empty() {
+                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                        turn_id: turn_id.clone(), round_num,
+                                        kind: RoundDeltaKind::Answering,
+                                        delta: std::mem::take(&mut answer_buf),
+                                    });
+                                }
+                                last_flush = std::time::Instant::now();
+                            }
                         }
                         deepx_gate::StreamEvent::ReasoningDelta(r) => {
                             if self.cancel.is_set() { return; }
                             reasoning.push_str(&r);
-                            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
-                                turn_id: turn_id.clone(),
-                                round_num,
-                                kind: RoundDeltaKind::Thinking,
-                                delta: r,
-                            });
+                            think_buf.push_str(&r);
+                            if last_flush.elapsed().as_millis() as u64 >= FLUSH_INTERVAL_MS
+                                || think_buf.len() >= FLUSH_CHAR_THRESHOLD
+                            {
+                                if !think_buf.is_empty() {
+                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                        turn_id: turn_id.clone(), round_num,
+                                        kind: RoundDeltaKind::Thinking,
+                                        delta: std::mem::take(&mut think_buf),
+                                    });
+                                }
+                                if !answer_buf.is_empty() {
+                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                        turn_id: turn_id.clone(), round_num,
+                                        kind: RoundDeltaKind::Answering,
+                                        delta: std::mem::take(&mut answer_buf),
+                                    });
+                                }
+                                last_flush = std::time::Instant::now();
+                            }
                         }
                         deepx_gate::StreamEvent::Done { raw_message, usage, .. } => {
+                            // Flush buffered deltas before processing completion
+                            if !think_buf.is_empty() {
+                                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                    turn_id: turn_id.clone(), round_num,
+                                    kind: RoundDeltaKind::Thinking,
+                                    delta: std::mem::take(&mut think_buf),
+                                });
+                            }
+                            if !answer_buf.is_empty() {
+                                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                    turn_id: turn_id.clone(), round_num,
+                                    kind: RoundDeltaKind::Answering,
+                                    delta: std::mem::take(&mut answer_buf),
+                                });
+                            }
                             if let Some(ref u) = usage {
                                 self.agent.session.tokens += u.total_tokens as u64;
                                 last_usage = usage.clone();

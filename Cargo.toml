@@ -12,6 +12,7 @@ members = [
     "crates/deepx-tui",
     "crates/deepx-session",
     "crates/deepx-tauri/src-tauri",
+    "crates/deepx-egui-exp1",
 ]
 
 [workspace.package]
@@ -27,3 +28,9 @@ codegen-units = 1
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
+
+[patch.crates-io]
+egui = { path = "D:/project/egui/crates/egui" }
+egui_extras = { path = "D:/project/egui/crates/egui_extras" }
+eframe = { path = "D:/project/egui/crates/eframe" }
+epaint = { path = "D:/project/egui/crates/epaint" }

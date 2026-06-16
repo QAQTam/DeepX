@@ -11,5 +11,8 @@ deepx-session = { path = "../deepx-session" }
 deepx-msglp = { path = "../deepx-msglp" }
 deepx-tauri = { path = "../deepx-tauri/src-tauri" }
 
+[build-dependencies]
+winresource = "0.1"
+
 [lints]
 workspace = true
