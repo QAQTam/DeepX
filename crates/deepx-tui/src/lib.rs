@@ -12,7 +12,7 @@ use app::{App, Screen};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::event::EnableBracketedPaste;
 use deepx_proto::{Agent2Ui, Ui2Agent};
-use deepx_types::{ConfigStore, SessionMeta};
+use deepx_types::ConfigStore;
 use ratatui::DefaultTerminal;
 use std::sync::mpsc;
 
@@ -96,9 +96,7 @@ pub fn run_tui() -> anyhow::Result<()> {
             run_setup(terminal, &mut app, &store)?;
         }
         load_sessions(&mut app);
-        if !app.sessions.is_empty() {
-            run_session_screen(terminal, &mut app)?;
-        }
+        run_session_screen(terminal, &mut app)?;
         if app.should_quit { return Ok(()); }
         app.scroll_offset = 0;
         app.status = app.setup.lang.t_chat_ready().to_string();
@@ -117,6 +115,20 @@ pub fn run_tui() -> anyhow::Result<()> {
                         }
                     }
                     let _ = tui_tx.send(Ui2Agent::CreateSession);
+                } else {
+                    // Wait for Ready frame before sending ResumeSession
+                    loop {
+                        match agent_rx.recv() {
+                            Ok(Agent2Ui::Ready) => break,
+                            Ok(_) => continue,
+                            Err(_) => {
+                                app.status = "Agent died before ready".into();
+                                break;
+                            }
+                        }
+                    }
+                    let seed = app.resume_seed.clone().unwrap();
+                    let _ = tui_tx.send(Ui2Agent::ResumeSession { seed });
                 }
 
                 let send = |tx: &mut mpsc::Sender<Ui2Agent>, frame: &Ui2Agent| {
@@ -140,17 +152,7 @@ pub fn run_tui() -> anyhow::Result<()> {
 
 
 fn load_sessions(app: &mut App) {
-    use std::fs;
-    let dir = deepx_types::platform::sessions_dir();
-    let index_path = dir.join("index.toml");
-    if let Ok(data) = fs::read_to_string(&index_path) {
-        let metas: Option<Vec<SessionMeta>> = toml::from_str(&data).ok()
-            .or_else(|| serde_json::from_str(&data).ok());
-        if let Some(mut metas) = metas {
-            metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
-            app.sessions = metas;
-        }
-    }
+    app.sessions = deepx_session::SessionManager::global().list();
 }
 
 // ── Setup wizard loop ──
