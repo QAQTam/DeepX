@@ -40,7 +40,7 @@ export default function StatusPanel(props: {
             <div class="status-section-body">
             <For each={props.tasks()}>
               {(task) => (
-                <div class={`status-row status-${task.status}`}>
+                <div class={`status-row status-${task.status}${(task as any)._deleting ? ' deleting' : ''}`}>
                   <span class="status-row-icon">{STATUS_ICON[task.status] ?? "?"}</span>
                   <div class="status-row-info">
                     <span class="status-row-title">{task.id}: {task.subject}</span>

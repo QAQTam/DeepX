@@ -142,7 +142,33 @@ export function createChatStore() {
       if (u.prompt_cache_hit_tokens != null) setSessionInfo("promptCacheHit", u.prompt_cache_hit_tokens as number);
       if (u.prompt_cache_miss_tokens != null) setSessionInfo("promptCacheMiss", u.prompt_cache_miss_tokens as number);
     }
-    if (data.tasks != null) setTasks(data.tasks as TaskInfo[]);
+    if (data.tasks != null) {
+      const newTasks = data.tasks as TaskInfo[];
+      const currentTasks = tasks();
+      // Tag removed tasks for slide-out animation
+      const newIds = new Set(newTasks.map(t => t.id));
+      for (const t of currentTasks) {
+        if (!newIds.has(t.id) && !(t as any)._deleting) {
+          (t as any)._deleting = true;
+        }
+      }
+      // Merge: keep deleting tasks for animation, add new/updated tasks
+      const merged = newTasks.map(t => ({ ...t }));
+      for (const t of currentTasks) {
+        if ((t as any)._deleting && !newIds.has(t.id)) {
+          merged.push({ ...t, _deleting: true } as any);
+        }
+      }
+      setTasks(merged as TaskInfo[]);
+      // Remove after animation
+      for (const t of currentTasks) {
+        if ((t as any)._deleting && !newIds.has(t.id)) {
+          setTimeout(() => {
+            setTasks((prev: TaskInfo[]) => prev.filter((x: TaskInfo) => x.id !== t.id));
+          }, 400);
+        }
+      }
+    }
     if (data.recent_edits != null) setRecentEdits(data.recent_edits as string[]);
   }
 
