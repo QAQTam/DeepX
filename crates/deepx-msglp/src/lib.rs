@@ -588,6 +588,9 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                         });
                     }
 
+                    // Refresh status panel after tool execution
+                    self.emit_dashboard();
+
                     round_num += 1;
                     continue;
                 }
