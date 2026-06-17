@@ -26,22 +26,16 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
         if which("pwsh.exe") {
             let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
             let mut c = Command::new("pwsh");
-            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded]);
             c
         } else if which("powershell.exe") {
             let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
             let mut c = Command::new("powershell");
-            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded]);
             c
         } else {
             let mut c = Command::new("cmd");
-            c.args(["/C", &command])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+            c.args(["/C", &command]);
             c
         }
     } else {
@@ -58,6 +52,15 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
         c.stdout(Stdio::piped()).stderr(Stdio::piped());
         c
     };
+
+    // Suppress console window popup when spawned from GUI (Tauri).
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     if let Some(dir) = &cwd {
         cmd.current_dir(dir);

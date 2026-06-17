@@ -31,8 +31,8 @@ impl SetupState {
         let (pid, ep) = deepx_config::registry::first_provider_endpoint();
         let def_model = deepx_config::registry::default_model_for(&pid, &ep);
         let model_list = deepx_config::registry::find_endpoint(&pid, &ep)
-            .map(|e| if e.models.is_empty() { vec![e.default_model.clone()] } else { e.models.clone() })
-            .unwrap_or_else(|| vec![def_model.clone()]);
+            .map(|e| if e.models.is_empty() { vec![] } else { e.models.clone() })
+            .unwrap_or_default();
         let model_index = model_list.iter().position(|m| m == &def_model).unwrap_or(0);
         Self {
             step: 0,
@@ -545,17 +545,14 @@ impl MenuState {
             "model" => {
                 let ep = deepx_config::registry::find_endpoint(&pid_value, "");
                 let models: Vec<String> = ep
-                    .map(|e| if e.models.is_empty() { vec![e.default_model.clone()] } else { e.models })
-                    .unwrap_or_else(|| {
-                        let def = deepx_config::registry::default_model_for(&pid_value, "");
-                        vec![def]
-                    });
+                    .map(|e| if e.models.is_empty() { vec![] } else { e.models })
+                    .unwrap_or_default();
                 let current = item.value.as_str();
                 let idx = models.iter().position(|m| m == current);
                 item.value = match idx {
                     Some(i) if i + 1 < models.len() => models[i + 1].clone(),
                     Some(_) => models[0].clone(),
-                    None => models.first().cloned().unwrap_or_else(|| "deepseek-v4-flash".into()),
+                    None => models.first().cloned().unwrap_or_default(),
                 };
             }
             "max_tokens" => {

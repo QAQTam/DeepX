@@ -7,7 +7,7 @@ pub(super) fn exec_read_file(args: &str) -> String {
     let end: Option<usize> = serde_json::from_str(args).ok()
         .and_then(|v: serde_json::Value| v.get("end_line")?.as_u64().map(|n| n as usize));
 
-    const MAX_READ_LINES: usize = 500;
+    const MAX_READ_LINES: usize = 300;
     if let (Some(s), Some(e)) = (start, end) {
         if e > s && e - s > MAX_READ_LINES {
             return format!("[ERROR] Requested range too large ({} lines > {} max). Use smaller range.", e - s, MAX_READ_LINES);
@@ -28,29 +28,29 @@ pub(super) fn exec_read_file(args: &str) -> String {
             if start.is_some() || end.is_some() {
                 let mut result = format!("[OK] {} lines {}-{}/{} of {}\n", shown, start_idx + 1, end_idx, total, path);
                 for (i, l) in lines.iter().enumerate() {
-                    result.push_str(&format!("{:>6}  {}\n", start_idx + i + 1, l));
+                    result.push_str(&format!("{:>4} {}\n", start_idx + i + 1, l));
                 }
                 result
-            } else if total <= 500 {
-                // Full output for files ≤500 lines (avoids AI re-read)
+            } else if total <= 200 {
+                // Full output for files ≤200 lines (avoids AI re-read)
                 let mut result = format!("[OK] {} lines total ({})\n", total, path);
                 for (i, l) in all_lines.iter().enumerate() {
-                    result.push_str(&format!("{:>6}  {}\n", i + 1, l));
+                    result.push_str(&format!("{:>4} {}\n", i + 1, l));
                 }
                 result
             } else {
                 // Head + tail for larger files with anchor index
-                let head = 100.min(total);
-                let tail = 50.min(total - head);
+                let head = 50.min(total);
+                let tail = 30.min(total - head);
                 let mut result = format!("[PARTIAL] {} — {} lines, showing first {} + last {}\n", path, total, head, tail);
                 for (i, l) in all_lines.iter().take(head).enumerate() {
-                    result.push_str(&format!("{:>6}  {}\n", i + 1, l));
+                    result.push_str(&format!("{:>4} {}\n", i + 1, l));
                 }
                 if total > head + tail {
                     result.push_str(&format!("  ⋮  [{} lines omitted — use start_line to read specific range]\n", total - head - tail));
                 }
                 for (i, l) in all_lines.iter().rev().take(tail).collect::<Vec<_>>().iter().rev().enumerate() {
-                    result.push_str(&format!("{:>6}  {}\n", total - tail + i + 1, l));
+                    result.push_str(&format!("{:>4} {}\n", total - tail + i + 1, l));
                 }
                 result
             }
@@ -77,7 +77,7 @@ handler!(handle_read_file, exec_read_file);
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("read_file", ""),
-        description: "Read file content. Default preview: first 50 lines + last 10 lines. Use start_line/end_line for precise range.",
+        description: "Read file content. Default preview: first 50 lines + last 30 lines for large files, full content for files ≤200 lines. Use start_line/end_line for precise range.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"start_line":{"type":"integer","description":"First line to read (1-based)","default":1},"end_line":{"type":"integer","description":"Last line to read (inclusive). If omitted, reads to end of file."}},"required":["path"],"additionalProperties":false}),
         handler: handle_read_file,
         safety: crate::default_allow,

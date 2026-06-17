@@ -45,6 +45,12 @@ pub(super) fn exec_sed(args: &str) -> String {
 
     let sed_path = find_binary("sed.exe");
     let mut cmd = Command::new(&sed_path);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     if quiet { cmd.arg("-n"); }
     if in_place { cmd.arg("-i"); }
     if !exprs.is_empty() {

@@ -25,6 +25,12 @@ pub(super) fn exec_grep(args: &str) -> String {
     }
     let grep_path = find_binary("grep.exe");
     let mut cmd = Command::new(&grep_path);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     if recursive { cmd.arg("-r"); }
     if line_numbers { cmd.arg("-n"); }
     cmd.arg(&pattern).arg(&path);
@@ -46,11 +52,11 @@ pub(super) fn exec_grep(args: &str) -> String {
             // strip CR (Windows), truncate to 200 lines
             let cleaned: String = stdout
                 .lines()
-                .take(200)
+                .take(100)
                 .collect::<Vec<&str>>()
                 .join("\n");
-            let truncated = if stdout.lines().count() > 200 {
-                format!("\n... ({} more matches)", stdout.lines().count() - 200)
+            let truncated = if stdout.lines().count() > 100 {
+                format!("\n... ({} more matches)", stdout.lines().count() - 100)
             } else {
                 String::new()
             };

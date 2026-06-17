@@ -3,6 +3,26 @@ use crate::effect::{Effect, PendingTool, ToolExecRequest, ToolExecutorFn};
 use deepx_session::SessionManager;
 use deepx_types::SessionFile;
 
+/// Truncate tool result for LLM context. Tools return full output for the user,
+/// but long results are trimmed here before storage to keep KV-cache prefixes
+/// stable across turns.
+fn truncate_tool_result(tool_name: &str, result: &str) -> String {
+    let limit = match tool_name {
+        "read_file" => 6000,
+        "web_fetch" => 8000,
+        "exec" => 5000,
+        "search" | "grep" => 4000,
+        _ => return result.to_string(),
+    };
+    if result.len() <= limit {
+        return result.to_string();
+    }
+    let cut = result.floor_char_boundary(limit);
+    let mut out = result[..cut].to_string();
+    out.push_str(&format!("\n... [truncated: {} total chars]", result.len()));
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct Step {
     pub assistant: Message,
@@ -226,10 +246,24 @@ impl MessageStore {
     }
 
     fn push_tool_result_inner(&mut self, tool_call_id: &str, result: &str) {
+        // Look up tool name from any step that owns this tool_call_id.
+        let tool_name: Option<String> = self.turns.iter().rev().find_map(|turn| {
+            turn.steps.iter().rev().find_map(|step| {
+                step.assistant.content.iter().find_map(|b| {
+                    if let deepx_types::ContentBlock::ToolUse { id, name, .. } = b {
+                        if id == tool_call_id { Some(name.clone()) } else { None }
+                    } else { None }
+                })
+            })
+        });
+        let final_result = tool_name.as_deref()
+            .map(|name| truncate_tool_result(name, result))
+            .unwrap_or_else(|| result.to_string());
+
         for turn in self.turns.iter_mut().rev() {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
                 if !step.tool_result_has_id(tool_call_id) {
-                    step.tool_results.push(Message::tool(tool_call_id, result));
+                    step.tool_results.push(Message::tool(tool_call_id, &final_result));
                 }
                 return;
             }
@@ -237,7 +271,7 @@ impl MessageStore {
         if let Some(turn) = self.turns.last_mut() {
             if let Some(step) = turn.steps.last_mut() {
                 log::warn!("push_tool_result: orphan tool_result {} — appending to last step", tool_call_id);
-                step.tool_results.push(Message::tool(tool_call_id, result));
+                step.tool_results.push(Message::tool(tool_call_id, &final_result));
                 return;
             }
         }
@@ -245,6 +279,20 @@ impl MessageStore {
     }
 
     pub fn replace_tool_result(&mut self, tool_call_id: &str, result: &str) {
+        // Same truncation for replace path.
+        let tool_name: Option<String> = self.turns.iter().rev().find_map(|turn| {
+            turn.steps.iter().rev().find_map(|step| {
+                step.assistant.content.iter().find_map(|b| {
+                    if let deepx_types::ContentBlock::ToolUse { id, name, .. } = b {
+                        if id == tool_call_id { Some(name.clone()) } else { None }
+                    } else { None }
+                })
+            })
+        });
+        let final_result = tool_name.as_deref()
+            .map(|name| truncate_tool_result(name, result))
+            .unwrap_or_else(|| result.to_string());
+
         for turn in self.turns.iter_mut().rev() {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
                 step.tool_results.retain(|tr| {
@@ -252,7 +300,7 @@ impl MessageStore {
                         matches!(b, deepx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == tool_call_id)
                     })
                 });
-                step.tool_results.push(Message::tool(tool_call_id, result));
+                step.tool_results.push(Message::tool(tool_call_id, &final_result));
                 return;
             }
         }

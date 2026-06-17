@@ -18,12 +18,12 @@ pub(super) fn exec_search(args: &str) -> String {
         Ok(o) if o.status.success() => {
             let out = String::from_utf8_lossy(&o.stdout);
             let all_lines: Vec<&str> = out.lines().collect();
-            let lines: Vec<&str> = all_lines.iter().take(200).copied().collect();
+            let lines: Vec<&str> = all_lines.iter().take(100).copied().collect();
             if lines.is_empty() {
                 return format!("No matches for '{}'", pattern);
             }
-            let truncated = if all_lines.len() > 200 {
-                format!("\n... ({} more matches)", all_lines.len() - 200)
+            let truncated = if all_lines.len() > 100 {
+                format!("\n... ({} more matches)", all_lines.len() - 100)
             } else {
                 String::new()
             };
@@ -38,9 +38,9 @@ pub(super) fn exec_search(args: &str) -> String {
             if lines.is_empty() {
                 format!("No matches for '{}'", pattern)
             } else {
-                let result: Vec<&str> = lines.iter().take(200).map(|s| s.as_str()).collect();
-                let truncated = if lines.len() > 200 {
-                    format!("\n... ({} more matches)", lines.len() - 200)
+                let result: Vec<&str> = lines.iter().take(100).map(|s| s.as_str()).collect();
+                let truncated = if lines.len() > 100 {
+                    format!("\n... ({} more matches)", lines.len() - 100)
                 } else {
                     String::new()
                 };
@@ -66,7 +66,7 @@ fn walk_dir(
     re: &regex::Regex,
     results: &mut Vec<String>,
 ) -> std::io::Result<()> {
-    if results.len() >= 200 {
+    if results.len() >= 100 {
         return Ok(());
     }
     let entries = match std::fs::read_dir(dir) {
@@ -87,7 +87,7 @@ fn walk_dir(
             }
             walk_dir(&path, glob, re, results)?;
         } else if path.is_file() {
-            if results.len() >= 200 {
+            if results.len() >= 100 {
                 return Ok(());
             }
             if let Some(g) = glob {
@@ -105,7 +105,7 @@ fn walk_dir(
             for (i, line) in content.lines().enumerate() {
                 if re.is_match(line) {
                     results.push(format!("{}:{}:{}", path.display(), i + 1, line));
-                    if results.len() >= 200 {
+                    if results.len() >= 100 {
                         return Ok(());
                     }
                 }
