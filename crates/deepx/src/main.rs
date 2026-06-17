@@ -34,6 +34,8 @@ fn main() {
             }
 
             deepx_session::SessionManager::init(deepx_types::platform::data_dir());
+            // Redirect log output to agent.log instead of stderr (which would pollute TUI).
+            let _ = deepx_msglp::logger::init_agent_logger(&deepx_types::platform::data_dir());
             let mut agent = deepx_msglp::agent::AgentState::init("cli");
             if let Some(seed) = resume_seed {
                 agent.session.resume_seed = Some(seed);

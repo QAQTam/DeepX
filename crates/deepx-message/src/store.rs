@@ -351,6 +351,24 @@ impl MessageStore {
         full
     }
 
+    /// Get pending tools from the last step (for manual execution with streaming).
+    pub fn get_last_step_pending(&self) -> Vec<PendingTool> {
+        let step = match self.turns.last().and_then(|t| t.steps.last()) {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+        let tool_ids = step.assistant_tool_ids();
+        step.pending_tools()
+            .into_iter()
+            .filter(|t| tool_ids.contains(&t.id) && !step.tool_result_has_id(&t.id))
+            .collect()
+    }
+
+    /// Push a tool result directly (for manual execution).
+    pub fn push_tool_result_direct(&mut self, tool_call_id: &str, result: &str) {
+        self.push_tool_result_inner(tool_call_id, result);
+    }
+
     /// Execute all pending tools in the current step. When `tool_executor` is None
     /// (e.g. during session restore), returns early without injecting errors.
     pub fn execute_tools_batch(&mut self) -> Effect {

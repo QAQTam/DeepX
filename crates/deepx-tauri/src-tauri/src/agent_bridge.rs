@@ -30,7 +30,7 @@ static BRIDGE: OnceLock<AgentBridge> = OnceLock::new();
 
 fn send_command(frame: Ui2Agent) -> Result<(), String> {
     let bridge = BRIDGE.get().ok_or_else(|| String::from("AgentBridge not initialized"))?;
-    eprintln!("[BRIDGE] send_command dispatching to agent");
+    log::info!("[BRIDGE] send_command dispatching to agent");
     bridge.send(&frame)
 }
 
@@ -48,7 +48,7 @@ impl AgentBridge {
             .arg("agent")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::null())
             .spawn()
             .expect("Failed to spawn agent subprocess");
 
@@ -62,7 +62,7 @@ impl AgentBridge {
                 let line = match line {
                     Ok(l) => l,
                     Err(e) => {
-                        eprintln!("[BRIDGE] agent stdout read error: {e}");
+                        log::info!("[BRIDGE] agent stdout read error: {e}");
                         break;
                     }
                 };
@@ -72,19 +72,19 @@ impl AgentBridge {
                 let event: Agent2Ui = match serde_json::from_str(&line) {
                     Ok(e) => e,
                     Err(e) => {
-                        eprintln!("[BRIDGE] failed to parse: {} -- error: {e}", &line[..line.len().min(80)]);
+                        log::info!("[BRIDGE] failed to parse: {} -- error: {e}", &line[..line.len().min(80)]);
                         continue;
                     }
                 };
                 let event_type = agent2ui_event_name(&event);
-                eprintln!("[BRIDGE] got event: {}", event_type);
+                log::info!("[BRIDGE] got event: {}", event_type);
                 let payload = serde_json::to_value(&event).unwrap_or_default();
                 if app_handle.emit("agent-event", payload.clone()).is_err() {
                     break;
                 }
                 let _ = app_handle.emit(&format!("agent-{}", event_type), payload);
             }
-            eprintln!("[BRIDGE] agent stdout reader thread exiting");
+            log::info!("[BRIDGE] agent stdout reader thread exiting");
         });
 
         let bridge = Self {
@@ -142,7 +142,7 @@ pub fn shutdown_agent() {
 pub fn cmd_send_message(
     text: String,
 ) -> Result<(), String> {
-    eprintln!("[BRIDGE] cmd_send_message: {}", &text[..text.floor_char_boundary(50)]);
+    log::info!("[BRIDGE] cmd_send_message: {}", &text[..text.floor_char_boundary(50)]);
     send_command(Ui2Agent::UserInput { text })
 }
 
@@ -150,7 +150,7 @@ pub fn cmd_send_message(
 #[tauri::command]
 pub fn cmd_create_session(
 ) -> Result<(), String> {
-    eprintln!("[BRIDGE] cmd_create_session");
+    log::info!("[BRIDGE] cmd_create_session");
     send_command(Ui2Agent::CreateSession)
 }
 
@@ -305,14 +305,14 @@ pub fn cmd_undo_turn(turn_id: String) -> Result<(), String> {
 /// Compact conversation history (summarize old turns).
 #[tauri::command]
 pub fn cmd_compact() -> Result<(), String> {
-    eprintln!("[BRIDGE] cmd_compact called");
+    log::info!("[BRIDGE] cmd_compact called");
     send_command(Ui2Agent::Compact)
 }
 
 /// Resume a specific session by seed.
 #[tauri::command]
 pub fn cmd_resume_session(seed: String) -> Result<(), String> {
-    eprintln!("[BRIDGE] cmd_resume_session called, seed={seed}");
+    log::info!("[BRIDGE] cmd_resume_session called, seed={seed}");
     deepx_session::SessionManager::global().set_active_seed(&seed);
     send_command(Ui2Agent::ResumeSession { seed })
 }

@@ -46,7 +46,7 @@ pub(crate) fn spawn_agent() -> Result<
         .arg("agent")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("spawn: {e}"))?;
     let stdin = child.stdin.take().ok_or("no stdin")?;

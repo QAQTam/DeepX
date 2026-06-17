@@ -13,13 +13,13 @@ use deepx_session::SessionManager;
 pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool {
     let seed = match restore_seed {
         Some(s) => {
-            eprintln!("[LIFECYCLE] init_session: loading seed={s}");
+            log::info!("[LIFECYCLE] init_session: loading seed={s}");
             if let Some(file) = SessionManager::global().load(s) {
-                eprintln!("[LIFECYCLE] loaded session file, {} messages", file.messages.len());
+                log::info!("[LIFECYCLE] loaded session file, {} messages", file.messages.len());
                 agent.session.seed = file.seed.clone();
                 agent.session.start = file.created_at;
                 let (msg, repairs) = deepx_message::MessageStore::from_session(&file);
-                eprintln!("[LIFECYCLE] from_session done, {} turns, {} repairs", msg.turn_count(), repairs.len());
+                log::info!("[LIFECYCLE] from_session done, {} turns, {} repairs", msg.turn_count(), repairs.len());
                 agent.msg = msg;
                 agent.session.from_resume = true;
                 agent.session.tokens = 0;
@@ -43,7 +43,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 "deepx-agent: session {} load failed — creating fresh session",
                 s
             );
-            eprintln!("[LIFECYCLE] load failed for {s}, generating new seed");
+            log::warn!("[LIFECYCLE] load failed for {s}, generating new seed");
             SessionManager::generate_seed()
         }
         None => return false,

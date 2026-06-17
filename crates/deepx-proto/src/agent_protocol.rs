@@ -325,6 +325,24 @@ pub enum Agent2Ui {
         result_summary: String,
         success: bool,
     },
+
+    /// Streaming output chunk from a running tool (e.g. exec stdout).
+    #[serde(rename = "exec_progress")]
+    ExecProgress {
+        tool_call_id: String,
+        chunk: String,
+    },
+
+    /// Tool call detected in streaming response — preview card before execution.
+    #[serde(rename = "tool_call_preview")]
+    ToolCallPreview {
+        turn_id: String,
+        round_num: u32,
+        index: usize,
+        id: String,
+        name: String,
+        args_so_far: String,
+    },
 }
 
 fn default_load_count() -> u32 { 20 }

@@ -18,6 +18,14 @@ export function createChatStore() {
   const [sessionInfo, setSessionInfo] = createStore<SessionInfo>({ seed: "", model: "", contextTokens: 0, contextLimit: 0, totalTokens: 0, promptCacheHit: 0, promptCacheMiss: 0 });
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [inputDisabled, setInputDisabled] = createSignal(false);
+
+  // Debug hook: inject mock data from browser console
+  if (typeof window !== "undefined") {
+    (window as any).__deepxDebugInject = (mockTurns: Turn[]) => {
+      setTurns(mockTurns as any);
+      setSessionInfo({ seed: "debug", model: "mock", contextTokens: 0, contextLimit: 0, totalTokens: 0, promptCacheHit: 0, promptCacheMiss: 0 });
+    };
+  }
   const [error, setError] = createSignal<string | null>(null);
   const [restoreText, setRestoreText] = createSignal<string | null>(null);
   const [tasks, setTasks] = createSignal<TaskInfo[]>([]);
@@ -50,11 +58,44 @@ export function createChatStore() {
     }));
   }
 
+  function handleToolCallPreview(turnId: string, roundNum: number, index: number, id: string, name: string, argsSoFar: string) {
+    ensureRound(turnId, roundNum);
+    // Update or insert tool call preview in the round's toolCalls
+    setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
+      const existing = round.toolCalls.findIndex(tc => tc.id === id);
+      if (existing >= 0) {
+        round.toolCalls[existing].args_display = argsSoFar.slice(0, 100);
+        round.toolCalls[existing].args_json = argsSoFar;
+      } else {
+        round.toolCalls.push({ id, name, args_display: argsSoFar.slice(0, 100), args_json: argsSoFar });
+      }
+    }));
+  }
+
   function handleRoundComplete(turnId: string, roundNum: number, thinking?: string, answer?: string, toolCalls?: ToolCallDef[], blocks?: RoundBlock[]) {
     ensureRound(turnId, roundNum);
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
       if (thinking) round.thinking = thinking; if (answer) round.answer = answer; if (toolCalls) round.toolCalls = toolCalls; if (blocks) round.blocks = blocks;
     }));
+  }
+
+  function handleExecProgress(_toolCallId: string, chunk: string) {
+    // Append streaming output to the last pending tool card in the latest turn
+    const lastTurn = turns[turns.length - 1];
+    if (!lastTurn) return;
+    const lastRound = lastTurn.rounds[lastTurn.rounds.length - 1];
+    if (!lastRound) return;
+    // Find the first tool call that doesn't have a real result yet
+    const pendingTc = lastRound.toolCalls.find(tc => !lastRound.toolResults.some(tr => tr.tool_call_id === tc.id));
+    if (!pendingTc) return;
+    // Find or update streaming result
+    const streamKey = pendingTc.id + "_stream";
+    const existing = lastRound.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
+    if (existing >= 0) {
+      setTurns((t) => t.turnId === lastTurn.turnId, "rounds", (r) => r.roundNum === lastRound.roundNum, "toolResults", existing, "output", (o: string) => o + chunk);
+    } else {
+      setTurns((t) => t.turnId === lastTurn.turnId, "rounds", (r) => r.roundNum === lastRound.roundNum, "toolResults", produce((tr: ToolResultDef[]) => tr.push({ tool_call_id: streamKey, output: chunk, success: true })));
+    }
   }
 
   function handleToolResults(turnId: string, roundNum: number, results: ToolResultDef[]) {
@@ -248,5 +289,5 @@ export function createChatStore() {
 
   function dismissAsk() { setAskState({ question: "", options: [], show: false }); }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleRoundComplete, handleToolResults, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clearError, clear, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clearError, clear, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

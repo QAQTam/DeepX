@@ -46,7 +46,8 @@ export default function MessageItem(props: MessageItemProps) {
                         <Show when={round.answer}><MarkdownBody class="md-body bubble-ai" content={round.answer!} /></Show>
                         <For each={round.toolCalls}>{(tc) => {
                           const r = round.toolResults.find((x) => x.tool_call_id === tc.id);
-                          return <ToolCallCard call={tc} result={r} />;
+                          const sr = round.toolResults.find((x) => x.tool_call_id === tc.id + "_stream");
+                          return <ToolCallCard call={tc} result={r} streamingOutput={sr?.output} />;
                         }}</For>
                       </>
                     }
@@ -61,7 +62,7 @@ export default function MessageItem(props: MessageItemProps) {
                             <MarkdownBody class="md-body bubble-ai" content={block.content!} />
                           </Match>
                           <Match when={block.type === "tool"}>
-                            <ToolCallCard call={block.card!} result={round.toolResults.find((x) => x.tool_call_id === block.card!.id)} />
+                            <ToolCallCard call={block.card!} result={round.toolResults.find((x) => x.tool_call_id === block.card!.id)} streamingOutput={round.toolResults.find((x) => x.tool_call_id === block.card!.id + "_stream")?.output} />
                           </Match>
                         </Switch>
                       )}

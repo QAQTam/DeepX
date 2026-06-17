@@ -19,6 +19,7 @@ pub mod agent;
 use agent::AgentState;
 mod lifecycle;
 mod dashboard;
+pub mod logger;
 use dashboard::{build_documents, build_recent_edits, build_tasks};
 use deepx_message::Effect;
 use deepx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
@@ -93,15 +94,15 @@ impl<R: BufRead, W: Write> Loop<R, W> {
         self.emit_dashboard();
         let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Ready);
 
-        eprintln!("[AGENT] entering main event loop, waiting for Ui2Agent...");
+        log::info!("[AGENT] entering main event loop, waiting for Ui2Agent...");
         loop {
             let frame: Ui2Agent = match deepx_proto::read_frame(&mut self.input) {
                 Ok(Some(f)) => {
-                    eprintln!("[AGENT] received Ui2Agent frame");
+                    log::info!("[AGENT] received Ui2Agent frame");
                     f
                 }
-                Ok(None) => { eprintln!("[AGENT] read_frame returned None (EOF)"); break; }
-                Err(e) => { eprintln!("[AGENT] read_frame error: {e}"); break; }
+                Ok(None) => { log::info!("[AGENT] read_frame returned None (EOF)"); break; }
+                Err(e) => { log::info!("[AGENT] read_frame error: {e}"); break; }
             };
 
             match frame {
@@ -160,9 +161,9 @@ impl<R: BufRead, W: Write> Loop<R, W> {
 
     // Slice to the latest INITIAL_LOAD_COUNT turns for incremental loading.
     fn handle_resume_session(&mut self, seed: &str) {
-        eprintln!("[AGENT] handle_resume_session seed={seed}");
+        log::info!("[AGENT] handle_resume_session seed={seed}");
         if lifecycle::init_session(&mut self.agent, Some(seed)) {
-            eprintln!("[AGENT] init_session succeeded, current_seed={}", self.agent.session.seed);
+            log::info!("[AGENT] init_session succeeded, current_seed={}", self.agent.session.seed);
             self.agent.rebind_store();
             self.emit_dashboard();
             let current_seed = self.agent.session.seed.clone();
@@ -172,7 +173,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                 let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
                 let recent: Vec<_> = all_turns[start..].to_vec();
                 let has_more = start > 0;
-                eprintln!("[AGENT] sending SessionRestored, turns.len={} (total={}, has_more={})", recent.len(), total, has_more);
+                log::info!("[AGENT] sending SessionRestored, turns.len={} (total={}, has_more={})", recent.len(), total, has_more);
                 let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::SessionRestored {
                     seed: current_seed,
                     turns: recent,
@@ -182,13 +183,13 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                     has_more,
                 });
             } else {
-                eprintln!("[AGENT] seed changed {} -> {}, sending SessionCreated", seed, current_seed);
+                log::info!("[AGENT] seed changed {} -> {}, sending SessionCreated", seed, current_seed);
                 let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::SessionCreated {
                     seed: current_seed,
                 });
             }
         } else {
-            eprintln!("[AGENT] init_session returned false");
+            log::info!("[AGENT] init_session returned false");
             let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error {
                 message: format!("Failed to resume session: {seed}"),
             });
@@ -230,9 +231,9 @@ impl<R: BufRead, W: Write> Loop<R, W> {
     }
 
     fn handle_undo_turn(&mut self, turn_id: &str) {
-        eprintln!("[AGENT] UndoTurn {turn_id} — turns before: {}", self.agent.msg.turn_count());
+        log::info!("[AGENT] UndoTurn {turn_id} — turns before: {}", self.agent.msg.turn_count());
         if self.agent.msg.truncate_before_turn(turn_id) {
-            eprintln!("[AGENT] UndoTurn — truncated, turns after: {}", self.agent.msg.turn_count());
+            log::info!("[AGENT] UndoTurn — truncated, turns after: {}", self.agent.msg.turn_count());
             self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
             let all_turns = build_turns_from_context(&self.agent);
             let total = all_turns.len() as u32;
@@ -248,13 +249,13 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                 has_more,
             });
         } else {
-            eprintln!("[AGENT] UndoTurn — truncate_before_turn returned false");
+            log::info!("[AGENT] UndoTurn — truncate_before_turn returned false");
         }
     }
 
     fn handle_compact(&mut self) {
         const KEEP: usize = 5;
-        eprintln!("[AGENT] handle_compact: {} turns", self.agent.msg.turn_count());
+        log::info!("[AGENT] handle_compact: {} turns", self.agent.msg.turn_count());
         if self.agent.msg.turn_count() <= KEEP {
             let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolNotice {
                 message: format!("Compact skipped: need >{} turns (have {})", KEEP, self.agent.msg.turn_count()),
@@ -485,6 +486,16 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                                 tool_calls_raw = serde_json::Value::Array(blocks);
                             }
                         }
+                        deepx_gate::StreamEvent::ToolCallProgress { index, id, name, args_so_far } => {
+                            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolCallPreview {
+                                turn_id: turn_id.clone(),
+                                round_num,
+                                index,
+                                id,
+                                name,
+                                args_so_far,
+                            });
+                        }
                         deepx_gate::StreamEvent::Retrying { attempt, max_retries, delay_secs, error } => {
                             let msg = format!("API error, retrying ({attempt}/{max_retries}) in {delay_secs}s: {error}");
                             let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error { message: msg });
@@ -512,7 +523,48 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             match effect {
                 Effect::None => {
                     self.phase = LoopPhase::ToolsRunning;
-                    self.agent.msg.execute_tools_batch();
+                    
+                    // Threaded tool execution with real-time progress streaming
+                    let pending = self.agent.msg.get_last_step_pending();
+                    if !pending.is_empty() {
+                        let (progress_tx, progress_rx) = std::sync::mpsc::channel::<String>();
+                        let mut handles = Vec::new();
+                        let mut tool_infos = Vec::new();
+                        
+                        for tool in &pending {
+                            let tx = progress_tx.clone();
+                            let name = tool.name.clone();
+                            let id = tool.id.clone();
+                            let args = tool.args.to_string();
+                            tool_infos.push((id.clone(), name.clone()));
+                            handles.push(std::thread::spawn(move || {
+                                let result = deepx_tools::bridge::execute_tool_with_id_full(&name, "", &args, &id, Some(tx));
+                                (id, result.content, result.success)
+                            }));
+                        }
+                        drop(progress_tx); // close sender when all threads drop their clones
+                        
+                        // Drain progress while tools run
+                        loop {
+                            match progress_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                                Ok(chunk) => {
+                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ExecProgress {
+                                        tool_call_id: String::new(),
+                                        chunk,
+                                    });
+                                }
+                                Err(_) => break, // channel closed → all threads done
+                            }
+                        }
+                        
+                        // Collect results
+                        for h in handles {
+                            if let Ok((tc_id, content, _success)) = h.join() {
+                                self.agent.msg.push_tool_result_direct(&tc_id, &content);
+                            }
+                        }
+                    }
+                    
                     let results = self.agent.msg.last_step_tool_results();
                     let mut tool_defs = Vec::new();
                     for (tc_id, tool_name, result_content, success) in &results {

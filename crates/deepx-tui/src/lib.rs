@@ -32,7 +32,7 @@ fn spawn_agent_subprocess(
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("spawn agent subprocess: {e}"))?;
 

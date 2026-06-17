@@ -26,16 +26,22 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
         if which("pwsh.exe") {
             let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
             let mut c = Command::new("pwsh");
-            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded]);
+            c.args(["-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &encoded]);
             c
         } else if which("powershell.exe") {
             let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
             let mut c = Command::new("powershell");
-            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded]);
+            c.args(["-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &encoded]);
             c
         } else {
             let mut c = Command::new("cmd");
             c.args(["/C", &command]);
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                c.creation_flags(CREATE_NO_WINDOW);
+            }
             c
         }
     } else {
@@ -53,13 +59,8 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
         c
     };
 
-    // Suppress console window popup when spawned from GUI (Tauri).
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    // Windows: CREATE_NO_WINDOW already applied per-shell above.
+    // Linux/macOS: no special handling needed.
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     if let Some(dir) = &cwd {
@@ -142,12 +143,22 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
     } else {
         output_buf.clone()
     };
-    let output = output.trim();
+    
+    // Summary for the model: keep it short to save context
+    let output_trimmed = output.trim();
+    let short_output = if output_trimmed.len() > 2000 {
+        let head: String = output_trimmed.chars().take(1000).collect();
+        let tail: String = output_trimmed.chars().rev().take(500).collect::<String>().chars().rev().collect();
+        format!("{head}\n...({} bytes total)...\n{tail}", output_buf.len())
+    } else {
+        output_trimmed.to_string()
+    };
+    
     let mut result = format!("[{}] exec: {} (exit {})\n", status, command, exit_code);
-    if output.is_empty() {
+    if short_output.is_empty() {
         result.push_str("(no output)");
     } else {
-        result.push_str(output);
+        result.push_str(&short_output);
     }
     result
 }

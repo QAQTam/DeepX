@@ -13,6 +13,8 @@
     "@kobalte/core": "^0.13.11",
     "@solidjs/router": "^0.16.1",
     "@tailwindcss/vite": "^4.3.0",
+    "@tanstack/solid-virtual": "^3.13.29",
+    "@tanstack/virtual-core": "^3.17.1",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "markdown-it": "^14.1.0",
