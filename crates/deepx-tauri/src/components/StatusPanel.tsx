@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import type { TaskInfo, ActivityEntry } from "../store/chat";
+import { useI18n } from "../i18n";
 
 const STATUS_ICON: Record<string, string> = {
   pending: "\u25cb", in_progress: "\u25cf", completed: "\u2713", cancelled: "\u2717",
@@ -16,6 +17,7 @@ export default function StatusPanel(props: {
   recentEdits: () => string[];
   activityLog: () => ActivityEntry[];
 }) {
+  const { t } = useI18n();
   const elapsed = (ts: number) => {
     const s = Math.floor((Date.now() - ts) / 1000);
     if (s < 60) return s + "s";
@@ -25,18 +27,18 @@ export default function StatusPanel(props: {
 
   return (
     <div class="status-panel">
-      <div class="status-panel-hd">Status</div>
+      <div class="status-panel-hd">{t().status.title}</div>
       <div class="status-panel-body">
 
         {/* ── Tasks ── */}
         <div class="status-section">
           <div class="status-section-hd">
-            Tasks
+            {t().status.tasks}
             <Show when={props.tasks().length > 0}>
               <span class="status-section-badge">{props.tasks().filter((t) => t.status === "completed").length}/{props.tasks().length}</span>
             </Show>
           </div>
-          <Show when={props.tasks().length > 0} fallback={<div class="status-empty">No tasks</div>}>
+          <Show when={props.tasks().length > 0} fallback={<div class="status-empty">{t().status.noTasks}</div>}>
             <div class="status-section-body">
             <For each={props.tasks()}>
               {(task) => (
@@ -53,15 +55,15 @@ export default function StatusPanel(props: {
           </Show>
         </div>
 
-        {/* ── Activity ── */}
+        {/* ── {t().status.activity} ── */}
         <div class="status-section">
           <div class="status-section-hd">
-            Activity
+            {t().status.activity}
             <Show when={props.activityLog().length > 0}>
               <span class="status-section-badge">{props.activityLog().length}</span>
             </Show>
           </div>
-          <Show when={props.activityLog().length > 0} fallback={<div class="status-empty">No activity</div>}>
+          <Show when={props.activityLog().length > 0} fallback={<div class="status-empty">{t().status.noActivity}</div>}>
             <div class="status-section-body">
             <For each={props.activityLog()}>
               {(entry) => (
@@ -82,12 +84,12 @@ export default function StatusPanel(props: {
         {/* ── Files ── */}
         <div class="status-section">
           <div class="status-section-hd">
-            Files
+            {t().status.files}
             <Show when={props.recentEdits().length > 0}>
               <span class="status-section-badge">{props.recentEdits().length}</span>
             </Show>
           </div>
-          <Show when={props.recentEdits().length > 0} fallback={<div class="status-empty">No files</div>}>
+          <Show when={props.recentEdits().length > 0} fallback={<div class="status-empty">{t().status.noFiles}</div>}>
             <div class="status-section-body">
             <For each={props.recentEdits()}>
               {(edit) => {

@@ -85,13 +85,13 @@ export default function SettingsView(props: SettingsViewProps) {
             <div class="settings-index">
               <button class="settings-card" onClick={() => setSubpage("api")}>
                 <span class="settings-card-icon">A</span>
-                <span class="settings-card-label">API</span>
+                <span class="settings-card-label">{t().settings.subApi}</span>
                 <span class="settings-card-desc">{providerId()} / {model()}</span>
                 <svg class="settings-card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2l6 6-6 6"/></svg>
               </button>
               <button class="settings-card" onClick={() => setSubpage("limits")}>
                 <span class="settings-card-icon">L</span>
-                <span class="settings-card-label">Limits</span>
+                <span class="settings-card-label">{t().settings.subLimits}</span>
                 <span class="settings-card-desc">{t().settings.maxTokens}: {maxTokens()} · ctx: {contextLimit()}</span>
                 <svg class="settings-card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2l6 6-6 6"/></svg>
               </button>

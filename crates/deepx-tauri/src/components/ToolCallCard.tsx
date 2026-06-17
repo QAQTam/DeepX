@@ -1,5 +1,6 @@
 import { createSignal, Show, createEffect, on } from "solid-js";
 import type { ToolCallDef, ToolResultDef } from "../store/chat";
+import { useI18n } from "../i18n";
 
 export default function ToolCallCard(props: {
   call: ToolCallDef;
@@ -7,6 +8,7 @@ export default function ToolCallCard(props: {
   streamingOutput?: string;
 }) {
   const [open, setOpen] = createSignal(false);
+  const { t } = useI18n();
   let bodyRef!: HTMLDivElement;
   const icon = toolIcon(props.call.name);
   const hasResult = !!props.result;
@@ -33,11 +35,11 @@ export default function ToolCallCard(props: {
         <span class="tool-card-args">{props.call.args_display}</span>
         <Show when={hasResult}>
           <span class={`tool-card-status ${props.result!.success ? "success" : "error"}`}>
-            {props.result!.success ? "OK" : "ERR"}
+            {props.result!.success ? t().tool.ok : t().tool.err}
           </span>
         </Show>
         <Show when={!hasResult}>
-          <span class="tool-card-status tool-running-text">Running...</span>
+          <span class="tool-card-status tool-running-text">{t().tool.running}</span>
         </Show>
       </div>
       <Show when={open() && (hasResult || props.streamingOutput)}>

@@ -1,6 +1,8 @@
 import { createSignal, Show, createEffect, on } from "solid-js";
+import { useI18n } from "../i18n";
 
 export default function ThinkingBlock(props: { content: string; streaming?: boolean }) {
+  const { t } = useI18n();
   const [open, setOpen] = createSignal(props.streaming ?? false);
   let bodyRef!: HTMLDivElement;
 
@@ -15,7 +17,7 @@ export default function ThinkingBlock(props: { content: string; streaming?: bool
     <div class="think-block">
       <div class={`think-header ${open() ? "open" : ""}`} onClick={() => setOpen((o) => !o)}>
         <svg width="12" height="12" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <span>Thinking</span>
+        <span>{t().message.thinking}</span>
       </div>
       <Show when={open()}>
         <div class="think-body" ref={bodyRef}>{props.content}</div>

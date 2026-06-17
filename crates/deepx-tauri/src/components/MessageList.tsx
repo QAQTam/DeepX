@@ -61,7 +61,7 @@ export default function MessageList(props: MessageListProps) {
       <Show when={props.hasMore}>
         <div class="load-more-bar">
           <button class="load-more-btn" onClick={props.onLoadMore}>
-            Load earlier messages
+            {t().chat.loadEarlier}
           </button>
         </div>
       </Show>
@@ -128,7 +128,7 @@ export default function MessageList(props: MessageListProps) {
           class="msg-jump-bottom"
           onClick={() => virtualizer.scrollToEnd({ behavior: "smooth" })}
         >
-          ↓ Jump to latest
+          {t().chat.jumpToLatest}
         </button>
       </Show>
     </div>

@@ -22,9 +22,9 @@ export default function MessageItem(props: MessageItemProps) {
       <div class={`msg-avatar ${props.role}`}>{isUser ? "U" : "X"}</div>
       <div class="msg-body">
         <div class="msg-role">
-          {isUser ? "You" : "DeepX"}
+          {isUser ? t().message.you : t().message.assistant}
           <Show when={isUser && props.turnId && props.onUndo}>
-            <span class="msg-undo" onClick={() => props.onUndo!(props.turnId!)} title="Undo from here">
+            <span class="msg-undo" onClick={() => props.onUndo!(props.turnId!)} title={t().message.undo}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M3 10h10a5 5 0 0 1 0 10H11" /><path d="M7 6l-4 4 4 4" />
               </svg>
