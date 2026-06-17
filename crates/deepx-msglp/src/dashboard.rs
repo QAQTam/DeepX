@@ -26,5 +26,5 @@ pub fn build_recent_edits(_agent: &AgentState) -> Vec<String> {
 }
 
 pub fn build_tasks(_agent: &AgentState) -> Vec<TaskInfo> {
-    Vec::new()
+    deepx_tools::bridge::all_tasks()
 }

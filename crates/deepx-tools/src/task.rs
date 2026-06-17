@@ -58,6 +58,25 @@ fn parse_id(args: &str) -> Result<u32, String> {
     Ok(n as u32)
 }
 
+/// Parse stored task lines into TaskInfo structs for dashboard/status.
+pub fn get_task_infos() -> Vec<deepx_proto::TaskInfo> {
+    let lines = read_tasks();
+    lines.iter().filter_map(|l| {
+        let trimmed = l.trim_start();
+        // Format: "- [status] T{id}: subject — description"
+        if !trimmed.starts_with("- [") { return None; }
+        let after_bracket = trimmed.split_once("] ")?.1;
+        let status = &trimmed[3..trimmed.find(']')?];
+        let (id_part, rest) = after_bracket.split_once(": ")?;
+        let id = id_part.trim().to_string();
+        let (subject, description) = rest.split_once(" — ").map_or(
+            (rest.to_string(), String::new()),
+            |(s, d)| (s.to_string(), d.to_string()),
+        );
+        Some(deepx_proto::TaskInfo { id, subject, description, status: status.to_string() })
+    }).collect()
+}
+
 pub(super) fn exec_task_create(args: &str) -> String {
     let subject = parse_arg(args, "subject");
     let description = parse_arg(args, "description");

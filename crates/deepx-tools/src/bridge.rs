@@ -243,6 +243,10 @@ pub fn files_written() -> Vec<String> {
     with_mgr(|mgr| mgr.stats().files_written).unwrap_or_default()
 }
 
+pub fn all_tasks() -> Vec<deepx_proto::TaskInfo> {
+    crate::task::get_task_infos()
+}
+
 // ── Wrap helper ──
 
 pub fn wrap_tool_result(name: &str, raw: &str) -> String {
