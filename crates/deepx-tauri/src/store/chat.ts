@@ -46,11 +46,18 @@ export function createChatStore() {
   }
 
   function handleTurnStart(turnId: string, userText: string) {
-    resetStreamBuffer(); setIsStreaming(true); setInputDisabled(true); setError(null);
+    resetStreamBuffer(); lastRoundNum = 0; setIsStreaming(true); setInputDisabled(true); setError(null);
     setTurns(produce((t) => t.push({ turnId, userText, rounds: [], status: "streaming" })));
   }
 
+  let lastRoundNum = 0;
+
   function handleRoundDelta(turnId: string, roundNum: number, kind: string, delta: string) {
+    // Reset stream buffer when entering a new round (e.g. after tool calls)
+    if (roundNum !== lastRoundNum) {
+      resetStreamBuffer();
+      lastRoundNum = roundNum;
+    }
     if (kind === "thinking") streamBuffer.thinking += delta; else if (kind === "answering") streamBuffer.answer += delta;
     ensureRound(turnId, roundNum);
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
@@ -112,7 +119,7 @@ export function createChatStore() {
   }
 
   function handleTurnEnd(turnId: string, data: Record<string, unknown>) {
-    setIsStreaming(false); setInputDisabled(false); resetStreamBuffer();
+    setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
     setTurns((t) => t.turnId === turnId, produce((turn) => { turn.status = "complete"; turn.stopReason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
     const u = data.usage as Record<string, unknown> | undefined;
     if (u) {
