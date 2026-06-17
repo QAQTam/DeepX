@@ -37,6 +37,7 @@ export default function StatusPanel(props: {
             </Show>
           </div>
           <Show when={props.tasks().length > 0} fallback={<div class="status-empty">No tasks</div>}>
+            <div class="status-section-body">
             <For each={props.tasks()}>
               {(task) => (
                 <div class={`status-row status-${task.status}`}>
@@ -48,6 +49,7 @@ export default function StatusPanel(props: {
                 </div>
               )}
             </For>
+            </div>
           </Show>
         </div>
 
@@ -60,6 +62,7 @@ export default function StatusPanel(props: {
             </Show>
           </div>
           <Show when={props.activityLog().length > 0} fallback={<div class="status-empty">No activity</div>}>
+            <div class="status-section-body">
             <For each={props.activityLog()}>
               {(entry) => (
                 <div class={`status-row status-${entry.success ? "success" : "fail"}`}>
@@ -72,6 +75,7 @@ export default function StatusPanel(props: {
                 </div>
               )}
             </For>
+            </div>
           </Show>
         </div>
 
@@ -84,6 +88,7 @@ export default function StatusPanel(props: {
             </Show>
           </div>
           <Show when={props.recentEdits().length > 0} fallback={<div class="status-empty">No files</div>}>
+            <div class="status-section-body">
             <For each={props.recentEdits()}>
               {(edit) => {
                 const [tool, ...pathParts] = edit.split(": ");
@@ -99,6 +104,7 @@ export default function StatusPanel(props: {
                 );
               }}
             </For>
+            </div>
           </Show>
         </div>
 
