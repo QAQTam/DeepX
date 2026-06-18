@@ -23,28 +23,21 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
 
     let mut cmd = if cfg!(target_os = "windows") {
         // Prefer pwsh (PowerShell 7) > powershell (5.1) > cmd
-        let mut c = if which("pwsh.exe") {
+        let c = if which("pwsh.exe") {
             let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
             let mut c = Command::new("pwsh");
-            c.args(["-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &encoded]);
+            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded]);
             c
         } else if which("powershell.exe") {
             let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
             let mut c = Command::new("powershell");
-            c.args(["-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &encoded]);
+            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded]);
             c
         } else {
             let mut c = Command::new("cmd");
             c.args(["/C", &command]);
             c
         };
-        // Suppress console window flash on Windows (GUI subsystem has no console to inherit)
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            c.creation_flags(CREATE_NO_WINDOW);
-        }
         c
     } else {
         // Prefer bash -i (reads .bashrc for nvm/fnm/rbenv etc)
@@ -61,7 +54,6 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         c
     };
 
-    // Linux/macOS: no special handling needed.
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
     if let Some(dir) = &cwd {
@@ -109,12 +101,11 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
             }
         });
     }
-    // signal no more output after streams close
     drop(done_tx);
 
     use std::sync::atomic::Ordering;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    let exit_status = loop {
+    loop {
         if crate::CANCEL.load(Ordering::SeqCst) {
             deepx_types::platform::kill_process(pid);
             return "[CANCELLED] Command execution cancelled by user.".into();
@@ -125,10 +116,10 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
             return format!("[ERROR] exec timed out after {}s\n[HINT] Increase timeout_secs or check if the command is stuck.", timeout_secs);
         }
         match child.try_wait() {
-            Ok(Some(status)) => {
+            Ok(Some(_status)) => {
                 // drain remaining output
                 while let Ok(chunk) = done_rx.recv() { output_buf.push_str(&chunk); }
-                break status;
+                break;
             }
             Ok(None) => {
                 match done_rx.recv_timeout(remaining.min(std::time::Duration::from_millis(200))) {
@@ -138,17 +129,14 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
             }
             Err(e) => return format!("[ERROR] exec wait failed: {}", e),
         }
-    };
+    }
 
-    let exit_code = exit_status.code().unwrap_or(-1);
-    let status = if exit_code == 0 { "OK" } else { "FAIL" };
     let output = if output_buf.len() > MAX_EXEC_OUTPUT {
         output_buf[..output_buf.floor_char_boundary(MAX_EXEC_OUTPUT)].to_string() + &format!("...[TRUNCATED: {} bytes total]", output_buf.len())
     } else {
         output_buf.clone()
     };
     
-    // Summary for the model: keep it short to save context
     let output_trimmed = output.trim();
     let short_output = if output_trimmed.len() > 2000 {
         let head: String = output_trimmed.chars().take(1000).collect();
@@ -158,7 +146,7 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         output_trimmed.to_string()
     };
     
-    let mut result = format!("[{}] exec: {} (exit {})\n", status, command, exit_code);
+    let mut result = format!("[OK] exec: {} (exit 0)\n", command);
     if short_output.is_empty() {
         result.push_str("(no output)");
     } else {

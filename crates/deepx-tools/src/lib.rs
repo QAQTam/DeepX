@@ -4,6 +4,7 @@
 
 
 pub mod exec;
+pub mod pty;
 
 pub mod explore;
 
