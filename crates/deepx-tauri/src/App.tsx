@@ -20,6 +20,7 @@ export default function App() {
   const [configLang, setConfigLang] = createSignal<Lang>("en");
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
   const [hasMore, setHasMore] = createSignal(false);
+  const [workspace, setWorkspace] = createSignal("");
   let unlisten: (() => void) | undefined;
 
   async function refreshSessions() {
@@ -65,6 +66,11 @@ export default function App() {
     chat.clear();
     localStorage.removeItem(LS_KEY);
     try { await invoke("cmd_new_session"); } catch (e) { console.error(e); }
+  }
+
+  async function saveWorkspace(val: string) {
+    setWorkspace(val);
+    try { await invoke("cmd_set_workspace", { path: val }); } catch (e) { console.error(e); }
   }
 
   onMount(async () => {
@@ -117,6 +123,8 @@ export default function App() {
 
     // Load session list immediately
     await refreshSessions();
+    // Load current workspace
+    try { const ws = await invoke<string>("cmd_get_workspace"); setWorkspace(ws); } catch (e) { console.error(e); }
     // Proactively restore last session (Ready may have been sent before mount)
     const savedSeed = localStorage.getItem(LS_KEY);
     if (savedSeed) {
@@ -172,6 +180,17 @@ export default function App() {
             </For>
           </div>
           <div class="sidebar-spacer" />
+          <div class="sidebar-workspace">
+            <label class="sidebar-workspace-label">{t().session.workspace}</label>
+            <input
+              class="sidebar-workspace-input"
+              type="text"
+              value={workspace()}
+              placeholder={t().session.workspaceHint}
+              onInput={(e) => setWorkspace(e.currentTarget.value)}
+              onChange={(e) => saveWorkspace(e.currentTarget.value)}
+            />
+          </div>
           <div class="sidebar-new-session"><button onClick={newSession} title={t().session.new}>+ {t().session.new}</button></div>
         </aside>
         <main class="main-content">

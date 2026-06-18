@@ -463,7 +463,7 @@ fn format_inline(text: &str) -> Line<'static> {
             remaining = rest;
             continue;
         }
-        if let Some(rest) = try_extract(&remaining, "*", &mut spans, false) {
+        if let Some(rest) = try_extract_italic(&remaining, &mut spans) {
             remaining = rest;
             continue;
         }
@@ -501,6 +501,39 @@ fn try_extract(text: &str, marker: &str, spans: &mut Vec<Span<'static>>, bold: b
     }
     let style = if bold { Style::new().bold() } else { Style::new().italic() };
     spans.push(Span::styled(inner.to_string(), style));
+    Some(rest)
+}
+
+/// Like `try_extract` for `*` but skips `**` pairs (bold) when searching
+/// for the closing `*`, so that `*italic **bold** text*` works correctly.
+fn try_extract_italic(text: &str, spans: &mut Vec<Span<'static>>) -> Option<String> {
+    let start = text.find('*')?;
+    // If the opening `*` is followed by another `*`, this is bold territory —
+    // let try_extract("**") handle it.
+    if text[start..].starts_with("**") {
+        return None;
+    }
+    let prefix = &text[..start];
+    let after = &text[start + 1..];
+    // Search for closing `*`, skipping `**` pairs
+    let mut pos = 0;
+    let closing = loop {
+        let found = after[pos..].find('*')?;
+        let abs = pos + found;
+        // If this `*` is part of `**`, skip the pair
+        if after[abs..].starts_with("**") {
+            pos = abs + 2;
+            continue;
+        }
+        break abs;
+    };
+    let inner = &after[..closing];
+    if inner.contains('\n') { return None; }
+    let rest = after[closing + 1..].to_string();
+    if !prefix.is_empty() {
+        spans.push(Span::raw(prefix.to_string()));
+    }
+    spans.push(Span::styled(inner.to_string(), Style::new().italic()));
     Some(rest)
 }
 

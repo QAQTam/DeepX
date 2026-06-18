@@ -60,6 +60,8 @@ const en = {
     noSessions: "No previous sessions found.",
     lastActive: "Last active",
     messages: "messages",
+    workspace: "Workspace",
+    workspaceHint: "Project root for explore tool",
   },
   status: {
     title: "Status",

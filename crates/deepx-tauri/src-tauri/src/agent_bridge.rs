@@ -335,3 +335,26 @@ pub fn cmd_new_session() -> Result<(), String> {
 pub fn cmd_load_more_turns(before_turn_id: String) -> Result<(), String> {
     send_command(Ui2Agent::LoadMoreTurns { before_turn_id, count: 20 })
 }
+
+/// Get the current session's workspace root path.
+#[tauri::command]
+pub fn cmd_get_workspace() -> Result<String, String> {
+    let mgr = deepx_session::SessionManager::global();
+    let seed = mgr.active_seed().unwrap_or_default();
+    if seed.is_empty() { return Ok(String::new()); }
+    let dir = deepx_types::platform::sessions_dir().join(&seed);
+    Ok(std::fs::read_to_string(dir.join("workspace.txt")).unwrap_or_default().trim().to_string())
+}
+
+/// Set the current session's workspace root path and notify the agent.
+#[tauri::command]
+pub fn cmd_set_workspace(path: String) -> Result<(), String> {
+    let mgr = deepx_session::SessionManager::global();
+    let seed = mgr.active_seed().unwrap_or_default();
+    if seed.is_empty() { return Err("No active session".into()); }
+    let dir = deepx_types::platform::sessions_dir().join(&seed);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+    std::fs::write(dir.join("workspace.txt"), path.trim()).map_err(|e| format!("write: {e}"))?;
+    // Tell agent to reload config (which includes workspace)
+    send_command(Ui2Agent::ReloadConfig)
+}

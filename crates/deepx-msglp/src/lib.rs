@@ -758,7 +758,8 @@ impl Loop {
                                         chunk,
                                     });
                                 }
-                                Err(_) => break, // channel closed → all threads done
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                             }
                         }
 

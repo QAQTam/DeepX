@@ -62,6 +62,8 @@ const zh: I18nStrings = {
     noSessions: "未找到历史会话。",
     lastActive: "上次活跃",
     messages: "条消息",
+    workspace: "工作区",
+    workspaceHint: "explore 工具的项目根目录",
   },
   status: {
     title: "状态",

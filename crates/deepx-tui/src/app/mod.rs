@@ -1,5 +1,5 @@
 use deepx_proto::{Agent2Ui, DocInfo, RoundBlock, RoundDeltaKind, TurnData};
-use deepx_types::{ConfigStore, PersistentConfig, SessionMeta};
+use deepx_types::{ConfigStore, SessionMeta};
 use crate::markdown::MarkdownRenderer;
 
 // ── Active screen ──
@@ -11,203 +11,9 @@ pub enum Screen {
     Menu,
 }
 
-// ── Setup wizard state ──
-
-pub struct SetupState {
-    pub step: usize,
-    pub lang: crate::i18n::Lang,
-    pub api_key: String,
-    pub model: String,
-    pub model_list: Vec<String>,
-    pub model_index: usize,
-    pub context_limit: String,
-    pub error: String,
-    pub status: String,
-    pub models_loaded: bool,
-}
-
-impl SetupState {
-    pub fn new() -> Self {
-        let (pid, ep) = deepx_config::registry::first_provider_endpoint();
-        let def_model = deepx_config::registry::default_model_for(&pid, &ep);
-        let model_list = deepx_config::registry::find_endpoint(&pid, &ep)
-            .map(|e| if e.models.is_empty() { vec![] } else { e.models.clone() })
-            .unwrap_or_default();
-        let model_index = model_list.iter().position(|m| m == &def_model).unwrap_or(0);
-        Self {
-            step: 0,
-            lang: crate::i18n::Lang::En,
-            api_key: String::new(),
-            model: def_model,
-            model_list,
-            model_index,
-            context_limit: String::from("1000000"),
-            error: String::new(),
-            status: String::new(),
-            models_loaded: false,
-        }
-    }
-
-    pub fn total_steps(&self) -> usize { 4 }
-
-    pub fn fill_from_store(&mut self, store: &ConfigStore) {
-        if let Some(key) = store.load_api_key() {
-            self.api_key = key;
-        }
-        if let Some(v) = store.load_value() {
-            if let Some(m) = v.get("model").and_then(|m| m.as_str()) {
-                self.model = m.to_string();
-                if let Some(idx) = self.model_list.iter().position(|n| n == m) {
-                    self.model_index = idx;
-                }
-            }
-            if let Some(c) = v.get("context_limit").and_then(|c| c.as_u64()) {
-                self.context_limit = c.to_string();
-            }
-            if let Some(l) = v.get("lang").and_then(|l| l.as_str()) {
-                self.lang = crate::i18n::Lang::from_str(l);
-            }
-        }
-    }
-
-    pub fn current_value(&self) -> &str {
-        match self.step {
-            0 => self.lang.as_str(),
-            1 => &self.api_key,
-            2 => &self.model,
-            3 => &self.context_limit,
-            _ => "",
-        }
-    }
-
-    fn current_value_mut(&mut self) -> &mut String {
-        match self.step {
-            1 => &mut self.api_key,
-            2 => &mut self.model,
-            3 => &mut self.context_limit,
-            _ => &mut self.error,
-        }
-    }
-
-    pub fn backspace(&mut self) {
-        if self.step >= 1 {
-            self.current_value_mut().pop();
-        }
-    }
-
-    pub fn type_char(&mut self, c: char) {
-        if self.step >= 1 {
-            self.current_value_mut().push(c);
-        }
-    }
-
-    pub fn clear_field(&mut self) {
-        if self.step >= 1 {
-            self.current_value_mut().clear();
-        }
-    }
-
-    pub fn next(&mut self) -> bool {
-        self.validate();
-        if !self.error.is_empty() {
-            return false;
-        }
-        self.step += 1;
-        self.step >= self.total_steps()
-    }
-
-    fn validate(&mut self) {
-        self.error.clear();
-        match self.step {
-            0 => {} // language always valid
-            1 => {
-                self.api_key = self.api_key.trim().to_string();
-                if self.api_key.is_empty() {
-                    self.error = self.lang.t_key_invalid().to_string();
-                }
-            }
-            2 => {
-                self.model = self.model.trim().to_string();
-                if self.model.is_empty() {
-                    self.error = self.lang.t_setup_model_required().to_string();
-                }
-            }
-            3 => {
-                if let Ok(v) = self.context_limit.parse::<u32>() {
-                    if v < 1024 {
-                        self.error = self.lang.t_setup_context_min().to_string();
-                    }
-                } else {
-                    self.error = self.lang.t_setup_invalid_number().to_string();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Validate API key by checking connectivity. Model list already comes from registry presets.
-    /// Returns true if the key appears valid (non-empty + connects).
-    pub fn fetch_models(&mut self, provider_id: &str) -> bool {
-        let key = self.api_key.trim();
-        if key.is_empty() {
-            return false;
-        }
-        let ep_id = deepx_config::registry::first_endpoint_for(provider_id)
-            .map(|e| e.id).unwrap_or_else(|| "openai".into());
-        let url = match deepx_config::registry::models_url_for(provider_id, &ep_id) {
-            Some(u) => u,
-            None => return false,
-        };
-        let resp = ureq::get(&url)
-            .header("Authorization", &format!("Bearer {}", key))
-            .call();
-        match resp {
-            Ok(_r) => {
-                self.models_loaded = true;
-                true
-            }
-            Err(_) => false,
-        }
-    }
-
-    pub fn cursor_row_offset(&self) -> u16 {
-        match self.step {
-            0 => 8,
-            1 => 6,
-            2 => {
-                if self.models_loaded {
-                    let n = self.model_list.len().min(6);
-                    let extra = if self.model_list.len() > 6 { 1 } else { 0 };
-                    6 + n as u16 + extra as u16
-                } else {
-                    3
-                }
-            }
-            3 => 5,
-            _ => 8,
-        }
-    }
-
-    pub fn toggle_lang(&mut self) {
-        self.lang = match self.lang {
-            crate::i18n::Lang::En => crate::i18n::Lang::Zh,
-            crate::i18n::Lang::Zh => crate::i18n::Lang::En,
-        };
-    }
-
-    pub fn to_persistent_config(&self) -> PersistentConfig {
-        let (pid, ep) = deepx_config::registry::first_provider_endpoint();
-        let base_url = deepx_config::registry::base_url_for(&pid, &ep);
-        PersistentConfig {
-            api_key: Some(self.api_key.trim().to_string()),
-            model: Some(self.model.trim().to_string()),
-            base_url: Some(base_url),
-            context_limit: Some(self.context_limit.parse().unwrap_or(1_000_000)),
-            lang: Some(self.lang.as_str().to_string()),
-            ..Default::default()
-        }
-    }
-}
+// ── Sub-modules ──
+pub mod setup;
+pub use setup::SetupState;
 
 // ── App state ──
 
@@ -263,8 +69,15 @@ pub struct App {
     pending_tail_lines: usize,
     pub last_render: std::time::Instant,
     pub cached_line_count: usize,
-    pub line_count_msg_len: usize,
+    pub line_count_version: u64,
     pub line_count_width: u16,
+    /// Incremented whenever message content/lines change — used to invalidate
+    /// the line-count cache in ui.rs so scrolling stays accurate.
+    pub message_version: u64,
+    /// Cached rendered text lines (avoid rebuilding on every scroll).
+    pub cached_text_lines: Vec<ratatui::text::Line<'static>>,
+    pub cached_text_version: u64,
+    pub cached_text_width: u16,
     md_renderer: Option<MarkdownRenderer>,
     // Input caching
     pub cached_input_lines: Vec<ratatui::text::Line<'static>>,
@@ -746,8 +559,12 @@ impl App {
             pending_tail_lines: 0,
             last_render: std::time::Instant::now(),
             cached_line_count: 0,
-            line_count_msg_len: 0,
+            line_count_version: 0,
             line_count_width: 0,
+            message_version: 0,
+            cached_text_lines: Vec::new(),
+            cached_text_version: 0,
+            cached_text_width: 0,
             md_renderer: None,
             cached_input_lines: Vec::new(),
             cached_input_len: 0,
@@ -839,6 +656,7 @@ impl App {
     pub fn push_msg(&mut self, role: ChatRole, content: &str) {
         // Flush previous renderer state before starting a new message
         self.finalize_last_message();
+        self.message_version = self.message_version.wrapping_add(1);
 
         // Trim old messages by total character count to prevent unbounded memory.
         // 250 messages can hold 12+ MB with large tool outputs — cap at ~500k chars.
@@ -878,11 +696,13 @@ impl App {
         self.streaming_rendered_len = 0;
         self.md_renderer = None;  // Reset markdown state to avoid state pollution
         self.pending_tail_lines = 0;
+        self.message_version = self.message_version.wrapping_add(1);
         self.messages.push(ChatMessage { role, content: content.to_string(), lines: Vec::new(), tool_status: ToolStatus::None, tool_id: String::new() });
     }
 
     fn append_last(&mut self, content: &str) {
         if let Some(last) = self.messages.last_mut() {
+            self.message_version = self.message_version.wrapping_add(1);
             last.content.push_str(content);
             let renderer = self.md_renderer.get_or_insert_with(MarkdownRenderer::new);
             let start = self.streaming_rendered_len.min(last.content.len());
@@ -917,9 +737,14 @@ impl App {
         }
     }
 
-    /// Push a tool message with status tracking.
+    /// Push or update a tool message, keyed by tool_id to avoid duplicates.
     fn push_tool_msg(&mut self, tool_id: &str, label: &str, status: ToolStatus) {
         self.finalize_last_message();
+        self.upsert_tool_card(tool_id, label, status);
+    }
+
+    fn upsert_tool_card(&mut self, tool_id: &str, label: &str, status: ToolStatus) {
+        self.message_version = self.message_version.wrapping_add(1);
         let content = label.to_string();
         let mut renderer = MarkdownRenderer::new();
         let mut lines = Vec::new();
@@ -932,13 +757,22 @@ impl App {
             lines.push(l);
         }
         self.last_msg_time = std::time::Instant::now();
-        self.messages.push(ChatMessage {
-            role: ChatRole::Tool,
-            content,
-            lines,
-            tool_status: status,
-            tool_id: tool_id.to_string(),
-        });
+        // Upsert: update existing card if one exists with same tool_id
+        if let Some(msg) = self.messages.iter_mut().rev()
+            .find(|m| m.role == ChatRole::Tool && m.tool_id == tool_id)
+        {
+            msg.content = content;
+            msg.lines = lines;
+            msg.tool_status = status;
+        } else {
+            self.messages.push(ChatMessage {
+                role: ChatRole::Tool,
+                content,
+                lines,
+                tool_status: status,
+                tool_id: tool_id.to_string(),
+            });
+        }
     }
 
     /// Flush the incremental renderer and write remaining lines to the last message.
@@ -979,6 +813,13 @@ impl App {
                 self.tool_batch_total = 0;
                 self.tool_batch_done = 0;
                 self.last_error.clear();
+                // Reset streaming draft state across turns — prevents stale
+                // draft_round_msg_idx from a cancelled previous turn leaking
+                // into the next RoundComplete and truncating wrong messages.
+                self.draft_round_msg_idx = None;
+                self.streaming_rendered_len = 0;
+                self.md_renderer = None;
+                self.pending_tail_lines = 0;
                 self.push_msg(ChatRole::Divider, "");
                 self.push_msg(ChatRole::User, &user_text);
                 self.scroll_offset = 0;
@@ -1086,6 +927,7 @@ impl App {
                     {
                         let summary = format_tool_result_summary(&r.output, r.success);
                         msg.content = format!("{} {}", msg.content, summary);
+                        self.message_version = self.message_version.wrapping_add(1);
                         msg.tool_status = if r.success { ToolStatus::Success } else { ToolStatus::Failed };
                         let mut renderer = MarkdownRenderer::new();
                         let mut new_lines = Vec::new();
@@ -1133,6 +975,7 @@ impl App {
                 self.load_turns(&turns);
             }
             Agent2Ui::Error { message } => {
+                self.draft_round_msg_idx = None;
                 let status_text = format!("{}: {}", self.setup.lang.t_chat_error(), message);
                 self.push_msg(ChatRole::Status, &status_text);
                 self.status = status_text.clone();
@@ -1144,6 +987,7 @@ impl App {
                 self.push_msg(ChatRole::Status, &text);
             }
             Agent2Ui::Done => {
+                self.draft_round_msg_idx = None;
                 self.status = self.setup.lang.t_chat_ready().to_string();
                 self.streaming = false;
                 self.debug.streaming = false;
@@ -1152,6 +996,7 @@ impl App {
                 self.finalize_last_message();
             }
             Agent2Ui::Cancelled => {
+                self.draft_round_msg_idx = None;
                 self.status = self.setup.lang.t_chat_cancelled().to_string();
                 self.streaming = false;
                 self.debug.streaming = false;
@@ -1186,6 +1031,55 @@ impl App {
                     self.status = "Agent shut down".into();
                 }
             }
+            Agent2Ui::ToolCallPreview { turn_id: _, round_num: _, index: _, id: _, name, args_so_far } => {
+                // Tool calls during streaming are transient — show in status bar
+                // rather than creating a message that would break append_last.
+                let preview = format!("🔧 {} {}", name, args_so_far);
+                self.status = if preview.len() > 80 {
+                    format!("{}…", &preview[..80])
+                } else {
+                    preview
+                };
+            }
+            Agent2Ui::ExecProgress { tool_call_id, chunk } => {
+                // Stream exec stdout/stderr into the tool card in real-time.
+                if let Some(msg) = self.messages.iter_mut().rev()
+                    .find(|m| m.role == ChatRole::Tool && m.tool_id == tool_call_id)
+                {
+                    msg.content.push_str(&chunk);
+                    self.message_version = self.message_version.wrapping_add(1);
+                    // Re-render with new content
+                    let mut renderer = MarkdownRenderer::new();
+                    let mut new_lines = Vec::new();
+                    for line in msg.content.lines() {
+                        for l in renderer.push_line(line) {
+                            new_lines.push(l);
+                        }
+                    }
+                    for l in renderer.flush() {
+                        new_lines.push(l);
+                    }
+                    msg.lines = new_lines;
+                }
+            }
+            Agent2Ui::MoreTurns { turns, has_more: _ } => {
+                // Prepend older turns loaded lazily (user scrolled up).
+                self.prepend_turns(&turns);
+            }
+            Agent2Ui::CompactStart { turns_total: _, turns_keeping: _ } => {
+                self.status = if self.setup.lang.as_str() == "zh" {
+                    "正在压缩上下文...".into()
+                } else {
+                    "Compacting context...".into()
+                };
+            }
+            Agent2Ui::CompactEnd { summary_chars: _, turns_compacted } => {
+                self.status = if self.setup.lang.as_str() == "zh" {
+                    format!("上下文压缩完成 ({} turn)", turns_compacted)
+                } else {
+                    format!("Context compacted ({} turns)", turns_compacted)
+                };
+            }
             _ => {}
         }
     }
@@ -1216,5 +1110,62 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Prepend older turns at front of message list (lazy history loading).
+    fn prepend_turns(&mut self, turns: &[TurnData]) {
+        let mut new_msgs: Vec<ChatMessage> = Vec::new();
+        for turn in turns {
+            new_msgs.push(ChatMessage {
+                role: ChatRole::Divider, content: String::new(), lines: Vec::new(),
+                tool_status: ToolStatus::None, tool_id: String::new(),
+            });
+            let content = &turn.user_text;
+            let mut r = MarkdownRenderer::new();
+            let mut md_lines = Vec::new();
+            for line in content.lines() {
+                for l in r.push_line(line) { md_lines.push(l); }
+            }
+            for l in r.flush() { md_lines.push(l); }
+            new_msgs.push(ChatMessage {
+                role: ChatRole::User, content: content.clone(), lines: md_lines,
+                tool_status: ToolStatus::None, tool_id: String::new(),
+            });
+            for round in &turn.rounds {
+                if let Some(ref t) = round.thinking { if !t.is_empty() {
+                    let mut r = MarkdownRenderer::new(); let mut md_lines = Vec::new();
+                    for line in t.lines() { for l in r.push_line(line) { md_lines.push(l); } }
+                    for l in r.flush() { md_lines.push(l); }
+                    new_msgs.push(ChatMessage {
+                        role: ChatRole::Thinking, content: t.clone(), lines: md_lines,
+                        tool_status: ToolStatus::None, tool_id: String::new(),
+                    });
+                }}
+                if let Some(ref a) = round.answer { if !a.is_empty() {
+                    let mut r = MarkdownRenderer::new(); let mut md_lines = Vec::new();
+                    for line in a.lines() { for l in r.push_line(line) { md_lines.push(l); } }
+                    for l in r.flush() { md_lines.push(l); }
+                    new_msgs.push(ChatMessage {
+                        role: ChatRole::Assistant, content: a.clone(), lines: md_lines,
+                        tool_status: ToolStatus::None, tool_id: String::new(),
+                    });
+                }}
+                for tc in &round.tool_calls {
+                    let label = format_tool_label(&tc.name, &tc.args_display);
+                    let mut status = ToolStatus::Success;
+                    if let Some(tr) = round.tool_results.iter().find(|r| r.tool_call_id == tc.id) {
+                        if !tr.success { status = ToolStatus::Failed; }
+                    }
+                    let mut r = MarkdownRenderer::new(); let mut md_lines = Vec::new();
+                    for line in label.lines() { for l in r.push_line(line) { md_lines.push(l); } }
+                    for l in r.flush() { md_lines.push(l); }
+                    new_msgs.push(ChatMessage {
+                        role: ChatRole::Tool, content: label, lines: md_lines,
+                        tool_status: status, tool_id: tc.id.clone(),
+                    });
+                }
+            }
+        }
+        if !new_msgs.is_empty() { self.messages.splice(0..0, new_msgs); self.message_version = self.message_version.wrapping_add(1); }
     }
 }
