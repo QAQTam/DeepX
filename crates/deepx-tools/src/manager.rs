@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::{ToolKey, ToolHandler, ToolCallCtx, CANCEL, SafetyVerdict};
+use crate::{ToolKey, ToolHandler, CANCEL, SafetyVerdict};
 
 // ── Execution metadata ──
 
@@ -46,6 +46,18 @@ pub struct ToolManager {
     stats_failures: u32,
     files_read: Vec<String>,
     files_written: Vec<String>,
+}
+
+// ── Three-phase execution for parallel tool support ──
+
+/// Prepared tool call, ready for execution without holding the manager lock.
+pub struct PreparedCall {
+    pub id: String,
+    pub name: String,
+    pub handler_fn: fn(crate::ToolCallCtx) -> crate::ToolResult,
+    pub ctx: crate::ToolCallCtx,
+    pub(crate) cancel_flag: Arc<AtomicBool>,
+    pub(crate) audit_args: serde_json::Value,
 }
 
 impl ToolManager {
@@ -103,72 +115,95 @@ impl ToolManager {
 
     pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> ToolExecReport {
         let t0 = std::time::Instant::now();
+        let prepared = match self.prepare_req(id, name, action, args, timeout_secs, progress_tx) {
+            Ok(p) => p,
+            Err(report) => return report,
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (prepared.handler_fn)(prepared.ctx.clone())
+        }));
+        let elapsed_ms = t0.elapsed().as_millis() as u64;
+        let tool_result = match result {
+            Ok(tr) => tr,
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
+                    else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
+                    else { "unknown panic".to_string() };
+                crate::ToolResult { success: false, content: format!("[ERROR] Tool panicked: {}", msg) }
+            }
+        };
+        self.finalize_req(prepared, tool_result, elapsed_ms)
+    }
 
+    // ── Three-phase execution for parallel tool support ──
+
+    /// Phase 1: validate, safety-check, register inflight. Returns a [`PreparedCall`]
+    /// that can be executed without the manager lock.
+    pub fn prepare_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> Result<PreparedCall, ToolExecReport> {
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                let msg = format!("[ERROR] Tool '{}' not in allowed list", name); return ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new().clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } };
+                let msg = format!("[ERROR] Tool '{}' not in allowed list", name);
+                return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
             }
         }
 
         let handler = match self.handlers.get(&ToolKey::new(name, action)) {
-            Some(h) => h,
+            Some(h) => h.clone(),
             None => {
                 match self.handlers.iter().find(|(k, _)| k.name == name) {
-                    Some((_, h)) => h,
-                    None => { let msg = format!("[ERROR] Unknown tool: {}/{}", name, action); return ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new().clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } }; },
+                    Some((_, h)) => h.clone(),
+                    None => {
+                        let msg = format!("[ERROR] Unknown tool: {}/{}", name, action);
+                        return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
+                    }
                 }
             }
         };
 
-        let ctx = ToolCallCtx {
+        let ctx = crate::ToolCallCtx {
             id: id.clone(), name: name.to_string(), action: action.to_string(),
             args: args.clone(), tx_progress: progress_tx.clone(), timeout_secs,
         };
         match (handler.safety)(&ctx) {
             SafetyVerdict::Block(reason) => {
                 let msg = format!("[ERROR] {}", reason);
-                return ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new().clone(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } };
+                return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
             }
             SafetyVerdict::Allow => {}
         }
 
         let cancel_flag = Arc::new(AtomicBool::new(false));
-        self.inflight_tasks.insert(id.clone(), cancel_flag);
+        self.inflight_tasks.insert(id.clone(), cancel_flag.clone());
 
-        let tool_name = name.to_string();
         let audit_args = args.clone();
-
-        let ctx = ToolCallCtx {
-            id: id.clone(), name: tool_name.clone(), action: action.to_string(),
+        let ctx = crate::ToolCallCtx {
+            id: id.clone(), name: name.to_string(), action: action.to_string(),
             args, tx_progress: progress_tx, timeout_secs,
         };
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            (handler.handler)(ctx)
-        }));
+        Ok(PreparedCall {
+            id,
+            name: name.to_string(),
+            handler_fn: handler.handler,
+            ctx,
+            cancel_flag,
+            audit_args,
+        })
+    }
 
-        self.inflight_tasks.remove(&id);
+    /// Phase 3: deregister inflight, accumulate stats, build report.
+    pub fn finalize_req(&mut self, prepared: PreparedCall, result: crate::ToolResult, elapsed_ms: u64) -> ToolExecReport {
+        self.inflight_tasks.remove(&prepared.id);
 
-        let (content, success) = match result {
-            Ok(tr) => (tr.content, tr.success),
-            Err(panic_info) => {
-                let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
-                    else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
-                    else { "unknown panic".to_string() };
-                (format!("[ERROR] Tool panicked: {}", msg), false)
-            }
-        };
+        let output_size = result.content.len();
+        let success = result.success;
 
-        let elapsed_ms = t0.elapsed().as_millis() as u64;
-        let output_size = content.len();
-
-        // Accumulate stats (caller retrieves via stats())
         self.stats_total += 1;
         if !success { self.stats_failures += 1; }
-        let args_summary = audit_args_summary(&tool_name, &audit_args);
-        let files_affected = extract_files_affected(&tool_name, &audit_args);
+        let args_summary = audit_args_summary(&prepared.name, &prepared.audit_args);
+        let files_affected = extract_files_affected(&prepared.name, &prepared.audit_args);
         if success {
-            match tool_name.as_str() {
+            match prepared.name.as_str() {
                 "read_file" | "search" | "grep" | "glob" | "explore" | "list_dir" | "diff" => {
                     for f in &files_affected { if !self.files_read.contains(f) { self.files_read.push(f.clone()); } }
                 }
@@ -178,8 +213,8 @@ impl ToolManager {
                 _ => {}
             }
         }
-        let meta = ToolExecMeta { name: tool_name, elapsed_ms, output_size, success, args_summary };
-        ToolExecReport { success, content, meta, files_affected }
+        let meta = ToolExecMeta { name: prepared.name, elapsed_ms, output_size, success, args_summary };
+        ToolExecReport { success, content: result.content, meta, files_affected }
     }
 
     pub fn stats(&self) -> ToolStats {

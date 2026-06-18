@@ -119,6 +119,7 @@ impl std::fmt::Display for ToolKey {
 
 // ── ToolCallCtx ──
 
+#[derive(Clone)]
 pub struct ToolCallCtx {
     pub id: String,
     pub name: String,

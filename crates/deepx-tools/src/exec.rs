@@ -38,7 +38,7 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
             c.args(["/C", &command]);
             c
         };
-        // Suppress console window flash on Windows
+        // Suppress console window flash on Windows (GUI subsystem has no console to inherit)
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -57,13 +57,12 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
             c.args(["-c", &command]);
             c
         };
-        c.stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         c
     };
 
-    // Windows: CREATE_NO_WINDOW already applied per-shell above.
     // Linux/macOS: no special handling needed.
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
     if let Some(dir) = &cwd {
         cmd.current_dir(dir);
