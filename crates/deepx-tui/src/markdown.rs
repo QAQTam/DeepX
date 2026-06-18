@@ -105,7 +105,7 @@ impl MarkdownRenderer {
                 return out;
             } else {
                 self.state = MdState::CodeBlock;
-                self.code_lang = trimmed[3..].trim().to_string();
+                self.code_lang = trimmed.strip_prefix("```").unwrap_or("").trim().to_string();
                 return out;
             }
         }
@@ -121,7 +121,7 @@ impl MarkdownRenderer {
 
         // Blockquote
         if trimmed.starts_with('>') {
-            let text = &trimmed[1..];
+            let text = trimmed.strip_prefix('>').unwrap_or(trimmed);
             return vec![Line::from(vec![
                 Span::styled("│ ", Style::new().fg(QUOTE_FG)),
                 Span::styled(text.to_string(), Style::new().fg(QUOTE_FG).italic()),
@@ -480,8 +480,9 @@ fn format_inline(text: &str) -> Line<'static> {
             spans.push(Span::raw(remaining[..next].to_string()));
             remaining = remaining[next..].to_string();
         } else if !remaining.is_empty() {
-            spans.push(Span::raw(remaining[..1].to_string()));
-            remaining = remaining[1..].to_string();
+            let p = remaining.floor_char_boundary(1);
+            spans.push(Span::raw(remaining[..p].to_string()));
+            remaining = remaining[p..].to_string();
         }
     }
 
@@ -578,9 +579,10 @@ fn try_extract_link(text: &str, spans: &mut Vec<Span<'static>>) -> Option<String
     if !after_label.starts_with('(') {
         return None;
     }
-    let url_end = after_label[1..].find(')')?;
-    let url = &after_label[1..][..url_end];
-    let remaining = after_label[url_end + 2..].to_string();
+    let after_paren = after_label.strip_prefix('(').unwrap_or("");
+    let url_end = after_paren.find(')')?;
+    let url = &after_paren[..url_end];
+    let remaining = after_paren[url_end + 1..].to_string();
     if !prefix.is_empty() {
         spans.push(Span::raw(prefix.to_string()));
     }

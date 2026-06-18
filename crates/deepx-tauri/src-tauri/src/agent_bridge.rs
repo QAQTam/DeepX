@@ -48,7 +48,7 @@ impl AgentBridge {
         child_cmd.arg("agent")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped()); // TODO: revert after debug
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -60,6 +60,26 @@ impl AgentBridge {
 
         let stdin = child.stdin.take().expect("Failed to get stdin");
         let stdout = child.stdout.take().expect("Failed to get stdout");
+        let stderr = child.stderr.take().expect("Failed to get stderr");
+
+        // Debug: pipe agent stderr to a log file
+        std::thread::spawn(move || {
+            let mut writer = std::fs::File::create(
+                deepx_types::platform::data_dir().join("agent_debug.log")
+            ).expect("Failed to create agent_debug.log");
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        use std::io::Write;
+                        let _ = write!(writer, "{}", line);
+                    }
+                }
+            }
+        });
 
         let app_handle = app.clone();
         std::thread::spawn(move || {

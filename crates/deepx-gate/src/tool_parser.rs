@@ -79,7 +79,7 @@ pub fn parse_xml_tool_calls(content: &str, tool_names: &[String]) -> (String, Ve
 
         let after_lt = &remaining[tc_start..];
         if let Some(end) = after_lt.find('>') {
-            let tag_name = &after_lt[1..end];
+            let tag_name = after_lt.strip_prefix('<').and_then(|s| s.get(..end - 1)).unwrap_or("");
             let closing = format!("</{tag_name}>");
 
             if let Some((_, tool_name)) = tag_map.iter().find(|(tag, _)| *tag == tag_name) {

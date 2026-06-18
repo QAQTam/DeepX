@@ -67,6 +67,7 @@ pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: 
 /// Uses three-phase locking: prepare (brief lock) → execute (no lock) → finalize (brief lock),
 /// so that multiple exec calls can run their subprocesses concurrently.
 pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> ToolExecResult {
+    log::info!("[BRIDGE] execute_tool_with_id_full name={} has_progress={}", name, progress_tx.is_some());
     let t0 = std::time::Instant::now();
     let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
     let call_id = if tool_call_id.is_empty() {

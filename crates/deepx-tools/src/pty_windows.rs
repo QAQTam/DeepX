@@ -31,8 +31,8 @@ impl Imp {
 }
 
 pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> {
-    let mut cmd = Command::new("cmd");
-    cmd.args(["/C", command]);
+    let mut cmd = Command::new("pwsh");
+    cmd.args(["-NoLogo", "-NoProfile", "-Command", command]);
     // Suppress console window flash
     #[cfg(target_os = "windows")]
     {

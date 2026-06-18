@@ -1036,7 +1036,8 @@ impl App {
                 // rather than creating a message that would break append_last.
                 let preview = format!("🔧 {} {}", name, args_so_far);
                 self.status = if preview.len() > 80 {
-                    format!("{}…", &preview[..80])
+                    let bound = preview.floor_char_boundary(80);
+                    format!("{}…", &preview[..bound])
                 } else {
                     preview
                 };

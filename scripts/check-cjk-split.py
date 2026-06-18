@@ -64,6 +64,13 @@ def classify_index(expr: str, known_safe_vars: set) -> str:
     ]:
         if re.search(pat, expr):
             return "safe"
+    # method-chain that clamps to a numeric literal → effectively hardcoded byte index
+    # e.g. .min(40), .max(200), len().min(100)
+    if re.search(r"\.\s*(?:min|max)\s*\(\s*\d+\s*\)", expr):
+        return "unsafe"
+    # arithmetic with numeric literals → likely byte math (len() - 1, n + 10)
+    if re.search(r"[+\-*/]\s*\d+", expr) or re.search(r"\d+\s*[+\-*/]", expr):
+        return "unsafe"
     return "maybe"
 
 

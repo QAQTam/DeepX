@@ -1,6 +1,9 @@
 import { createStore, produce } from "solid-js/store";
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import AnsiUp from "ansi-to-html";
+
+const ansiUp = new AnsiUp();
 
 export interface ToolCallDef { id: string; name: string; args_display: string; args_json: string; }
 export interface ToolResultDef { tool_call_id: string; output: string; success: boolean; }
@@ -114,18 +117,24 @@ export function createChatStore() {
   }
 
   function handleExecProgress(toolCallId: string, chunk: string) {
-    const lastTurn = turns[turns.length - 1];
-    if (!lastTurn) return;
-    const lastRound = lastTurn.rounds[lastTurn.rounds.length - 1];
-    if (!lastRound) return;
-    // Find or update streaming result for the specific tool call
+    console.log("[ExecProgress]", toolCallId, chunk.slice(0, 40));
+    // Convert ANSI escape codes to HTML for PTY output rendering
+    const html = ansiUp.toHtml(chunk);
     const streamKey = toolCallId + "_stream";
-    const existing = lastRound.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
-    if (existing >= 0) {
-      setTurns((t) => t.turnId === lastTurn.turnId, "rounds", (r) => r.roundNum === lastRound.roundNum, "toolResults", existing, "output", (o: string) => o + chunk);
-    } else {
-      setTurns((t) => t.turnId === lastTurn.turnId, "rounds", (r) => r.roundNum === lastRound.roundNum, "toolResults", produce((tr: ToolResultDef[]) => tr.push({ tool_call_id: streamKey, output: chunk, success: true })));
-    }
+    setTurns(produce((ts) => {
+      const turn = ts[ts.length - 1];
+      if (!turn) { console.log("[ExecProgress] no turn"); return; }
+      const round = turn.rounds[turn.rounds.length - 1];
+      if (!round) { console.log("[ExecProgress] no round"); return; }
+      console.log("[ExecProgress] round found, toolCalls:", round.toolCalls.length, "toolResults:", round.toolResults.length);
+      const existing = round.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
+      if (existing >= 0) {
+        round.toolResults[existing].output += html;
+      } else {
+        round.toolResults.push({ tool_call_id: streamKey, output: html, success: true });
+      }
+      console.log("[ExecProgress] updated toolResults, count:", round.toolResults.length);
+    }));
   }
 
   function handleToolResults(turnId: string, roundNum: number, results: ToolResultDef[]) {
@@ -134,7 +143,7 @@ export function createChatStore() {
       // Remove streaming placeholders for the same tool call IDs
       const streamKeys = new Set(results.map(r => r.tool_call_id + "_stream"));
       round.toolResults = round.toolResults.filter(tr => !streamKeys.has(tr.tool_call_id));
-      // Push final results
+      // Push final results (ANSI rendering handled by ToolCallCard)
       round.toolResults.push(...results);
     }));
     for (const r of results) {

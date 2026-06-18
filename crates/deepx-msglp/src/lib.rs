@@ -403,18 +403,83 @@ impl Loop {
         }
     }
 
-    fn handle_tool_call(&mut self, id: &str, name: &str, action: &str, args: &serde_json::Value) {
-        let result = deepx_tools::bridge::execute_tool_with_id(name, action, &args.to_string(), id);
-        let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");
+    fn handle_tool_call(&mut self, id: &str, name: &str, _action: &str, args: &serde_json::Value) {
+        log::info!("[AGENT] handle_tool_call: name={name} id={id}");
+        let turn_id = format!("tc_{id}");
+        let round_num = 0u32;
+
+        // Pre-emit turn and round so the frontend has a target for ExecProgress
+        let turn_id_for_emit = turn_id.clone();
+        self.emit(Agent2Ui::TurnStart {
+            turn_id: turn_id_for_emit,
+            user_text: format!("tool: {name}"),
+        });
+        let args_display: String = args.get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or(name)
+            .chars()
+            .take(80)
+            .collect();
+        self.emit(Agent2Ui::RoundComplete {
+            turn_id: turn_id.clone(),
+            round_num,
+            thinking: None,
+            answer: None,
+            tool_calls: vec![deepx_proto::ToolCallDef {
+                id: id.to_string(),
+                name: name.to_string(),
+                args_display: args_display.clone(),
+                args_json: args.to_string(),
+            }],
+            blocks: vec![deepx_proto::RoundBlock::Tool {
+                card: deepx_proto::ToolCallDef {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    args_display,
+                    args_json: args.to_string(),
+                },
+            }],
+            is_final: false,
+        });
+
+        // Use execute_tool_with_id_full with a progress channel for streaming
+        let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(String, String)>();
+        let tool_name = name.to_string();
+        let tool_id = id.to_string();
+        let tool_id_for_result = tool_id.clone();
+        let args_s = args.to_string();
+        let handle = std::thread::spawn(move || {
+            let result = deepx_tools::bridge::execute_tool_with_id_full(&tool_name, "", &args_s, &tool_id, Some(progress_tx));
+            (tool_id, result.content, result.success)
+        });
+        // Drain progress while tool runs
+        loop {
+            match progress_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok((tc_id, chunk)) => {
+                    self.emit(Agent2Ui::ExecProgress {
+                        tool_call_id: tc_id,
+                        chunk,
+                    });
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let (tid, output, success) = handle.join().unwrap_or_else(|_| (tool_id_for_result, "[ERROR] tool thread panicked".into(), false));
         self.emit(Agent2Ui::ToolResults {
-            turn_id: "headless".into(),
-            round_num: 0,
+            turn_id: turn_id.clone(),
+            round_num,
             results: vec![deepx_proto::ToolResultDef {
-                tool_call_id: id.to_string(),
-                output: result,
+                tool_call_id: tid,
+                output,
                 success,
                 file: None,
             }],
+        });
+        self.emit(Agent2Ui::TurnEnd {
+            turn_id: turn_id.clone(),
+            stop_reason: None,
+            usage: None,
         });
     }
 
@@ -746,27 +811,47 @@ impl Loop {
                         drop(progress_tx); // close sender when all threads drop their clones
 
                         // Drain progress while tools run (with cancel check)
-                        loop {
+                        log::info!("[AGENT] drain loop start");
+                        let cancelled = loop {
                             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                                 // Cancel: stop draining, tools will detect cancel flag
-                                break;
+                                log::info!("[AGENT] drain loop cancel");
+                                break true;
                             }
                             match progress_rx.recv_timeout(std::time::Duration::from_millis(100)) {
                                 Ok((tc_id, chunk)) => {
+                                    log::info!("[AGENT] ExecProgress: {} {}", tc_id, &chunk[..chunk.floor_char_boundary(chunk.len().min(40))]);
                                     self.emit(Agent2Ui::ExecProgress {
                                         tool_call_id: tc_id,
                                         chunk,
                                     });
                                 }
                                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                    log::info!("[AGENT] drain loop disconnected");
+                                    break false;
+                                }
                             }
-                        }
+                        };
 
-                        // Collect results
-                        for h in handles {
-                            if let Ok((tc_id, content, _success)) = h.join() {
-                                self.agent.msg.push_tool_result_direct(&tc_id, &content);
+                        // Collect results — skip join if cancelled to avoid blocking
+                        // on tool threads that may still be waiting on PTY I/O.
+                        if cancelled {
+                            log::info!("[AGENT] cancelled, skipping tool thread joins");
+                            // Push placeholder results so the store doesn't get stuck
+                            for (tc_id, _tool_name) in &tool_infos {
+                                self.agent.msg.push_tool_result_direct(tc_id, "[CANCELLED]");
+                            }
+                        } else {
+                            for h in handles {
+                                match h.join() {
+                                    Ok((tc_id, content, _success)) => {
+                                        self.agent.msg.push_tool_result_direct(&tc_id, &content);
+                                    }
+                                    Err(_) => {
+                                        log::error!("[AGENT] tool thread panicked");
+                                    }
+                                }
                             }
                         }
                     }

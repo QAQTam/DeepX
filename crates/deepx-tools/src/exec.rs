@@ -1,14 +1,18 @@
-//! Command execution via shell.
+//! Command execution via PTY (pseudo-terminal).
+//!
+//! Windows: `conpty` (CreatePseudoConsole API) via `pwsh -Command`.
+//! Unix: `libc::forkpty` via `bash -c` or `sh -c`.
+//!
+//! Output is read by a background thread and streamed through a channel,
+//! preserving cancel/timeout responsiveness. PTY provides proper terminal
+//! semantics: ANSI colors, `isatty()`=true for the child process.
 //!
 //! 安全检测逻辑由 safety.rs 集中管理。
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
 
 use crate::{ToolCallCtx, ToolResult};
 use std::sync::mpsc;
-
-// ── Compat helpers ──
 
 pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> String {
     const MAX_EXEC_OUTPUT: usize = 1024 * 1024;
@@ -21,122 +25,107 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         .filter(|&n| n > 0 && n <= 3600)
         .unwrap_or(30);
 
-    let mut cmd = if cfg!(target_os = "windows") {
-        // Prefer pwsh (PowerShell 7) > powershell (5.1) > cmd
-        let c = if which("pwsh.exe") {
-            let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
-            let mut c = Command::new("pwsh");
-            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded]);
-            c
-        } else if which("powershell.exe") {
-            let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
-            let mut c = Command::new("powershell");
-            c.args(["-NoLogo", "-NonInteractive", "-Command", &encoded]);
-            c
-        } else {
-            let mut c = Command::new("cmd");
-            c.args(["/C", &command]);
-            c
-        };
-        c
-    } else {
-        // Prefer bash -i (reads .bashrc for nvm/fnm/rbenv etc)
-        let mut c = if which("bash") {
-            let mut c = Command::new("bash");
-            c.args(["-i", "-c", &command]);
-            c
-        } else {
-            let mut c = Command::new("sh");
-            c.args(["-c", &command]);
-            c
-        };
-        c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        c
-    };
-
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    if let Some(dir) = &cwd {
-        cmd.current_dir(dir);
-    }
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
+    // ── Spawn via PTY ──
+    log::info!("[EXEC] spawn start, has_progress_tx={}", progress_tx.is_some());
+    let mut proc = match crate::pty::spawn(&command, cwd.as_deref()) {
+        Ok(p) => p,
         Err(e) => return format!("[ERROR] exec '{}' failed to start\n[HINT] {}", command, e),
     };
-    let pid = child.id();
+    let pid = proc.pid();
 
-    let stdout_reader = child.stdout.take().map(BufReader::new);
-    let stderr_reader = child.stderr.take().map(BufReader::new);
+    // ── Reader thread: PTY output → channel ──
+    let reader = match proc.take_output() {
+        Some(r) => r,
+        None => return format!("[ERROR] exec '{}' no output pipe", command),
+    };
 
     let pt_out = progress_tx.clone();
-    let pt_err = progress_tx.clone();
+    let has_progress = pt_out.is_some();
+    log::info!("[EXEC] reader thread starting, has_progress={}", has_progress);
     let tc_id = tool_call_id.to_string();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
-    let mut output_buf = String::new();
+    let done_tx_thread = done_tx.clone();
 
-    if let Some(reader) = stdout_reader {
-        let done_tx = done_tx.clone();
-        let tc_id = tc_id.clone();
-        std::thread::spawn(move || {
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let text = format!("{l}\n");
-                    if let Some(ref tx) = pt_out { let _ = tx.send((tc_id.clone(), text.clone())); }
-                    let _ = done_tx.send(text);
+    let _reader_handle = std::thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+        let mut line_count = 0u32;
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    line_count += 1;
+                    if let Some(ref tx) = pt_out {
+                        let _ = tx.send((tc_id.clone(), line.clone()));
+                    }
+                    let _ = done_tx_thread.send(line.clone());
                 }
             }
-        });
-    }
-    if let Some(reader) = stderr_reader {
-        let done_tx = done_tx.clone();
-        let tc_id = tc_id.clone();
-        std::thread::spawn(move || {
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let text = format!("[stderr] {l}\n");
-                    if let Some(ref tx) = pt_err { let _ = tx.send((tc_id.clone(), text.clone())); }
-                    let _ = done_tx.send(text);
-                }
-            }
-        });
-    }
+        }
+        log::info!("[EXEC] reader thread done, {} lines", line_count);
+    });
     drop(done_tx);
 
-    use std::sync::atomic::Ordering;
+    // ── Main loop: timeout + cancel + collect ──
+    let mut output_buf = String::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
+
+    let exit_reason = loop {
+        use std::sync::atomic::Ordering;
+        let remaining = deadline.checked_duration_since(std::time::Instant::now()).unwrap_or_default();
+
+        // Cancel
         if crate::CANCEL.load(Ordering::SeqCst) {
-            deepx_types::platform::kill_process(pid);
+            let _ = proc.kill();
             return "[CANCELLED] Command execution cancelled by user.".into();
         }
-        let remaining = deadline.checked_duration_since(std::time::Instant::now()).unwrap_or_default();
+
+        // Timeout
         if remaining.is_zero() {
-            deepx_types::platform::kill_process(pid);
+            let _ = proc.kill();
             return format!("[ERROR] exec timed out after {}s\n[HINT] Increase timeout_secs or check if the command is stuck.", timeout_secs);
         }
-        match child.try_wait() {
-            Ok(Some(_status)) => {
-                // drain remaining output
-                while let Ok(chunk) = done_rx.recv() { output_buf.push_str(&chunk); }
-                break;
+
+        // Read output chunk
+        match done_rx.recv_timeout(remaining.min(std::time::Duration::from_millis(200))) {
+            Ok(chunk) => {
+                output_buf.push_str(&chunk);
             }
-            Ok(None) => {
-                match done_rx.recv_timeout(remaining.min(std::time::Duration::from_millis(200))) {
-                    Ok(chunk) => output_buf.push_str(&chunk),
-                    Err(_) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if !proc.is_alive() {
+                    break "process_exited";
                 }
+                continue;
             }
-            Err(e) => return format!("[ERROR] exec wait failed: {}", e),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break "reader_disconnected";
+            }
         }
+    };
+    log::info!("[EXEC] main loop exit: {}", exit_reason);
+
+    // Ensure PTY is fully closed so the reader thread unblocks.
+    // On Windows conpty, the output pipe may not close automatically when
+    // the child process exits. Explicitly dropping proc triggers
+    // conpty::Process::Drop → ClosePseudoConsole, which closes the pipe.
+    drop(proc);
+    // _reader_handle will be dropped on return (detaching the thread).
+    // The reader thread will exit once the PTY pipe closes (now closed).
+
+    // Final drain
+    while let Ok(chunk) = done_rx.try_recv() {
+        output_buf.push_str(&chunk);
     }
 
+    // ── Format output ──
     let output = if output_buf.len() > MAX_EXEC_OUTPUT {
-        output_buf[..output_buf.floor_char_boundary(MAX_EXEC_OUTPUT)].to_string() + &format!("...[TRUNCATED: {} bytes total]", output_buf.len())
+        output_buf[..output_buf.floor_char_boundary(MAX_EXEC_OUTPUT)].to_string()
+            + &format!("...[TRUNCATED: {} bytes total]", output_buf.len())
     } else {
         output_buf.clone()
     };
-    
+
     let output_trimmed = output.trim();
     let short_output = if output_trimmed.len() > 2000 {
         let head: String = output_trimmed.chars().take(1000).collect();
@@ -145,8 +134,8 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     } else {
         output_trimmed.to_string()
     };
-    
-    let mut result = format!("[OK] exec: {} (exit 0)\n", command);
+
+    let mut result = format!("[OK] exec: {} (pid {})\n", command, pid);
     if short_output.is_empty() {
         result.push_str("(no output)");
     } else {
@@ -177,26 +166,6 @@ use deepx_types::arg::{parse_opt, parse_opt_u64};
 
 use crate::{ToolHandler, ToolKey};
 use std::time::Duration;
-
-fn which(name: &str) -> bool {
-    if cfg!(target_os = "windows") {
-        Command::new("where")
-            .args([name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    } else {
-        Command::new("which")
-            .args([name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-}
 
 pub fn register(mgr: &mut crate::ToolManager) {
     // exec/run

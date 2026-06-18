@@ -70,7 +70,7 @@ use imp::Imp;
 /// Spawn a command in a PTY.
 ///
 /// `command` is the full shell command line (e.g. `"git log --oneline"`).
-/// On Windows this is executed via `cmd /C`. On Unix via `sh -c`.
+/// On Windows this is executed via `pwsh -Command`. On Unix via `sh -c`.
 /// `cwd` optionally sets the working directory for the child process.
 ///
 /// Returns a [`PtyProcess`] from which stdout can be read with PTY semantics

@@ -1,6 +1,9 @@
 import { createSignal, Show, createEffect, on } from "solid-js";
 import type { ToolCallDef, ToolResultDef } from "../store/chat";
 import { useI18n } from "../i18n";
+import AnsiUp from "ansi-to-html";
+
+const ansiUp = new AnsiUp();
 
 const isUnifiedDiff = (text: string): boolean =>
   /^(--- (a\/|\/)|@@ -\d+)/m.test(text);
@@ -74,7 +77,9 @@ function renderOutput(text: string): string {
   if (isUnifiedDiff(text)) {
     return renderDiff(text);
   }
-  return `<pre class="diff-plain">${esc(text)}</pre>`;
+  // ANSI-to-HTML: preserve terminal colors in PTY output
+  const html = ansiUp.toHtml(text);
+  return `<pre class="diff-plain">${html}</pre>`;
 }
 
 export default function ToolCallCard(props: {
@@ -82,17 +87,18 @@ export default function ToolCallCard(props: {
   result?: ToolResultDef;
   streamingOutput?: string;
 }) {
-  const [open, setOpen] = createSignal(false);
   const { t } = useI18n();
   let bodyRef!: HTMLDivElement;
   const icon = toolIcon(props.call.name);
   const hasResult = !!props.result;
+  // Default open for running tools so streaming output is immediately visible
+  const [open, setOpen] = createSignal(!hasResult);
   const stateClass = () =>
     hasResult
       ? props.result!.success ? "tool-success" : "tool-error"
       : "tool-running";
 
-  // Auto-expand when streaming output arrives
+  // Auto-expand when streaming output arrives (redundant with default but safe)
   createEffect(on(() => props.streamingOutput, (v) => {
     if (v) setOpen(true);
   }));
@@ -122,7 +128,11 @@ export default function ToolCallCard(props: {
           <span class="tool-card-status tool-running-text">{t().tool.running}</span>
         </Show>
       </div>
-      <Show when={open() && (hasResult || props.streamingOutput)}>
+      <Show when={open() && (hasResult || props.streamingOutput)} fallback={
+        <Show when={!hasResult}>
+          <div class="tool-card-body muted">{t().tool.running}...</div>
+        </Show>
+      }>
         <div class="tool-card-body" ref={bodyRef} innerHTML={
           (props.streamingOutput || "") +
           (hasResult && props.streamingOutput ? "\n\n" : "") +

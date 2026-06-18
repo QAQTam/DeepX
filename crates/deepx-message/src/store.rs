@@ -202,7 +202,6 @@ impl MessageStore {
         turn.steps.push(step);
 
         if has_tools {
-            self.execute_tools_batch();
             Effect::None
         } else {
             Effect::TurnComplete

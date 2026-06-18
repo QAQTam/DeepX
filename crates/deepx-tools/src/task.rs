@@ -31,7 +31,7 @@ fn next_id(lines: &[String]) -> u32 {
             let body = rest.1.trim_start();
             if let Some(id_str) = body.splitn(2, ':').next() {
                 if id_str.starts_with('T') {
-                    if let Ok(n) = id_str[1..].parse::<u32>() {
+                    if let Ok(n) = id_str.strip_prefix('T').unwrap_or("").parse::<u32>() {
                         if n > max { max = n; }
                     }
                 }
