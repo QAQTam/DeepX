@@ -1,12 +1,5 @@
-import markdownit from "markdown-it";
-import { createMemo } from "solid-js";
-
-const md = markdownit({
-  html: true,
-  linkify: true,
-  typographer: true,
-  breaks: true,
-});
+import * as smd from "streaming-markdown";
+import { onMount, onCleanup, createEffect } from "solid-js";
 
 interface MarkdownBodyProps {
   content: string;
@@ -14,6 +7,36 @@ interface MarkdownBodyProps {
 }
 
 export default function MarkdownBody(props: MarkdownBodyProps) {
-  const html = createMemo(() => md.render(props.content));
-  return <div class={props.class} innerHTML={html()} />;
+  let container!: HTMLDivElement;
+  let parser: smd.Parser | null = null;
+  let lastLen = 0;
+
+  onMount(() => {
+    const renderer = smd.default_renderer(container);
+    parser = smd.parser(renderer);
+    // Feed any content that already exists at mount time
+    if (props.content) {
+      smd.parser_write(parser, props.content);
+      lastLen = props.content.length;
+    }
+  });
+
+  // Feed only the new portion of content (incremental)
+  createEffect(() => {
+    if (!parser) return;
+    const delta = props.content.slice(lastLen);
+    if (delta.length > 0) {
+      smd.parser_write(parser, delta);
+      lastLen = props.content.length;
+    }
+  });
+
+  onCleanup(() => {
+    if (parser) {
+      smd.parser_end(parser);
+      parser = null;
+    }
+  });
+
+  return <div ref={container} class={props.class} />;
 }

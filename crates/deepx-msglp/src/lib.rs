@@ -1,18 +1,21 @@
 //! deepx-msglp: message-loop driver for the agent child process.
 //!
-//! The [`Loop`] reads [`Ui2Agent`] frames from stdin via JSON-LP
-//! and writes [`Agent2Ui`] frames to stdout. It drives the full
-//! user-input → gate → tools → response pipeline.
+//! The [`Loop`] reads [`Ui2Agent`] frames via a channel fed by a background
+//! I/O thread, and writes [`Agent2Ui`] frames to a channel consumed by a
+//! background writer thread. It drives the full user-input → gate → tools →
+//! response pipeline.
 //!
 //! Responsibilities:
-//!   1. Ingest [`Ui2Agent`] frames from stdin (JSON-LP)
+//!   1. Ingest [`Ui2Agent`] frames via channel (background I/O thread)
 //!   2. Drive `UserInput` through gate → message → tools
 //!   3. Propagate `Cancel` via [`CancelToken`] / `Arc<AtomicBool>`
-//!   4. Emit all [`Agent2Ui`] responses to stdout
+//!   4. Emit all [`Agent2Ui`] responses via channel
 //!   5. Handle session lifecycle (CreateSession, ResumeSession, Shutdown)
+//!   6. Check for interrupt commands between rounds (Cancel, session switch)
 
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 
 pub mod agent;
@@ -70,69 +73,254 @@ enum LoopPhase {
 }
 
 // ═══════════════════════════════════════════════════════
-// Loop — reads Ui2Agent from stdin (JSON-LP), writes
-// Agent2Ui to stdout. `input: R` is BufRead (stdin),
-// `output: W` is Write (stdout). No internal channels.
+// Loop — channel-based event loop.
+//
+// Background I/O threads handle stdin/stdout; the main loop
+// uses mpsc channels. This allows Cancel and session-switch
+// commands to arrive while the loop is busy processing.
 // ═══════════════════════════════════════════════════════
 
-pub struct Loop<R: BufRead, W: Write> {
+pub struct Loop {
     agent: AgentState,
-    input: R,
-    output: W,
+    cmd_rx: mpsc::Receiver<Ui2Agent>,
+    event_tx: mpsc::Sender<Agent2Ui>,
     cancel: CancelToken,
     phase: LoopPhase,
+    /// Pending session switch requested while busy (seed to resume).
+    pending_session: Option<String>,
+    /// Pending new-session request while busy.
+    pending_new_session: bool,
+    /// Pending shutdown.
+    pending_shutdown: bool,
 }
 
-impl<R: BufRead, W: Write> Loop<R, W> {
-    pub fn new_ipc(agent: AgentState, input: R, output: W) -> Self {
+impl Loop {
+    /// Create a Loop backed by real stdin/stdout via background I/O threads.
+    ///
+    /// Spawns:
+    /// - a reader thread that reads JSON-LP from `input` and sends to `cmd_rx`
+    /// - a writer thread that receives from `event_tx` and writes JSON-LP to `output`
+    ///
+    /// For Cancel frames, the reader thread also sets the CancelToken directly
+    /// so that an in-progress handle_user_input round exits immediately.
+    pub fn new_ipc(
+        agent: AgentState,
+        input: impl BufRead + Send + 'static,
+        output: impl Write + Send + 'static,
+    ) -> Self {
         let cancel = CancelToken::new();
-        Self { agent, input, output, cancel, phase: LoopPhase::Idle }
+        let cancel_for_reader = cancel.clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Ui2Agent>();
+        let (event_tx, event_rx) = mpsc::channel::<Agent2Ui>();
+
+        // Reader thread: stdin → cmd_tx
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(input);
+            loop {
+                match deepx_proto::read_frame(&mut reader) {
+                    Ok(Some(frame)) => {
+                        let is_interrupt = matches!(frame,
+                            Ui2Agent::Cancel | Ui2Agent::ResumeSession { .. }
+                            | Ui2Agent::NewSession | Ui2Agent::Shutdown
+                        );
+                        if is_interrupt {
+                            // Set cancel token directly so busy loops see it immediately
+                            cancel_for_reader.set();
+                            deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                        }
+                        // Send through channel for the main loop to handle
+                        if cmd_tx.send(frame).is_err() {
+                            break; // Loop dropped
+                        }
+                    }
+                    Ok(None) | Err(_) => break, // EOF or error
+                }
+            }
+            log::info!("[AGENT] reader thread exiting");
+        });
+
+        // Writer thread: event_rx → stdout
+        std::thread::spawn(move || {
+            let mut writer = std::io::BufWriter::new(output);
+            while let Ok(event) = event_rx.recv() {
+                if deepx_proto::write_frame(&mut writer, &event).is_err() {
+                    break;
+                }
+            }
+            log::info!("[AGENT] writer thread exiting");
+        });
+
+        Loop {
+            agent,
+            cmd_rx,
+            event_tx,
+            cancel,
+            phase: LoopPhase::Idle,
+            pending_session: None,
+            pending_new_session: false,
+            pending_shutdown: false,
+        }
+    }
+
+    /// Convenience: send an event to the writer thread.
+    fn emit(&self, event: Agent2Ui) {
+        let _ = self.event_tx.send(event);
+    }
+
+    /// Drain all pending commands from the channel (non-blocking).
+    /// Interrupt-type commands (Cancel, ResumeSession, NewSession, Shutdown)
+    /// are handled immediately. Other commands are queued in `pending_*` fields
+    /// for later handling.
+    fn drain_pending(&mut self) {
+        while let Ok(cmd) = self.cmd_rx.try_recv() {
+            match cmd {
+                Ui2Agent::Cancel => {
+                    self.cancel.set();
+                    deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                    if self.phase == LoopPhase::ToolsRunning {
+                        deepx_tools::bridge::cancel_current_tool();
+                    }
+                    self.phase = LoopPhase::Idle;
+                    self.emit(Agent2Ui::Cancelled);
+                }
+                Ui2Agent::ResumeSession { seed } => {
+                    self.cancel.set();
+                    deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                    self.pending_session = Some(seed);
+                    self.emit(Agent2Ui::Cancelled);
+                }
+                Ui2Agent::NewSession => {
+                    self.cancel.set();
+                    deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                    self.pending_new_session = true;
+                    self.emit(Agent2Ui::Cancelled);
+                }
+                Ui2Agent::Shutdown => {
+                    self.pending_shutdown = true;
+                }
+                // For commands that arrive while idle, dispatch immediately
+                other => self.dispatch(other),
+            }
+        }
+    }
+
+    /// Check for interrupt commands during long-running operations.
+    /// Returns true if the current operation should abort.
+    fn check_interrupts(&mut self) -> bool {
+        while let Ok(cmd) = self.cmd_rx.try_recv() {
+            match cmd {
+                Ui2Agent::Cancel => {
+                    self.cancel.set();
+                    deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                    if self.phase == LoopPhase::ToolsRunning {
+                        deepx_tools::bridge::cancel_current_tool();
+                    }
+                    self.phase = LoopPhase::Idle;
+                    self.emit(Agent2Ui::Cancelled);
+                    return true;
+                }
+                Ui2Agent::ResumeSession { seed } => {
+                    self.cancel.set();
+                    deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                    self.pending_session = Some(seed);
+                    self.emit(Agent2Ui::Cancelled);
+                    return true;
+                }
+                Ui2Agent::NewSession => {
+                    self.cancel.set();
+                    deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                    self.pending_new_session = true;
+                    self.emit(Agent2Ui::Cancelled);
+                    return true;
+                }
+                Ui2Agent::Shutdown => {
+                    self.pending_shutdown = true;
+                    return true;
+                }
+                // Queue non-interrupt commands for later
+                _ => {
+                    // Silently drop non-interrupt commands during busy processing;
+                    // they will be re-sent by the frontend after Ready.
+                    log::info!("[AGENT] dropping non-interrupt command during busy phase");
+                }
+            }
+        }
+        false
+    }
+
+    /// Dispatch a single command (called when idle).
+    fn dispatch(&mut self, frame: Ui2Agent) {
+        match frame {
+            Ui2Agent::UserInput { text } => { self.handle_user_input(&text); }
+            Ui2Agent::Cancel => { self.handle_cancel(); }
+            Ui2Agent::CreateSession => { self.handle_create_session(); }
+            Ui2Agent::ResumeSession { ref seed } => { self.handle_resume_session(seed); }
+            Ui2Agent::LoadMoreTurns { ref before_turn_id, count } => {
+                let all_turns = build_turns_from_context(&self.agent);
+                let idx = all_turns.iter().position(|t| t.turn_id == *before_turn_id);
+                let end = idx.unwrap_or(all_turns.len());
+                let start = end.saturating_sub(count as usize);
+                let batch: Vec<_> = all_turns[start..end].to_vec();
+                self.emit(Agent2Ui::MoreTurns {
+                    turns: batch,
+                    has_more: start > 0,
+                });
+            }
+            Ui2Agent::NewSession => { self.handle_create_session(); }
+            Ui2Agent::ReloadConfig => { self.handle_reload_config(); }
+            Ui2Agent::Shutdown => {
+                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.emit(Agent2Ui::ShutdownAck);
+                self.pending_shutdown = true;
+            }
+            Ui2Agent::ToolCall { id, name, action, args } => { self.handle_tool_call(&id, &name, &action, &args); }
+            Ui2Agent::UndoTurn { ref turn_id } => { self.handle_undo_turn(turn_id); }
+            Ui2Agent::Compact => { self.handle_compact(); }
+            _ => {}
+        }
     }
 
     pub fn run(&mut self) {
         self.agent.rebind_store();
         self.emit_dashboard();
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Ready);
+        self.emit(Agent2Ui::Ready);
 
         log::info!("[AGENT] entering main event loop, waiting for Ui2Agent...");
         loop {
-            let frame: Ui2Agent = match deepx_proto::read_frame(&mut self.input) {
-                Ok(Some(f)) => {
+            // Process any queued commands first
+            self.drain_pending();
+
+            // Handle pending session switch (set during busy period)
+            if let Some(seed) = self.pending_session.take() {
+                self.handle_resume_session(&seed);
+                self.emit(Agent2Ui::Ready);
+            }
+            if self.pending_new_session {
+                self.pending_new_session = false;
+                self.handle_create_session();
+                self.emit(Agent2Ui::Ready);
+            }
+            if self.pending_shutdown {
+                break;
+            }
+
+            // Signal readiness before blocking (for Tauri refresh recovery)
+            self.emit(Agent2Ui::Ready);
+
+            // Block waiting for next command
+            let frame: Ui2Agent = match self.cmd_rx.recv() {
+                Ok(f) => {
                     log::info!("[AGENT] received Ui2Agent frame");
                     f
                 }
-                Ok(None) => { log::info!("[AGENT] read_frame returned None (EOF)"); break; }
-                Err(e) => { log::info!("[AGENT] read_frame error: {e}"); break; }
-            };
-
-            match frame {
-                Ui2Agent::UserInput { text } => { self.handle_user_input(&text); }
-                Ui2Agent::Cancel => { self.handle_cancel(); }
-                Ui2Agent::CreateSession => { self.handle_create_session(); }
-                Ui2Agent::ResumeSession { ref seed } => { self.handle_resume_session(seed); }
-                Ui2Agent::LoadMoreTurns { ref before_turn_id, count } => {
-                    let all_turns = build_turns_from_context(&self.agent);
-                    let idx = all_turns.iter().position(|t| t.turn_id == *before_turn_id);
-                    let end = idx.unwrap_or(all_turns.len());
-                    let start = end.saturating_sub(count as usize);
-                    let batch: Vec<_> = all_turns[start..end].to_vec();
-                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::MoreTurns {
-                        turns: batch,
-                        has_more: start > 0,
-                    });
-                }
-                Ui2Agent::NewSession => { self.handle_create_session(); }
-                Ui2Agent::ReloadConfig => { self.handle_reload_config(); }
-                Ui2Agent::Shutdown => {
-                    self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
-                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ShutdownAck);
+                Err(_) => {
+                    log::info!("[AGENT] cmd_rx closed — exiting");
                     break;
                 }
-                Ui2Agent::ToolCall { id, name, action, args } => { self.handle_tool_call(&id, &name, &action, &args); }
-                Ui2Agent::UndoTurn { ref turn_id } => { self.handle_undo_turn(turn_id); }
-                Ui2Agent::Compact => { self.handle_compact(); }
-                _ => {}
-            }
+            };
+
+            self.dispatch(frame);
         }
 
         deepx_tools::bridge::shutdown_tools();
@@ -147,16 +335,16 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             _ => {}
         }
         self.phase = LoopPhase::Idle;
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Cancelled);
+        self.emit(Agent2Ui::Cancelled);
     }
 
     fn handle_create_session(&mut self) {
         lifecycle::create_session(&mut self.agent);
         self.agent.rebind_store();
-        self.emit_dashboard();
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::SessionCreated {
+        self.emit(Agent2Ui::SessionCreated {
             seed: self.agent.session.seed.clone(),
         });
+        self.emit_dashboard();
     }
 
     // Slice to the latest INITIAL_LOAD_COUNT turns for incremental loading.
@@ -165,7 +353,6 @@ impl<R: BufRead, W: Write> Loop<R, W> {
         if lifecycle::init_session(&mut self.agent, Some(seed)) {
             log::info!("[AGENT] init_session succeeded, current_seed={}", self.agent.session.seed);
             self.agent.rebind_store();
-            self.emit_dashboard();
             let current_seed = self.agent.session.seed.clone();
             if current_seed == seed {
                 let all_turns = build_turns_from_context(&self.agent);
@@ -174,7 +361,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                 let recent: Vec<_> = all_turns[start..].to_vec();
                 let has_more = start > 0;
                 log::info!("[AGENT] sending SessionRestored, turns.len={} (total={}, has_more={})", recent.len(), total, has_more);
-                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::SessionRestored {
+                self.emit(Agent2Ui::SessionRestored {
                     seed: current_seed,
                     turns: recent,
                     tokens_used: 0,
@@ -184,13 +371,14 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                 });
             } else {
                 log::info!("[AGENT] seed changed {} -> {}, sending SessionCreated", seed, current_seed);
-                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::SessionCreated {
+                self.emit(Agent2Ui::SessionCreated {
                     seed: current_seed,
                 });
             }
+            self.emit_dashboard();
         } else {
             log::info!("[AGENT] init_session returned false");
-            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error {
+            self.emit(Agent2Ui::Error {
                 message: format!("Failed to resume session: {seed}"),
             });
         }
@@ -218,7 +406,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
     fn handle_tool_call(&mut self, id: &str, name: &str, action: &str, args: &serde_json::Value) {
         let result = deepx_tools::bridge::execute_tool_with_id(name, action, &args.to_string(), id);
         let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolResults {
+        self.emit(Agent2Ui::ToolResults {
             turn_id: "headless".into(),
             round_num: 0,
             results: vec![deepx_proto::ToolResultDef {
@@ -240,7 +428,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
             let recent: Vec<_> = all_turns[start..].to_vec();
             let has_more = start > 0;
-            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::SessionRestored {
+            self.emit(Agent2Ui::SessionRestored {
                 seed: self.agent.session.seed.clone(),
                 turns: recent,
                 tokens_used: 0,
@@ -257,7 +445,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
         const KEEP: usize = 5;
         log::info!("[AGENT] handle_compact: {} turns", self.agent.msg.turn_count());
         if self.agent.msg.turn_count() <= KEEP {
-            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolNotice {
+            self.emit(Agent2Ui::ToolNotice {
                 message: format!("Compact skipped: need >{} turns (have {})", KEEP, self.agent.msg.turn_count()),
                 level: "info".into(),
             });
@@ -265,7 +453,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
         }
 
         let compact_count = self.agent.msg.turn_count() - KEEP;
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::CompactStart {
+        self.emit(Agent2Ui::CompactStart {
             turns_total: self.agent.msg.turn_count() as u32,
             turns_keeping: KEEP as u32,
         });
@@ -300,15 +488,15 @@ impl<R: BufRead, W: Write> Loop<R, W> {
         let summary = match deepx_gate::chat_sync(&provider, msgs, 2048) {
             Ok(s) if !s.trim().is_empty() => s,
             Ok(_) => {
-                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error {
+                self.emit(Agent2Ui::Error {
                     message: "Compact failed: model returned empty response. Try again.".into(),
                 });
-                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::CompactEnd { summary_chars: 0, turns_compacted: 0 });
+                self.emit(Agent2Ui::CompactEnd { summary_chars: 0, turns_compacted: 0 });
                 return;
             }
             Err(e) => {
-                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error { message: e });
-                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::CompactEnd { summary_chars: 0, turns_compacted: 0 });
+                self.emit(Agent2Ui::Error { message: e });
+                self.emit(Agent2Ui::CompactEnd { summary_chars: 0, turns_compacted: 0 });
                 return;
             }
         };
@@ -316,10 +504,10 @@ impl<R: BufRead, W: Write> Loop<R, W> {
         let chars = summary.chars().count();
         self.agent.msg.apply_compact(&summary, KEEP);
         self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::CompactEnd {
+        self.emit(Agent2Ui::CompactEnd {
             summary_chars: chars, turns_compacted: compact_count as u32,
         });
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolNotice {
+        self.emit(Agent2Ui::ToolNotice {
             message: format!("Compacted {} turns → {} chars summary", compact_count, chars),
             level: "info".into(),
         });
@@ -330,20 +518,19 @@ impl<R: BufRead, W: Write> Loop<R, W> {
 
     fn handle_user_input(&mut self, text: &str) {
         if self.agent.session.seed.is_empty() {
-            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error {
+            self.emit(Agent2Ui::Error {
                 message: "No session — create one first".into(),
             });
             return;
         }
 
         self.cancel.clear();
-        // turn_state deleted — cancel handled by CancelToken
         deepx_tools::CANCEL.store(false, Ordering::SeqCst);
-        
+
         self.agent.msg.push_user(text);
 
         let turn_id = format!("t{}", self.agent.msg.turn_count());
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::TurnStart {
+        self.emit(Agent2Ui::TurnStart {
             turn_id: turn_id.clone(),
             user_text: text.to_string(),
         });
@@ -362,18 +549,32 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             ep.as_ref().map(|e| e.supports_thinking).unwrap_or(true),
         );
 
-          let mut round_num = 0u32;
-          let mut last_usage: Option<deepx_types::UsageInfo> = None;
+        let mut round_num = 0u32;
+        let mut last_usage: Option<deepx_types::UsageInfo> = None;
 
-          // Delta batching: accumulate deltas and flush every ~30ms
-          let mut answer_buf = String::new();
-          let mut think_buf = String::new();
-          let mut last_flush = std::time::Instant::now();
-          const FLUSH_INTERVAL_MS: u64 = 30;
-          const FLUSH_CHAR_THRESHOLD: usize = 20;
+        // Delta batching: accumulate deltas and flush every ~30ms
+        let mut answer_buf = String::new();
+        let mut think_buf = String::new();
+        let mut last_flush = std::time::Instant::now();
+        const FLUSH_INTERVAL_MS: u64 = 30;
+        const FLUSH_CHAR_THRESHOLD: usize = 20;
 
         loop {
+            // ── Check for interrupt commands between rounds ──
+            if self.check_interrupts() {
+                self.agent.msg.remove_last_step_if_incomplete();
+                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                break;
+            }
+
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
+                self.agent.msg.remove_last_step_if_incomplete();
+                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                break;
+            }
+
+            // Check for pending session switch (set by check_interrupts)
+            if self.pending_session.is_some() || self.pending_new_session {
                 self.agent.msg.remove_last_step_if_incomplete();
                 self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 break;
@@ -388,7 +589,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             let mut had_error = false;
 
             self.phase = LoopPhase::GateRunning;
-        let result = deepx_gate::chat_stream(
+            let result = deepx_gate::chat_stream(
                 &provider,
                 messages,
                 tools,
@@ -405,14 +606,14 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                                 || answer_buf.len() >= FLUSH_CHAR_THRESHOLD
                             {
                                 if !think_buf.is_empty() {
-                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                    self.emit(Agent2Ui::RoundDelta {
                                         turn_id: turn_id.clone(), round_num,
                                         kind: RoundDeltaKind::Thinking,
                                         delta: std::mem::take(&mut think_buf),
                                     });
                                 }
                                 if !answer_buf.is_empty() {
-                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                    self.emit(Agent2Ui::RoundDelta {
                                         turn_id: turn_id.clone(), round_num,
                                         kind: RoundDeltaKind::Answering,
                                         delta: std::mem::take(&mut answer_buf),
@@ -429,14 +630,14 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                                 || think_buf.len() >= FLUSH_CHAR_THRESHOLD
                             {
                                 if !think_buf.is_empty() {
-                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                    self.emit(Agent2Ui::RoundDelta {
                                         turn_id: turn_id.clone(), round_num,
                                         kind: RoundDeltaKind::Thinking,
                                         delta: std::mem::take(&mut think_buf),
                                     });
                                 }
                                 if !answer_buf.is_empty() {
-                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                    self.emit(Agent2Ui::RoundDelta {
                                         turn_id: turn_id.clone(), round_num,
                                         kind: RoundDeltaKind::Answering,
                                         delta: std::mem::take(&mut answer_buf),
@@ -448,14 +649,14 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                         deepx_gate::StreamEvent::Done { raw_message, usage, .. } => {
                             // Flush buffered deltas before processing completion
                             if !think_buf.is_empty() {
-                                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                self.emit(Agent2Ui::RoundDelta {
                                     turn_id: turn_id.clone(), round_num,
                                     kind: RoundDeltaKind::Thinking,
                                     delta: std::mem::take(&mut think_buf),
                                 });
                             }
                             if !answer_buf.is_empty() {
-                                let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::RoundDelta {
+                                self.emit(Agent2Ui::RoundDelta {
                                     turn_id: turn_id.clone(), round_num,
                                     kind: RoundDeltaKind::Answering,
                                     delta: std::mem::take(&mut answer_buf),
@@ -487,7 +688,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                             }
                         }
                         deepx_gate::StreamEvent::ToolCallProgress { index, id, name, args_so_far } => {
-                            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolCallPreview {
+                            self.emit(Agent2Ui::ToolCallPreview {
                                 turn_id: turn_id.clone(),
                                 round_num,
                                 index,
@@ -498,10 +699,10 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                         }
                         deepx_gate::StreamEvent::Retrying { attempt, max_retries, delay_secs, error } => {
                             let msg = format!("API error, retrying ({attempt}/{max_retries}) in {delay_secs}s: {error}");
-                            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error { message: msg });
+                            self.emit(Agent2Ui::Error { message: msg });
                         }
                         deepx_gate::StreamEvent::Error(msg) => {
-                            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Error { message: msg });
+                            self.emit(Agent2Ui::Error { message: msg });
                             had_error = true;
                         }
                         _ => {}
@@ -518,19 +719,19 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             let assistant_msg = build_assistant_message(&content, &reasoning, &parsed);
             let effect = self.agent.msg.push_assistant(assistant_msg.clone());
 
-            emit_round_complete(&self.agent, &mut self.output, &turn_id, round_num, &assistant_msg, &content, &reasoning, &parsed);
+            emit_round_complete(&self.event_tx, &turn_id, round_num, &assistant_msg, &content, &reasoning, &parsed);
 
             match effect {
                 Effect::None => {
                     self.phase = LoopPhase::ToolsRunning;
-                    
+
                     // Threaded tool execution with real-time progress streaming
                     let pending = self.agent.msg.get_last_step_pending();
                     if !pending.is_empty() {
-                        let (progress_tx, progress_rx) = std::sync::mpsc::channel::<String>();
+                        let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(String, String)>();
                         let mut handles = Vec::new();
                         let mut tool_infos = Vec::new();
-                        
+
                         for tool in &pending {
                             let tx = progress_tx.clone();
                             let name = tool.name.clone();
@@ -543,20 +744,24 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                             }));
                         }
                         drop(progress_tx); // close sender when all threads drop their clones
-                        
-                        // Drain progress while tools run
+
+                        // Drain progress while tools run (with cancel check)
                         loop {
+                            if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
+                                // Cancel: stop draining, tools will detect cancel flag
+                                break;
+                            }
                             match progress_rx.recv_timeout(std::time::Duration::from_millis(100)) {
-                                Ok(chunk) => {
-                                    let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ExecProgress {
-                                        tool_call_id: String::new(),
+                                Ok((tc_id, chunk)) => {
+                                    self.emit(Agent2Ui::ExecProgress {
+                                        tool_call_id: tc_id,
                                         chunk,
                                     });
                                 }
                                 Err(_) => break, // channel closed → all threads done
                             }
                         }
-                        
+
                         // Collect results
                         for h in handles {
                             if let Ok((tc_id, content, _success)) = h.join() {
@@ -564,7 +769,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                             }
                         }
                     }
-                    
+
                     let results = self.agent.msg.last_step_tool_results();
                     let mut tool_defs = Vec::new();
                     for (tc_id, tool_name, result_content, success) in &results {
@@ -574,14 +779,14 @@ impl<R: BufRead, W: Write> Loop<R, W> {
                             success: *success,
                             file: None,
                         });
-                        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::AuditRecord {
+                        self.emit(Agent2Ui::AuditRecord {
                             tool_name: tool_name.clone(),
                             result_summary: result_content.lines().next().unwrap_or("").chars().take(120).collect(),
                             success: *success,
                         });
                     }
                     if !tool_defs.is_empty() {
-                        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::ToolResults {
+                        self.emit(Agent2Ui::ToolResults {
                             turn_id: turn_id.clone(),
                             round_num,
                             results: tool_defs,
@@ -600,7 +805,7 @@ impl<R: BufRead, W: Write> Loop<R, W> {
 
             self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
 
-            let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::TurnEnd {
+            self.emit(Agent2Ui::TurnEnd {
                 turn_id: turn_id.clone(),
                 stop_reason: None,
                 usage: last_usage.clone(),
@@ -609,13 +814,13 @@ impl<R: BufRead, W: Write> Loop<R, W> {
             break;
         }
 
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Done);
+        self.emit(Agent2Ui::Done);
     }
 
     // ── Dashboard ──
 
-    fn emit_dashboard(&mut self) {
-        let _ = deepx_proto::write_frame(&mut self.output, &Agent2Ui::Dashboard {
+    fn emit_dashboard(&self) {
+        self.emit(Agent2Ui::Dashboard {
             hp_connected: true,
             session_seed: self.agent.session.seed.clone(),
             context_limit: self.agent.config.context_limit,
@@ -682,9 +887,9 @@ fn build_assistant_message(
 }
 
 fn emit_round_complete(
-    _agent: &AgentState, output: &mut impl Write,
+    event_tx: &mpsc::Sender<Agent2Ui>,
     turn_id: &str, round_num: u32, assistant_msg: &deepx_types::Message,
-    content: &str, reasoning: &str, _parsed: &[deepx_types::ToolCall],
+    _content: &str, _reasoning: &str, _parsed: &[deepx_types::ToolCall],
 ) {
     use deepx_types::ContentBlock;
     let mut blocks = Vec::new();
@@ -720,11 +925,11 @@ fn emit_round_complete(
             _ => {}
         }
     }
-    let _ = deepx_proto::write_frame(output, &Agent2Ui::RoundComplete {
+    let _ = event_tx.send(Agent2Ui::RoundComplete {
         turn_id: turn_id.into(),
         round_num,
-        thinking: if reasoning.is_empty() { None } else { Some(reasoning.into()) },
-        answer: if content.is_empty() { None } else { Some(content.into()) },
+        thinking: if _reasoning.is_empty() { None } else { Some(_reasoning.into()) },
+        answer: if _content.is_empty() { None } else { Some(_content.into()) },
         tool_calls: tool_calls.clone(),
         blocks,
         is_final: tool_calls.is_empty(),
@@ -751,8 +956,8 @@ fn build_turns_from_context(agent: &AgentState) -> Vec<deepx_proto::TurnData> {
                     })
                 } else { None }
             }).collect();
-            let trs: Vec<deepx_proto::ToolResultDef> = step.tool_results.iter().filter_map(|tr| {
-                tr.content.iter().find_map(|b| {
+            let trs: Vec<deepx_proto::ToolResultDef> = step.tool_results.iter().flat_map(|msg| {
+                msg.content.iter().filter_map(|b| {
                     if let ContentBlock::ToolResult { tool_use_id, content } = b {
                         Some(deepx_proto::ToolResultDef {
                             tool_call_id: tool_use_id.clone(),

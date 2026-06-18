@@ -124,7 +124,7 @@ pub struct ToolCallCtx {
     pub name: String,
     pub action: String,
     pub args: serde_json::Value,
-    pub tx_progress: Option<std::sync::mpsc::Sender<String>>,
+    pub tx_progress: Option<std::sync::mpsc::Sender<(String, String)>>,
     pub timeout_secs: Option<u64>,
 }
 

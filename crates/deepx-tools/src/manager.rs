@@ -101,7 +101,7 @@ impl ToolManager {
         }
     }
 
-    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<String>>) -> ToolExecReport {
+    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> ToolExecReport {
         let t0 = std::time::Instant::now();
 
         if let Some(ref allowed) = self.allowed {

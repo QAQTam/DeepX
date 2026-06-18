@@ -36,6 +36,33 @@ export function createChatStore() {
   const [compactResult, setCompactResult] = createSignal<string | null>(null);
   let streamBuffer = { thinking: "", answer: "" };
 
+  // ── Per-session status cache ──
+  type SessionStatus = { tasks: TaskInfo[]; edits: string[]; activity: ActivityEntry[] };
+  const sessionStatusCache = new Map<string, SessionStatus>();
+
+  function cacheCurrentStatus() {
+    const seed = sessionInfo.seed;
+    if (!seed) return;
+    sessionStatusCache.set(seed, {
+      tasks: [...tasks()],
+      edits: [...recentEdits()],
+      activity: [...activityLog()],
+    });
+  }
+
+  function loadCachedStatus(seed: string) {
+    const cached = sessionStatusCache.get(seed);
+    if (cached) {
+      setTasks(cached.tasks);
+      setRecentEdits(cached.edits);
+      setActivityLog(cached.activity);
+    } else {
+      setTasks([]);
+      setRecentEdits([]);
+      setActivityLog([]);
+    }
+  }
+
   function resetStreamBuffer() { streamBuffer = { thinking: "", answer: "" }; }
 
   function ensureRound(turnId: string, roundNum: number) {
@@ -86,17 +113,13 @@ export function createChatStore() {
     }));
   }
 
-  function handleExecProgress(_toolCallId: string, chunk: string) {
-    // Append streaming output to the last pending tool card in the latest turn
+  function handleExecProgress(toolCallId: string, chunk: string) {
     const lastTurn = turns[turns.length - 1];
     if (!lastTurn) return;
     const lastRound = lastTurn.rounds[lastTurn.rounds.length - 1];
     if (!lastRound) return;
-    // Find the first tool call that doesn't have a real result yet
-    const pendingTc = lastRound.toolCalls.find(tc => !lastRound.toolResults.some(tr => tr.tool_call_id === tc.id));
-    if (!pendingTc) return;
-    // Find or update streaming result
-    const streamKey = pendingTc.id + "_stream";
+    // Find or update streaming result for the specific tool call
+    const streamKey = toolCallId + "_stream";
     const existing = lastRound.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
     if (existing >= 0) {
       setTurns((t) => t.turnId === lastTurn.turnId, "rounds", (r) => r.roundNum === lastRound.roundNum, "toolResults", existing, "output", (o: string) => o + chunk);
@@ -107,7 +130,13 @@ export function createChatStore() {
 
   function handleToolResults(turnId: string, roundNum: number, results: ToolResultDef[]) {
     ensureRound(turnId, roundNum);
-    setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, "toolResults", produce((tr) => tr.push(...results)));
+    setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
+      // Remove streaming placeholders for the same tool call IDs
+      const streamKeys = new Set(results.map(r => r.tool_call_id + "_stream"));
+      round.toolResults = round.toolResults.filter(tr => !streamKeys.has(tr.tool_call_id));
+      // Push final results
+      round.toolResults.push(...results);
+    }));
     for (const r of results) {
       if (r.success && r.output.startsWith("[USER_QUERY] ")) {
         try {
@@ -130,7 +159,11 @@ export function createChatStore() {
     }
   }
 
-  function handleSessionCreated(seed: string) { setSessionInfo("seed", seed); }
+  function handleSessionCreated(seed: string) {
+    cacheCurrentStatus();           // save old session's tasks/activity/edits
+    setSessionInfo("seed", seed);
+    loadCachedStatus(seed);         // restore target session's data (or empty)
+  }
   function handleDashboard(data: Record<string, unknown>) {
     if (data.session_seed) setSessionInfo("seed", data.session_seed as string);
     if (data.model) setSessionInfo("model", data.model as string);
@@ -173,6 +206,7 @@ export function createChatStore() {
   }
 
   function handleCancelled() { setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); }
+  function handleDone() { setIsStreaming(false); }
   function handleError(message: string) {
     setError(message); setIsStreaming(false); setInputDisabled(false);
     const lastTurn = turns[turns.length - 1];
@@ -186,6 +220,7 @@ export function createChatStore() {
     });
   }
   function clear() { setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]); resetStreamBuffer(); }
+  function clearTurns() { setTurns([]); setError(null); resetStreamBuffer(); }
 
   async function undoTurn(turnId: string) {
     try {
@@ -322,5 +357,5 @@ export function createChatStore() {
 
   function dismissAsk() { setAskState({ question: "", options: [], show: false }); }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleError, clearError, clear, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  return { turns, sessionInfo, isStreaming, inputDisabled, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

@@ -1,4 +1,4 @@
-import { For, Show, Switch, Match } from "solid-js";
+import { For, Show, Switch, Match, createMemo } from "solid-js";
 import MarkdownBody from "./MarkdownBody";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolCallCard from "./ToolCallCard";
@@ -37,39 +37,57 @@ export default function MessageItem(props: MessageItemProps) {
         <Show when={props.rounds && props.rounds.length > 0}>
           <div class="msg-rounds">
             <For each={props.rounds}>
-              {(round) => (
-                <div class={`msg-round ${props.status === "streaming" ? "streaming" : ""}`}>
-                  <Show when={round.blocks && round.blocks.length > 0}
-                    fallback={
-                      <>
-                        <Show when={round.thinking}><ThinkingBlock content={round.thinking!} streaming={props.status === "streaming"} /></Show>
-                        <Show when={round.answer}><MarkdownBody class="md-body bubble-ai" content={round.answer!} /></Show>
-                        <For each={round.toolCalls}>{(tc) => {
-                          const r = round.toolResults.find((x) => x.tool_call_id === tc.id);
-                          const sr = round.toolResults.find((x) => x.tool_call_id === tc.id + "_stream");
-                          return <ToolCallCard call={tc} result={r} streamingOutput={sr?.output} />;
-                        }}</For>
-                      </>
-                    }
-                  >
-                    <For each={round.blocks}>
-                      {(block) => (
-                        <Switch>
-                          <Match when={block.type === "reasoning"}>
-                            <ThinkingBlock content={block.content!} />
-                          </Match>
-                          <Match when={block.type === "text"}>
-                            <MarkdownBody class="md-body bubble-ai" content={block.content!} />
-                          </Match>
-                          <Match when={block.type === "tool"}>
-                            <ToolCallCard call={block.card!} result={round.toolResults.find((x) => x.tool_call_id === block.card!.id)} streamingOutput={round.toolResults.find((x) => x.tool_call_id === block.card!.id + "_stream")?.output} />
-                          </Match>
-                        </Switch>
-                      )}
-                    </For>
-                  </Show>
-                </div>
-              )}
+              {(round) => {
+                // Merge tool results into tool calls / blocks so <For> re-renders
+                // when toolResults change independently of toolCalls/blocks.
+                const mergedToolCalls = createMemo(() =>
+                  round.toolCalls.map((tc) => ({
+                    call: tc,
+                    result: round.toolResults.find((x) => x.tool_call_id === tc.id),
+                    streamOutput: round.toolResults.find((x) => x.tool_call_id === tc.id + "_stream")?.output,
+                  }))
+                );
+                const mergedBlocks = createMemo(() =>
+                  round.blocks.map((block) => {
+                    if (block.type !== "tool" || !block.card) return block;
+                    const res = round.toolResults.find((x) => x.tool_call_id === block.card!.id);
+                    const streamOut = round.toolResults.find((x) => x.tool_call_id === block.card!.id + "_stream")?.output;
+                    return { ...block, card: { ...block.card, _result: res, _streamOutput: streamOut } };
+                  })
+                );
+                return (
+                  <div class={`msg-round ${props.status === "streaming" ? "streaming" : ""}`}>
+                    <Show
+                      when={round.blocks && round.blocks.length > 0}
+                      fallback={
+                        <>
+                          <Show when={round.thinking}><ThinkingBlock content={round.thinking!} streaming={props.status === "streaming"} /></Show>
+                          <Show when={round.answer}><MarkdownBody class="md-body bubble-ai" content={round.answer!} /></Show>
+                          <For each={mergedToolCalls()}>
+                            {(item) => <ToolCallCard call={item.call} result={item.result} streamingOutput={item.streamOutput} />}
+                          </For>
+                        </>
+                      }
+                    >
+                      <For each={mergedBlocks()}>
+                        {(block: any) => (
+                          <Switch>
+                            <Match when={block.type === "reasoning"}>
+                              <ThinkingBlock content={block.content!} />
+                            </Match>
+                            <Match when={block.type === "text"}>
+                              <MarkdownBody class="md-body bubble-ai" content={block.content!} />
+                            </Match>
+                            <Match when={block.type === "tool"}>
+                              <ToolCallCard call={block.card!} result={block.card._result} streamingOutput={block.card._streamOutput} />
+                            </Match>
+                          </Switch>
+                        )}
+                      </For>
+                    </Show>
+                  </div>
+                );
+              }}
             </For>
           </div>
         </Show>

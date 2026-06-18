@@ -44,12 +44,18 @@ impl AgentBridge {
         deepx_session::SessionManager::init(deepx_types::platform::data_dir());
 
         let exe = std::env::current_exe().expect("cannot get current exe path");
-        let mut child = Command::new(&exe)
-            .arg("agent")
+        let mut child_cmd = Command::new(&exe);
+        child_cmd.arg("agent")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            child_cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = child_cmd.spawn()
             .expect("Failed to spawn agent subprocess");
 
         let stdin = child.stdin.take().expect("Failed to get stdin");

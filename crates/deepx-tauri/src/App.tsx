@@ -84,10 +84,12 @@ export default function App() {
       const p = e.payload;
       switch (p.type as string) {
         case "ready": {
+          // Ready is now emitted on every idle transition; use it as a
+          // re-sync signal (e.g. after agent finishes a long task).
           const savedSeed = localStorage.getItem(LS_KEY);
-          if (savedSeed) {
+          if (savedSeed && chat.sessionInfo.seed !== savedSeed) {
             try { await invoke("cmd_resume_session", { seed: savedSeed }); } catch (e) { console.error(e); }
-          } else {
+          } else if (!savedSeed && !chat.sessionInfo.seed) {
             try { await invoke("cmd_new_session"); } catch (e) { console.error(e); }
           }
           break;
@@ -98,11 +100,11 @@ export default function App() {
         case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
         case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
         case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); break;
-        case "session_created": chat.clear(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); refreshSessions(); break;
-        case "session_restored": if (p.seed) { chat.clear(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); if (p.turns) { chat.loadTurnsFromRestore(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); } setHasMore(!!p.has_more); } break;
+        case "session_created": chat.clearTurns(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); refreshSessions(); break;
+        case "session_restored": if (p.seed) { chat.clearTurns(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); if (p.turns) { chat.loadTurnsFromRestore(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); } setHasMore(!!p.has_more); refreshSessions(); } break;
         case "more_turns": if (p.turns) { chat.prependTurns(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); setHasMore(!!p.has_more); } break;
         case "dashboard": chat.handleDashboard(p); break;
-        case "done": chat.setInputDisabled(false); break;
+        case "done": chat.setInputDisabled(false); chat.handleDone(); break;
         case "cancelled": chat.handleCancelled(); break;
         case "error": chat.handleError((p.message ?? "Unknown error") as string); break;
         case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, result_summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean }); break;
@@ -113,9 +115,15 @@ export default function App() {
       }
     }); } catch (e) { console.error(e); }
 
-    // Load session list immediately (non-blocking for session init)
+    // Load session list immediately
     await refreshSessions();
-    // Session init is deferred to the "ready" event handler above
+    // Proactively restore last session (Ready may have been sent before mount)
+    const savedSeed = localStorage.getItem(LS_KEY);
+    if (savedSeed) {
+      try { await invoke("cmd_resume_session", { seed: savedSeed }); } catch (e) { console.error(e); }
+    } else {
+      try { await invoke("cmd_new_session"); } catch (e) { console.error(e); }
+    }
   });
 
   onCleanup(() => unlisten?.());

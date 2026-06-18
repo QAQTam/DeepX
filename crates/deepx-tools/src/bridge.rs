@@ -63,7 +63,7 @@ pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: 
 
 /// Execute a tool and return the full result including any interrupt request.
 /// `progress_tx` is an optional channel sender; exec tools stream stdout chunks to it.
-pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<String>>) -> ToolExecResult {
+pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> ToolExecResult {
     let args_val: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
     let call_id = if tool_call_id.is_empty() {
         format!("agent_{}", std::time::SystemTime::now()
@@ -143,7 +143,7 @@ pub fn execute_tool_simple(req: &deepx_message::ToolExecRequest) -> deepx_messag
 
 pub fn execute_tools_parallel(
     tools: Vec<deepx_message::ToolExecRequest>,
-    progress_tx: Option<&std::sync::mpsc::Sender<String>>,
+    progress_tx: Option<&std::sync::mpsc::Sender<(String, String)>>,
     agent_tx: Option<&std::sync::mpsc::Sender<deepx_proto::Agent2Ui>>,
 ) -> Vec<(String, deepx_message::ToolExecReport)> {
     if tools.len() <= 1 {
@@ -159,7 +159,7 @@ pub fn execute_tools_parallel(
         let _progress_tx = progress_tx.cloned();
         thread::spawn(move || {
             let (ptx, prx) = if req.name == "exec" {
-                let (tx, rx) = std::sync::mpsc::channel();
+                let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
                 (Some(tx), Some(rx))
             } else { (None, None) };
 
@@ -179,7 +179,7 @@ pub fn execute_tools_parallel(
 
             // Stream exec output to UI
             if let (Some(rx), Some(atx)) = (prx, agent_tx) {
-                while let Ok(delta) = rx.recv() {
+                while let Ok((_id, delta)) = rx.recv() {
                     let _ = atx.send(deepx_proto::Agent2Ui::ToolExecDelta {
                         tool_call_id: req.id.clone(), delta,
                     });

@@ -8,6 +8,12 @@ pub(super) fn exec_search(args: &str) -> String {
 
     // Phase 1: try ripgrep (cross-platform, fast)
     let mut cmd = Command::new("rg");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd.arg("-n").arg("--no-heading");
     if let Some(ref g) = glob {
         cmd.arg("-g").arg(g);

@@ -2,6 +2,81 @@ import { createSignal, Show, createEffect, on } from "solid-js";
 import type { ToolCallDef, ToolResultDef } from "../store/chat";
 import { useI18n } from "../i18n";
 
+const isUnifiedDiff = (text: string): boolean =>
+  /^(--- (a\/|\/)|@@ -\d+)/m.test(text);
+
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderDiff(text: string): string {
+  const lines = text.split("\n");
+  const rows: Array<{ line: string; oldLn: string; newLn: string; cls: string }> = [];
+  let oldLn = 0, newLn = 0;
+  let fileHdr = "";
+  let summary = "";
+  let started = false;
+
+  for (const line of lines) {
+    if (!started && !line.startsWith("--- ") && !line.startsWith("@@")) {
+      if (line.trim()) summary += esc(line) + "\n";
+      continue;
+    }
+    if (line.startsWith("--- ")) {
+      fileHdr = esc(line.slice(4));
+      started = true;
+      continue;
+    }
+    if (line.startsWith("+++ ")) { continue; }
+    if (!started) continue;
+
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (hunkMatch) {
+      if (oldLn === 0 && newLn === 0) {
+        oldLn = parseInt(hunkMatch[1]) - 1;
+        newLn = parseInt(hunkMatch[3]) - 1;
+      }
+      continue;
+    }
+
+    if (line.startsWith("-")) {
+      oldLn++;
+      rows.push({ line: esc(line.slice(1)), oldLn: String(oldLn), newLn: "", cls: "diff-row-del" });
+    } else if (line.startsWith("+")) {
+      newLn++;
+      rows.push({ line: esc(line.slice(1)), oldLn: "", newLn: String(newLn), cls: "diff-row-add" });
+    } else {
+      oldLn++; newLn++;
+      rows.push({ line: esc(line), oldLn: String(oldLn), newLn: String(newLn), cls: "diff-row-ctx" });
+    }
+  }
+
+  if (rows.length === 0) return "";
+
+  let html = '<div class="diff-block">';
+  if (summary) html += `<div class="diff-summary">${summary.trim()}</div>`;
+  if (fileHdr) html += `<div class="diff-file-hdr">${fileHdr}</div>`;
+  html += '<div class="diff-uni-wrap">';
+
+  for (const row of rows) {
+    html += `<div class="diff-uni-row ${row.cls}">`;
+    html += `<span class="diff-uni-ln diff-uni-old">${row.oldLn}</span>`;
+    html += `<span class="diff-uni-ln diff-uni-new">${row.newLn}</span>`;
+    html += `<span class="diff-uni-body">${row.line}</span>`;
+    html += '</div>';
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+function renderOutput(text: string): string {
+  if (isUnifiedDiff(text)) {
+    return renderDiff(text);
+  }
+  return `<pre class="diff-plain">${esc(text)}</pre>`;
+}
+
 export default function ToolCallCard(props: {
   call: ToolCallDef;
   result?: ToolResultDef;
@@ -22,8 +97,13 @@ export default function ToolCallCard(props: {
     if (v) setOpen(true);
   }));
 
-  // Auto-scroll terminal to bottom
-  createEffect(on(() => props.streamingOutput, () => {
+  // Auto-expand when result arrives (tool completed)
+  createEffect(on(() => props.result, (r) => {
+    if (r) setOpen(true);
+  }));
+
+  // Auto-scroll to bottom on content change
+  createEffect(on(() => [props.streamingOutput, props.result?.output], () => {
     if (bodyRef) bodyRef.scrollTop = bodyRef.scrollHeight;
   }));
 
@@ -43,11 +123,11 @@ export default function ToolCallCard(props: {
         </Show>
       </div>
       <Show when={open() && (hasResult || props.streamingOutput)}>
-        <div class="tool-card-body" ref={bodyRef}>
-          {props.streamingOutput || ""}
-          {hasResult && props.streamingOutput ? "\n\n" : ""}
-          {hasResult ? props.result!.output : ""}
-        </div>
+        <div class="tool-card-body" ref={bodyRef} innerHTML={
+          (props.streamingOutput || "") +
+          (hasResult && props.streamingOutput ? "\n\n" : "") +
+          (hasResult ? renderOutput(props.result!.output) : "")
+        } />
       </Show>
     </div>
   );

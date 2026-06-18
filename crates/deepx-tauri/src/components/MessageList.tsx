@@ -1,4 +1,4 @@
-import { Show, createEffect } from "solid-js";
+import { Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import MessageItem from "./MessageItem";
 import type { Turn } from "../store/chat";
@@ -16,6 +16,7 @@ export default function MessageList(props: MessageListProps) {
   const { t } = useI18n();
   let listRef!: HTMLDivElement;
   const heightCache = new Map<string, number>();
+  const [autoScroll, setAutoScroll] = createSignal(true);
 
   const virtualizer = createVirtualizer({
     get count() { return props.turns.length; },
@@ -30,31 +31,57 @@ export default function MessageList(props: MessageListProps) {
     getItemKey: (index: number) => props.turns[index]?.turnId ?? String(index),
   });
 
-  // Scroll to end when turns are first loaded (restore / initial data)
+  // Detect manual scroll away from bottom (debounced to avoid momentary misfires)
+  let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+  const onScroll = () => {
+    const el = listRef;
+    if (!el) return;
+    if (scrollTimer) return; // debounce: skip rapid scroll events
+    scrollTimer = setTimeout(() => {
+      scrollTimer = null;
+      const threshold = 50;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      setAutoScroll(atBottom);
+    }, 150);
+  };
+
+  // Scroll to end whenever turns grow (new turn appended, not just first load).
+  // Double RAF ensures measureElement has updated the virtualizer's internal
+  // measurements before we scroll, avoiding overshoot from estimated heights.
   let prevLen = 0;
   createEffect(() => {
     const len = props.turns.length;
-    if (len > 0 && prevLen === 0) {
-      requestAnimationFrame(() => virtualizer.scrollToEnd());
+    if (len > prevLen) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          virtualizer.scrollToEnd();
+        });
+      });
     }
     prevLen = len;
   });
 
-  // Auto-scroll to end on streaming
+  // Reset auto-scroll when streaming starts (user hasn't scrolled up yet)
   createEffect(() => {
     if (props.isStreaming()) {
+      setAutoScroll(true);
+    }
+  });
+
+  // Auto-scroll to end during streaming — only if user hasn't scrolled up
+  createEffect(() => {
+    if (props.isStreaming() && autoScroll()) {
       const id = setInterval(() => {
-        virtualizer.scrollToEnd({ behavior: "smooth" });
+        if (autoScroll()) {
+          virtualizer.scrollToEnd({ behavior: "smooth" });
+        }
       }, 200);
-      return () => clearInterval(id);
+      onCleanup(() => clearInterval(id));
     }
   });
 
   // Jump-to-bottom button visibility
-  const showJump = () => {
-    const atEnd = virtualizer.isAtEnd();
-    return !props.isStreaming() && props.turns.length > 0 && !atEnd;
-  };
+  const showJump = () => props.turns.length > 0 && !autoScroll();
 
   return (
     <div class="msg-list-wrap">
@@ -66,7 +93,7 @@ export default function MessageList(props: MessageListProps) {
         </div>
       </Show>
 
-      <div class="msg-list" ref={listRef}>
+      <div class="msg-list" ref={listRef} onScroll={onScroll}>
         <Show
           when={props.turns.length === 0}
           fallback={
@@ -126,7 +153,7 @@ export default function MessageList(props: MessageListProps) {
       <Show when={showJump()}>
         <button
           class="msg-jump-bottom"
-          onClick={() => virtualizer.scrollToEnd({ behavior: "smooth" })}
+          onClick={() => { virtualizer.scrollToEnd({ behavior: "smooth" }); setAutoScroll(true); }}
         >
           {t().chat.jumpToLatest}
         </button>

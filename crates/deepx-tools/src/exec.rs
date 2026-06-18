@@ -10,7 +10,7 @@ use std::sync::mpsc;
 
 // ── Compat helpers ──
 
-pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> String {
+pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> String {
     const MAX_EXEC_OUTPUT: usize = 1024 * 1024;
     let command = crate::parse_arg(args, "command");
     if command.trim().is_empty() {
@@ -23,7 +23,7 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
 
     let mut cmd = if cfg!(target_os = "windows") {
         // Prefer pwsh (PowerShell 7) > powershell (5.1) > cmd
-        if which("pwsh.exe") {
+        let mut c = if which("pwsh.exe") {
             let encoded = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.UTF8Encoding]::new();{}", command);
             let mut c = Command::new("pwsh");
             c.args(["-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &encoded]);
@@ -36,14 +36,16 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
         } else {
             let mut c = Command::new("cmd");
             c.args(["/C", &command]);
-            #[cfg(target_os = "windows")]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x08000000;
-                c.creation_flags(CREATE_NO_WINDOW);
-            }
             c
+        };
+        // Suppress console window flash on Windows
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            c.creation_flags(CREATE_NO_WINDOW);
         }
+        c
     } else {
         // Prefer bash -i (reads .bashrc for nvm/fnm/rbenv etc)
         let mut c = if which("bash") {
@@ -78,16 +80,18 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
 
     let pt_out = progress_tx.clone();
     let pt_err = progress_tx.clone();
+    let tc_id = tool_call_id.to_string();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let mut output_buf = String::new();
 
     if let Some(reader) = stdout_reader {
         let done_tx = done_tx.clone();
+        let tc_id = tc_id.clone();
         std::thread::spawn(move || {
             for line in reader.lines() {
                 if let Ok(l) = line {
                     let text = format!("{l}\n");
-                    if let Some(ref tx) = pt_out { let _ = tx.send(text.clone()); }
+                    if let Some(ref tx) = pt_out { let _ = tx.send((tc_id.clone(), text.clone())); }
                     let _ = done_tx.send(text);
                 }
             }
@@ -95,11 +99,12 @@ pub fn exec_command(args: &str, progress_tx: Option<mpsc::Sender<String>>) -> St
     }
     if let Some(reader) = stderr_reader {
         let done_tx = done_tx.clone();
+        let tc_id = tc_id.clone();
         std::thread::spawn(move || {
             for line in reader.lines() {
                 if let Ok(l) = line {
                     let text = format!("[stderr] {l}\n");
-                    if let Some(ref tx) = pt_err { let _ = tx.send(text.clone()); }
+                    if let Some(ref tx) = pt_err { let _ = tx.send((tc_id.clone(), text.clone())); }
                     let _ = done_tx.send(text);
                 }
             }
@@ -173,7 +178,7 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
         "cwd": ctx.get_str("cwd"),
         "timeout_secs": ctx.get_u64("timeout_secs"),
     });
-    let result = exec_command(&args.to_string(), ctx.tx_progress);
+    let result = exec_command(&args.to_string(), &ctx.id, ctx.tx_progress);
     let success = result.starts_with("[OK]");
     ToolResult { success, content: result }
 }
