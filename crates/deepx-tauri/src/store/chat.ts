@@ -228,7 +228,7 @@ export function createChatStore() {
       return next.length > 50 ? next.slice(0, 50) : next;
     });
   }
-  function clear() { setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]); resetStreamBuffer(); }
+  function clear() { setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]); resetStreamBuffer(); setIsStreaming(false); setInputDisabled(false); lastRoundNum = 0; }
   function clearTurns() { setTurns([]); setError(null); resetStreamBuffer(); }
 
   async function undoTurn(turnId: string) {

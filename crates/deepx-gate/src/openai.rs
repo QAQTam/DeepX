@@ -3,12 +3,39 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use deepx_types::{ContentBlock, Message, ToolDef, UsageInfo};
 use deepx_types::{CacheTokenField, ThinkingParamMode};
 
 use super::types::{ProviderConfig, StreamEvent};
+
+/// Per-read timeout for SSE streaming. When no data arrives within this
+/// interval, `read()` returns a `TimedOut` error so we can check the cancel
+/// flag and retry. This makes cancel responsive even during the "thinking"
+/// delay before the first token arrives.
+const SSE_READ_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// Check whether the cancel flag is set.
+fn is_cancelled(cancel: Option<&Arc<AtomicBool>>) -> bool {
+    cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false)
+}
+
+/// Sleep for `delay` but wake up every 100ms to check the cancel flag.
+/// Returns `true` if cancelled during the sleep.
+fn sleep_with_cancel(delay: Duration, cancel: Option<&Arc<AtomicBool>>) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < delay {
+        if is_cancelled(cancel) {
+            return true;
+        }
+        let remaining = delay - start.elapsed();
+        std::thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+    false
+}
 
 const MAX_RETRIES: u32 = 3;
 const BASE_DELAY_SECS: u64 = 1;
@@ -23,6 +50,11 @@ fn backoff_delay(attempt: u32) -> Duration {
 }
 
 /// Send a chat completion request and stream SSE events via `on_event`.
+///
+/// `cancel` is an optional `Arc<AtomicBool>` that, when set to `true`, causes
+/// the streaming to abort as soon as the next read times out (within
+/// `SSE_READ_TIMEOUT`). This makes cancel responsive even while the HTTP
+/// response is still being streamed.
 pub fn chat_stream_openai(
     provider: &ProviderConfig,
     model: &str,
@@ -31,6 +63,7 @@ pub fn chat_stream_openai(
     max_tokens: u32,
     effort: Option<String>,
     user_id: Option<String>,
+    cancel: Option<&Arc<AtomicBool>>,
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> anyhow::Result<()> {
     let api_msgs = convert_messages(messages, None);
@@ -86,11 +119,25 @@ pub fn chat_stream_openai(
     let url = build_chat_url(&provider.base_url, provider.chat_path.as_deref());
 
     let mut attempt = 0u32;
+    // Use an Agent with a short per-read timeout so that `stream_sse` can
+    // check the cancel flag between reads, even when the server is "thinking"
+    // and not sending data. The overall request timeout remains 900s.
+    let agent = ureq::AgentBuilder::new()
+        .timeout_read(SSE_READ_TIMEOUT)
+        .timeout_write(Duration::from_secs(30))
+        .build();
+
     loop {
         attempt += 1;
+
+        // Check cancel before sending the request
+        if is_cancelled(cancel) {
+            return Err(anyhow::anyhow!("cancelled by user"));
+        }
+
         dump_api_request(user_id.as_deref(), &body);
 
-        let resp = ureq::post(&url)
+        let resp = agent.post(&url)
             .set("Authorization", &format!("Bearer {}", provider.api_key))
             .set("Content-Type", "application/json")
             .timeout(Duration::from_secs(900))
@@ -98,7 +145,7 @@ pub fn chat_stream_openai(
 
         match resp {
             Ok(resp) => {
-                return stream_sse(resp, provider, user_id.as_deref(), on_event);
+                return stream_sse(resp, provider, user_id.as_deref(), cancel, on_event);
             }
             Err(ureq::Error::Status(code, resp)) => {
                 let text = resp.into_string().unwrap_or_default();
@@ -117,7 +164,9 @@ pub fn chat_stream_openai(
                     delay_secs: delay.as_secs(),
                     error: format!("HTTP {} ({})", code, code_desc),
                 });
-                std::thread::sleep(delay);
+                if sleep_with_cancel(delay, cancel) {
+                    return Err(anyhow::anyhow!("cancelled by user"));
+                }
             }
             Err(ureq::Error::Transport(e)) => {
                 if attempt >= MAX_RETRIES {
@@ -132,7 +181,9 @@ pub fn chat_stream_openai(
                     delay_secs: delay.as_secs(),
                     error: format!("{e}"),
                 });
-                std::thread::sleep(delay);
+                if sleep_with_cancel(delay, cancel) {
+                    return Err(anyhow::anyhow!("cancelled by user"));
+                }
             }
         }
     }
@@ -142,6 +193,7 @@ fn stream_sse(
     resp: ureq::Response,
     provider: &ProviderConfig,
     _user_id: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> anyhow::Result<()> {
     let mut balance_queried = false;
@@ -158,11 +210,25 @@ fn stream_sse(
     let mut stop_reason: Option<String> = None;
 
     loop {
-        let n = reader.read(&mut byte_buf).map_err(|e| {
-            let msg = format!("SSE read error: {e}");
-            on_event(StreamEvent::Error(msg.clone()));
-            anyhow::anyhow!("{}", msg)
-        })?;
+        // Check cancel before each read attempt
+        if is_cancelled(cancel) {
+            return Err(anyhow::anyhow!("cancelled by user"));
+        }
+
+        let n = match reader.read(&mut byte_buf) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut
+                  || e.kind() == std::io::ErrorKind::WouldBlock => {
+                // Read timeout (SSE_READ_TIMEOUT elapsed with no data).
+                // Loop back to check cancel, then retry the read.
+                continue;
+            }
+            Err(e) => {
+                let msg = format!("SSE read error: {e}");
+                on_event(StreamEvent::Error(msg.clone()));
+                return Err(anyhow::anyhow!("{}", msg));
+            }
+        };
 
         if n == 0 {
             // EOF — stream ended without Done

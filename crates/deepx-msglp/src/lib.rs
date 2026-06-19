@@ -170,8 +170,9 @@ impl Loop {
 
     /// Drain all pending commands from the channel (non-blocking).
     /// Interrupt-type commands (Cancel, ResumeSession, NewSession, Shutdown)
-    /// are handled immediately. Other commands are queued in `pending_*` fields
-    /// for later handling.
+    /// are handled immediately. Other commands are dispatched immediately
+    /// UNLESS a session switch is pending — in that case, non-interrupt
+    /// commands are dropped (the frontend re-sends them after Ready).
     fn drain_pending(&mut self) {
         while let Ok(cmd) = self.cmd_rx.try_recv() {
             match cmd {
@@ -198,6 +199,12 @@ impl Loop {
                 }
                 Ui2Agent::Shutdown => {
                     self.pending_shutdown = true;
+                }
+                // If a session switch is pending, drop non-interrupt commands
+                // to prevent dispatching them to the wrong (old) session.
+                // The frontend re-sends UserInput after receiving Ready.
+                _other if self.pending_session.is_some() || self.pending_new_session => {
+                    log::info!("[AGENT] dropping non-interrupt command during pending session switch");
                 }
                 // For commands that arrive while idle, dispatch immediately
                 other => self.dispatch(other),
@@ -654,6 +661,9 @@ impl Loop {
             let mut had_error = false;
 
             self.phase = LoopPhase::GateRunning;
+            // Clone the Arc<AtomicBool> so the gate can check cancel in its
+            // SSE read loop without borrowing self.
+            let cancel_arc = self.cancel.arc();
             let result = deepx_gate::chat_stream(
                 &provider,
                 messages,
@@ -661,6 +671,7 @@ impl Loop {
                 self.agent.config.max_tokens,
                 Some(self.agent.config.reasoning_effort.clone()),
                 Some(self.agent.session.seed.clone()),
+                Some(&cancel_arc),
                 &mut |event| {
                     match event {
                         deepx_gate::StreamEvent::ContentDelta(d) => {
@@ -780,6 +791,15 @@ impl Loop {
                 break;
             }
 
+            // Cancel may have been requested during the gate phase. The gate
+            // now aborts promptly (via SSE_READ_TIMEOUT), but we still need to
+            // prevent processing partial content / executing tools.
+            if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
+                self.agent.msg.remove_last_step_if_incomplete();
+                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                break;
+            }
+
             let parsed = parse_tool_calls_from_response(&content, &reasoning, &tool_calls_raw, &self.agent);
             let assistant_msg = build_assistant_message(&content, &reasoning, &parsed);
             let effect = self.agent.msg.push_assistant(assistant_msg.clone());
@@ -794,7 +814,8 @@ impl Loop {
                     let pending = self.agent.msg.get_last_step_pending();
                     if !pending.is_empty() {
                         let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(String, String)>();
-                        let mut handles = Vec::new();
+                        // Track (tc_id, JoinHandle) so we can identify panicked threads.
+                        let mut handles: Vec<(String, std::thread::JoinHandle<(String, String, bool)>)> = Vec::new();
                         let mut tool_infos = Vec::new();
 
                         for tool in &pending {
@@ -803,10 +824,12 @@ impl Loop {
                             let id = tool.id.clone();
                             let args = tool.args.to_string();
                             tool_infos.push((id.clone(), name.clone()));
-                            handles.push(std::thread::spawn(move || {
+                            let id_for_handle = id.clone();
+                            let handle = std::thread::spawn(move || {
                                 let result = deepx_tools::bridge::execute_tool_with_id_full(&name, "", &args, &id, Some(tx));
                                 (id, result.content, result.success)
-                            }));
+                            });
+                            handles.push((id_for_handle, handle));
                         }
                         drop(progress_tx); // close sender when all threads drop their clones
 
@@ -834,22 +857,34 @@ impl Loop {
                             }
                         };
 
-                        // Collect results — skip join if cancelled to avoid blocking
-                        // on tool threads that may still be waiting on PTY I/O.
                         if cancelled {
-                            log::info!("[AGENT] cancelled, skipping tool thread joins");
+                            log::info!("[AGENT] cancelled, pushing placeholder results + background reaper");
                             // Push placeholder results so the store doesn't get stuck
                             for (tc_id, _tool_name) in &tool_infos {
                                 self.agent.msg.push_tool_result_direct(tc_id, "[CANCELLED]");
                             }
+                            // Spawn a background reaper thread to join the tool
+                            // threads. This avoids leaking threads (M1) while
+                            // keeping the main loop responsive — tools that
+                            // check CANCEL will return quickly; others run to
+                            // completion in the background.
+                            std::thread::spawn(move || {
+                                for (_id, h) in handles {
+                                    let _ = h.join();
+                                }
+                            });
                         } else {
-                            for h in handles {
+                            for (tc_id, h) in handles {
                                 match h.join() {
-                                    Ok((tc_id, content, _success)) => {
+                                    Ok((_id, content, _success)) => {
                                         self.agent.msg.push_tool_result_direct(&tc_id, &content);
                                     }
                                     Err(_) => {
-                                        log::error!("[AGENT] tool thread panicked");
+                                        // Thread panicked — inject an error result
+                                        // so the step's all_tools_satisfied() can
+                                        // eventually return true (fixes M2).
+                                        log::error!("[AGENT] tool thread panicked for {tc_id}");
+                                        self.agent.msg.push_tool_result_direct(&tc_id, "[ERROR] tool thread panicked");
                                     }
                                 }
                             }

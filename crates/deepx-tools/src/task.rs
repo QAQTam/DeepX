@@ -2,6 +2,9 @@
 //! Format: "- [status] T{id}: subject — description"
 
 use super::{parse_arg, parse_opt};
+use std::sync::Mutex;
+
+static TASK_LOCK: Mutex<()> = Mutex::new(());
 
 fn current_seed() -> String {
     crate::CURRENT_SESSION.lock().unwrap().clone().unwrap_or_default()
@@ -78,6 +81,7 @@ pub fn get_task_infos() -> Vec<deepx_proto::TaskInfo> {
 }
 
 pub(super) fn exec_task_create(args: &str) -> String {
+    let _guard = TASK_LOCK.lock().unwrap();
     let subject = parse_arg(args, "subject");
     let description = parse_arg(args, "description");
 
@@ -103,6 +107,7 @@ pub(super) fn exec_task_create(args: &str) -> String {
 }
 
 pub(super) fn exec_task_update(args: &str) -> String {
+    let _guard = TASK_LOCK.lock().unwrap();
     let id: u32 = match parse_id(args) {
         Ok(n) => n,
         Err(e) => return format!("[ERROR] task_update: {}", e),
@@ -132,6 +137,7 @@ pub(super) fn exec_task_update(args: &str) -> String {
 }
 
 pub(super) fn exec_task_delete(args: &str) -> String {
+    let _guard = TASK_LOCK.lock().unwrap();
     let id: u32 = match parse_id(args) {
         Ok(n) => n,
         Err(e) => return format!("[ERROR] task_delete: {}", e),
