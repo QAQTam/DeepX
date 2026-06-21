@@ -83,22 +83,21 @@ impl Config {
                     cfg.reasoning_effort = profile.effort.clone().unwrap_or_else(|| "high".into());
                     cfg.context_limit = profile.context_limit;
                     cfg.base_url = profile.base_url.clone();
-                    if let Some(ref ep) = profile.endpoint {
-                        if !ep.is_empty() {
+                    if let Some(ref ep) = profile.endpoint
+                        && !ep.is_empty() {
                             cfg.endpoint = ep.clone();
                             let ep_burl = crate::registry::base_url_for(&cfg.provider_id, ep);
                             if !ep_burl.is_empty() && ep_burl != cfg.base_url {
                                 cfg.base_url = ep_burl;
                             }
                         }
-                    }
                 }
             }
-            if let Some(k) = pc.api_key { if !k.is_empty() { cfg.api_key = k; } }
-            if let Some(m) = pc.model { if !m.is_empty() { cfg.model = m; } }
+            if let Some(k) = pc.api_key && !k.is_empty() { cfg.api_key = k; }
+            if let Some(m) = pc.model && !m.is_empty() { cfg.model = m; }
             // User base_url override: only apply if differs from all known endpoint defaults
-            if let Some(ref u) = pc.base_url {
-                if !u.is_empty() {
+            if let Some(ref u) = pc.base_url
+                && !u.is_empty() {
                     let is_ep_default = crate::registry::all_providers().iter()
                         .flat_map(|p| &p.endpoints)
                         .any(|e| e.base_url == *u || e.models_url.as_deref() == Some(u.as_str()));
@@ -106,17 +105,15 @@ impl Config {
                         cfg.base_url = u.clone();
                     }
                 }
-            }
             if let Some(mt) = pc.max_tokens { cfg.max_tokens = mt; }
             if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
-            if let Some(ref re) = pc.reasoning_effort { if !re.is_empty() { cfg.reasoning_effort = re.clone(); } }
-            if let Some(ref k) = pc.context7_api_key { if !k.is_empty() { cfg.context7_api_key = Some(k.clone()); } }
-            if let Some(ref l) = pc.lang { if !l.is_empty() { cfg.lang = Some(l.clone()); } }
-            if let Some(ref mcp) = pc.mcp_servers {
-                if let Ok(servers) = serde_json::from_value::<Vec<serde_json::Value>>(mcp.clone()) {
+            if let Some(ref re) = pc.reasoning_effort && !re.is_empty() { cfg.reasoning_effort = re.clone(); }
+            if let Some(ref k) = pc.context7_api_key && !k.is_empty() { cfg.context7_api_key = Some(k.clone()); }
+            if let Some(ref l) = pc.lang && !l.is_empty() { cfg.lang = Some(l.clone()); }
+            if let Some(ref mcp) = pc.mcp_servers
+                && let Ok(servers) = serde_json::from_value::<Vec<serde_json::Value>>(mcp.clone()) {
                     cfg.mcp_servers = servers;
                 }
-            }
         }
 
         if !cfg.profiles.contains_key("default") {

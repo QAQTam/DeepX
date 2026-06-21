@@ -37,6 +37,10 @@ pub fn set_context7_key(key: &str) {
     crate::set_c7_key(key);
 }
 
+pub fn set_bocha_key(key: &str) {
+    crate::set_bocha_key(key);
+}
+
 fn with_mgr<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&mut crate::ToolManager) -> R,

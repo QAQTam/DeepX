@@ -27,106 +27,44 @@ pub(super) fn closest_line(content: &str, search: &str) -> Option<(usize, String
 /// Produce a unified diff between two file contents.
 /// Shows the first diff region with context.
 pub(crate) fn unified_diff(before: &str, after: &str, path: &str) -> String {
-    let lines_a: Vec<&str> = before.lines().collect();
-    let lines_b: Vec<&str> = after.lines().collect();
+    use similar::TextDiff;
 
     if before == after {
         return String::new();
     }
-
-    // Find first differing line
-    let mut first_diff = 0usize;
-    while first_diff < lines_a.len() && first_diff < lines_b.len()
-        && lines_a[first_diff] == lines_b[first_diff]
-    {
-        first_diff += 1;
-    }
-
-    // Find last differing line by scanning from the end
-    let mut end_a = lines_a.len();
-    let mut end_b = lines_b.len();
-    while end_a > first_diff && end_b > first_diff
-        && lines_a[end_a - 1] == lines_b[end_b - 1]
-    {
-        end_a -= 1;
-        end_b -= 1;
-    }
-
-    let ctx_start = first_diff.saturating_sub(3);
-    let ctx_end = (end_a.max(end_b) + 3).min(lines_a.len().max(lines_b.len()));
-    let old_count = end_a - first_diff;
-    let new_count = end_b - first_diff;
-
-    let mut diff = String::new();
-    diff.push_str(&format!("--- a/{}\n+++ b/{}\n", path, path));
-    diff.push_str(&format!("@@ -{},{} +{},{} @@\n",
-        first_diff + 1, old_count.max(1),
-        first_diff + 1, new_count.max(1)));
-
-    // Context before
-    for i in ctx_start..first_diff {
-        diff.push_str(&format!(" {}\n", lines_a[i]));
-    }
-    // Removed lines (only the actual changed region)
-    for i in first_diff..end_a {
-        diff.push_str(&format!("-{}\n", lines_a[i]));
-    }
-    // Added lines
-    for i in first_diff..end_b {
-        diff.push_str(&format!("+{}\n", lines_b[i]));
-    }
-    // Context after
-    for i in end_a.max(end_b)..ctx_end {
-        let line = if i < lines_b.len() { lines_b[i] } else { lines_a[i] };
-        diff.push_str(&format!(" {}\n", line));
-    }
-
-    diff
+    let diff = TextDiff::from_lines(before, after);
+    diff.unified_diff()
+        .context_radius(3)
+        .header(&format!("a/{path}"), &format!("b/{path}"))
+        .to_string()
 }
 
-pub(super) fn build_diff(before: &str, after: &str, old: &str, new: &str, path: &str) -> String {
-    let before_lines: Vec<&str> = before.lines().collect();
-    let after_lines: Vec<&str> = after.lines().collect();
-
-    let old_first_line = old.lines().next().unwrap_or(old);
-    let change_line = before_lines.iter()
-        .position(|l| l.contains(old_first_line))
-        .unwrap_or(0);
-
-    let old_count = old.lines().count();
-    let new_count = new.lines().count();
-    let ctx_start = change_line.saturating_sub(3);
-    let ctx_end_after  = (change_line + new_count + 3).min(after_lines.len());
-
-    let mut diff = String::new();
-    // Unified diff header
-    diff.push_str(&format!("--- a/{}\n+++ b/{}\n", path, path));
-    // Hunk header
-    let ctx_line = before_lines.get(change_line.saturating_sub(1)).unwrap_or(&"");
-    diff.push_str(&format!("@@ -{},{} +{},{} @@ {}\n",
-        change_line + 1, old_count.max(1),
-        change_line + 1, new_count.max(1),
-        ctx_line));
-
-    // Context before
-    for i in ctx_start..change_line {
-        diff.push_str(&format!(" {}\n", before_lines[i]));
+/// Count added/removed lines and find first changed line from a unified diff.
+/// Returns (added_lines, removed_lines, first_changed_line).
+pub(crate) fn diff_stats(diff: &str) -> (u32, u32, u32) {
+    let mut added = 0u32;
+    let mut removed = 0u32;
+    let mut first_line = 1u32;
+    let mut got_hunk = false;
+    for line in diff.lines() {
+        if line.starts_with("@@") {
+            if let Some(rest) = line.strip_prefix("@@ -") {
+                if let Some(comma) = rest.find(',') {
+                    if let Ok(start) = rest[..comma].parse::<u32>() {
+                        if !got_hunk {
+                            first_line = start;
+                            got_hunk = true;
+                        }
+                    }
+                }
+            }
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            added += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            removed += 1;
+        }
     }
-    // Removed lines
-    for i in change_line..(change_line + old_count).min(before_lines.len()) {
-        diff.push_str(&format!("-{}\n", before_lines[i]));
-    }
-    // Added lines
-    for i in change_line..(change_line + new_count).min(after_lines.len()) {
-        diff.push_str(&format!("+{}\n", after_lines[i]));
-    }
-    // Context after
-    let ctx_after_start = change_line + new_count;
-    for i in ctx_after_start..ctx_end_after {
-        diff.push_str(&format!(" {}\n", after_lines[i]));
-    }
-
-    diff
+    (added, removed, first_line)
 }
 
 /// Score candidates by context-before/context-after proximity and pick the best match.
@@ -226,5 +164,181 @@ pub(super) fn apply_diff_and_format(
             result
         }
         Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.", path, e),
+    }
+}
+
+// ── Pure-Rust grep engine (used by grep tool on Windows, search tool fallback) ──
+
+/// Search files/directories with regex. Returns `path:line:content` lines.
+/// Handles single files, recursive directory walk, glob filtering, binary skip.
+pub(crate) fn rust_grep(
+    pattern: &str,
+    path: &str,
+    recursive: bool,
+    line_numbers: bool,
+    glob: Option<&str>,
+    max_results: usize,
+) -> Result<Vec<String>, String> {
+    let re = regex::Regex::new(pattern)
+        .map_err(|e| format!("invalid regex: {e}"))?;
+    let p = std::path::Path::new(path);
+    let mut results = Vec::new();
+
+    if p.is_dir() {
+        if recursive {
+            walk_dir(p, glob, &re, line_numbers, max_results, &mut results)
+                .map_err(|e| format!("{path}: {e}"))?;
+        } else {
+            // Non-recursive dir: search only immediate files
+            walk_dir_flat(p, glob, &re, line_numbers, max_results, &mut results)
+                .map_err(|e| format!("{path}: {e}"))?;
+        }
+    } else if p.is_file() {
+        search_file(p, &re, line_numbers, max_results, &mut results);
+    } else {
+        return Err(format!("{path}: no such file or directory"));
+    }
+    Ok(results)
+}
+
+fn search_file(
+    path: &std::path::Path,
+    re: &regex::Regex,
+    line_numbers: bool,
+    max_results: usize,
+    results: &mut Vec<String>,
+) {
+    if is_binary_file(path) {
+        return;
+    }
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    for (i, line) in content.lines().enumerate() {
+        if re.is_match(line) {
+            if line_numbers {
+                results.push(format!("{}:{}:{}", path.display(), i + 1, line));
+            } else {
+                results.push(format!("{}:{}", path.display(), line));
+            }
+            if results.len() >= max_results {
+                return;
+            }
+        }
+    }
+}
+
+fn walk_dir(
+    dir: &std::path::Path,
+    glob: Option<&str>,
+    re: &regex::Regex,
+    line_numbers: bool,
+    max_results: usize,
+    results: &mut Vec<String>,
+) -> std::io::Result<()> {
+    if results.len() >= max_results {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+
+        if path.is_dir() {
+            if fname.starts_with('.') || fname == "target" || fname == "node_modules" {
+                continue;
+            }
+            walk_dir(&path, glob, re, line_numbers, max_results, results)?;
+        } else if path.is_file() {
+            if results.len() >= max_results {
+                return Ok(());
+            }
+            if let Some(g) = glob {
+                if !simple_glob_match(g, &fname) {
+                    continue;
+                }
+            }
+            search_file(&path, re, line_numbers, max_results, results);
+        }
+    }
+    Ok(())
+}
+
+fn walk_dir_flat(
+    dir: &std::path::Path,
+    glob: Option<&str>,
+    re: &regex::Regex,
+    line_numbers: bool,
+    max_results: usize,
+    results: &mut Vec<String>,
+) -> std::io::Result<()> {
+    if results.len() >= max_results {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if path.is_file() {
+            if results.len() >= max_results {
+                return Ok(());
+            }
+            let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+            if let Some(g) = glob {
+                if !simple_glob_match(g, &fname) {
+                    continue;
+                }
+            }
+            search_file(&path, re, line_numbers, max_results, results);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn simple_glob_match(glob: &str, filename: &str) -> bool {
+    if glob == "*" || glob == "**" {
+        return true;
+    }
+    let starts = glob.starts_with('*');
+    let ends = glob.ends_with('*');
+    let inner = glob.trim_matches('*');
+    if inner.is_empty() {
+        return true;
+    }
+    match (starts, ends) {
+        (true, true) => filename.contains(inner),
+        (true, false) => filename.ends_with(inner),
+        (false, true) => filename.starts_with(inner),
+        (false, false) => filename == glob,
+    }
+}
+
+fn is_binary_file(path: &std::path::Path) -> bool {
+    match std::fs::read(path) {
+        Ok(data) => {
+            let check = &data[..data.len().min(16384)];
+            if check.contains(&0u8) {
+                return true;
+            }
+            let non_printable = check.iter()
+                .filter(|&&b| b != 0x09 && b != 0x0A && b != 0x0D && (b < 0x20 || b > 0x7E))
+                .count();
+            non_printable as f64 / check.len().max(1) as f64 > 0.30
+        }
+        Err(_) => false,
     }
 }

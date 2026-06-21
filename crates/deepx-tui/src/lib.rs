@@ -127,7 +127,7 @@ pub fn run_tui() -> anyhow::Result<()> {
                             }
                         }
                     }
-                    let seed = app.resume_seed.clone().unwrap();
+                    let seed = app.resume_seed.clone().expect("resume_seed is Some");
                     let _ = tui_tx.send(Ui2Agent::ResumeSession { seed });
                 }
 
@@ -326,22 +326,26 @@ fn run_chat(
             Duration::from_millis(100) // ~10 Hz idle — terminals don't need more
         };
 
+        let mut had_input = false;
+
         if event::poll(poll_timeout)? {
             match event::read()? {
                 Event::Resize(_, _) => {
                     // ratatui Terminal auto-resizes on next draw — nothing to do here
+                    had_input = true;
                 }
                 Event::Paste(data) => {
                     let text = data.trim_end_matches(|c: char| c == '\n' || c == '\r');
                     app.input.insert_str(app.cursor, text);
                     app.cursor += text.len();
+                    had_input = true;
                 }
                 Event::Key(key) => {
             if key.kind != KeyEventKind::Press { continue; }
+            had_input = true;
 
             // Ask popup: intercept keys
-            if app.ask.is_some() {
-                let ask = app.ask.as_mut().unwrap();
+            if let Some(ask) = app.ask.as_mut() {
                 match (key.modifiers, key.code) {
                     (_, KeyCode::Esc) => { app.ask = None; }
                     (_, KeyCode::Up) => { if ask.selected > 0 { ask.selected -= 1; } }
@@ -350,35 +354,32 @@ fn run_chat(
                         let reply = if ask.selected < ask.options.len() {
                             let opt = &ask.options[ask.selected];
                             if opt.is_empty() {
-                                if ask.custom_input.is_empty() { continue; }
-                                ask.custom_input.clone()
+                                if ask.custom_input.is_empty() { None }
+                                else { Some(ask.custom_input.clone()) }
                             } else {
-                                opt.clone()
+                                Some(opt.clone())
                             }
-                        } else { continue };
-                        if !reply.is_empty() {
-                            send(tui_tx, &deepx_proto::Ui2Agent::UserInput { text: reply });
+                        } else { None };
+                        if let Some(reply) = reply {
+                            if !reply.is_empty() {
+                                send(tui_tx, &deepx_proto::Ui2Agent::UserInput { text: reply });
+                            }
+                            app.ask = None;
                         }
-                        app.ask = None;
                     }
                     (_, KeyCode::Backspace) => { ask.custom_input.pop(); }
                     (_, KeyCode::Char(c)) => { ask.custom_input.push(c); }
                     _ => {}
                 }
-                continue;
-            }
-
-            // Help overlay
-            if app.show_help {
+            } else if app.show_help {
+                // Help overlay
                 match (key.modifiers, key.code) {
                     (_, KeyCode::Char('?')) | (_, KeyCode::Esc) => { app.show_help = false; }
                     _ => {}
                 }
-                continue;
-            }
-
-            // Normal chat keys
-            match (key.modifiers, key.code) {
+            } else {
+                // Normal chat keys
+                match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Char('?')) => {
                     app.show_help = !app.show_help;
                     app.scroll_offset = 0;
@@ -524,6 +525,7 @@ fn run_chat(
                 }
                 _ => {}
             }
+            } // else
             } // Event::Key
             _ => {}
             } // match event
@@ -551,14 +553,15 @@ fn run_chat(
 
         if agent_dead && app.should_quit { return Ok(()); }
 
-        // 3. Render (ratatui internally diffs — cheap when nothing changed)
+        // 3. Render — throttle when idle, but render immediately on user input
+        // for instant visual feedback (typing, scrolling, toggles).
         let now = Instant::now();
         let render_interval = if app.streaming {
             Duration::from_millis(33) // ~30 FPS streaming
         } else {
-            Duration::from_millis(100) // ~10 FPS idle — terminals are low-bandwidth
+            Duration::from_millis(100) // ~10 FPS idle
         };
-        if now.duration_since(app.last_render) >= render_interval {
+        if had_input || now.duration_since(app.last_render) >= render_interval {
             terminal.draw(|frame| {
                 ui::render_chat(frame, app);
                 if app.ask.is_some() { ui::render_ask(frame, app); }

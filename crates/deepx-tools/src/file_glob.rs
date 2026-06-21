@@ -1,87 +1,60 @@
+//! glob tool — file finder powered by `ignore` crate walker.
+//! Replaces the hand-written `walk_dir` with ripgrep's gitignore-aware engine.
+
 use crate::{parse_arg, parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_glob(args: &str) -> String {
     let pattern = parse_arg(args, "pattern");
     let path = parse_arg_or(args, "path", ".");
-    // Strip **/ for filename matching (walk is already recursive)
-    let file_pattern = if let Some(pos) = pattern.rfind("**/") {
-        &pattern[pos + 3..]
-    } else if let Some(pos) = pattern.rfind("**\\") {
-        &pattern[pos + 3..]
-    } else {
-        pattern.as_str()
-    };
-    let mut results = Vec::new();
-    let root = std::path::Path::new(&path);
-    if let Err(e) = glob_walk(root, file_pattern, &mut results) {
-        return format!("[ERROR] glob failed: {}\n[HINT] Check the pattern syntax.", e);
-    }
-    if results.is_empty() {
-        return format!("No files matching '{}'", pattern);
-    }
-    results.join("\n")
-}
 
-fn glob_walk(dir: &std::path::Path, file_pattern: &str, results: &mut Vec<String>) -> std::io::Result<()> {
-    if results.len() >= 500 {
-        return Ok(());
-    }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-    for entry in entries {
+    let mut results = Vec::new();
+    let max_results = 500;
+
+    let walker = ignore::WalkBuilder::new(&path)
+        .hidden(false)
+        .git_ignore(false)
+        .require_git(false)
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .build();
+
+    for entry in walker {
+        if results.len() >= max_results {
+            break;
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
         };
-        let path = entry.path();
-        let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-        if path.is_dir() {
-            if fname.starts_with('.') || fname == "target" || fname == "node_modules" {
+        if let Some(ft) = entry.file_type() {
+            if !ft.is_file() && !ft.is_symlink() {
                 continue;
             }
-            glob_walk(&path, file_pattern, results)?;
-        } else if path.is_file() {
-            if results.len() >= 500 {
-                return Ok(());
-            }
-            if simple_glob_match(file_pattern, &fname) {
-                let size = path.metadata().map(|m| m.len()).unwrap_or(0);
-                let sz = if size > 1024 * 1024 {
-                    format!("{:.1}M", size as f64 / 1_048_576.0)
-                } else if size > 1024 {
-                    format!("{}K", size / 1024)
-                } else {
-                    format!("{}B", size)
-                };
-                results.push(format!("{} ({})", path.display(), sz));
-            }
+        } else {
+            continue;
         }
+        let fname = entry.file_name().to_string_lossy();
+        if !super::file_shared::simple_glob_match(&pattern, &fname) {
+            continue;
+        }
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        let sz = if size > 1024 * 1024 {
+            format!("{:.1}M", size as f64 / 1_048_576.0)
+        } else if size > 1024 {
+            format!("{}K", size / 1024)
+        } else {
+            format!("{}B", size)
+        };
+        results.push(format!("{} ({})", entry.path().display(), sz));
     }
-    Ok(())
-}
 
-fn simple_glob_match(glob: &str, filename: &str) -> bool {
-    if glob == "*" || glob == "**" {
-        return true;
-    }
-    let starts = glob.starts_with('*');
-    let ends = glob.ends_with('*');
-    let inner = glob.trim_matches('*');
-    if inner.is_empty() {
-        return true;
-    }
-    match (starts, ends) {
-        (true, true) => filename.contains(inner),
-        (true, false) => filename.ends_with(inner),
-        (false, true) => filename.starts_with(inner),
-        (false, false) => filename == glob,
+    if results.is_empty() {
+        format!("No files matching '{}'", pattern)
+    } else {
+        results.join("\n")
     }
 }
 
 handler!(handle_glob, exec_glob);
-
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {

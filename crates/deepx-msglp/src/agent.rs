@@ -1,6 +1,7 @@
 //! AgentState: core agent session state backing the message loop.
 
 use deepx_config::Config;
+use deepx_session::SessionMeta;
 
 use deepx_message::{ToolExecRequest, ToolExecReport};
 use deepx_tools::bridge;
@@ -9,8 +10,7 @@ use deepx_tools::bridge;
 pub struct AgentState {
     pub msg: deepx_message::MessageStore,
     pub config: deepx_config::Config,
-    pub session: deepx_session::SessionMeta,
-    pub tool_results: Vec<(String, String)>,
+    pub session: SessionMeta,
     pub tool_defs: Vec<deepx_types::ToolDef>,
     pub dsml_compat_count: u32,
     pub turn_count: u32,
@@ -21,8 +21,7 @@ impl AgentState {
         let msg = deepx_message::MessageStore::new("init");
         Self {
             msg, config,
-            session: deepx_session::SessionMeta::new(),
-            tool_results: Vec::new(),
+            session: SessionMeta::new(),
             tool_defs: Vec::new(),
             dsml_compat_count: 0,
             turn_count: 0,
@@ -30,7 +29,13 @@ impl AgentState {
     }
 
     pub fn init(caller: &str) -> Self {
-        let config = Config::load().unwrap_or_default();
+        let config = match Config::load() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("deepx-agent: Config::load failed ({e}), using default config");
+                Config::default()
+            }
+        };
         bridge::init_tools(caller, &[]);
         if let Some(ref key) = config.context7_api_key {
             if !key.is_empty() { bridge::set_context7_key(key); }

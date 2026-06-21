@@ -1,5 +1,6 @@
 use std::process::Command;
 use crate::{parse_arg, parse_opt, parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
+use super::file_shared::rust_grep;
 
 pub(super) fn exec_search(args: &str) -> String {
     let pattern = parse_arg(args, "pattern");
@@ -38,8 +39,8 @@ pub(super) fn exec_search(args: &str) -> String {
         _ => {} // rg not installed or errored — fall through to pure Rust
     }
 
-    // Phase 2: pure Rust fallback (regex + manual file walking)
-    match rust_search(&pattern, glob, &dir) {
+    // Phase 2: pure Rust fallback
+    match rust_grep(&pattern, &dir, true, true, glob.as_deref(), 100) {
         Ok(lines) => {
             if lines.is_empty() {
                 format!("No matches for '{}'", pattern)
@@ -54,104 +55,6 @@ pub(super) fn exec_search(args: &str) -> String {
             }
         }
         Err(e) => format!("[ERROR] search failed: {}\n[HINT] Check the pattern or path.", e),
-    }
-}
-
-fn rust_search(pattern: &str, glob: Option<String>, dir: &str) -> Result<Vec<String>, String> {
-    let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
-    let mut results = Vec::new();
-    let root = std::path::Path::new(dir);
-    walk_dir(root, glob.as_deref(), &re, &mut results)
-        .map_err(|e| format!("{}: {}", dir, e))?;
-    Ok(results)
-}
-
-fn walk_dir(
-    dir: &std::path::Path,
-    glob: Option<&str>,
-    re: &regex::Regex,
-    results: &mut Vec<String>,
-) -> std::io::Result<()> {
-    if results.len() >= 100 {
-        return Ok(());
-    }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-
-        if path.is_dir() {
-            if fname.starts_with('.') || fname == "target" || fname == "node_modules" {
-                continue;
-            }
-            walk_dir(&path, glob, re, results)?;
-        } else if path.is_file() {
-            if results.len() >= 100 {
-                return Ok(());
-            }
-            if let Some(g) = glob {
-                if !simple_glob_match(g, &fname) {
-                    continue;
-                }
-            }
-            if is_binary_file(&path) {
-                continue;
-            }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            for (i, line) in content.lines().enumerate() {
-                if re.is_match(line) {
-                    results.push(format!("{}:{}:{}", path.display(), i + 1, line));
-                    if results.len() >= 100 {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn simple_glob_match(glob: &str, filename: &str) -> bool {
-    if glob == "*" || glob == "**" {
-        return true;
-    }
-    let starts = glob.starts_with('*');
-    let ends = glob.ends_with('*');
-    let inner = glob.trim_matches('*');
-    if inner.is_empty() {
-        return true;
-    }
-    match (starts, ends) {
-        (true, true) => filename.contains(inner),
-        (true, false) => filename.ends_with(inner),
-        (false, true) => filename.starts_with(inner),
-        (false, false) => filename == glob,
-    }
-}
-
-fn is_binary_file(path: &std::path::Path) -> bool {
-    match std::fs::read(path) {
-        Ok(data) => {
-            let check = &data[..data.len().min(16384)];
-            if check.contains(&0u8) {
-                return true;
-            }
-            let non_printable = check.iter()
-                .filter(|&&b| b != 0x09 && b != 0x0A && b != 0x0D && (b < 0x20 || b > 0x7E))
-                .count();
-            non_printable as f64 / check.len().max(1) as f64 > 0.30
-        }
-        Err(_) => false,
     }
 }
 

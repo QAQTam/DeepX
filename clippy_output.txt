@@ -1,0 +1,360 @@
+warning: this `if` statement can be collapsed
+  --> crates\deepx-types\src\config.rs:93:9
+   |
+93 | /         if let Some(parent) = self.path.parent() {
+94 | |             if let Err(e) = std::fs::create_dir_all(parent) {
+95 | |                 eprintln!("ConfigStore: create_dir_all({}) failed: {e}", parent.display());
+96 | |                 return false;
+97 | |             }
+98 | |         }
+   | |_________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+   = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+   |
+93 ~         if let Some(parent) = self.path.parent()
+94 ~             && let Err(e) = std::fs::create_dir_all(parent) {
+95 |                 eprintln!("ConfigStore: create_dir_all({}) failed: {e}", parent.display());
+96 |                 return false;
+97 ~             }
+   |
+
+warning: this `impl` can be derived
+  --> crates\deepx-types\src\provider.rs:37:1
+   |
+37 | / impl Default for ThinkingParamMode {
+38 | |     fn default() -> Self { Self::OpenAi }
+39 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#derivable_impls
+   = note: `#[warn(clippy::derivable_impls)]` on by default
+help: replace the manual implementation with a derive attribute and mark the default variant
+   |
+16 + #[derive(Default)]
+17 | pub enum ThinkingParamMode {
+18 |     /// thinking: {type: "enabled"} at top-level body. DeepSeek, GLM, Kimi, MiMo, Doubao, OpenAI.
+19 ~     #[default]
+20 ~     OpenAi,
+   |
+
+warning: this `impl` can be derived
+  --> crates\deepx-types\src\provider.rs:41:1
+   |
+41 | / impl Default for CacheTokenField {
+42 | |     fn default() -> Self { Self::PromptCacheHitTokens }
+43 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#derivable_impls
+help: replace the manual implementation with a derive attribute and mark the default variant
+   |
+26 + #[derive(Default)]
+27 | pub enum CacheTokenField {
+28 |     /// usage.prompt_cache_hit_tokens + usage.prompt_cache_miss_tokens. DeepSeek.
+29 ~     #[default]
+30 ~     PromptCacheHitTokens,
+   |
+
+warning: `deepx-types` (lib) generated 3 warnings (run `cargo clippy --fix --lib -p deepx-types -- ` to apply 3 suggestions)
+    Checking deepx-session v0.3.0 (D:\Project\DeepX\crates\deepx-session)
+    Checking deepx-proto v0.3.0 (D:\Project\DeepX\crates\deepx-proto)
+    Checking deepx-config v0.3.0 (D:\Project\DeepX\crates\deepx-config)
+   Compiling deepx-tauri v0.3.0 (D:\Project\DeepX\crates\deepx-tauri\src-tauri)
+   Compiling deepx v0.3.0 (D:\Project\DeepX\crates\deepx)
+warning: `deepx-types` (lib test) generated 3 warnings (3 duplicates)
+error: used `unwrap()` on a `Result` value
+  --> crates\deepx\build.rs:22:9
+   |
+22 |         res.compile().unwrap();
+   |         ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: consider using `expect()` to provide a better panic message
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#unwrap_used
+   = note: requested on the command line with `-D clippy::unwrap-used`
+
+error: could not compile `deepx` (build script) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+warning: this `if` statement can be collapsed
+  --> crates\deepx-session\src\manager.rs:41:9
+   |
+41 | /         if metas.is_empty() {
+42 | |             if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
+43 | |                 for entry in entries.flatten() {
+44 | |                     let path = entry.path();
+...  |
+63 | |         }
+   | |_________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+   = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+   |
+41 ~         if metas.is_empty()
+42 ~             && let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
+43 |                 for entry in entries.flatten() {
+...
+61 |                 }
+62 ~             }
+   |
+
+warning: this `if` statement can be collapsed
+  --> crates\deepx-session\src\manager.rs:47:21
+   |
+47 | /                     if let Ok(data) = std::fs::read_to_string(&session_file) {
+48 | |                         if let Ok(sf) = toml::from_str::<SessionFile>(&data) {
+49 | |                             metas.push(SessionMeta {
+50 | |                                 seed: sf.seed,
+...  |
+60 | |                     }
+   | |_____________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+   |
+47 ~                     if let Ok(data) = std::fs::read_to_string(&session_file)
+48 ~                         && let Ok(sf) = toml::from_str::<SessionFile>(&data) {
+49 |                             metas.push(SessionMeta {
+...
+58 |                             });
+59 ~                         }
+   |
+
+warning: this `if` statement can be collapsed
+   --> crates\deepx-session\src\manager.rs:127:9
+    |
+127 | /         if let Ok(content) = toml::to_string_pretty(&file) {
+128 | |             if std::fs::write(&session_path, &content).is_err() {
+129 | |                 log::error!("SessionManager: failed to write session file {}", session_path.display());
+130 | |             }
+131 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+127 ~         if let Ok(content) = toml::to_string_pretty(&file)
+128 ~             && std::fs::write(&session_path, &content).is_err() {
+129 |                 log::error!("SessionManager: failed to write session file {}", session_path.display());
+130 ~             }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\deepx-session\src\manager.rs:245:9
+    |
+245 | /         if let Ok(content) = toml::to_string_pretty(metas) {
+246 | |             if std::fs::write(&path, &content).is_err() {
+247 | |                 log::error!("SessionManager: failed to write index.toml");
+248 | |             }
+249 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+245 ~         if let Ok(content) = toml::to_string_pretty(metas)
+246 ~             && std::fs::write(&path, &content).is_err() {
+247 |                 log::error!("SessionManager: failed to write index.toml");
+248 ~             }
+    |
+
+warning: this `if` statement can be collapsed
+  --> crates\deepx-config\src\config.rs:86:21
+   |
+86 | /                     if let Some(ref ep) = profile.endpoint {
+87 | |                         if !ep.is_empty() {
+88 | |                             cfg.endpoint = ep.clone();
+89 | |                             let ep_burl = crate::registry::base_url_for(&cfg.provider_id, ep);
+...  |
+94 | |                     }
+   | |_____________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+   = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+   |
+86 ~                     if let Some(ref ep) = profile.endpoint
+87 ~                         && !ep.is_empty() {
+88 |                             cfg.endpoint = ep.clone();
+...
+92 |                             }
+93 ~                         }
+   |
+
+warning: this `if` statement can be collapsed
+  --> crates\deepx-config\src\config.rs:97:13
+   |
+97 |             if let Some(k) = pc.api_key { if !k.is_empty() { cfg.api_key = k; } }
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+   |
+97 -             if let Some(k) = pc.api_key { if !k.is_empty() { cfg.api_key = k; } }
+97 +             if let Some(k) = pc.api_key && !k.is_empty() { cfg.api_key = k; }
+   |
+
+warning: this `if` statement can be collapsed
+  --> crates\deepx-config\src\config.rs:98:13
+   |
+98 |             if let Some(m) = pc.model { if !m.is_empty() { cfg.model = m; } }
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+   |
+98 -             if let Some(m) = pc.model { if !m.is_empty() { cfg.model = m; } }
+98 +             if let Some(m) = pc.model && !m.is_empty() { cfg.model = m; }
+   |
+
+warning: this `if` statement can be collapsed
+   --> crates\deepx-config\src\config.rs:100:13
+    |
+100 | /             if let Some(ref u) = pc.base_url {
+101 | |                 if !u.is_empty() {
+102 | |                     let is_ep_default = crate::registry::all_providers().iter()
+103 | |                         .flat_map(|p| &p.endpoints)
+...   |
+109 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+100 ~             if let Some(ref u) = pc.base_url
+101 ~                 && !u.is_empty() {
+102 |                     let is_ep_default = crate::registry::all_providers().iter()
+...
+107 |                     }
+108 ~                 }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\deepx-config\src\config.rs:112:13
+    |
+112 |             if let Some(ref re) = pc.reasoning_effort { if !re.is_empty() { cfg.reasoning_effort = re.clone(); } }
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+112 -             if let Some(ref re) = pc.reasoning_effort { if !re.is_empty() { cfg.reasoning_effort = re.clone(); } }
+112 +             if let Some(ref re) = pc.reasoning_effort && !re.is_empty() { cfg.reasoning_effort = re.clone(); }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\deepx-config\src\config.rs:113:13
+    |
+113 |             if let Some(ref k) = pc.context7_api_key { if !k.is_empty() { cfg.context7_api_key = Some(k.clone()); } }
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+113 -             if let Some(ref k) = pc.context7_api_key { if !k.is_empty() { cfg.context7_api_key = Some(k.clone()); } }
+113 +             if let Some(ref k) = pc.context7_api_key && !k.is_empty() { cfg.context7_api_key = Some(k.clone()); }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\deepx-config\src\config.rs:114:13
+    |
+114 |             if let Some(ref l) = pc.lang { if !l.is_empty() { cfg.lang = Some(l.clone()); } }
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+114 -             if let Some(ref l) = pc.lang { if !l.is_empty() { cfg.lang = Some(l.clone()); } }
+114 +             if let Some(ref l) = pc.lang && !l.is_empty() { cfg.lang = Some(l.clone()); }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\deepx-config\src\config.rs:115:13
+    |
+115 | /             if let Some(ref mcp) = pc.mcp_servers {
+116 | |                 if let Ok(servers) = serde_json::from_value::<Vec<serde_json::Value>>(mcp.clone()) {
+117 | |                     cfg.mcp_servers = servers;
+118 | |                 }
+119 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+115 ~             if let Some(ref mcp) = pc.mcp_servers
+116 ~                 && let Ok(servers) = serde_json::from_value::<Vec<serde_json::Value>>(mcp.clone()) {
+117 |                     cfg.mcp_servers = servers;
+118 ~                 }
+    |
+
+warning: `deepx-session` (lib) generated 4 warnings (run `cargo clippy --fix --lib -p deepx-session -- ` to apply 4 suggestions)
+warning: useless conversion to the same type: `std::string::String`
+  --> crates\deepx-config\src\registry.rs:23:32
+   |
+23 |                 default_model: String::new().into(),
+   |                                ^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `String::new()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#useless_conversion
+   = note: `#[warn(clippy::useless_conversion)]` on by default
+
+warning: useless conversion to the same type: `std::string::String`
+  --> crates\deepx-config\src\registry.rs:46:32
+   |
+46 |                 default_model: String::new().into(),
+   |                                ^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `String::new()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `std::string::String`
+  --> crates\deepx-config\src\registry.rs:69:32
+   |
+69 |                 default_model: String::new().into(),
+   |                                ^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `String::new()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `std::string::String`
+  --> crates\deepx-config\src\registry.rs:91:32
+   |
+91 |                 default_model: String::new().into(),
+   |                                ^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `String::new()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `std::string::String`
+   --> crates\deepx-config\src\registry.rs:112:32
+    |
+112 |                 default_model: String::new().into(),
+    |                                ^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `String::new()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `std::string::String`
+   --> crates\deepx-config\src\registry.rs:133:32
+    |
+133 |                 default_model: String::new().into(),
+    |                                ^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `String::new()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `std::string::String`
+   --> crates\deepx-config\src\registry.rs:155:32
+    |
+155 |                 default_model: String::new().into(),
+    |                                ^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `String::new()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `std::string::String`
+   --> crates\deepx-config\src\registry.rs:175:32
+    |
+175 |                 default_model: String::new().into(),
+    |                                ^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `String::new()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#useless_conversion
+
+warning: `deepx-session` (lib test) generated 4 warnings (4 duplicates)
+warning: `deepx-config` (lib) generated 16 warnings (run `cargo clippy --fix --lib -p deepx-config -- ` to apply 16 suggestions)
+warning: `deepx-config` (lib test) generated 16 warnings (16 duplicates)

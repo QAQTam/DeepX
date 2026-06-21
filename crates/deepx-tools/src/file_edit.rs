@@ -1,5 +1,5 @@
 use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
-use super::file_shared::{build_diff, normalize_newlines, closest_line};
+use super::file_shared::{unified_diff, diff_stats, normalize_newlines, closest_line};
 
 // ── Argument parsers ──
 
@@ -139,13 +139,19 @@ pub(super) fn exec_edit_file(args: &str) -> String {
         }
 
         if dry_run {
-            let diff = build_diff(&orig, &content, "", "", path);
-            results.push(format!("[DRY RUN] {path} — {n} pattern(s), no changes written\n\n{diff}", n = patterns.len()));
+            let diff = unified_diff(&orig, &content, path);
+            let (added, removed, first_line) = diff_stats(&diff);
+            let added_count = added.max(1);
+            let removed_count = removed.max(1);
+            results.push(format!("[DRY RUN] {path} — {n} pattern(s), no changes written\n\n{diff}\n[CHANGE] {path}:{first_line} +{added_count} -{removed_count} | edit_file (dry run)", n = patterns.len()));
         } else {
             match std::fs::write(path, &content) {
                 Ok(_) => {
-                    let diff = build_diff(&orig, &content, "", "", path);
-                    results.push(format!("[OK] {path} — {n} pattern(s): {summary}\n\n{diff}", n = patterns.len(), summary = msgs.join("; ")));
+                    let diff = unified_diff(&orig, &content, path);
+                    let (added, removed, first_line) = diff_stats(&diff);
+                    let added_count = added.max(1);
+                    let removed_count = removed.max(1);
+                    results.push(format!("[OK] {path} — {n} pattern(s): {summary}\n\n{diff}\n[CHANGE] {path}:{first_line} +{added_count} -{removed_count} | edit_file", n = patterns.len(), summary = msgs.join("; ")));
                 }
                 Err(e) => {
                     results.push(format!("[ERROR] Cannot write {path}: {e}"));

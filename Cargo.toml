@@ -11,12 +11,18 @@ members = [
     "crates/deepx-tools",
     "crates/deepx-tui",
     "crates/deepx-session",
+    "crates/deepx-sed",
     "crates/deepx-tauri/src-tauri",
+    "crates/deepx-grep-matcher",
+    "crates/deepx-grep-regex",
+    "crates/deepx-grep-searcher",
+    "crates/deepx-globset",
+    "crates/deepx-ignore",
 ]
 
 [workspace.package]
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 
 [profile.release]

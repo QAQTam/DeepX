@@ -19,6 +19,12 @@ pub mod sed;
 
 pub mod grep;
 
+pub mod jaq;
+
+pub mod wc;
+
+pub mod sort;
+
 pub mod file_edit_diff;
 
 pub mod file_list_dir;
@@ -50,6 +56,7 @@ pub mod manager;
 pub mod mcp_bridge;
 
 pub use web::set_c7_key;
+pub use web::set_bocha_key;
 pub use safety::SafetyVerdict;
 pub use manager::{ToolManager, ToolExecMeta, ToolExecReport, ToolStats};
 
@@ -84,11 +91,17 @@ use deepx_types::ToolDef;
 
 // ── Global state ──
 
+/// Global cancel flag for tool execution.
+///
+/// Set at the start of every interrupt (Cancel, session switch, shutdown)
+/// from the reader thread and the main loop. Checked by bridge before
+/// executing each tool. Reset at the top of [`crate::Loop::handle_user_input`]
+/// so it is per-turn, not cross-session.
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
 pub static CURRENT_SESSION: Mutex<Option<String>> = Mutex::new(None);
 
 pub fn set_current_session(seed: &str) {
-    let mut guard = CURRENT_SESSION.lock().unwrap();
+    let mut guard = CURRENT_SESSION.lock().expect("CURRENT_SESSION lock");
     *guard = Some(seed.to_string());
 }
 

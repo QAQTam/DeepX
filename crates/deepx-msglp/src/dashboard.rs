@@ -1,8 +1,7 @@
-use crate::agent::AgentState;
 use deepx_proto::DocInfo;
 use deepx_proto::TaskInfo;
 
-pub fn build_documents(_agent: &AgentState) -> Vec<DocInfo> {
+pub fn build_documents() -> Vec<DocInfo> {
     let files_read = deepx_tools::bridge::files_read();
     let mut docs: Vec<DocInfo> = files_read
         .iter()
@@ -20,11 +19,11 @@ pub fn build_documents(_agent: &AgentState) -> Vec<DocInfo> {
     docs
 }
 
-pub fn build_recent_edits(_agent: &AgentState) -> Vec<String> {
+pub fn build_recent_edits() -> Vec<String> {
     let files = deepx_tools::bridge::files_written();
     files.iter().take(10).map(|f| format!("edit: {}", f)).collect()
 }
 
-pub fn build_tasks(_agent: &AgentState) -> Vec<TaskInfo> {
+pub fn build_tasks() -> Vec<TaskInfo> {
     deepx_tools::bridge::all_tasks()
 }

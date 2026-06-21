@@ -16,7 +16,7 @@ impl Log for FileLogger {
     }
 
     fn log(&self, record: &Record) {
-        let mut f = self.file.lock().unwrap();
+        let mut f = self.file.lock().expect("agent log lock");
         let _ = writeln!(
             f,
             "[{}] {} | {}",
@@ -27,7 +27,7 @@ impl Log for FileLogger {
     }
 
     fn flush(&self) {
-        let _ = self.file.lock().unwrap().flush();
+        let _ = self.file.lock().expect("agent log lock").flush();
     }
 }
 

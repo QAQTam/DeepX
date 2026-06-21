@@ -1,4 +1,5 @@
 use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
+use super::file_shared::{unified_diff, diff_stats, normalize_newlines};
 
 pub(super) fn exec_write_file(args: &str) -> String {
     let path = parse_arg(args, "path");
@@ -8,6 +9,10 @@ pub(super) fn exec_write_file(args: &str) -> String {
         let _ = std::fs::create_dir_all(parent);
     }
     let line_count = content.lines().count();
+
+    // Read old content if file exists (for diff on overwrite)
+    let old_content = std::fs::read_to_string(&path).ok();
+
     if append {
         use std::io::Write;
         let mut file = match std::fs::OpenOptions::new().append(true).create(true).open(&path) {
@@ -15,12 +20,35 @@ pub(super) fn exec_write_file(args: &str) -> String {
             Err(e) => return format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
         };
         match file.write_all(content.as_bytes()) {
-            Ok(_) => format!("[OK] {} — appended {} bytes, {} lines", path, content.len(), line_count),
+            Ok(_) => {
+                if let Some(ref old) = old_content {
+                    let old_line_count = old.lines().count();
+                    let first_line = if old_line_count == 0 { 1u32 } else { old_line_count as u32 + 1 };
+                    format!("[OK] {} — appended {} bytes, {} lines\n\n+{}\n\n[CHANGE] {}:{} +{} -0 | write_file (append)", path, content.len(), line_count, content.trim_end(), path, first_line, line_count as u32)
+                } else {
+                    format!("[OK] {} — appended {} bytes, {} lines (new file)", path, content.len(), line_count)
+                }
+            }
             Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
         }
     } else {
         match std::fs::write(&path, &content) {
-            Ok(_) => format!("[OK] {} — {} bytes, {} lines", path, content.len(), line_count),
+            Ok(_) => {
+                if let Some(ref old) = old_content {
+                    // Overwrite: show full diff
+                    let (old_norm, _) = normalize_newlines(old);
+                    let (new_norm, _) = normalize_newlines(&content);
+                    let diff = unified_diff(&old_norm, &new_norm, &path);
+                    if diff.is_empty() {
+                        format!("[OK] {} — {} bytes, {} lines (no changes)", path, content.len(), line_count)
+                    } else {
+                        let (added, removed, first_line) = diff_stats(&diff);
+                        format!("[OK] {} — {} bytes, {} lines\n\n{}\n[CHANGE] {}:{} +{} -{} | write_file", path, content.len(), line_count, diff.trim_end(), path, first_line, added.max(1), removed.max(1))
+                    }
+                } else {
+                    format!("[OK] {} — {} bytes, {} lines (new file)", path, content.len(), line_count)
+                }
+            }
             Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
         }
     }

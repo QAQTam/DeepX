@@ -13,8 +13,10 @@ pub enum UserSendMode {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub enum ThinkingParamMode {
     /// thinking: {type: "enabled"} at top-level body. DeepSeek, GLM, Kimi, MiMo, Doubao, OpenAI.
+    #[default]
     OpenAi,
     /// enable_thinking: true at top-level body. Qwen.
     QwenEnableThinking,
@@ -23,8 +25,10 @@ pub enum ThinkingParamMode {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub enum CacheTokenField {
     /// usage.prompt_cache_hit_tokens + usage.prompt_cache_miss_tokens. DeepSeek.
+    #[default]
     PromptCacheHitTokens,
     /// usage.prompt_tokens_details.cached_tokens (nested). Qwen, GLM.
     PromptDetailsCached,
@@ -34,13 +38,7 @@ pub enum CacheTokenField {
     None,
 }
 
-impl Default for ThinkingParamMode {
-    fn default() -> Self { Self::OpenAi }
-}
 
-impl Default for CacheTokenField {
-    fn default() -> Self { Self::PromptCacheHitTokens }
-}
 
 #[derive(Debug, Clone)]
 pub struct EndpointSpec {

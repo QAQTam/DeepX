@@ -85,9 +85,9 @@ pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> 
         } else {
             "/bin/sh"
         };
-        let shell_c = CString::new(shell).unwrap();
-        let arg_c = CString::new("-c").unwrap();
-        let cmd_c = CString::new(command).unwrap();
+        let shell_c = CString::new(shell).expect("shell path invalid");
+        let arg_c = CString::new("-c").expect("-c is valid CString");
+        let cmd_c = CString::new(command).expect("command contains NUL byte");
 
         unsafe {
             libc::execl(

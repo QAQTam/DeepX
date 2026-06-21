@@ -35,6 +35,28 @@ fn format_ts(seconds: u64) -> String {
     } else { String::new() }
 }
 
+/// Short single-char icon for activity log and file entries.
+fn tool_activity_icon(name: &str) -> &'static str {
+    match name {
+        "read_file" | "file_read" => "R",
+        "write_file" | "file_write" => "W",
+        "edit_file" | "edit_file_diff" | "file_edit" => "E",
+        "delete_file" | "file_delete" => "D",
+        "file_move" | "move_file" => "M",
+        "exec" => ">",
+        "explore" => "S",
+        "search" | "grep" | "file_search" => "Z",
+        "glob" | "file_glob" => "G",
+        "list_dir" | "file_list_dir" => "L",
+        "diff" | "file_diff" => "=",
+        "web_search" | "web_fetch" => "@",
+        "task_create" | "task_update" | "task_delete" | "task_list" => "T",
+        "ask_user" => "?",
+        "sed" => "~",
+        _ => "*",
+    }
+}
+
 // The six render functions below are the core of the TUI.
 // They were manually reconstructed after a refactoring accident.
 // Full original implementations are in git history.
@@ -220,7 +242,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
     frame.render_widget(h1, header_line1);
 
     let mut h2_spans = vec![
-        Span::styled(format!("Session: {}", app.session_tokens), Style::new().fg(Color::Rgb(180, 180, 200))), Span::raw("  "),
+        Span::styled(format!("Session: {}", if app.debug.session_seed.is_empty() { "—".into() } else { app.debug.session_seed.chars().take(8).collect::<String>() }), Style::new().fg(Color::Rgb(180, 180, 200))), Span::raw("  "),
     ];
     if cache_total > 0 {
         h2_spans.push(Span::styled(format!("Hit:{}", app.cache_hit), Style::new().fg(Color::Rgb(100, 200, 120))));
@@ -256,7 +278,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
     let scroll = if at_bottom { max_scroll.min(u16::MAX as usize) as u16 }
     else { let offset = app.scroll_offset.min(max_scroll); (max_scroll - offset).min(u16::MAX as usize) as u16 };
     frame.render_widget(paragraph.scroll((scroll, 0)), body_content);
-    let mut scrollbar_state = ScrollbarState::new(total_wrapped.max(1)).position(scroll as usize).viewport_content_length(content_height);
+    let mut scrollbar_state = ScrollbarState::new(total_wrapped).position(scroll as usize).viewport_content_length(content_height);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).thumb_symbol("█").track_symbol(Some("│"));
     frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
 
@@ -307,15 +329,107 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(dlines), inner);
     }
     if app.show_tasks {
-        let tasks = app.tasks(); let task_w = 50u16; let task_h = (tasks.len() as u16 + 3).min(20).max(5);
-        let task_rect = Rect::new(area.width.saturating_sub(task_w + 2), area.y + 14, task_w, task_h);
-        frame.render_widget(Clear, task_rect);
-        let task_block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::new().fg(Color::Rgb(120, 200, 200))).title(format!(" Tasks ({}) ", tasks.len())).style(Style::new().bg(Color::Rgb(18, 22, 30)));
-        frame.render_widget(&task_block, task_rect);
-        let inner = task_block.inner(task_rect);
-        let tlines: Vec<Line> = if tasks.is_empty() { vec![Line::from(Span::styled("  (no tasks)", Style::new().fg(Color::Gray)))] }
-        else { tasks.iter().map(|(icon, text)| { let ic = match icon.as_str() { "✓" => Color::Rgb(100,220,100), "●" => Color::Rgb(220,200,100), _ => Color::Rgb(140,150,160) }; Line::from(vec![Span::styled(format!(" {} ", icon), Style::new().fg(ic).bold()), Span::styled(text.to_string(), Style::new().fg(Color::Rgb(200,210,220)))]) }).collect() };
-        frame.render_widget(Paragraph::new(tlines), inner);
+        let tasks = app.tasks();
+        let recent = &app.debug.recent_edits;
+        let activity = &app.activity_log;
+
+        // Compute total lines: section headers + content
+        let task_lines = if tasks.is_empty() { 1 } else { tasks.iter().map(|t| if t.description.is_empty() { 1 } else { 2 }).sum::<usize>() };
+        let activity_lines = if activity.is_empty() { 1 } else { activity.len().min(10) };
+        let edit_lines = if recent.is_empty() { 1 } else { recent.len().min(8) };
+        let total_content = 3 + task_lines + 3 + activity_lines + 3 + edit_lines; // 3 section headers + content
+        let panel_h = (total_content as u16 + 2).min(24).max(8);
+
+        let panel_w = 50u16;
+        let panel_rect = Rect::new(area.width.saturating_sub(panel_w + 2), area.y + 1, panel_w, panel_h);
+        frame.render_widget(Clear, panel_rect);
+        let panel_block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(Color::Rgb(120, 200, 200)))
+            .title(format!(" Status ")).style(Style::new().bg(Color::Rgb(18, 22, 30)));
+        frame.render_widget(&panel_block, panel_rect);
+        let inner = panel_block.inner(panel_rect);
+
+        let mut lines: Vec<Line> = Vec::new();
+
+        // ── Section 1: Tasks ──
+        let completed = tasks.iter().filter(|t| t.status == "completed").count();
+        lines.push(Line::from(vec![
+            Span::styled(" Tasks ", Style::new().fg(Color::Rgb(120, 200, 200)).bold()),
+            Span::styled(format!("({}/{})", completed, tasks.len()), Style::new().fg(Color::Rgb(100, 160, 180))),
+        ]));
+        if tasks.is_empty() {
+            lines.push(Line::from(Span::styled("  (no tasks)", Style::new().fg(Color::Gray))));
+        } else {
+            for t in tasks {
+                let (icon, color) = match t.status.as_str() {
+                    "completed" => ("✓", Color::Rgb(100, 220, 100)),
+                    "in_progress" => ("●", Color::Rgb(220, 200, 100)),
+                    "cancelled" => ("✗", Color::Rgb(220, 100, 100)),
+                    _ => ("○", Color::Rgb(140, 150, 160)),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {} ", icon), Style::new().fg(color).bold()),
+                    Span::styled(format!("{}: {}", t.id, t.subject), Style::new().fg(Color::Rgb(200, 210, 220))),
+                ]));
+                if !t.description.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(&t.description, Style::new().fg(Color::Rgb(140, 150, 160)).italic()),
+                    ]));
+                }
+            }
+        }
+
+        // ── Section 2: Activity ──
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" Activity ", Style::new().fg(Color::Rgb(120, 200, 200)).bold()),
+            Span::styled(format!("({})", activity.len()), Style::new().fg(Color::Rgb(100, 160, 180))),
+        ]));
+        if activity.is_empty() {
+            lines.push(Line::from(Span::styled("  (no activity)", Style::new().fg(Color::Gray))));
+        } else {
+            for entry in activity.iter().rev().take(10) {
+                let icon = tool_activity_icon(&entry.tool_name);
+                let result_icon = if entry.success { "✓" } else { "✗" };
+                let result_color = if entry.success { Color::Rgb(100, 220, 100) } else { Color::Rgb(220, 100, 100) };
+                let elapsed = entry.time.elapsed().as_secs();
+                let ts = if elapsed < 60 { format!("{}s", elapsed) } else { format!("{}m", elapsed / 60) };
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {} ", icon), Style::new().fg(Color::Rgb(160, 180, 200)).bold()),
+                    Span::styled(format!("{} ", result_icon), Style::new().fg(result_color)),
+                    Span::styled(&entry.tool_name, Style::new().fg(Color::Rgb(200, 210, 220))),
+                    Span::raw(" "),
+                    Span::styled(&entry.summary, Style::new().fg(Color::Rgb(140, 150, 160))),
+                    Span::raw(" "),
+                    Span::styled(ts, Style::new().fg(Color::Rgb(100, 110, 120))),
+                ]));
+            }
+        }
+
+        // ── Section 3: Recent Edits ──
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" Files ", Style::new().fg(Color::Rgb(120, 200, 200)).bold()),
+            Span::styled(format!("({})", recent.len()), Style::new().fg(Color::Rgb(100, 160, 180))),
+        ]));
+        if recent.is_empty() {
+            lines.push(Line::from(Span::styled("  (no files)", Style::new().fg(Color::Gray))));
+        } else {
+            for edit in recent.iter().take(8) {
+                // Format: "tool_name: path" or just "path"
+                let (tool, path) = edit.split_once(": ").unwrap_or(("edit", edit.as_str()));
+                let ticon = tool_activity_icon(tool);
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {} ", ticon), Style::new().fg(Color::Rgb(160, 180, 200)).bold()),
+                    Span::styled(tool, Style::new().fg(Color::Rgb(180, 190, 200))),
+                    Span::raw(" "),
+                    Span::styled(path, Style::new().fg(Color::Rgb(140, 150, 160))),
+                ]));
+            }
+        }
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
     if app.show_context {
         let ctx_w = 50u16; let ctx_h = 4u16;
@@ -346,10 +460,9 @@ pub fn render_help(frame: &mut Frame, app: &App) {
         ("Esc", "Cancel", "取消"),
         ("↑/↓", "Browse history / Scroll", "浏览历史 / 滚动"),
         ("PgUp/PgDn", "Fast scroll", "快速滚动"),
-        ("F5", "Toggle thinking", "切换思考显示"),
-        ("F6", "Expand thinking", "展开思考"),
-        ("F7", "Tasks", "任务列表"),
+        ("F6", "Toggle thinking", "切换思考显示"),
         ("F8", "Context", "上下文"),
+        ("F9", "Status", "状态面板"),
         ("F10", "Settings", "设置"),
         ("F12", "Debug", "调试"),
         ("?", "Help", "帮助"),
@@ -445,8 +558,13 @@ pub fn render_menu(frame: &mut Frame, menu: &crate::app::MenuState) {
     else { if menu.lang.as_str() == "zh" { "  ↑↓ 导航  Enter 切换/编辑  Esc 保存并返回" } else { "  ↑↓ navigate  Enter toggle/edit  Esc save & back" } };
     frame.render_widget(Line::from(Span::styled(footer, Style::new().fg(DIM))), footer_area);
     if menu.editing {
-        let val_len = if menu.edit_buf.is_empty() { menu.items.get(menu.selected).map_or(0, |i| cjk_width(&i.value)) } else { cjk_width(&menu.edit_buf) };
-        let cursor_x = list_area.x + 25 + val_len.min(30) as u16;
+        let item = match menu.items.get(menu.selected) { Some(i) => i, None => return };
+        let display_value = if menu.edit_buf.is_empty() { &item.value } else { &menu.edit_buf };
+        let val_len = cjk_width(display_value);
+        // Compute prefix display width: "  " (sel_mark) + formatted_label + "  " (separator)
+        let label_fmt = format!("{:<20}", item.label);
+        let prefix_width = 2u16 + cjk_width(&label_fmt) + 2u16;
+        let cursor_x = list_area.x + prefix_width + val_len.min(30) as u16;
         let row = (menu.selected.saturating_sub(scroll) + 1) as u16;
         let cursor_y = list_area.y + row;
         frame.set_cursor_position((cursor_x.min(area.width.saturating_sub(1)), cursor_y.min(area.height.saturating_sub(1))));

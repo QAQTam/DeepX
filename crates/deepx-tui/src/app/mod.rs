@@ -1,4 +1,4 @@
-use deepx_proto::{Agent2Ui, DocInfo, RoundBlock, RoundDeltaKind, TurnData};
+use deepx_proto::{Agent2Ui, DocInfo, RoundBlock, RoundDeltaKind, TaskInfo, TurnData};
 use deepx_types::{ConfigStore, SessionMeta};
 use crate::markdown::MarkdownRenderer;
 
@@ -62,6 +62,8 @@ pub struct App {
     pub debug: DebugState,
     pub ask: Option<AskState>,
     pub balance: String,
+    /// Tool execution activity log (max 50 entries).
+    pub activity_log: Vec<ActivityEntry>,
     pub validating: bool,
     pub busy: bool,
     streaming_rendered_len: usize,
@@ -118,6 +120,15 @@ pub struct AskState {
     pub custom_input: String,
 }
 
+/// A single tool execution record for the activity log.
+#[derive(Clone)]
+pub struct ActivityEntry {
+    pub tool_name: String,
+    pub summary: String,
+    pub success: bool,
+    pub time: std::time::Instant,
+}
+
 #[derive(Clone)]
 pub struct DebugState {
     pub hp_connected: bool,
@@ -128,6 +139,8 @@ pub struct DebugState {
     pub streaming: bool,
     pub dsml_compat_count: u32,
     pub documents: Vec<DocInfo>,
+    pub tasks: Vec<TaskInfo>,
+    pub recent_edits: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -590,9 +603,12 @@ impl App {
                 streaming: false,
                 dsml_compat_count: 0,
                 documents: Vec::new(),
+                tasks: Vec::new(),
+                recent_edits: Vec::new(),
             },
             ask: None,
             balance: String::new(),
+            activity_log: Vec::new(),
             validating: false,
             busy: false,
         }
@@ -632,25 +648,8 @@ impl App {
         DOTS[(self.frame_count as usize / 2) % DOTS.len()]
     }
 
-    pub fn tasks(&self) -> Vec<(String, String)> {
-        if self.debug.session_seed.is_empty() {
-            return Vec::new();
-        }
-        let path = deepx_types::platform::sessions_dir()
-            .join(&self.debug.session_seed)
-            .join("tasks.md");
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        content
-            .lines()
-            .filter(|l| l.starts_with("- [") && (l.contains("[pending]") || l.contains("[in_progress]") || l.contains("[completed]")))
-            .map(|l| {
-                let s = l.trim_start_matches("- ");
-                let status = if s.contains("[completed]") { "✓" }
-                    else if s.contains("[in_progress]") { "●" }
-                    else { "○" };
-                (status.to_string(), s.to_string())
-            })
-            .collect()
+    pub fn tasks(&self) -> &[TaskInfo] {
+        &self.debug.tasks
     }
 
     pub fn push_msg(&mut self, role: ChatRole, content: &str) {
@@ -1005,7 +1004,7 @@ impl App {
                 self.finalize_last_message();
             }
             Agent2Ui::Dashboard { hp_connected, session_seed, usage, context_limit,
-                tool_calls_total, tool_failures, current_phase: _, streaming, dsml_compat_count, documents, .. } => {
+                tool_calls_total, tool_failures, current_phase: _, streaming, dsml_compat_count, documents, tasks, recent_edits, .. } => {
                 self.debug.hp_connected = hp_connected;
                 self.debug.session_seed = session_seed;
                 self.debug.context_tokens = usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
@@ -1015,6 +1014,8 @@ impl App {
                 self.debug.streaming = streaming;
                 self.debug.dsml_compat_count = dsml_compat_count;
                 self.debug.documents = documents;
+                self.debug.tasks = tasks;
+                self.debug.recent_edits = recent_edits;
             }
             // AskUser variant removed — no longer in proto
             Agent2Ui::Balance { is_available, total_balance, currency } => {
@@ -1080,6 +1081,17 @@ impl App {
                 } else {
                     format!("Context compacted ({} turns)", turns_compacted)
                 };
+            }
+            Agent2Ui::AuditRecord { tool_name, result_summary, success } => {
+                self.activity_log.push(ActivityEntry {
+                    tool_name,
+                    summary: result_summary,
+                    success,
+                    time: std::time::Instant::now(),
+                });
+                if self.activity_log.len() > 50 {
+                    self.activity_log.remove(0);
+                }
             }
             _ => {}
         }

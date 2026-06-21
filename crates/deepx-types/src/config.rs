@@ -90,12 +90,11 @@ impl ConfigStore {
             }
         };
         let tmp = self.path.with_extension("toml.tmp");
-        if let Some(parent) = self.path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+        if let Some(parent) = self.path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!("ConfigStore: create_dir_all({}) failed: {e}", parent.display());
                 return false;
             }
-        }
         if let Err(e) = std::fs::write(&tmp, &content) {
             eprintln!("ConfigStore: write({}) failed: {e}", tmp.display());
             return false;

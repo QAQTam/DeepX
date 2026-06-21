@@ -245,92 +245,94 @@ fn find_char_boundary(s: &str, max: usize) -> usize {
     s.floor_char_boundary(max)
 }
 
-// ── Web search ──
+// ── Web search (BochaAI API) ──
+
+const BOCHA_BASE: &str = "https://api.bocha.cn/v1";
+
+static BOCHA_KEY: OnceLock<String> = OnceLock::new();
+
+pub fn set_bocha_key(key: &str) {
+    let _ = BOCHA_KEY.set(key.to_string());
+}
+
+fn bocha_key() -> String {
+    BOCHA_KEY.get().cloned()
+        .or_else(|| std::env::var("BOCHA_API_KEY").ok())
+        .unwrap_or_default()
+}
 
 fn exec_web_search(args: &str) -> String {
     let query = deepx_types::arg::parse_arg(args, "query").unwrap_or_default();
-    let url = format!("https://cn.bing.com/search?q={}&setlang=zh-cn", urlencoding(&query));
-    let body = match (|| -> Result<String, String> {
-        let resp = ureq::get(&url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .call()
+    if query.is_empty() {
+        return "[ERROR] web_search: missing 'query' parameter\n[HINT] Provide a search query string.".into();
+    }
+    let api_key = bocha_key();
+    if api_key.is_empty() {
+        return "[ERROR] web_search: BOCHA_API_KEY not set\n[HINT] Set the BOCHA_API_KEY environment variable or call set_bocha_key().\n      Get a free key at https://open.bochaai.com".into();
+    }
+
+    let body = serde_json::json!({
+        "query": query,
+        "summary": true,
+        "count": 10,
+    });
+
+    let resp_text = match (|| -> Result<String, String> {
+        let resp = ureq::post(&format!("{BOCHA_BASE}/web-search"))
+            .header("Authorization", &format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .send_json(body)
             .map_err(|e| format!("request: {e}"))?;
-        resp.into_body().read_to_string().map_err(|e| format!("read: {e}"))
+        let status = resp.status();
+        let text = resp.into_body().read_to_string().map_err(|e| format!("read: {e}"))?;
+        if status != 200 {
+            return Err(format!("HTTP {}: {}", status, text.chars().take(300).collect::<String>()));
+        }
+        Ok(text)
     })() {
         Ok(b) => b,
-        Err(e) => return format!("[ERROR] Search failed: {}\n[HINT] Check network connection.", e),
+        Err(e) => return format!("[ERROR] Search failed: {}\n[HINT] Check network or API key.", e),
     };
-    let mut results = Vec::new();
-    // Bing wraps results in <li class="b_algo">. Split on this anchor.
-    for chunk in body.split("<li class=\"b_algo\"") {
-        if results.len() >= 15 { break; }
-        // Title: <h2> ... <a href="URL">Title</a>
-        let title_url = chunk.find("<h2")
-            .and_then(|h2| chunk[h2..].find("<a ")
-                .and_then(|a| {
-                    let seg = &chunk[h2 + a..];
-                    let href = seg.split("href=\"").nth(1)
-                        .and_then(|s| s.split('"').next())
-                        .unwrap_or("");
-                    let title_start = seg.find('>').map(|i| i + 1).unwrap_or(0);
-                    let title = seg[title_start..].split("</a>").next().unwrap_or("");
-                    Some((href.to_string(), strip_html(title)))
-                }));
-        let snippet = chunk.find("b_lineclamp")
-            .and_then(|b| {
-                let seg = &chunk[b..];
-                seg.find('>').map(|i| &seg[i + 1..])
-                    .and_then(|s| s.split("</p>").next())
-            })
-            .map(|s| {
-                let t = strip_html(s).replace("&ensp;"," ").replace("&#0183;","·")
-                    .replace("&amp;","&").replace("&lt;","<").replace("&gt;",">");
-                t.trim().to_string()
-            });
-        if let Some((href, title)) = title_url {
-            if !title.is_empty() && title.len() > 3 && !results.iter().any(|r: &String| r.contains(&title)) {
-                results.push(format!("[{}]({})", title, href));
-            }
-        }
-        if let Some(snip) = snippet {
-            if snip.len() > 10 {
-                results.push(format!("  {}", snip));
-            }
-        }
+
+    let parsed: serde_json::Value = match serde_json::from_str(&resp_text) {
+        Ok(v) => v,
+        Err(e) => return format!("[ERROR] Failed to parse response: {e}"),
+    };
+
+    let code = parsed.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+    if code != 200 {
+        let msg = parsed.get("msg").and_then(|m| m.as_str()).unwrap_or("unknown");
+        return format!("[ERROR] Bocha API error (code {}): {}", code, msg);
     }
+
+    let results = parsed["data"]["webPages"]["value"]
+        .as_array()
+        .map(|arr| arr.clone())
+        .unwrap_or_default();
+
     if results.is_empty() {
-        format!("[OK] Bing: {}\n\n(no results)", query)
-    } else {
-        format!("[OK] Bing: {}\n\n{}", query, results.join("\n"))
+        return format!("[OK] Bocha: {}\n\n(no results)", query);
     }
-}
 
-fn strip_html(s: &str) -> String {
-    let mut result = String::new();
-    let mut in_tag = false;
-    for c in s.chars() {
-        if c == '<' { in_tag = true; continue; }
-        if c == '>' { in_tag = false; continue; }
-        if !in_tag { result.push(c); }
-    }
-    result.trim().to_string()
-}
-
-fn urlencoding(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
-            out.push(c);
-        } else if c == ' ' {
-            out.push('+');
-        } else {
-            // Encode multi-byte UTF-8 chars correctly (e.g. '你' → %E4%BD%A0)
-            let mut buf = [0u8; 4];
-            let encoded = c.encode_utf8(&mut buf);
-            for b in encoded.bytes() {
-                out.push_str(&format!("%{:02X}", b));
-            }
+    let mut out = format!("[OK] Bocha: {}\n", query);
+    for r in results.iter() {
+        let title = r.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let url = r.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let snippet = r.get("snippet").and_then(|v| v.as_str()).unwrap_or("");
+        let site = r.get("siteName").and_then(|v| v.as_str()).unwrap_or("");
+        let date = r.get("datePublished")
+            .or_else(|| r.get("dateLastCrawled"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        out.push_str(&format!("\n[{}]({})", title, url));
+        if !snippet.is_empty() {
+            out.push_str(&format!("\n  {}", snippet));
         }
+        if !site.is_empty() || !date.is_empty() {
+            let sep = if !site.is_empty() && !date.is_empty() { " · " } else { "" };
+            out.push_str(&format!("\n  ({}{}{})", site, sep, date));
+        }
+        out.push('\n');
     }
     out
 }
@@ -359,7 +361,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
     mgr.register(ToolHandler {
         key: ToolKey::new("web_search", ""),
-        description: "Search the web via Bing. Returns titles, URLs, and snippets.",
+        description: "Search the web via BochaAI (China-friendly search API). Returns titles, URLs, and snippets.",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

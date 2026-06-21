@@ -130,7 +130,7 @@ impl AgentBridge {
     /// Write a `Ui2Agent` frame as a JSON-LP line to the child process's stdin.
     fn send(&self, frame: &Ui2Agent) -> Result<(), String> {
         let json = serde_json::to_string(frame).map_err(|e| format!("serialize: {e}"))?;
-        let mut stdin = self.stdin.lock().unwrap();
+        let mut stdin = self.stdin.lock().expect("stdin lock");
         writeln!(*stdin, "{}", json).map_err(|e| format!("write: {e}"))?;
         stdin.flush().map_err(|e| format!("flush: {e}"))
     }
@@ -139,7 +139,7 @@ impl AgentBridge {
     /// teardown, then force-kill the process if it is still running.
     pub fn shutdown(&self) {
         {
-            let mut s = self.shutdown.lock().unwrap();
+            let mut s = self.shutdown.lock().expect("shutdown lock");
             if *s {
                 return;
             }
@@ -147,7 +147,7 @@ impl AgentBridge {
         } // drop shutdown lock before calling send()
         let _ = self.send(&Ui2Agent::Shutdown);
         std::thread::sleep(std::time::Duration::from_millis(500));
-        if let Some(mut child) = self.child.lock().unwrap().take() {
+        if let Some(mut child) = self.child.lock().expect("child lock").take() {
             let _ = child.kill();
             let _ = child.wait();
         }

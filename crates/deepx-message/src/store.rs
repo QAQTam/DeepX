@@ -332,7 +332,7 @@ impl MessageStore {
             let ann_text = annotations.join("\n");
             if let Some(last_user) = full.iter_mut().rev().find(|m| m.role == "user") {
                 let existing = last_user.content.iter_mut().find_map(|b| {
-                    if let deepx_types::ContentBlock::Text { ref mut text } = b {
+                    if let deepx_types::ContentBlock::Text { text } = b {
                         Some(text)
                     } else {
                         None

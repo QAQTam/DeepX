@@ -38,14 +38,14 @@ impl SessionManager {
         let mut metas = self.load_index();
 
         // Fallback: if index.toml is empty/broken, scan directories
-        if metas.is_empty() {
-            if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
+        if metas.is_empty()
+            && let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if !path.is_dir() { continue; }
                     let session_file = path.join("session.toml");
-                    if let Ok(data) = std::fs::read_to_string(&session_file) {
-                        if let Ok(sf) = toml::from_str::<SessionFile>(&data) {
+                    if let Ok(data) = std::fs::read_to_string(&session_file)
+                        && let Ok(sf) = toml::from_str::<SessionFile>(&data) {
                             metas.push(SessionMeta {
                                 seed: sf.seed,
                                 created_at: sf.created_at,
@@ -57,10 +57,8 @@ impl SessionManager {
                                 checksum: sf.checksum.clone(),
                             });
                         }
-                    }
                 }
             }
-        }
 
         metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
         metas
@@ -124,11 +122,10 @@ impl SessionManager {
         };
 
         // Write session file
-        if let Ok(content) = toml::to_string_pretty(&file) {
-            if std::fs::write(&session_path, &content).is_err() {
+        if let Ok(content) = toml::to_string_pretty(&file)
+            && std::fs::write(&session_path, &content).is_err() {
                 log::error!("SessionManager: failed to write session file {}", session_path.display());
             }
-        }
 
         // Update index
         let mut index = self.load_index();
@@ -242,11 +239,10 @@ impl SessionManager {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(content) = toml::to_string_pretty(metas) {
-            if std::fs::write(&path, &content).is_err() {
+        if let Ok(content) = toml::to_string_pretty(metas)
+            && std::fs::write(&path, &content).is_err() {
                 log::error!("SessionManager: failed to write index.toml");
             }
-        }
     }
 
     fn load_from_disk(&self, seed: &str) -> Option<SessionFile> {

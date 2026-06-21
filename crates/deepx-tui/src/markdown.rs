@@ -252,7 +252,7 @@ fn theme() -> &'static syntect::highlighting::Theme {
         let ts = ThemeSet::load_defaults();
         ts.themes.get("base16-eighties.dark")
             .cloned()
-            .unwrap_or_else(|| ts.themes.values().next().cloned().unwrap())
+            .unwrap_or_else(|| ts.themes.values().next().cloned().expect("ThemeSet has at least one theme"))
     })
 }
 

@@ -1,0 +1,36 @@
+[package]
+name = "deepx-sed"
+version.workspace = true
+edition.workspace = true
+description = "DeepX sed tool — Rust-native stream editor, forked from red"
+license = "MIT"
+repository = "https://github.com/uutils/red"
+keywords = ["sed", "text-processing"]
+categories = ["text-processing"]
+
+[lib]
+name = "deepx_sed"
+path = "src/lib.rs"
+
+[features]
+default = []
+selinux = ["dep:selinux", "dep:selinux-sys"]
+
+[dependencies]
+anyhow = "1.0"
+lazy_static = "1.4"
+encoding_rs = "0.8"
+lexopt = "0.3.1"
+rustc-hash = "2.0"
+regex = "1"
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+selinux = { version = "0.5", optional = true }
+selinux-sys = { version = "0.6", optional = true }
+
+[lints]
+workspace = true

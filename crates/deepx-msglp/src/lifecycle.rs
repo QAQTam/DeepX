@@ -79,7 +79,6 @@ pub fn create_session(agent: &mut AgentState) {
     agent.msg.push_system(deepx_types::Message::system(
         &deepx_config::prompt::full_system_prompt()
     ));
-    agent.tool_results.clear();
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     SessionManager::global().save(
         &agent.session.seed,

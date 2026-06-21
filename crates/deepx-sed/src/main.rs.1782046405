@@ -1,0 +1,92 @@
+// Copyright (c) 2026 Red Authors
+// License: MIT
+//
+
+mod cli;
+
+use red::constants::DEFAULT_LINE_LENGTH;
+use red::errors::Result;
+use red::{run as red_run, RunConfig};
+
+fn run(args: cli::CliArgs) -> Result<()> {
+    let extended_regex = args.extended_regex;
+
+    // Determine line length: -l flag takes precedence, otherwise check COLS envvar
+    let line_length = if args.line_length != DEFAULT_LINE_LENGTH {
+        // User specified -l flag explicitly, use it
+        args.line_length
+    } else {
+        // Check COLS environment variable (GNU sed compatibility)
+        match std::env::var("COLS") {
+            Ok(cols_str) => {
+                match cols_str.parse::<usize>() {
+                    Ok(cols) if cols > 1 => cols - 1, // sed subtracts 1 to avoid terminal line wraps
+                    _ => DEFAULT_LINE_LENGTH,         // Invalid or 0/1, use default
+                }
+            }
+            Err(_) => DEFAULT_LINE_LENGTH, // COLS not set, use default
+        }
+    };
+
+    let cfg = RunConfig {
+        scripts_with_sources: args.scripts_with_sources,
+        // Extract just filenames from (filename, raw_bytes) tuples
+        input_files: args.files.into_iter().map(|(f, _)| f).collect(),
+        quiet: args.quiet,
+        in_place: args.in_place,
+        extended_regex,
+        separate_files: args.separate_files,
+        line_length,
+        unbuffered: args.unbuffered,
+        posix: args.posix || std::env::var("POSIXLY_CORRECT").is_ok(),
+        strict_posix: args.posix, // Only --posix flag, not POSIXLY_CORRECT
+        follow_symlinks: args.follow_symlinks,
+        sandbox: args.sandbox,
+        null_data: args.null_data,
+        binary: args.binary,
+    };
+
+    // On Windows, set stdin/stdout mode based on -b flag
+    // Default: TEXT mode (LF -> CRLF conversion) for GNU sed compatibility
+    // With -b: BINARY mode (no conversion)
+    #[cfg(windows)]
+    {
+        const O_TEXT: i32 = 0x4000;
+        const O_BINARY: i32 = 0x8000;
+        unsafe {
+            extern "C" {
+                fn _setmode(fd: i32, mode: i32) -> i32;
+            }
+            let mode = if args.binary { O_BINARY } else { O_TEXT };
+            _setmode(0, mode); // stdin
+            _setmode(1, mode); // stdout
+        }
+    }
+
+    red_run(cfg)
+}
+
+fn main() {
+    // Set up signal handlers for cleanup of temporary files
+    #[cfg(unix)]
+    if let Err(e) = red::signals::unix::setup_signal_handlers() {
+        eprintln!("sed: warning: failed to setup signal handlers: {}", e);
+    }
+
+    // Initialize multibyte character set support
+    red::mbcs::initialize();
+
+    let args = match cli::parse_args() {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("sed: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(error) = run(args) {
+        let exit_code = error.exit_code();
+        eprintln!("sed: {error}");
+        std::process::exit(exit_code);
+    }
+}

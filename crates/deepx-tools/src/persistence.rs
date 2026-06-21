@@ -58,7 +58,7 @@ fn memory_path(seed: &str, tier: &str) -> Option<PathBuf> {
 static PERSIST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn read_memory(seed: &str, tier: &str) -> String {
-    let _lock = PERSIST_LOCK.lock().unwrap();
+    let _lock = PERSIST_LOCK.lock().expect("PERSIST_LOCK");
     let Some(path) = memory_path(seed, tier) else { return String::new(); };
     if !path.exists() { return String::new(); }
     let Ok(content) = std::fs::read_to_string(&path) else { return String::new(); };
@@ -76,7 +76,7 @@ pub fn read_memory(seed: &str, tier: &str) -> String {
 }
 
 pub fn write_memory(seed: &str, tier: &str, content: &str) {
-    let _lock = PERSIST_LOCK.lock().unwrap();
+    let _lock = PERSIST_LOCK.lock().expect("PERSIST_LOCK");
     let Some(path) = memory_path(seed, tier) else { return };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -85,7 +85,7 @@ pub fn write_memory(seed: &str, tier: &str, content: &str) {
 }
 
 pub fn append_memory(seed: &str, tier: &str, line: &str) {
-    let _lock = PERSIST_LOCK.lock().unwrap();
+    let _lock = PERSIST_LOCK.lock().expect("PERSIST_LOCK");
     let Some(path) = memory_path(seed, tier) else { return };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

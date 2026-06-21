@@ -19,6 +19,6 @@ fn main() {
 </dependency>
 </assembly>"#,
         );
-        res.compile().unwrap();
+        res.compile().expect("Windows resource compilation failed");
     }
 }
