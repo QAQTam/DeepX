@@ -41,16 +41,17 @@ impl AgentState {
                 Config::default()
             }
         };
-        bridge::init_tools(caller, &[], &[deepx_subagent::register]);
+        bridge::init_tools(caller, &[], &[deepx_subagent::register], vec![]);
         if let Some(ref key) = config.context7_api_key {
             if !key.is_empty() { bridge::set_context7_key(key); }
         }
         let mut agent = Self::new(config);
-        agent.tool_defs = bridge::all_tools();
+        agent.tool_defs = bridge::all_tools(); // full set — LLM sees all, execution filtered by ToolManager
         agent
     }
 
     /// Initialize agent in subagent mode with a restricted tool allowlist and optional ephemeral flag.
+    /// The LLM sees ALL tools (cache-friendly); the ToolManager enforces the allowlist at execution.
     pub fn init_subagent(allowed_tools: &[String], ephemeral: bool) -> Self {
         let config = match Config::load() {
             Ok(c) => c,
@@ -59,21 +60,13 @@ impl AgentState {
                 Config::default()
             }
         };
-        bridge::init_tools("subagent", &[], &[deepx_subagent::register]);
+        bridge::init_tools("subagent", &[], &[deepx_subagent::register], allowed_tools.to_vec());
         if let Some(ref key) = config.context7_api_key {
             if !key.is_empty() { bridge::set_context7_key(key); }
         }
         let mut agent = Self::new(config);
         agent.ephemeral = ephemeral;
-        // Filter tool defs to only allowed tools
-        let all = bridge::all_tools();
-        if allowed_tools.is_empty() {
-            agent.tool_defs = all;
-        } else {
-            agent.tool_defs = all.into_iter()
-                .filter(|t| allowed_tools.contains(&t.function.name))
-                .collect();
-        }
+        agent.tool_defs = bridge::all_tools(); // full set — LLM cache friendly
         agent
     }
 

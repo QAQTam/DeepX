@@ -142,7 +142,7 @@ impl ToolManager {
     pub fn prepare_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> Result<PreparedCall, ToolExecReport> {
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                let msg = format!("[ERROR] Tool '{}' not in allowed list", name);
+                let msg = format!("[ERROR] Tool '{}' is not in the allowed list for this subagent. Allowed tools: [{}]", name, allowed.join(", "));
                 return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
             }
         }

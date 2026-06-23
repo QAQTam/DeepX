@@ -964,6 +964,37 @@ impl Loop {
         }
 
         self.emit(Agent2Ui::Done);
+
+        // ── Desktop notification: response preview ──
+        let preview = self.agent.msg.turns().last()
+            .and_then(|t| t.steps.last())
+            .map(|s| {
+                s.assistant.content.iter()
+                    .filter_map(|b| match b {
+                        deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        if !preview.is_empty() {
+            let first_20: String = preview.split_whitespace().take(20).collect::<Vec<_>>().join(" ");
+            let body = if preview.split_whitespace().count() > 20 {
+                format!("{}...", first_20)
+            } else {
+                first_20
+            };
+            // Spawn thread to avoid blocking — notification API may be slow
+            std::thread::spawn(move || {
+                let _ = notify_rust::Notification::new()
+                    .summary("DeepX")
+                    .body(&body)
+                    .appname("DeepX")
+                    .timeout(notify_rust::Timeout::Milliseconds(8000))
+                    .show();
+            });
+        }
     }
 
     // ── Dashboard ──

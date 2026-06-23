@@ -1,9 +1,29 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "windows")]
+unsafe fn windows_allocate_console() {
+    unsafe extern "system" {
+        fn AllocConsole() -> i32;
+        fn AttachConsole(pid: u32) -> i32;
+    }
+    // Try attaching to parent console first (e.g. launched from cmd/pwsh)
+    // ATTACH_PARENT_PROCESS = 0xFFFFFFFF
+    if unsafe { AttachConsole(0xFFFF_FFFF) } == 0 {
+        // No parent console — create a new one
+        unsafe { AllocConsole(); }
+    }
+}
+
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
         "--tui" => {
+            // On Windows, the binary is built with windows_subsystem="windows"
+            // (no console). TUI needs a console — allocate one here.
+            #[cfg(target_os = "windows")]
+            {
+                unsafe { windows_allocate_console(); }
+            }
             if let Err(e) = deepx_tui::run_tui() {
                 eprintln!("deepx-tui: {e}");
                 std::process::exit(1);

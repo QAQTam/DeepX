@@ -20,9 +20,11 @@ static TOOL_MANAGER: OnceLock<Mutex<crate::ToolManager>> = OnceLock::new();
 /// Initialize the in-process tool manager.
 /// Must be called once at startup, before any tool execution.
 /// `extra_registrars` allows external crates to inject tools (e.g. deepx-subagent).
-pub fn init_tools(session_seed: &str, mcp_servers: &[crate::mcp_bridge::McpServerConfig], extra_registrars: &[crate::registration::ToolRegistrar]) {
+/// `allowed_tools` restricts which tools can execute (empty = all allowed).
+/// Tool defs exposed to the LLM are always the full set (cache-friendly).
+pub fn init_tools(session_seed: &str, mcp_servers: &[crate::mcp_bridge::McpServerConfig], extra_registrars: &[crate::registration::ToolRegistrar], allowed_tools: Vec<String>) {
     let mut mgr = crate::registration::build_tool_manager(extra_registrars);
-    mgr.apply_init(vec![], session_seed);
+    mgr.apply_init(allowed_tools, session_seed);
 
     if !mcp_servers.is_empty() {
         if let Err(e) = crate::mcp_bridge::register_mcp_servers(&mut mgr, mcp_servers) {
