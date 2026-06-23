@@ -48,6 +48,9 @@ impl ContentBlock {
 /// code snippets). It maps to OpenAI's `name` parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    /// Monotonic per-session message ID for ordering and dedup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msg_id: Option<u64>,
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -58,6 +61,7 @@ pub struct Message {
 impl Message {
     pub fn system(content: &str) -> Self {
         Self {
+            msg_id: None,
             role: "system".into(),
             name: None,
             content: vec![ContentBlock::text(content)],
@@ -65,6 +69,7 @@ impl Message {
     }
     pub fn user(content: &str) -> Self {
         Self {
+            msg_id: None,
             role: "user".into(),
             name: None,
             content: vec![ContentBlock::text(content)],
@@ -72,6 +77,7 @@ impl Message {
     }
     pub fn tool(tool_call_id: &str, result: &str) -> Self {
         Self {
+            msg_id: None,
             role: "tool".into(),
             name: None,
             content: vec![ContentBlock::ToolResult {

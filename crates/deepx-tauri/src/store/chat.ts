@@ -3,7 +3,9 @@ import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import AnsiUp from "ansi-to-html";
 
-const ansiUp = new AnsiUp();
+// escapeXML: true — escape <, >, & in text content so that tool output
+// containing HTML/CSS/code is displayed as text, not rendered as DOM.
+const ansiUp = new AnsiUp({ escapeXML: true });
 
 export interface ToolCallDef { id: string; name: string; args_display: string; args_json: string; }
 export interface ToolResultDef { tool_call_id: string; output: string; success: boolean; }

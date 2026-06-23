@@ -57,12 +57,14 @@ const en = {
   session: {
     resume: "Resume Session",
     new: "New Session",
+    recent: "Recent Sessions",
     noSessions: "No previous sessions found.",
     lastActive: "Last active",
     messages: "messages",
     workspace: "Workspace",
     workspaceHint: "Project root directory",
     workspaceBrowse: "Browse...",
+    startupHint: "Start a new conversation or select a session from the sidebar.",
   },
   status: {
     title: "Status",

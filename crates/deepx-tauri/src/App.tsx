@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createChatStore, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
 import ChatView from "./components/ChatView";
+import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
 import InfoBar from "./components/InfoBar";
 import StatusPanel from "./components/StatusPanel";
@@ -22,6 +23,9 @@ export default function App() {
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
   const [hasMore, setHasMore] = createSignal(false);
   const [workspace, setWorkspace] = createSignal("");
+  // Tracks whether the user has explicitly chosen a session (new or resume).
+  // Until this is true, the startup page stays visible even if events fire.
+  const [hasChosenSession, setHasChosenSession] = createSignal(false);
   let unlisten: (() => void) | undefined;
 
   async function refreshSessions() {
@@ -38,6 +42,7 @@ export default function App() {
     try {
       chat.clear();
       localStorage.setItem(LS_KEY, seed);
+      setHasChosenSession(true);
       console.log("[App] invoking cmd_resume_session...");
       await invoke("cmd_resume_session", { seed });
       console.log("[App] cmd_resume_session returned");
@@ -50,7 +55,8 @@ export default function App() {
       if (chat.sessionInfo.seed === seed) {
         chat.clear();
         localStorage.removeItem(LS_KEY);
-        await invoke("cmd_new_session");
+        setHasChosenSession(false);
+        // Don't auto-create — let the startup page be shown instead
       }
       await refreshSessions();
     } catch (e) { console.error(e); }
@@ -85,6 +91,11 @@ export default function App() {
   }
 
   onMount(async () => {
+    // Always start with a clean slate — the startup page lets the user choose.
+    // Clear any stray saved seed that could trigger an unwanted auto-resume.
+    if (!chat.sessionInfo.seed) {
+      localStorage.removeItem(LS_KEY);
+    }
     try {
       const raw = await invoke<string>("cmd_load_config");
       const cfg = JSON.parse(raw);
@@ -101,14 +112,8 @@ export default function App() {
       const p = e.payload;
       switch (p.type as string) {
         case "ready": {
-          // Ready is now emitted on every idle transition; use it as a
-          // re-sync signal (e.g. after agent finishes a long task).
-          const savedSeed = localStorage.getItem(LS_KEY);
-          if (savedSeed && chat.sessionInfo.seed !== savedSeed) {
-            try { await invoke("cmd_resume_session", { seed: savedSeed }); } catch (e) { console.error(e); }
-          } else if (!savedSeed && !chat.sessionInfo.seed) {
-            try { await invoke("cmd_new_session"); } catch (e) { console.error(e); }
-          }
+          // Agent is idle. If the session was lost (e.g. agent restart),
+          // the startup page will already be showing — no action needed.
           break;
         }
         case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
@@ -117,8 +122,8 @@ export default function App() {
         case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
         case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
         case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); break;
-        case "session_created": chat.clearTurns(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); refreshSessions(); break;
-        case "session_restored": if (p.seed) { chat.clearTurns(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); if (p.turns) { chat.loadTurnsFromRestore(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); } setHasMore(!!p.has_more); refreshSessions(); } break;
+        case "session_created": chat.clearTurns(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); setHasChosenSession(true); refreshSessions(); break;
+        case "session_restored": if (p.seed) { chat.clearTurns(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); setHasChosenSession(true); if (p.turns) { chat.loadTurnsFromRestore(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); } setHasMore(!!p.has_more); refreshSessions(); } break;
         case "more_turns": if (p.turns) { chat.prependTurns(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); setHasMore(!!p.has_more); } break;
         case "dashboard": chat.handleDashboard(p); break;
         case "done": chat.setInputDisabled(false); chat.handleDone(); break;
@@ -132,17 +137,11 @@ export default function App() {
       }
     }); } catch (e) { console.error(e); }
 
-    // Load session list immediately
+    // Load session list and workspace.
+    // The startup page is always shown when no session is active —
+    // it lets the user type to start a new conversation or pick a recent session.
     await refreshSessions();
-    // Load current workspace
     try { const ws = await invoke<string>("cmd_get_workspace"); setWorkspace(ws); } catch (e) { console.error(e); }
-    // Proactively restore last session (Ready may have been sent before mount)
-    const savedSeed = localStorage.getItem(LS_KEY);
-    if (savedSeed) {
-      try { await invoke("cmd_resume_session", { seed: savedSeed }); } catch (e) { console.error(e); }
-    } else {
-      try { await invoke("cmd_new_session"); } catch (e) { console.error(e); }
-    }
   });
 
   onCleanup(() => unlisten?.());
@@ -209,12 +208,13 @@ export default function App() {
               </button>
             </div>
           </div>
-          <div class="sidebar-new-session"><button onClick={newSession} title={t().session.new}>+ {t().session.new}</button></div>
         </aside>
         <main class="main-content">
           <Show when={view() === "chat"} fallback={<SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} />}>
-            <ChatView chat={chat} hasMore={hasMore()} onLoadMore={loadMoreTurns} />
-            <StatusPanel tasks={chat.tasks} recentEdits={chat.recentEdits} activityLog={chat.activityLog} />
+            <Show when={hasChosenSession() && chat.sessionInfo.seed} fallback={<StartupView sessions={sessions()} onResume={resumeSession} />}>
+              <ChatView chat={chat} hasMore={hasMore()} onLoadMore={loadMoreTurns} />
+              <StatusPanel tasks={chat.tasks} recentEdits={chat.recentEdits} activityLog={chat.activityLog} />
+            </Show>
           </Show>
         </main>
         

@@ -59,12 +59,14 @@ const zh: I18nStrings = {
   session: {
     resume: "恢复会话",
     new: "新会话",
+    recent: "最近会话",
     noSessions: "未找到历史会话。",
     lastActive: "上次活跃",
     messages: "条消息",
     workspace: "工作区",
     workspaceHint: "项目根目录",
     workspaceBrowse: "浏览...",
+    startupHint: "开始一个新对话，或从左侧选择一个历史会话。",
   },
   status: {
     title: "状态",

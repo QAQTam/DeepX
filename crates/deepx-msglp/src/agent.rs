@@ -18,10 +18,12 @@ pub struct AgentState {
 
 impl AgentState {
     pub fn new(config: deepx_config::Config) -> Self {
-        let msg = deepx_message::MessageStore::new("init");
+        // Seed is empty until create_session / init_session assigns a real one.
+        // This prevents accidental persistence of a placeholder seed.
+        let msg = deepx_message::MessageStore::new("");
         Self {
             msg, config,
-            session: SessionMeta::new(),
+            session: SessionMeta::default(),
             tool_defs: Vec::new(),
             dsml_compat_count: 0,
             turn_count: 0,
@@ -60,6 +62,6 @@ impl AgentState {
 
     pub fn maybe_save_session(&mut self) {
         if self.msg.has_pending_tools() { return; }
-        self.msg.snapshot(&self.config.model, &self.config.reasoning_effort);
+        self.msg.flush_meta(&self.config.model, &self.config.reasoning_effort);
     }
 }

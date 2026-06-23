@@ -3,7 +3,9 @@ import type { ToolCallDef, ToolResultDef } from "../store/chat";
 import { useI18n } from "../i18n";
 import AnsiUp from "ansi-to-html";
 
-const ansiUp = new AnsiUp();
+// escapeXML: true — escape <, >, & in text content so that tool output
+// containing HTML/CSS/code is displayed as text, not rendered as DOM.
+const ansiUp = new AnsiUp({ escapeXML: true });
 
 const isUnifiedDiff = (text: string): boolean =>
   /^(--- (a\/|\/)|@@ -\d+)/m.test(text);

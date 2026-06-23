@@ -277,7 +277,7 @@ impl Loop {
             Ui2Agent::NewSession => { self.handle_create_session(); }
             Ui2Agent::ReloadConfig => { self.handle_reload_config(); }
             Ui2Agent::Shutdown => {
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 self.emit(Agent2Ui::ShutdownAck);
                 self.pending_shutdown = true;
             }
@@ -331,7 +331,7 @@ impl Loop {
         }
 
         deepx_tools::bridge::shutdown_tools();
-        self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+        self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
     }
 
     fn handle_cancel(&mut self) {
@@ -494,7 +494,8 @@ impl Loop {
         log::info!("[AGENT] UndoTurn {turn_id} — turns before: {}", self.agent.msg.turn_count());
         if self.agent.msg.truncate_before_turn(turn_id) {
             log::info!("[AGENT] UndoTurn — truncated, turns after: {}", self.agent.msg.turn_count());
-            self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+            // Full rewrite needed — the JSONL on disk still has the truncated messages.
+            self.agent.msg.snapshot_full(&self.agent.config.model, &self.agent.config.reasoning_effort);
             let all_turns = build_turns_from_context(&self.agent);
             let total = all_turns.len() as u32;
             let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
@@ -575,7 +576,8 @@ impl Loop {
 
         let chars = summary.chars().count();
         self.agent.msg.apply_compact(&summary, KEEP);
-        self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+        // Full rewrite needed — compact changes system_messages, not just new messages.
+        self.agent.msg.snapshot_full(&self.agent.config.model, &self.agent.config.reasoning_effort);
         self.emit(Agent2Ui::CompactEnd {
             summary_chars: chars, turns_compacted: compact_count as u32,
         });
@@ -590,10 +592,16 @@ impl Loop {
 
     fn handle_user_input(&mut self, text: &str) {
         if self.agent.session.seed.is_empty() {
-            self.emit(Agent2Ui::Error {
-                message: "No session — create one first".into(),
+            // Auto-create a session on first user input.
+            // The frontend is responsible for ensuring this only happens
+            // when the user explicitly starts a new conversation.
+            log::info!("[AGENT] seed is empty — auto-creating session on first user input");
+            lifecycle::create_session(&mut self.agent);
+            self.agent.rebind_store();
+            self.emit(Agent2Ui::SessionCreated {
+                seed: self.agent.session.seed.clone(),
             });
-            return;
+            self.emit_dashboard();
         }
 
         self.cancel.clear();
@@ -635,20 +643,20 @@ impl Loop {
             // ── Check for interrupt commands between rounds ──
             if self.check_interrupts() {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 break;
             }
 
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 break;
             }
 
             // Check for pending session switch (set by check_interrupts)
             if self.pending_session.is_some() || self.pending_new_session {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 break;
             }
 
@@ -787,7 +795,7 @@ impl Loop {
             );
 
             if had_error || result.is_err() {
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 break;
             }
 
@@ -796,7 +804,7 @@ impl Loop {
             // prevent processing partial content / executing tools.
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
                 break;
             }
 
@@ -924,7 +932,7 @@ impl Loop {
                 _ => {}
             }
 
-            self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+            self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
 
             self.emit(Agent2Ui::TurnEnd {
                 turn_id: turn_id.clone(),
@@ -1004,7 +1012,7 @@ fn build_assistant_message(
         let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
         blocks.push(ContentBlock::ToolUse { id: tc.id.clone(), name: tc.function.name.clone(), input });
     }
-    Message { role: "assistant".into(), name: None, content: blocks }
+    Message { msg_id: None, role: "assistant".into(), name: None, content: blocks }
 }
 
 fn emit_round_complete(

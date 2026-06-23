@@ -1,7 +1,6 @@
 use deepx_types::Message;
 use crate::effect::{Effect, PendingTool, ToolExecRequest, ToolExecutorFn};
 use deepx_session::SessionManager;
-use deepx_types::SessionFile;
 
 /// Truncate tool result for LLM context. Tools return full output for the user,
 /// but long results are trimmed here before storage to keep KV-cache prefixes
@@ -110,6 +109,12 @@ pub struct MessageStore {
     tool_executor: Option<ToolExecutorFn>,
     /// Number of earliest turns that have been compacted (skipped in LLM context).
     compact_skip: usize,
+    /// Next message ID to assign (monotonic per session).
+    next_msg_id: u64,
+    /// If true, save_msg is a no-op — used during from_messages replay.
+    replaying: bool,
+    /// Messages assigned msg_id but not yet flushed to disk.
+    pending_save: Vec<Message>,
 }
 
 impl std::fmt::Debug for MessageStore {
@@ -119,6 +124,8 @@ impl std::fmt::Debug for MessageStore {
             .field("turns", &self.turns.len())
             .field("cancelled", &self.cancelled)
             .field("has_executor", &self.tool_executor.is_some())
+            .field("compact_skip", &self.compact_skip)
+            .field("next_msg_id", &self.next_msg_id)
             .finish()
     }
 }
@@ -132,6 +139,9 @@ impl Clone for MessageStore {
             cancelled: self.cancelled,
             tool_executor: None,
             compact_skip: self.compact_skip,
+            next_msg_id: self.next_msg_id,
+            replaying: false,
+            pending_save: Vec::new(),
         }
     }
 }
@@ -145,6 +155,9 @@ impl MessageStore {
             cancelled: false,
             tool_executor: None,
             compact_skip: 0,
+            next_msg_id: 1,
+            replaying: false,
+            pending_save: Vec::new(),
         }
     }
 
@@ -157,6 +170,10 @@ impl MessageStore {
         self.system_messages.clear();
         self.turns.clear();
         self.cancelled = false;
+        self.compact_skip = 0;
+        self.next_msg_id = 1;
+        self.replaying = false;
+        self.pending_save.clear();
     }
 
     pub fn cancel(&mut self) {
@@ -167,9 +184,39 @@ impl MessageStore {
         self.cancelled
     }
 
+    /// Assign msg_id and buffer for batched persistence.
+    /// Flushed to disk via [`flush_meta`].
+    fn save_msg(&mut self, msg: &Message) {
+        let mut m = msg.clone();
+        m.msg_id = Some(self.next_msg_id);
+        self.next_msg_id += 1;
+        if !self.replaying {
+            self.pending_save.push(m);
+        }
+    }
+
+    /// Write buffered messages to JSONL, then update meta.json + index.
+    /// No-op if the session seed has not been initialized yet (empty seed).
+    pub fn flush_meta(&mut self, model: &str, effort: &str) {
+        if self.seed.is_empty() {
+            return;
+        }
+        if !self.pending_save.is_empty() {
+            SessionManager::global().save_append(
+                &self.seed, &self.pending_save, model, Some(effort), self.compact_skip,
+            );
+            self.pending_save.clear();
+        } else {
+            SessionManager::global().update_meta(
+                &self.seed, model, Some(effort), self.compact_skip,
+            );
+        }
+    }
+
     pub fn push_system(&mut self, msg: Message) -> Effect {
         debug_assert_eq!(msg.role, "system", "push_system requires role=system");
-        self.system_messages.push(msg);
+        self.system_messages.push(msg.clone());
+        self.save_msg(&msg);
         Effect::None
     }
 
@@ -179,27 +226,31 @@ impl MessageStore {
                 auto_complete_unfulfilled(step, "[CANCELLED] Tool was not executed (user interrupted).");
             }
         }
-        self.turns.push(Turn::new(Message::user(text)));
+        let msg = Message::user(text);
+        self.turns.push(Turn::new(msg.clone()));
+        self.save_msg(&msg);
         Effect::None
     }
 
     pub fn push_assistant(&mut self, msg: Message) -> Effect {
         debug_assert_eq!(msg.role, "assistant", "push_assistant requires role=assistant");
 
-        if self.turns.is_empty() {
-            log::warn!("push_assistant: no turn exists, auto-creating empty user turn");
-            self.turns.push(Turn::new(Message::user("")));
-        }
-
-        let turn = self.turns.last_mut().expect("turns non-empty after guarantee");
+        let turn = match self.turns.last_mut() {
+            Some(t) => t,
+            None => {
+                log::error!("push_assistant: no turn exists — assistant response without user input. Dropping.");
+                return Effect::None;
+            }
+        };
 
         if let Some(step) = turn.steps.last_mut() {
             auto_complete_unfulfilled(step, "[AUTO] Tool was not executed before next assistant response.");
         }
 
-        let step = Step::new(msg);
+        let step = Step::new(msg.clone());
         let has_tools = step.has_tool_use();
         turn.steps.push(step);
+        self.save_msg(&msg);
 
         if has_tools {
             Effect::None
@@ -259,10 +310,13 @@ impl MessageStore {
             .map(|name| truncate_tool_result(name, result))
             .unwrap_or_else(|| result.to_string());
 
+        let tool_msg = Message::tool(tool_call_id, &final_result);
+
         for turn in self.turns.iter_mut().rev() {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
                 if !step.tool_result_has_id(tool_call_id) {
-                    step.tool_results.push(Message::tool(tool_call_id, &final_result));
+                    step.tool_results.push(tool_msg.clone());
+                    self.save_msg(&tool_msg);
                 }
                 return;
             }
@@ -270,7 +324,8 @@ impl MessageStore {
         if let Some(turn) = self.turns.last_mut() {
             if let Some(step) = turn.steps.last_mut() {
                 log::warn!("push_tool_result: orphan tool_result {} — appending to last step", tool_call_id);
-                step.tool_results.push(Message::tool(tool_call_id, &final_result));
+                step.tool_results.push(tool_msg.clone());
+                self.save_msg(&tool_msg);
                 return;
             }
         }
@@ -486,23 +541,33 @@ impl MessageStore {
         self.tool_executor = Some(executor);
     }
 
-    pub fn snapshot(&self, model: &str, effort: &str) {
-        let msgs = self.to_vec();
-        if !self.seed.is_empty() {
-            SessionManager::global().save(&self.seed, &msgs, model, Some(effort));
+    /// Save all messages (full rewrite). Used for undo or compact.
+    /// No-op if the session seed has not been initialized yet.
+    pub fn snapshot_full(&mut self, model: &str, effort: &str) {
+        if self.seed.is_empty() {
+            return;
         }
+        let msgs = self.to_vec();
+        SessionManager::global().save_full(
+            &self.seed, &msgs, model, Some(effort), self.compact_skip,
+        );
+        self.pending_save.clear();
     }
 
     /// Reconstruct the internal turn/step structure by replaying saved messages
     /// through `push_user` / `push_assistant` / `push_tool_result`.
-    pub fn from_session(session_file: &SessionFile) -> (Self, Vec<String>) {
-        let mut store = Self::new(&session_file.seed);
-        let msgs = &session_file.messages;
+    pub fn from_messages(seed: &str, msgs: &[Message]) -> (Self, Vec<String>) {
+        let mut store = Self::new(seed);
+        store.replaying = true;
         let mut repairs = Vec::new();
         let mut i = 0;
 
         while i < msgs.len() && msgs[i].role == "system" {
             store.system_messages.push(msgs[i].clone());
+            // Restore msg_id tracking without re-persisting
+            if let Some(mid) = msgs[i].msg_id {
+                store.next_msg_id = store.next_msg_id.max(mid + 1);
+            }
             i += 1;
         }
 
@@ -561,6 +626,11 @@ impl MessageStore {
             }
         }
 
+        // Restore next_msg_id: max(msg_id) + 1, or 1 if empty.
+        let max_id = msgs.iter().filter_map(|m| m.msg_id).max().unwrap_or(0);
+        store.next_msg_id = store.next_msg_id.max(max_id + 1);
+        store.replaying = false;
+
         (store, repairs)
     }
 
@@ -583,6 +653,7 @@ impl MessageStore {
         };
         if idx >= self.turns.len() { return false; }
         self.turns.truncate(idx);
+        // After truncation, need full rewrite on next save.
         true
     }
 

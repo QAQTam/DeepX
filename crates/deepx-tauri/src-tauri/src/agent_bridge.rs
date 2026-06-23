@@ -297,12 +297,12 @@ pub fn cmd_list_sessions() -> Result<String, String> {
     serde_json::to_string(&metas).map_err(|e| format!("serialize: {e}"))
 }
 
-/// Load full session data (messages) by seed.
+/// Load full session data (metadata only) by seed.
 #[tauri::command]
 pub fn cmd_load_session(seed: String) -> Result<String, String> {
-    let session = deepx_session::SessionManager::global().load(&seed)
+    let meta = deepx_session::SessionManager::global().load_meta(&seed)
         .ok_or_else(|| format!("Session not found: {seed}"))?;
-    serde_json::to_string(&session).map_err(|e| format!("serialize: {e}"))
+    serde_json::to_string(&meta).map_err(|e| format!("serialize: {e}"))
 }
 
 /// Set the active session seed for next app restart.
