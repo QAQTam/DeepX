@@ -24,8 +24,8 @@ fn main() {
             {
                 unsafe { windows_allocate_console(); }
             }
-            if let Err(e) = deepx_tui::run_tui() {
-                eprintln!("deepx-tui: {e}");
+            if let Err(e) = deepx_terminalui::run_tui() {
+                eprintln!("deepx-terminalui: {e}");
                 std::process::exit(1);
             }
         }

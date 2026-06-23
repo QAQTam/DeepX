@@ -8,7 +8,7 @@ members = [
     "crates/deepx-types",
     "crates/deepx-proto",
     "crates/deepx-tools",
-    "crates/deepx-tui",
+    "crates/deepx-terminalui",
     "crates/deepx-session",
     "crates/deepx-sed",
     "crates/deepx-subagent",

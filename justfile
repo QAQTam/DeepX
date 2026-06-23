@@ -71,7 +71,7 @@ clean: clean-fe
 
 # Run TUI tests
 test-tui:
-    cargo test -p deepx-tui
+    cargo test -p deepx-terminalui
 
 # Run tool tests
 test-tools:

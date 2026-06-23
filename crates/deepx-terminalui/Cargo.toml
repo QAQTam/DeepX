@@ -1,11 +1,11 @@
 [package]
-name = "deepx-tui"
+name = "deepx-terminalui"
 version.workspace = true
 edition.workspace = true
 description = "DeepX terminal user interface"
 
 [lib]
-name = "deepx_tui"
+name = "deepx_terminalui"
 path = "src/lib.rs"
 
 [dependencies]

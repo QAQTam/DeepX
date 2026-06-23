@@ -1015,8 +1015,8 @@ dependencies = [
  "deepx-msglp",
  "deepx-proto",
  "deepx-session",
+ "deepx-terminalui",
  "deepx-tools",
- "deepx-tui",
  "deepx-types",
  "log",
  "serde",
@@ -1026,6 +1026,26 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
  "toml 0.8.2",
+]
+
+[[package]]
+name = "deepx-terminalui"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crossterm",
+ "deepx-config",
+ "deepx-proto",
+ "deepx-session",
+ "deepx-types",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "syntect",
+ "toml 0.8.2",
+ "unicode-width",
+ "ureq 3.3.0",
 ]
 
 [[package]]
@@ -1052,26 +1072,6 @@ dependencies = [
  "serde_json",
  "shell-words",
  "similar",
- "ureq 3.3.0",
-]
-
-[[package]]
-name = "deepx-tui"
-version = "0.4.0"
-dependencies = [
- "anyhow",
- "chrono",
- "crossterm",
- "deepx-config",
- "deepx-proto",
- "deepx-session",
- "deepx-types",
- "ratatui",
- "serde",
- "serde_json",
- "syntect",
- "toml 0.8.2",
- "unicode-width",
  "ureq 3.3.0",
 ]
 
