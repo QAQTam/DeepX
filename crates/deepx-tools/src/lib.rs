@@ -86,7 +86,7 @@ macro_rules! handler {
 }
 
 use std::sync::atomic::AtomicBool;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 
 use deepx_types::ToolDef;
@@ -107,10 +107,11 @@ pub fn set_current_session(seed: &str) {
     *guard = Some(seed.to_string());
 }
 
-pub static CURRENT_WORKSPACE: OnceLock<String> = OnceLock::new();
+pub static CURRENT_WORKSPACE: RwLock<String> = RwLock::new(String::new());
 
 pub fn set_workspace(path: &str) {
-    let _ = CURRENT_WORKSPACE.set(path.to_string());
+    let mut ws = CURRENT_WORKSPACE.write().expect("CURRENT_WORKSPACE lock");
+    *ws = path.to_string();
 }
 
 // ── ToolKey ──

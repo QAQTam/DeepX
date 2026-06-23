@@ -12,8 +12,9 @@ use crate::CURRENT_WORKSPACE;
 
 pub(super) fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
     let default_path = {
-        let ws = CURRENT_WORKSPACE.get().map(|s| s.as_str()).unwrap_or(".");
-        if ws == "." || ws.is_empty() {
+        let ws_guard = CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock");
+        let ws = ws_guard.as_str();
+        if ws.is_empty() || ws == "." {
             std::fs::read_to_string(deepx_types::platform::workspace_path())
                 .ok().filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| ".".into())

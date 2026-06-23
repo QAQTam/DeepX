@@ -62,6 +62,11 @@ const zh: I18nStrings = {
     sectionModel: "模型",
     sectionApi: "API 密钥",
     sectionInterface: "界面",
+    theme: "主题",
+    themeSystem: "跟随系统",
+    themeLight: "亮色",
+    themeDark: "暗色",
+    themeDarkGray: "灰暗色 (OLED)",
   },
   session: {
     resume: "对话列表",

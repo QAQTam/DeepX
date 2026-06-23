@@ -12,8 +12,24 @@ import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
 
 type View = "chat" | "settings";
+export type ThemeMode = "system" | "light" | "dark" | "dark-gray";
 
 const LS_KEY = "deepx:seed";
+const LS_THEME = "deepx:theme";
+
+/** Resolve a ThemeMode to the actual data-theme value to apply.
+ *  "system" maps to "dark-gray" on dark OS, "light" on light OS. */
+function resolveTheme(mode: ThemeMode): "light" | "dark" | "dark-gray" {
+  if (mode !== "system") return mode;
+  if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
+    return "dark-gray";
+  }
+  return "light";
+}
+
+function applyTheme(mode: ThemeMode) {
+  document.documentElement.setAttribute("data-theme", resolveTheme(mode));
+}
 
 export default function App() {
   const i18n = createI18n(((localStorage.getItem("deepx:lang") ?? "en") as Lang));
@@ -26,7 +42,9 @@ export default function App() {
   // Tracks whether the user has explicitly chosen a session (new or resume).
   // Until this is true, the startup page stays visible even if events fire.
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
+  const [theme, setTheme] = createSignal<ThemeMode>("system");
   let unlisten: (() => void) | undefined;
+  let unlistenTheme: (() => void) | undefined;
 
   async function refreshSessions() {
     try {
@@ -91,6 +109,20 @@ export default function App() {
   }
 
   onMount(async () => {
+    // ── Theme initialization ──
+    const savedTheme = (localStorage.getItem(LS_THEME) ?? "system") as ThemeMode;
+    setTheme(savedTheme);
+    applyTheme(savedTheme);
+    // Listen for OS theme changes when in "system" mode
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSysThemeChange = () => {
+      if ((localStorage.getItem(LS_THEME) ?? "system") === "system") {
+        applyTheme("system");
+      }
+    };
+    mq.addEventListener("change", onSysThemeChange);
+    unlistenTheme = () => mq.removeEventListener("change", onSysThemeChange);
+
     // Always start with a clean slate — the startup page lets the user choose.
     // Clear any stray saved seed that could trigger an unwanted auto-resume.
     if (!chat.sessionInfo.seed) {
@@ -144,10 +176,11 @@ export default function App() {
     try { const ws = await invoke<string>("cmd_get_workspace"); setWorkspace(ws); } catch (e) { console.error(e); }
   });
 
-  onCleanup(() => unlisten?.());
+  onCleanup(() => { unlisten?.(); unlistenTheme?.(); });
 
   const t = () => i18n.t() ?? en;
   async function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("deepx:lang", l); try { await invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l }); } catch (e) { console.error(e); } }
+  function switchTheme(t: ThemeMode) { setTheme(t); localStorage.setItem(LS_THEME, t); applyTheme(t); }
 
   const isActive = (seed: string) => chat.sessionInfo.seed === seed;
 
@@ -167,6 +200,10 @@ export default function App() {
             </button>
           </nav>
           <div class="sidebar-section-label">{t().session.resume}</div>
+          <button class="sidebar-new-session-btn" onClick={() => { newSession(); setHasChosenSession(true); }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>{t().session.new}</span>
+          </button>
           <div class="sidebar-sessions">
             <For each={sessions()}>
               {(s) => (
@@ -210,7 +247,7 @@ export default function App() {
           </div>
         </aside>
         <main class="main-content">
-          <Show when={view() === "chat"} fallback={<SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} />}>
+          <Show when={view() === "chat"} fallback={<SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} theme={theme} onThemeChange={switchTheme} />}>
             <Show when={hasChosenSession() && chat.sessionInfo.seed} fallback={<StartupView sessions={sessions()} onResume={resumeSession} />}>
               <ChatView chat={chat} hasMore={hasMore()} onLoadMore={loadMoreTurns} />
               <StatusPanel tasks={chat.tasks} recentEdits={chat.recentEdits} activityLog={chat.activityLog} />

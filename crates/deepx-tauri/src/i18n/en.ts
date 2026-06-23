@@ -60,6 +60,11 @@ const en = {
     sectionModel: "Model",
     sectionApi: "API Keys",
     sectionInterface: "Interface",
+    theme: "Theme",
+    themeSystem: "System",
+    themeLight: "Light",
+    themeDark: "Dark",
+    themeDarkGray: "Dark Gray (OLED)",
   },
   session: {
     resume: "Sessions",

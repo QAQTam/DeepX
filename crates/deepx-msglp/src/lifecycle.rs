@@ -58,6 +58,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
         &deepx_config::prompt::full_system_prompt()
     ));
     deepx_tools::bridge::set_current_session(&agent.session.seed);
+    deepx_tools::bridge::load_workspace(&agent.session.seed);
     agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session {}", agent.session.seed);
     true
@@ -74,6 +75,7 @@ pub fn create_session(agent: &mut AgentState) {
         &deepx_config::prompt::full_system_prompt()
     ));
     deepx_tools::bridge::set_current_session(&agent.session.seed);
+    deepx_tools::bridge::load_workspace(&agent.session.seed);
     agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session {}", agent.session.seed);
 }

@@ -2,10 +2,12 @@ import { createSignal, createResource, For, Show, createEffect } from "solid-js"
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n, type Lang } from "../i18n";
 
+type ThemeMode = "system" | "light" | "dark" | "dark-gray";
+
 interface Provider { id: string; display: string; endpoints: Endpoint[]; }
 interface Endpoint { id: string; display: string; base_url: string; default_model: string; models: string[]; }
 
-interface SettingsViewProps { lang: () => Lang; onLangChange: (l: Lang) => void; onClose: () => void; }
+interface SettingsViewProps { lang: () => Lang; onLangChange: (l: Lang) => void; onClose: () => void; theme: () => ThemeMode; onThemeChange: (t: ThemeMode) => void; }
 
 export default function SettingsView(props: SettingsViewProps) {
   const { t } = useI18n();
@@ -208,6 +210,15 @@ export default function SettingsView(props: SettingsViewProps) {
             {/* ── Interface ── */}
             <div class="settings-section">
               <h3 class="settings-section-title">{t().settings.sectionInterface}</h3>
+              <div class="settings-field">
+                <label>{t().settings.theme}</label>
+                <select value={props.theme()} onChange={(e) => props.onThemeChange(e.currentTarget.value as ThemeMode)}>
+                  <option value="system">{t().settings.themeSystem}</option>
+                  <option value="light">{t().settings.themeLight}</option>
+                  <option value="dark">{t().settings.themeDark}</option>
+                  <option value="dark-gray">{t().settings.themeDarkGray}</option>
+                </select>
+              </div>
               <div class="settings-field">
                 <label>{t().settings.language}</label>
                 <select value={props.lang()} onChange={(e) => props.onLangChange(e.currentTarget.value as Lang)}>

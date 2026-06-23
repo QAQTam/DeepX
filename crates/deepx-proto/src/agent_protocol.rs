@@ -289,7 +289,7 @@ pub enum Agent2Ui {
         documents: Vec<DocInfo>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         recent_edits: Vec<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         tasks: Vec<TaskInfo>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_title: Option<String>,
