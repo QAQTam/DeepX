@@ -8,6 +8,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Spawn the agent child process and expose its stdin writer via the bridge singleton.
             let bridge = agent_bridge::AgentBridge::init(app.handle());

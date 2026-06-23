@@ -206,6 +206,7 @@ pub fn cmd_save_config(
     context_limit: u32,
     reasoning_effort: String,
     lang: String,
+    context7_api_key: String,
 ) -> Result<(), String> {
     let mut cfg = deepx_config::Config::load().unwrap_or_default();
     if !api_key.is_empty() { cfg.api_key = api_key; }
@@ -217,6 +218,7 @@ pub fn cmd_save_config(
     if context_limit > 0 { cfg.context_limit = context_limit; }
     if !reasoning_effort.is_empty() { cfg.reasoning_effort = reasoning_effort; }
     if !lang.is_empty() { cfg.lang = Some(lang); }
+    if !context7_api_key.is_empty() { cfg.context7_api_key = Some(context7_api_key); }
     cfg.save()?;
     send_command(Ui2Agent::ReloadConfig)
 }
@@ -255,6 +257,8 @@ pub fn cmd_load_config() -> Result<String, String> {
         "context_limit": cfg.context_limit,
         "reasoning_effort": cfg.reasoning_effort,
         "lang": cfg.lang,
+        "active_profile": cfg.active_profile,
+        "context7_api_key": if cfg.context7_api_key.as_deref().unwrap_or("").is_empty() { "" } else { "****" },
         "providers": providers,
     });
     serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
