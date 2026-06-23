@@ -140,6 +140,9 @@ fn handle_spawn_subagent(ctx: ToolCallCtx) -> ToolResult {
     // Spawn background thread to collect results
     std::thread::spawn(move || {
         let mut final_answer = String::new();
+        let mut exit_code: i32 = 0;
+        let mut did_cancel = false;
+        let mut did_finish = false; // true only on turn_end
         for line in reader.lines() {
             let line = match line { Ok(l) => l, Err(_) => break };
             if line.trim().is_empty() { continue; }
@@ -147,28 +150,70 @@ fn handle_spawn_subagent(ctx: ToolCallCtx) -> ToolResult {
             let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
             match event_type {
                 "round_complete" => {
+                    // Only capture answer from the FINAL round (is_final=true)
+                    // or if no final answer yet, take any non-empty answer
+                    let is_final = event.get("is_final").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let has_tool_calls = event.get("tool_calls")
+                        .and_then(|v| v.as_array())
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false);
+                    // Skip intermediate rounds that have pending tool calls
+                    if has_tool_calls && !is_final {
+                        continue;
+                    }
+                    // Prefer `answer` field; fall back to `blocks` text content
                     if let Some(answer) = event.get("answer").and_then(|v| v.as_str()) {
                         if !answer.is_empty() { final_answer = answer.to_string(); }
                     }
+                    if final_answer.is_empty() {
+                        if let Some(blocks) = event.get("blocks").and_then(|v| v.as_array()) {
+                            for block in blocks {
+                                if block.get("type").and_then(|v| v.as_str()) == Some("text") {
+                                    if let Some(content) = block.get("content").and_then(|v| v.as_str()) {
+                                        final_answer.push_str(content);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                "turn_end" => break,
+                "turn_end" => {
+                    did_finish = true;
+                    if final_answer.is_empty() {
+                        if let Some(answer) = event.get("answer").and_then(|v| v.as_str()) {
+                            if !answer.is_empty() { final_answer = answer.to_string(); }
+                        }
+                    }
+                    break;
+                }
                 "error" => {
                     if let Some(msg) = event.get("message").and_then(|v| v.as_str()) {
                         final_answer = format!("[SUBAGENT '{}' ERROR] {}", name_bg, msg);
                     }
+                    exit_code = 1;
+                    did_finish = true; // error is a "clean" exit
                     break;
                 }
                 "cancelled" => {
                     final_answer = format!("[SUBAGENT '{}' CANCELLED]", name_bg);
+                    did_cancel = true;
                     break;
                 }
                 _ => {}
             }
         }
-        // Store the answer and mark as exited
+        let answer_len = final_answer.len();
         deepx_tools::process_registry::ProcessRegistry::set_answer(registry_id_bg, final_answer);
-        deepx_tools::process_registry::ProcessRegistry::kill(registry_id_bg);
-        log::info!("[SUBAGENT] '{}' background collection complete", name_bg);
+        if did_cancel {
+            deepx_tools::process_registry::ProcessRegistry::kill(registry_id_bg);
+        } else if did_finish {
+            deepx_tools::process_registry::ProcessRegistry::mark_exited(registry_id_bg, exit_code);
+        } else {
+            // Abnormal exit: pipe broke before turn_end/error/cancelled
+            deepx_tools::process_registry::ProcessRegistry::mark_exited(registry_id_bg, -1);
+            log::warn!("[SUBAGENT] '{}' abnormal exit (no turn_end), partial answer_len={}", name_bg, answer_len);
+        }
+        log::info!("[SUBAGENT] '{}' background collection complete, answer_len={}, exit={}", name_bg, answer_len, exit_code);
     });
 
     log::info!("[SUBAGENT] '{}' spawned asynchronously, pid={}", name, registry_id);
