@@ -20,6 +20,7 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
     let context_after: Vec<String> = v.get("context_after").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
     let description = v.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let dry_run = v.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
 
     let raw = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -71,7 +72,7 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
     };
 
     // Apply diff and format result
-    apply_diff_and_format(path, &file_lines, match_idx, win, &new_lines, description, was_fuzzy)
+    apply_diff_and_format(path, &file_lines, match_idx, win, &new_lines, description, was_fuzzy, dry_run)
 }
 
 handler!(handle_edit_file_diff, exec_edit_file_diff);
@@ -80,8 +81,8 @@ handler!(handle_edit_file_diff, exec_edit_file_diff);
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("edit_file_diff", ""),
-        description: "Fuzzy multi-line edit via old_lines+new_lines. Tolerant of whitespace changes. Prefer edit_file for simple single-string replacements; use fuzzy_edit for multi-line blocks or when exact whitespace is uncertain.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
+        description: "Fuzzy multi-line edit via old_lines+new_lines. Tolerant of whitespace changes. Dry-run by default (preview only); set dry_run=false to actually write. Prefer edit_file for simple single-string replacements.",
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
         safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),

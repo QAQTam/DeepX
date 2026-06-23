@@ -157,15 +157,20 @@ pub fn load_workspace(seed: &str) {
     let dir = deepx_types::platform::sessions_dir().join(seed);
     let ws = std::fs::read_to_string(dir.join("workspace.txt")).unwrap_or_default();
     let ws = ws.trim();
-    if !ws.is_empty() {
-        crate::set_workspace(ws);
-    } else {
-        crate::set_workspace(".");
+    let ws = if !ws.is_empty() { ws } else { "." };
+    crate::set_workspace(ws);
+    // Set process current directory so all relative paths in exec/linuxmod/file tools
+    // resolve against the workspace root instead of the installation directory.
+    if let Err(e) = std::env::set_current_dir(ws) {
+        log::warn!("load_workspace: cannot cd to '{}': {e}", ws);
     }
 }
 
 pub fn set_workspace(path: &str) {
     crate::set_workspace(path);
+    if let Err(e) = std::env::set_current_dir(path) {
+        log::warn!("set_workspace: cannot cd to '{}': {e}", path);
+    }
 }
 
 /// Execute a batch of tools in parallel (threaded).

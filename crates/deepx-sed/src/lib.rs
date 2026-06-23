@@ -287,10 +287,40 @@ pub fn deepx_run_sed(script: &str, path: &str, in_place: bool, quiet: bool) -> S
                     format!("[OK] sed {}\n\n{}", desc, diff)
                 }
             } else {
-                // Output went to stdout — can't easily capture from here.
-                // Fall through to binary path would be needed, but for dry-run
-                // we already handled s/// via inline above.
-                format!("[OK] sed {} (use --in-place for complex scripts)", desc)
+                // Full engine wrote to stdout — we can't capture it.
+                // Re-run in-place on a temp copy to capture the result.
+                let tmp_dir = std::env::temp_dir();
+                let tmp_path = tmp_dir.join(format!("deepx-sed-out-{}.tmp", std::process::id()));
+                if std::fs::copy(path, &tmp_path).is_err() {
+                    return format!("[OK] sed {} (use --in-place for complex scripts)", desc);
+                }
+                let tmp_config = RunConfig {
+                    scripts_with_sources: vec![(desc.clone(), desc.as_bytes().to_vec(), ScriptSource::Expression(0))],
+                    input_files: vec![tmp_path.to_string_lossy().to_string()],
+                    quiet,
+                    in_place: Some(String::new()),
+                    extended_regex: false,
+                    separate_files: false,
+                    line_length: 70,
+                    unbuffered: false,
+                    posix: false,
+                    strict_posix: false,
+                    follow_symlinks: false,
+                    sandbox: false,
+                    null_data: false,
+                    binary: false,
+                };
+                match run(tmp_config) {
+                    Ok(()) => {
+                        let result = std::fs::read_to_string(&tmp_path).unwrap_or_default();
+                        let _ = std::fs::remove_file(&tmp_path);
+                        result
+                    }
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&tmp_path);
+                        format!("[ERROR] sed: {e}")
+                    }
+                }
             }
         }
         Err(e) => format!("[ERROR] sed: {e}"),
@@ -308,6 +338,11 @@ fn try_deepx_inline(script: &str, path: &str, in_place: bool, quiet: bool) -> Op
     let flags = parts.get(2).copied().unwrap_or("");
     if !flags.chars().all(|c| matches!(c, 'g' | 'i' | 'm' | 's')) { return None; }
 
+    // Fast path uses Rust regex syntax, which diverges from sed BRE for
+    // backslash sequences: \( \) \+ \? \{ \} \| mean different things.
+    // Bail to the full engine (which speaks native sed BRE) for any \ in pattern.
+    if pattern.contains('\\') { return None; }
+
     let mut builder = ::regex::RegexBuilder::new(pattern);
     builder.case_insensitive(flags.contains('i'));
     builder.multi_line(flags.contains('m'));
@@ -316,9 +351,15 @@ fn try_deepx_inline(script: &str, path: &str, in_place: bool, quiet: bool) -> Op
 
     let content = std::fs::read_to_string(path).ok()?;
     let result = if flags.contains('g') {
-        re.replace_all(&content, replacement).to_string()
+        re.replace_all(&content, convert_sed_replacement(replacement)).to_string()
     } else {
-        re.replace(&content, replacement).to_string()
+        // Per-line replace: sed s/// without /g replaces first match on EACH line
+        let repl = convert_sed_replacement(replacement);
+        content
+            .lines()
+            .map(|line| re.replace(line, repl.as_str()).to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     if in_place {
@@ -334,6 +375,52 @@ fn try_deepx_inline(script: &str, path: &str, in_place: bool, quiet: bool) -> Op
     } else {
         Some(result)
     }
+}
+
+/// Convert sed-style replacement to regex-crate-compatible format.
+/// - `\&` → `&` (escaped ampersand becomes literal ampersand)
+/// - `&` → `$0` (unescaped ampersand is the whole match)
+/// - `\\` → `\` (escaped backslash becomes literal backslash)
+/// - `\0`-`\9` → `$0`-`$9` (backreferences)
+/// - `$` → `$$` (escape dollar signs for regex crate)
+fn convert_sed_replacement(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some('&') => {
+                    result.push('&');
+                    chars.next();
+                }
+                Some('\\') => {
+                    result.push('\\');
+                    chars.next();
+                }
+                Some(d @ '0'..='9') => {
+                    result.push('$');
+                    result.push(*d);
+                    chars.next();
+                }
+                Some(other) => {
+                    // Unknown escape — preserve as-is (sed passes through)
+                    result.push('\\');
+                    result.push(*other);
+                    chars.next();
+                }
+                None => {
+                    result.push('\\');
+                }
+            }
+        } else if c == '&' {
+            result.push_str("$0");
+        } else if c == '$' {
+            result.push_str("$$");
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 /// Generate a minimal unified diff (DeepX format compatible).

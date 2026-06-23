@@ -25,9 +25,9 @@ pub(super) fn exec_grep(args: &str) -> String {
     }
 }
 
-/// ripgrep engine on Windows: `ignore::Walk` for traversal + `grep-searcher` for matching.
-#[cfg(windows)]
-fn exec_grep_rust(
+/// ripgrep engine: `ignore::Walk` for traversal + `grep-searcher` for matching.
+/// Cross-platform — used by both `grep` tool and `linuxmod`.
+pub(crate) fn exec_grep_rust(
     pattern: &str,
     path: &str,
     recursive: bool,

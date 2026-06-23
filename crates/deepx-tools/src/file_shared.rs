@@ -118,6 +118,7 @@ pub(super) fn apply_diff_and_format(
     new_lines: &[String],
     description: &str,
     was_fuzzy: bool,
+    dry_run: bool,
 ) -> String {
     let mut out_lines: Vec<&str> = file_lines.to_vec();
     out_lines.splice(match_idx..match_idx + win, std::iter::empty());
@@ -125,6 +126,38 @@ pub(super) fn apply_diff_and_format(
         out_lines.insert(match_idx + j, line);
     }
     let new_content = out_lines.join("\n");
+
+    if dry_run {
+        let line = match_idx + 1;
+        let added = new_lines.len() as u32;
+        let removed = win as u32;
+        let mut result = String::new();
+        if was_fuzzy {
+            result.push_str("\u{26a0} fuzzy match (indentation normalized)\n");
+        }
+        result.push_str(&format!("[DRY RUN] {path} — preview, no changes written\n\n"));
+        result.push_str(&format!("--- a/{}\n+++ b/{}\n", path, path));
+        let ctx_line = file_lines.get(match_idx.saturating_sub(1)).unwrap_or(&"");
+        result.push_str(&format!("@@ -{},{} +{},{} @@ {}\n",
+            line, removed.max(1), line, added.max(1), ctx_line));
+        let ctx_start = match_idx.saturating_sub(2);
+        for i in ctx_start..match_idx {
+            result.push_str(&format!(" {}\n", file_lines[i]));
+        }
+        for i in match_idx..match_idx + win {
+            result.push_str(&format!("-{}\n", file_lines[i]));
+        }
+        for l in new_lines {
+            result.push_str(&format!("+{}\n", l));
+        }
+        let ctx_end = (match_idx + win + 2).min(out_lines.len());
+        for i in (match_idx + win)..ctx_end {
+            result.push_str(&format!(" {}\n", out_lines[i]));
+        }
+        let desc = if description.is_empty() { "edited" } else { description };
+        result.push_str(&format!("\n[CHANGE] {}:{} +{} -{} | {} (dry run)", path, line, added, removed, desc));
+        return result;
+    }
 
     match std::fs::write(path, &new_content) {
         Ok(_) => {

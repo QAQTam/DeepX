@@ -7,7 +7,6 @@ members = [
     "crates/deepx-message",
     "crates/deepx-types",
     "crates/deepx-proto",
-    "crates/deepx",
     "crates/deepx-tools",
     "crates/deepx-tui",
     "crates/deepx-session",

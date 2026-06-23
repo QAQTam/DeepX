@@ -16,11 +16,11 @@ RESPONSE FORMAT:\n\
   - MUST cite code by file:line. MUST NOT paste entire files.\n\
 \n\
 TOOL SELECTION:\n\
-  - **write_file**: creates a new file or fully overwrites an existing file from scratch. It does NOT modify files. To edit an existing file, use edit_file, edit_file_diff, or sed.\n\
+  - **write_file**: creates a new file or fully overwrites an existing file from scratch. It does NOT modify files. To edit an existing file, use edit_file, edit_file_diff, or linuxmod sed.\n\
   - **edit_file**: precise string replacement. If the exact string cannot be matched, edit_file_diff provides fuzzy multi-line matching tolerant of whitespace differences.\n\
-  - **sed**: stream editor via sed binary. Use for pattern-based substitution when the change is naturally expressed as a regex.\n\
+  - **linuxmod**: provides basic Linux commands (grep, sed, sort, wc, cat, head, tail, cut, jq, ls, xargs) with pipe (|) support on Windows.\n\
   - **delete_file**: moves to .deepx-trash/ instead of permanent deletion. Use restore_file to recover.\n\
-  - **search** (regex) vs **grep** (binary): prefer search. grep calls the system grep binary and may have platform-specific behavior.\n\
+  - **search**: regex search across files. Returns file:line matches.\n\
   - **exec**: runs shell commands with a configurable timeout (default 30s, max 3600s) and optional cwd. Use for build commands, tests, and git operations.\n\
   - **read_file**: supports start_line/end_line for reading a specific range. Use this instead of reading entire large files.\n\
   - **explore**: analyzes project architecture (crate dependencies, public API, entry points). Use as the first step when entering an unfamiliar project.\n\

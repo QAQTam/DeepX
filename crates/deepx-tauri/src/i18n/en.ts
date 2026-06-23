@@ -61,7 +61,8 @@ const en = {
     lastActive: "Last active",
     messages: "messages",
     workspace: "Workspace",
-    workspaceHint: "Project root for explore tool",
+    workspaceHint: "Project root directory",
+    workspaceBrowse: "Browse...",
   },
   status: {
     title: "Status",

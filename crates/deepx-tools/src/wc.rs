@@ -15,19 +15,24 @@ pub(super) fn exec_wc(args: &str) -> String {
         Err(e) => return format!("[ERROR] wc: cannot read {path}: {e}"),
     };
 
+    run_wc_core(&content, &path, lines_only)
+}
+
+handler!(handle_wc, exec_wc);
+
+/// Count lines/words/chars/bytes with raw args — used by linuxmod.
+pub(crate) fn run_wc_core(content: &str, label: &str, lines_only: bool) -> String {
     let line_count = content.lines().count();
     let byte_count = content.len();
 
     if lines_only {
-        format!("[OK] wc: {} → {} lines", path, line_count)
+        format!("[OK] wc: {label} → {} lines", line_count)
     } else {
         let word_count = content.split_whitespace().count();
         let char_count = content.chars().count();
-        format!("[OK] wc: {} → {} lines, {} words, {} chars, {} bytes", path, line_count, word_count, char_count, byte_count)
+        format!("[OK] wc: {label} → {} lines, {} words, {} chars, {} bytes", line_count, word_count, char_count, byte_count)
     }
 }
-
-handler!(handle_wc, exec_wc);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {

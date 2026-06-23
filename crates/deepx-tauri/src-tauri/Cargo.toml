@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 description = "DeepX Tauri desktop application"
 
+[[bin]]
+name = "deepx"
+path = "src/main.rs"
+
 [lib]
 name = "deepx_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -12,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["custom-protocol"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 deepx-msglp = { path = "../../deepx-msglp" }
@@ -21,11 +25,11 @@ deepx-session = { path = "../../deepx-session" }
 deepx-tools = { path = "../../deepx-tools" }
 deepx-types = { path = "../../deepx-types" }
 deepx-proto = { path = "../../deepx-proto" }
+deepx-tui = { path = "../../deepx-tui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 anyhow = "1"
 log = "0.4"
-
 [lints]
 workspace = true

@@ -16,6 +16,26 @@ pub(super) fn exec_sort(args: &str) -> String {
         Err(e) => return format!("[ERROR] sort: cannot read {path}: {e}"),
     };
 
+    run_sort_core_with_content(&content, &path, unique, reverse)
+}
+
+handler!(handle_sort, exec_sort);
+
+/// Sort lines of a file with raw args — used by linuxmod.
+pub(crate) fn run_sort_core(path: &str, unique: bool, reverse: bool) -> String {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => return format!("[ERROR] sort: cannot read {path}: {e}"),
+    };
+    run_sort_core_with_content(&content, path, unique, reverse)
+}
+
+/// Sort already-loaded content — used by linuxmod pipe segments.
+pub(crate) fn run_sort_str(content: &str, unique: bool, reverse: bool) -> String {
+    run_sort_core_with_content(content, "<stdin>", unique, reverse)
+}
+
+fn run_sort_core_with_content(content: &str, label: &str, unique: bool, reverse: bool) -> String {
     let mut lines: Vec<&str> = content.lines().collect();
 
     if reverse {
@@ -32,19 +52,11 @@ pub(super) fn exec_sort(args: &str) -> String {
     let result = lines.join("\n");
 
     if result.is_empty() {
-        format!("[OK] sort: {path} → empty")
+        format!("[OK] sort: {label} → empty")
     } else {
-        let truncated = if count > 200 {
-            let first_200: Vec<&str> = lines.iter().take(200).copied().collect();
-            format!("{}\n... ({} more lines)", first_200.join("\n"), count - 200)
-        } else {
-            result
-        };
-        format!("[OK] sort: {path} → {count} lines\n\n{truncated}")
+        format!("[OK] sort: {label} → {count} lines\n\n{result}")
     }
 }
-
-handler!(handle_sort, exec_sort);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {

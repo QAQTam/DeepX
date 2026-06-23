@@ -63,7 +63,8 @@ const zh: I18nStrings = {
     lastActive: "上次活跃",
     messages: "条消息",
     workspace: "工作区",
-    workspaceHint: "explore 工具的项目根目录",
+    workspaceHint: "项目根目录",
+    workspaceBrowse: "浏览...",
   },
   status: {
     title: "状态",

@@ -55,6 +55,8 @@ pub mod manager;
 
 pub mod mcp_bridge;
 
+pub mod linuxmod;
+
 pub use web::set_c7_key;
 pub use web::set_bocha_key;
 pub use safety::SafetyVerdict;

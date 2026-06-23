@@ -24,7 +24,7 @@ pub(super) fn exec_jaq(args: &str) -> String {
     out
 }
 
-fn run_jaq(filter: &str, input: &str, path: &str) -> Result<String, String> {
+pub(crate) fn run_jaq(filter: &str, input: &str, path: &str) -> Result<String, String> {
     use jaq_core::{Ctx, Vars, Compiler, unwrap_valr};
     use jaq_core::load::{Arena, File, Loader};
     use jaq_json::Val;
@@ -63,15 +63,22 @@ fn run_jaq(filter: &str, input: &str, path: &str) -> Result<String, String> {
         .filter_map(|r| r.ok())
         .collect();
 
-    // Format output
+    // Format output as human-readable JSON
     if results.is_empty() {
         Ok(format!("[OK] jaq: {filter} → no results"))
     } else if results.len() == 1 {
-        Ok(format!("[OK] jaq: {filter}\n\n{:#?}", results[0]))
+        let json_str = val_to_json_string(&results[0]);
+        Ok(format!("[OK] jaq: {filter}\n\n{json_str}"))
     } else {
         let count = results.len();
-        Ok(format!("[OK] jaq: {filter} → {count} results\n\n{:#?}", results))
+        let items: Vec<String> = results.iter().map(val_to_json_string).collect();
+        Ok(format!("[OK] jaq: {filter} → {count} results\n\n[{}]", items.join(", ")))
     }
+}
+
+fn val_to_json_string(val: &jaq_json::Val) -> String {
+    // Use Val's Display impl (jaq-json provides JSON-like Display)
+    format!("{}", val)
 }
 
 handler!(handle_jaq, exec_jaq);

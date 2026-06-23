@@ -1,6 +1,7 @@
 import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { createChatStore, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
 import ChatView from "./components/ChatView";
 import SettingsView from "./components/SettingsView";
@@ -71,6 +72,16 @@ export default function App() {
   async function saveWorkspace(val: string) {
     setWorkspace(val);
     try { await invoke("cmd_set_workspace", { path: val }); } catch (e) { console.error(e); }
+  }
+
+  async function browseWorkspace() {
+    try {
+      const selected = await open({ directory: true, multiple: false, title: t().session.workspace });
+      if (selected && typeof selected === "string") {
+        setWorkspace(selected);
+        await invoke("cmd_set_workspace", { path: selected });
+      }
+    } catch (e) { console.error(e); }
   }
 
   onMount(async () => {
@@ -182,14 +193,21 @@ export default function App() {
           <div class="sidebar-spacer" />
           <div class="sidebar-workspace">
             <label class="sidebar-workspace-label">{t().session.workspace}</label>
-            <input
-              class="sidebar-workspace-input"
-              type="text"
-              value={workspace()}
-              placeholder={t().session.workspaceHint}
-              onInput={(e) => setWorkspace(e.currentTarget.value)}
-              onChange={(e) => saveWorkspace(e.currentTarget.value)}
-            />
+            <div class="sidebar-workspace-row">
+              <input
+                class="sidebar-workspace-input"
+                type="text"
+                value={workspace()}
+                placeholder={t().session.workspaceHint}
+                onInput={(e) => setWorkspace(e.currentTarget.value)}
+                onChange={(e) => saveWorkspace(e.currentTarget.value)}
+              />
+              <button class="sidebar-workspace-browse" onClick={browseWorkspace} title={t().session.workspaceBrowse}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="sidebar-new-session"><button onClick={newSession} title={t().session.new}>+ {t().session.new}</button></div>
         </aside>
