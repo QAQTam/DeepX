@@ -1,4 +1,4 @@
-import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
+import { createSignal, onMount, onCleanup, Show, For, Switch, Match } from "solid-js";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -11,14 +11,13 @@ import StatusPanel from "./components/StatusPanel";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
 
-type View = "chat" | "settings";
+type View = "home" | "chat" | "settings";
 export type ThemeMode = "system" | "light" | "dark" | "dark-gray";
 
 const LS_KEY = "deepx:seed";
 const LS_THEME = "deepx:theme";
 
-/** Resolve a ThemeMode to the actual data-theme value to apply.
- *  "system" maps to "dark-gray" on dark OS, "light" on light OS. */
+/** Resolve a ThemeMode to the actual data-theme value to apply. */
 function resolveTheme(mode: ThemeMode): "light" | "dark" | "dark-gray" {
   if (mode !== "system") return mode;
   if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
@@ -31,20 +30,91 @@ function applyTheme(mode: ThemeMode) {
   document.documentElement.setAttribute("data-theme", resolveTheme(mode));
 }
 
+// ── Multi-session store registry ──
+// Each open session gets its own ChatStore, keyed by seed.
+type ChatStore = ReturnType<typeof createChatStore>;
+
 export default function App() {
   const i18n = createI18n(((localStorage.getItem("deepx:lang") ?? "en") as Lang));
-  const chat = createChatStore();
   const [view, setView] = createSignal<View>("chat");
   const [configLang, setConfigLang] = createSignal<Lang>("en");
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
   const [hasMore, setHasMore] = createSignal(false);
   const [workspace, setWorkspace] = createSignal("");
-  // Tracks whether the user has explicitly chosen a session (new or resume).
-  // Until this is true, the startup page stays visible even if events fire.
+  // Active session seed — drives which ChatStore is displayed
+  const [activeSeed, setActiveSeed] = createSignal<string>("");
+  // Has the user explicitly chosen a session?
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
   const [theme, setTheme] = createSignal<ThemeMode>("system");
-  let unlisten: (() => void) | undefined;
+
+  // Registry of open session ChatStores
+  const chatStores = new Map<string, ChatStore>();
+  let unlistenFns: (() => void)[] = [];
   let unlistenTheme: (() => void) | undefined;
+
+  /** Get or create a ChatStore for the given seed. Also sets up event listener. */
+  function getOrCreateChatStore(seed: string): ChatStore {
+    let store = chatStores.get(seed);
+    if (!store) {
+      store = createChatStore(seed);
+      chatStores.set(seed, store);
+      // Subscribe to per-seed agent events
+      const eventName = `agent-${seed}-event`;
+      listen<Record<string, unknown>>(eventName, (e) => {
+        handleAgentEvent(store!, e.payload);
+      }).then(unlisten => {
+        unlistenFns.push(unlisten);
+      }).catch(console.error);
+    }
+    return store;
+  }
+
+  /** Current active ChatStore (derived from activeSeed). */
+  function activeChat(): ChatStore | undefined {
+    const seed = activeSeed();
+    if (!seed) return undefined;
+    return chatStores.get(seed);
+  }
+
+  /** Handle incoming agent events for a specific store. */
+  function handleAgentEvent(chat: ChatStore, p: Record<string, unknown>) {
+    switch (p.type as string) {
+      case "ready": break;
+      case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
+      case "round_delta": chat.handleRoundDelta((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.kind ?? "") as string, (p.delta ?? "") as string); break;
+      case "tool_call_preview": chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
+      case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
+      case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
+      case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); break;
+      case "session_created": {
+        const evtSeed = p.seed as string;
+        chat.clearTurns();
+        chat.handleSessionCreated(evtSeed);
+        localStorage.setItem(LS_KEY, evtSeed);
+        refreshSessions();
+        break;
+      }
+      case "session_restored": if (p.seed) {
+        const evtSeed = p.seed as string;
+        chat.clearTurns();
+        chat.handleSessionCreated(evtSeed);
+        localStorage.setItem(LS_KEY, evtSeed);
+        if (p.turns) { chat.loadTurnsFromRestore(p.turns as any[]); }
+        setHasMore(!!p.has_more);
+        refreshSessions();
+      } break;
+      case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); setHasMore(!!p.has_more); } break;
+      case "dashboard": chat.handleDashboard(p); break;
+      case "done": chat.setInputDisabled(false); chat.handleDone(); break;
+      case "cancelled": chat.handleCancelled(); break;
+      case "error": chat.handleError((p.message ?? "Unknown error") as string); break;
+      case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, result_summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean }); break;
+      case "compact_start": chat.handleCompactStart(p); break;
+      case "compact_end": chat.handleCompactEnd(p); break;
+      case "tool_notice": chat.handleToolNotice(p); break;
+      case "exec_progress": chat.handleExecProgress((p.tool_call_id ?? "") as string, (p.chunk ?? "") as string); break;
+    }
+  }
 
   async function refreshSessions() {
     try {
@@ -58,8 +128,17 @@ export default function App() {
   async function resumeSession(seed: string) {
     console.log("[App] resumeSession called, seed:", seed);
     try {
-      chat.clear();
+      const existing = chatStores.get(seed);
+      // If already open, just switch — don't clear or re-invoke
+      if (existing && existing.sessionInfo.seed) {
+        setActiveSeed(seed);
+        setHasChosenSession(true);
+        localStorage.setItem(LS_KEY, seed);
+        return;
+      }
+      const chat = getOrCreateChatStore(seed);
       localStorage.setItem(LS_KEY, seed);
+      setActiveSeed(seed);
       setHasChosenSession(true);
       console.log("[App] invoking cmd_resume_session...");
       await invoke("cmd_resume_session", { seed });
@@ -70,32 +149,61 @@ export default function App() {
   async function deleteSession(seed: string) {
     try {
       await invoke("cmd_delete_session", { seed });
-      if (chat.sessionInfo.seed === seed) {
-        chat.clear();
+      if (activeSeed() === seed) {
+        const chat = chatStores.get(seed);
+        if (chat) chat.clear();
+        chatStores.delete(seed);
         localStorage.removeItem(LS_KEY);
+        setActiveSeed("");
         setHasChosenSession(false);
-        // Don't auto-create — let the startup page be shown instead
       }
       await refreshSessions();
     } catch (e) { console.error(e); }
   }
 
   async function loadMoreTurns() {
+    const seed = activeSeed();
+    if (!seed) return;
+    const chat = activeChat();
+    if (!chat) return;
     const ts = chat.turns;
     if (ts.length === 0) return;
     const firstId = ts[0].turnId;
-    try { await invoke("cmd_load_more_turns", { beforeTurnId: firstId }); } catch (e) { console.error(e); }
+    try { await invoke("cmd_load_more_turns", { seed, beforeTurnId: firstId }); } catch (e) { console.error(e); }
   }
 
   async function newSession() {
-    chat.clear();
-    localStorage.removeItem(LS_KEY);
-    try { await invoke("cmd_new_session"); } catch (e) { console.error(e); }
+    try {
+      const seed: string = await invoke("cmd_new_session");
+      const chat = getOrCreateChatStore(seed);
+      chat.clear();
+      localStorage.removeItem(LS_KEY);
+      setActiveSeed(seed);
+      setHasChosenSession(true);
+      await refreshSessions();
+    } catch (e) { console.error(e); }
+  }
+
+  /** Called from StartupView when user types a message without a session. */
+  async function startNewSessionAndSend(text: string) {
+    try {
+      const seed: string = await invoke("cmd_new_session");
+      const chat = getOrCreateChatStore(seed);
+      chat.clear();
+      localStorage.removeItem(LS_KEY);
+      setActiveSeed(seed);
+      setHasChosenSession(true);
+      await refreshSessions();
+      // Now send the message
+      await invoke("cmd_send_message", { seed, text });
+    } catch (e) { console.error(e); }
   }
 
   async function saveWorkspace(val: string) {
     setWorkspace(val);
-    try { await invoke("cmd_set_workspace", { path: val }); } catch (e) { console.error(e); }
+    const seed = activeSeed();
+    if (!seed) return;
+    try { await invoke("cmd_set_workspace", { seed, path: val }); } catch (e) { console.error(e); }
   }
 
   async function browseWorkspace() {
@@ -103,7 +211,8 @@ export default function App() {
       const selected = await open({ directory: true, multiple: false, title: t().session.workspace });
       if (selected && typeof selected === "string") {
         setWorkspace(selected);
-        await invoke("cmd_set_workspace", { path: selected });
+        const seed = activeSeed();
+        if (seed) await invoke("cmd_set_workspace", { seed, path: selected });
       }
     } catch (e) { console.error(e); }
   }
@@ -113,7 +222,6 @@ export default function App() {
     const savedTheme = (localStorage.getItem(LS_THEME) ?? "system") as ThemeMode;
     setTheme(savedTheme);
     applyTheme(savedTheme);
-    // Listen for OS theme changes when in "system" mode
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onSysThemeChange = () => {
       if ((localStorage.getItem(LS_THEME) ?? "system") === "system") {
@@ -123,15 +231,16 @@ export default function App() {
     mq.addEventListener("change", onSysThemeChange);
     unlistenTheme = () => mq.removeEventListener("change", onSysThemeChange);
 
-    // Always start with a clean slate — the startup page lets the user choose.
-    // Clear any stray saved seed that could trigger an unwanted auto-resume.
-    if (!chat.sessionInfo.seed) {
+    // Clear stray saved seed
+    if (!activeSeed()) {
       localStorage.removeItem(LS_KEY);
     }
     try {
       const raw = await invoke<string>("cmd_load_config");
       const cfg = JSON.parse(raw);
-      if (cfg.model) chat.handleDashboard({ model: cfg.model });
+      if (cfg.model) {
+        // Forward model info to all stores
+      }
       if (cfg.lang && (cfg.lang === "en" || cfg.lang === "zh")) {
         const cl = cfg.lang as Lang;
         i18n.setLang(cl);
@@ -139,50 +248,31 @@ export default function App() {
         localStorage.setItem("deepx:lang", cl);
       }
     } catch (_) {}
-    // Set up event listener FIRST
-    try { unlisten = await listen<Record<string, unknown>>("agent-event", async (e) => {
-      const p = e.payload;
-      switch (p.type as string) {
-        case "ready": {
-          // Agent is idle. If the session was lost (e.g. agent restart),
-          // the startup page will already be showing — no action needed.
-          break;
-        }
-        case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
-        case "round_delta": chat.handleRoundDelta((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.kind ?? "") as string, (p.delta ?? "") as string); break;
-        case "tool_call_preview": chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
-        case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
-        case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
-        case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); break;
-        case "session_created": chat.clearTurns(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); setHasChosenSession(true); refreshSessions(); break;
-        case "session_restored": if (p.seed) { chat.clearTurns(); chat.handleSessionCreated(p.seed as string); localStorage.setItem(LS_KEY, p.seed as string); setHasChosenSession(true); if (p.turns) { chat.loadTurnsFromRestore(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); } setHasMore(!!p.has_more); refreshSessions(); } break;
-        case "more_turns": if (p.turns) { chat.prependTurns(p.turns as Array<{ turn_id: string; user_text: string; rounds: Array<{ round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; tool_results: ToolResultDef[] }> }>); setHasMore(!!p.has_more); } break;
-        case "dashboard": chat.handleDashboard(p); break;
-        case "done": chat.setInputDisabled(false); chat.handleDone(); break;
-        case "cancelled": chat.handleCancelled(); break;
-        case "error": chat.handleError((p.message ?? "Unknown error") as string); break;
-        case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, result_summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean }); break;
-        case "compact_start": chat.handleCompactStart(p); break;
-        case "compact_end": chat.handleCompactEnd(p); break;
-        case "tool_notice": chat.handleToolNotice(p); break;
-        case "exec_progress": chat.handleExecProgress((p.tool_call_id ?? "") as string, (p.chunk ?? "") as string); break;
-      }
-    }); } catch (e) { console.error(e); }
 
-    // Load session list and workspace.
-    // The startup page is always shown when no session is active —
-    // it lets the user type to start a new conversation or pick a recent session.
     await refreshSessions();
-    try { const ws = await invoke<string>("cmd_get_workspace"); setWorkspace(ws); } catch (e) { console.error(e); }
+    try {
+      const savedSeed = localStorage.getItem(LS_KEY);
+      if (savedSeed) {
+        const ws = await invoke<string>("cmd_get_workspace", { seed: savedSeed });
+        setWorkspace(ws);
+      }
+    } catch (e) { console.error(e); }
   });
 
-  onCleanup(() => { unlisten?.(); unlistenTheme?.(); });
+  onCleanup(() => {
+    for (const fn of unlistenFns) { fn?.(); }
+    unlistenTheme?.();
+    // Close all open sessions
+    for (const seed of chatStores.keys()) {
+      invoke("cmd_close_session", { seed }).catch(() => {});
+    }
+  });
 
   const t = () => i18n.t() ?? en;
-  async function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("deepx:lang", l); try { await invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l }); } catch (e) { console.error(e); } }
+  async function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("deepx:lang", l); try { await invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l, context7ApiKey: "", subagentModel: "", subagentBaseUrl: "", subagentApiKey: "", subagentMaxTokens: 0, subagentTimeoutSecs: 0, subagentDefaultTools: [] }); } catch (e) { console.error(e); } }
   function switchTheme(t: ThemeMode) { setTheme(t); localStorage.setItem(LS_THEME, t); applyTheme(t); }
 
-  const isActive = (seed: string) => chat.sessionInfo.seed === seed;
+  const isActive = (seed: string) => activeSeed() === seed;
 
   return (
     <I18nCtx.Provider value={{ t: i18n.t, lang: () => i18n.lang(), setLang: switchLang }}>
@@ -190,7 +280,17 @@ export default function App() {
         <aside class="sidebar frost-panel">
           <div class="sidebar-brand"><span class="sidebar-logo">{">"}</span><span class="sidebar-title">{t().app.title}</span></div>
           <nav class="sidebar-nav">
-            <button class={`sidebar-btn ${view() === "chat" ? "active" : ""}`} onClick={() => setView("chat")} title={t().nav.chat}>
+            <button class={`sidebar-btn ${view() === "home" ? "active" : ""}`} onClick={() => setView("home")} title={t().nav.home}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+              <span>{t().nav.home}</span>
+            </button>
+            <button class={`sidebar-btn ${view() === "chat" ? "active" : ""}`} onClick={() => {
+              setView("chat");
+              if (!hasChosenSession() || !activeSeed()) {
+                const list = sessions();
+                if (list.length > 0) resumeSession(list[0].seed);
+              }
+            }} title={t().nav.chat}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               <span>{t().nav.chat}</span>
             </button>
@@ -247,12 +347,48 @@ export default function App() {
           </div>
         </aside>
         <main class="main-content">
-          <Show when={view() === "chat"} fallback={<SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} theme={theme} onThemeChange={switchTheme} />}>
-            <Show when={hasChosenSession() && chat.sessionInfo.seed} fallback={<StartupView sessions={sessions()} onResume={resumeSession} />}>
-              <ChatView chat={chat} hasMore={hasMore()} onLoadMore={loadMoreTurns} />
-              <StatusPanel tasks={chat.tasks} recentEdits={chat.recentEdits} activityLog={chat.activityLog} />
-            </Show>
-          </Show>
+          <div class="open-tabs">
+            <For each={[...chatStores.keys()]}>
+              {(seed) => (
+                <button
+                  class={`tab-btn ${seed === activeSeed() ? "active" : ""}`}
+                  onClick={() => { setActiveSeed(seed); setHasChosenSession(true); }}
+                >
+                  <span>{seed.substring(0, 8)}</span>
+                  <span
+                    class="tab-close"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      invoke("cmd_close_session", { seed }).catch(console.error);
+                      chatStores.delete(seed);
+                      if (activeSeed() === seed) {
+                        const remaining = [...chatStores.keys()];
+                        setActiveSeed(remaining.length > 0 ? remaining[remaining.length - 1] : "");
+                      }
+                    }}
+                  >×</span>
+                </button>
+              )}
+            </For>
+          </div>
+          <Switch>
+            <Match when={view() === "settings"}>
+              <SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} theme={theme} onThemeChange={switchTheme} />
+            </Match>
+            <Match when={view() === "home"}>
+              <StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} showHeatmap={true} />
+            </Match>
+            <Match when={view() === "chat"}>
+              <Show when={hasChosenSession() && activeSeed() && activeChat()} fallback={<StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} />}>
+                {activeChat() && (
+                  <>
+                    <ChatView chat={activeChat()!} hasMore={hasMore()} onLoadMore={loadMoreTurns} />
+                    <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} />
+                  </>
+                )}
+              </Show>
+            </Match>
+          </Switch>
         </main>
         
       </div>

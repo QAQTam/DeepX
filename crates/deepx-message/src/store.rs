@@ -115,6 +115,8 @@ pub struct MessageStore {
     replaying: bool,
     /// Messages assigned msg_id but not yet flushed to disk.
     pending_save: Vec<Message>,
+    /// If true, skip all disk persistence. Used by subagents (disposable workers).
+    ephemeral: bool,
 }
 
 impl std::fmt::Debug for MessageStore {
@@ -142,6 +144,7 @@ impl Clone for MessageStore {
             next_msg_id: self.next_msg_id,
             replaying: false,
             pending_save: Vec::new(),
+            ephemeral: self.ephemeral,
         }
     }
 }
@@ -158,7 +161,15 @@ impl MessageStore {
             next_msg_id: 1,
             replaying: false,
             pending_save: Vec::new(),
+            ephemeral: false,
         }
+    }
+
+    /// Create a MessageStore that never persists to disk (subagent / disposable worker).
+    pub fn new_ephemeral(seed: &str) -> Self {
+        let mut s = Self::new(seed);
+        s.ephemeral = true;
+        s
     }
 
     pub fn seed(&self) -> &str {
@@ -186,7 +197,11 @@ impl MessageStore {
 
     /// Assign msg_id and buffer for batched persistence.
     /// Flushed to disk via [`flush_meta`].
+    /// No-op in ephemeral mode.
     fn save_msg(&mut self, msg: &Message) {
+        if self.ephemeral {
+            return;
+        }
         let mut m = msg.clone();
         m.msg_id = Some(self.next_msg_id);
         self.next_msg_id += 1;
@@ -196,9 +211,10 @@ impl MessageStore {
     }
 
     /// Write buffered messages to JSONL, then update meta.json + index.
-    /// No-op if the session seed has not been initialized yet (empty seed).
+    /// No-op if the session seed has not been initialized yet (empty seed),
+    /// or if ephemeral mode is enabled.
     pub fn flush_meta(&mut self, model: &str, effort: &str) {
-        if self.seed.is_empty() {
+        if self.seed.is_empty() || self.ephemeral {
             return;
         }
         if !self.pending_save.is_empty() {
@@ -544,7 +560,7 @@ impl MessageStore {
     /// Save all messages (full rewrite). Used for undo or compact.
     /// No-op if the session seed has not been initialized yet.
     pub fn snapshot_full(&mut self, model: &str, effort: &str) {
-        if self.seed.is_empty() {
+        if self.seed.is_empty() || self.ephemeral {
             return;
         }
         let msgs = self.to_vec();

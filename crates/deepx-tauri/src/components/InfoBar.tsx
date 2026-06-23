@@ -16,6 +16,7 @@ export default function InfoBar(props: {
   onDismissError?: () => void;
   isCompacting: () => boolean;
   compactResult: () => string | null;
+  onCompact?: () => void;
 }) {
   const { t } = useI18n();
   const seedShort = () => props.seed.substring(0, 8);
@@ -56,6 +57,7 @@ export default function InfoBar(props: {
   });
 
   async function handleCompact() {
+    if (props.onCompact) { props.onCompact(); return; }
     try { await invoke("cmd_compact"); } catch (e) { console.error(e); }
   }
 

@@ -18,7 +18,7 @@ export interface TaskInfo { id: string; subject: string; description: string; st
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
 export interface AskState { question: string; options: string[]; show: boolean; }
 
-export function createChatStore() {
+export function createChatStore(seed: string) {
   const [turns, setTurns] = createStore<Turn[]>([]);
   const [sessionInfo, setSessionInfo] = createStore<SessionInfo>({ seed: "", model: "", contextTokens: 0, contextLimit: 0, totalTokens: 0, promptCacheHit: 0, promptCacheMiss: 0 });
   const [isStreaming, setIsStreaming] = createSignal(false);
@@ -233,7 +233,7 @@ export function createChatStore() {
 
   async function undoTurn(turnId: string) {
     try {
-      await invoke("cmd_undo_turn", { turnId });
+      await invoke("cmd_undo_turn", { seed, turnId });
     } catch (e) { console.error(e); }
     const num = parseInt(turnId.replace("t", ""), 10);
     if (!isNaN(num)) {
@@ -360,7 +360,7 @@ export function createChatStore() {
   async function submitAskAnswer(answer: string) {
     setAskState({ question: "", options: [], show: false });
     try {
-      await invoke("cmd_send_message", { text: answer });
+      await invoke("cmd_send_message", { seed, text: answer });
     } catch (e) { console.error(e); }
   }
 

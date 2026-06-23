@@ -8,11 +8,12 @@ interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").create
 
 export default function ChatView(props: ChatViewProps) {
   const { chat } = props;
+  const seed = () => chat.sessionInfo.seed;
 
   async function handleSend(text: string) {
     try {
       chat.clearError();
-      await invoke("cmd_send_message", { text });
+      await invoke("cmd_send_message", { seed: seed(), text });
     } catch (e) {
       console.error("send_message error:", e);
     }
@@ -20,10 +21,16 @@ export default function ChatView(props: ChatViewProps) {
 
   async function handleStop() {
     try {
-      await invoke("cmd_cancel");
+      await invoke("cmd_cancel", { seed: seed() });
     } catch (e) {
       console.error("cancel error:", e);
     }
+  }
+
+  async function handleCompact() {
+    try {
+      await invoke("cmd_compact", { seed: seed() });
+    } catch (e) { console.error(e); }
   }
 
   return (
@@ -40,6 +47,7 @@ export default function ChatView(props: ChatViewProps) {
         onDismissError={() => chat.clearError()}
         isCompacting={chat.isCompacting}
         compactResult={chat.compactResult}
+        onCompact={handleCompact}
       />
       <MessageList turns={chat.turns} isStreaming={chat.isStreaming} onUndo={(id) => chat.undoTurn(id)} hasMore={props.hasMore} onLoadMore={props.onLoadMore} />
       <InputBar

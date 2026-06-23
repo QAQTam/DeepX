@@ -11,6 +11,7 @@ members = [
     "crates/deepx-tui",
     "crates/deepx-session",
     "crates/deepx-sed",
+    "crates/deepx-subagent",
     "crates/deepx-tauri/src-tauri",
     "crates/deepx-grep-matcher",
     "crates/deepx-grep-regex",

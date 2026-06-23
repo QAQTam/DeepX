@@ -3,6 +3,43 @@
 use deepx_types::{ConfigStore, PersistentConfig};
 use std::collections::HashMap; // still used by profiles
 
+/// Subagent default configuration.
+/// These are defaults; individual `spawn_subagent` calls can override per-instance.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SubagentConfig {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_subagent_max_tokens")]
+    pub max_tokens: u32,
+    #[serde(default = "default_subagent_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub default_tools: Vec<String>,
+}
+
+fn default_subagent_max_tokens() -> u32 { 4096 }
+fn default_subagent_timeout() -> u64 { 120 }
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            base_url: String::new(),
+            api_key: String::new(),
+            max_tokens: 4096,
+            timeout_secs: 120,
+            default_tools: vec![
+                "read_file".into(), "search".into(), "grep".into(),
+                "exec".into(), "list_dir".into(), "glob".into(),
+            ],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub api_key: String,
@@ -18,6 +55,7 @@ pub struct Config {
     pub context7_api_key: Option<String>,
     pub lang: Option<String>,
     pub mcp_servers: Vec<serde_json::Value>,
+    pub subagent: SubagentConfig,
 }
 
 impl Default for Config {
@@ -43,6 +81,7 @@ impl Default for Config {
             context7_api_key: None,
             lang: None,
             mcp_servers: Vec::new(),
+            subagent: SubagentConfig::default(),
         }
     }
 }
@@ -114,6 +153,13 @@ impl Config {
                 && let Ok(servers) = serde_json::from_value::<Vec<serde_json::Value>>(mcp.clone()) {
                     cfg.mcp_servers = servers;
                 }
+            // ── Subagent defaults ──
+            if let Some(ref m) = pc.subagent_model && !m.is_empty() { cfg.subagent.model = m.clone(); }
+            if let Some(ref u) = pc.subagent_base_url && !u.is_empty() { cfg.subagent.base_url = u.clone(); }
+            if let Some(ref k) = pc.subagent_api_key && !k.is_empty() { cfg.subagent.api_key = k.clone(); }
+            if let Some(mt) = pc.subagent_max_tokens { cfg.subagent.max_tokens = mt; }
+            if let Some(ts) = pc.subagent_timeout_secs { cfg.subagent.timeout_secs = ts; }
+            if let Some(ref tools) = pc.subagent_default_tools { cfg.subagent.default_tools = tools.clone(); }
         }
 
         if !cfg.profiles.contains_key("default") {
@@ -152,6 +198,12 @@ impl Config {
             lang: self.lang.clone(),
             context7_api_key: self.context7_api_key.clone(),
             mcp_servers: mcp_val,
+            subagent_model: if self.subagent.model.is_empty() { None } else { Some(self.subagent.model.clone()) },
+            subagent_base_url: if self.subagent.base_url.is_empty() { None } else { Some(self.subagent.base_url.clone()) },
+            subagent_api_key: if self.subagent.api_key.is_empty() { None } else { Some(self.subagent.api_key.clone()) },
+            subagent_max_tokens: Some(self.subagent.max_tokens),
+            subagent_timeout_secs: Some(self.subagent.timeout_secs),
+            subagent_default_tools: if self.subagent.default_tools.is_empty() { None } else { Some(self.subagent.default_tools.clone()) },
         };
         if !store.save(&pc) {
             Err(format!("Failed to save config to {}", deepx_types::platform::config_path().display()))

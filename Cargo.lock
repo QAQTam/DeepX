@@ -797,6 +797,7 @@ dependencies = [
  "deepx-message",
  "deepx-proto",
  "deepx-session",
+ "deepx-subagent",
  "deepx-tools",
  "deepx-types",
  "log",
@@ -837,6 +838,18 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.8.2",
+]
+
+[[package]]
+name = "deepx-subagent"
+version = "0.4.0"
+dependencies = [
+ "deepx-session",
+ "deepx-tools",
+ "deepx-types",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

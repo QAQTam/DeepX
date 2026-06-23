@@ -157,6 +157,44 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 .startup-recent-summary { font-size: 14px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 12px; }
 .startup-recent-meta { font-size: 12px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
 
+/* ── Contribution Heatmap ── */
+.heatmap-card {
+  width: 100%; max-width: 580px;
+  margin-top: 12px;
+  padding: 14px 16px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-card);
+}
+.heatmap-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 10px;
+}
+.heatmap-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.heatmap-total { font-size: 11px; color: var(--text-muted); }
+.heatmap-grid {
+  display: flex; gap: 3px; flex-wrap: wrap;
+}
+.heatmap-cell {
+  width: 14px; height: 14px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.heatmap-cell:hover { transform: scale(1.4); }
+.heatmap-cell.hm-l0 { background: var(--bg-tertiary); }
+.heatmap-cell.hm-l1 { background: #c6e48b; }
+.heatmap-cell.hm-l2 { background: #7bc96f; }
+.heatmap-cell.hm-l3 { background: #449c4a; }
+.heatmap-cell.hm-l4 { background: #1a6b2a; }
+.heatmap-legend {
+  display: flex; align-items: center; gap: 4px;
+  justify-content: flex-end; margin-top: 8px;
+  font-size: 10px; color: var(--text-muted);
+}
+.heatmap-legend .heatmap-cell { width: 10px; height: 10px; }
+.heatmap-legend .heatmap-cell:hover { transform: none; }
+
 /* ── Message List Wrapper ── */
 .msg-list-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
@@ -422,6 +460,14 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
   transition: all var(--transition);
 }
 .settings-toggle-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent); }
+
+/* Subagent section */
+.settings-section-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5; }
+.settings-checkbox-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 4px; }
+.settings-checkbox-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--radius); cursor: pointer; font-size: 12px; color: var(--text-secondary); transition: background var(--transition); user-select: none; }
+.settings-checkbox-item:hover { background: var(--bg-hover); }
+.settings-checkbox-item.checked { color: var(--accent); }
+.settings-checkbox-item input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
 
 /* Footer */
 .settings-float-footer {

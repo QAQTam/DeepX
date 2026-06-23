@@ -290,8 +290,28 @@ impl Loop {
 
     pub fn run(&mut self) {
         self.agent.rebind_store();
-        self.emit_dashboard();
-        self.emit(Agent2Ui::Ready);
+
+        // Auto-init: if seed is pre-set (from --seed or --resume-seed CLI args),
+        // create or resume the session immediately instead of waiting for IPC commands.
+        let resume_seed = self.agent.session.resume_seed.take();
+        let has_seed = !self.agent.session.seed.is_empty();
+
+        if let Some(seed) = resume_seed {
+            self.handle_resume_session(&seed);
+            self.emit(Agent2Ui::Ready);
+        } else if has_seed && !self.agent.session.from_resume {
+            // New session with pre-set seed (from --seed)
+            lifecycle::create_session_with_seed(&mut self.agent);
+            self.agent.rebind_store();
+            self.emit(Agent2Ui::SessionCreated {
+                seed: self.agent.session.seed.clone(),
+            });
+            self.emit_dashboard();
+            self.emit(Agent2Ui::Ready);
+        } else {
+            self.emit_dashboard();
+            self.emit(Agent2Ui::Ready);
+        }
 
         log::info!("[AGENT] entering main event loop, waiting for Ui2Agent...");
         loop {

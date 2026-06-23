@@ -1,6 +1,6 @@
 const en = {
   app: { title: "DeepX", subtitle: "AI Coding Agent" },
-  nav: { chat: "Chat", settings: "Settings" },
+  nav: { home: "Home", chat: "Chat", settings: "Settings" },
   chat: {
     placeholder: "Ask DeepX to code...",
     send: "Send",

@@ -1,5 +1,5 @@
 # DeepX build system
-# Usage: just <recipe>
+# Usage: just [recipe]
 
 set windows-shell := ["pwsh.exe", "-NoLogo", "-Command"]
 
@@ -8,39 +8,64 @@ default:
 
 # === Development ===
 
-# Start Tauri dev server (hot-reload frontend + Rust)
-dev:
+# Start Tauri dev server (clean dist first)
+dev: clean-fe
     cd crates/deepx-tauri && pnpm tauri dev
 
 # Start TUI in dev mode
 tui:
     cargo run --release -p deepx-tauri -- --tui
 
-# Type-check frontend only
-check-fe:
-    cd crates/deepx-tauri && pnpm tsc --noEmit
+# === Frontend ===
 
-# Check Rust compilation
-check-rs:
-    cargo check
+# Clean Vite dist + TypeScript cache (run before build/release/dev)
+clean-fe:
+    @echo "Cleaning dist + tsbuildinfo..."
+    -Remove-Item -Recurse -Force crates/deepx-tauri/dist -ErrorAction SilentlyContinue
+    -Remove-Item -Force crates/deepx-tauri/tsconfig.tsbuildinfo -ErrorAction SilentlyContinue
+
+# Build frontend only
+fe:
+    cd crates/deepx-tauri && pnpm build
 
 # === Building ===
 
-# Build release binary (deepx.exe with all modes)
-build:
+# Debug build (clean dist first)
+build: clean-fe
     cd crates/deepx-tauri && pnpm build
-    cargo build --release -p deepx-tauri
+    cargo build
+    @echo "Binary: target/debug/deepx.exe"
+
+# Release build (clean dist + optimized)
+release: clean-fe
+    cd crates/deepx-tauri && pnpm build
+    cargo build --release
     @echo "Binary: target/release/deepx.exe"
 
 # Build installer (MSI/NSIS)
-release:
+installer: clean-fe
     cd crates/deepx-tauri && pnpm tauri build
     @echo "Installer: crates/deepx-tauri/src-tauri/target/release/bundle/"
 
-# Clean all build artifacts
-clean:
+# === Check ===
+
+# Type-check frontend only
+check-fe:
+    cd crates/deepx-tauri && npx tsc --noEmit
+
+# Check Rust only
+check-rs:
+    cargo check
+
+# Full check
+check: check-fe check-rs
+
+# === Clean ===
+
+# Deep clean all artifacts
+clean: clean-fe
     cargo clean
-    Remove-Item -Recurse -Force crates/deepx-tauri/dist -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force crates/deepx-tauri/node_modules/.cache -ErrorAction SilentlyContinue
+    @echo "Done."
 
 # === Testing ===
 

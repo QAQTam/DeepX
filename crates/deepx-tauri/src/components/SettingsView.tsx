@@ -9,6 +9,8 @@ interface Endpoint { id: string; display: string; base_url: string; default_mode
 
 interface SettingsViewProps { lang: () => Lang; onLangChange: (l: Lang) => void; onClose: () => void; theme: () => ThemeMode; onThemeChange: (t: ThemeMode) => void; }
 
+const ALL_TOOLS = ["read_file", "write_file", "edit_file", "edit_file_diff", "search", "grep", "jaq", "exec", "list_dir", "glob", "file_delete", "file_move", "file_diff", "explore", "web_fetch", "web_search", "task_create", "task_update", "task_delete", "task_list", "ask_user", "spawn_subagent", "check_process", "wait_process", "kill_process"];
+
 export default function SettingsView(props: SettingsViewProps) {
   const { t } = useI18n();
   const [apiKey, setApiKey] = createSignal("");
@@ -24,6 +26,15 @@ export default function SettingsView(props: SettingsViewProps) {
   const [saved, setSaved] = createSignal(false);
   const [showApiKey, setShowApiKey] = createSignal(false);
   const [showC7Key, setShowC7Key] = createSignal(false);
+
+  // ── Subagent fields ──
+  const [subModel, setSubModel] = createSignal("");
+  const [subBaseUrl, setSubBaseUrl] = createSignal("");
+  const [subApiKey, setSubApiKey] = createSignal("");
+  const [subMaxTokens, setSubMaxTokens] = createSignal(4096);
+  const [subTimeout, setSubTimeout] = createSignal(120);
+  const [subTools, setSubTools] = createSignal<string[]>(["read_file", "search", "grep", "exec", "list_dir", "glob"]);
+  const [showSubApiKey, setShowSubApiKey] = createSignal(false);
 
   const [configData] = createResource(async () => {
     try { const raw = await invoke<string>("cmd_load_config"); return JSON.parse(raw); }
@@ -43,6 +54,15 @@ export default function SettingsView(props: SettingsViewProps) {
     if (data.reasoning_effort) setReasoningEffort(data.reasoning_effort);
     if (data.active_profile) setActiveProfile(data.active_profile);
     if (data.context7_api_key) setContext7Key(data.context7_api_key === "****" ? "" : data.context7_api_key);
+    // ── Subagent load ──
+    if (data.subagent) {
+      if (data.subagent.model) setSubModel(data.subagent.model);
+      if (data.subagent.base_url) setSubBaseUrl(data.subagent.base_url);
+      if (data.subagent.api_key && data.subagent.api_key !== "****") setSubApiKey(data.subagent.api_key);
+      if (data.subagent.max_tokens) setSubMaxTokens(data.subagent.max_tokens);
+      if (data.subagent.timeout_secs) setSubTimeout(data.subagent.timeout_secs);
+      if (data.subagent.default_tools?.length) setSubTools(data.subagent.default_tools);
+    }
   });
 
   const providers = (): Provider[] => configData()?.providers ?? [];
@@ -66,6 +86,10 @@ export default function SettingsView(props: SettingsViewProps) {
     if (ep) { setBaseUrl(ep.base_url); setModel(ep.default_model); }
   }
 
+  function toggleTool(name: string) {
+    setSubTools(prev => prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name]);
+  }
+
   async function save() {
     try {
       await invoke("cmd_save_config", {
@@ -74,6 +98,9 @@ export default function SettingsView(props: SettingsViewProps) {
         maxTokens: maxTokens(), contextLimit: contextLimit(),
         reasoningEffort: reasoningEffort(), lang: props.lang(),
         context7ApiKey: context7Key(),
+        subagentModel: subModel(), subagentBaseUrl: subBaseUrl(),
+        subagentApiKey: subApiKey(), subagentMaxTokens: subMaxTokens(),
+        subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -83,13 +110,10 @@ export default function SettingsView(props: SettingsViewProps) {
   return (
     <div class="settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
       <div class="settings-float-card">
-        {/* Header */}
         <div class="settings-float-header">
           <div class="settings-float-title">
             <h2>{t().settings.title}</h2>
-            <span class="settings-float-subtitle">
-              {t().settings.activeProfile}: {activeProfile()}
-            </span>
+            <span class="settings-float-subtitle">{t().settings.activeProfile}: {activeProfile()}</span>
           </div>
           <button class="settings-float-close" onClick={props.onClose} aria-label="Close">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -98,27 +122,23 @@ export default function SettingsView(props: SettingsViewProps) {
           </button>
         </div>
 
-        <Show when={!configData.loading} fallback={
-          <div class="settings-loading">{t().chat.thinking}</div>
-        }>
+        <Show when={!configData.loading} fallback={<div class="settings-loading">{t().chat.thinking}</div>}>
           <div class="settings-float-body">
+
             {/* ── Provider ── */}
             <div class="settings-section">
               <h3 class="settings-section-title">{t().settings.sectionProvider}</h3>
-              <div class="settings-field">
-                <label>{t().settings.provider}</label>
+              <div class="settings-field"><label>{t().settings.provider}</label>
                 <select value={providerId()} onChange={(e) => handleProviderChange(e.currentTarget.value)}>
                   <For each={providers()}>{(p: Provider) => <option value={p.id}>{p.display}</option>}</For>
                 </select>
               </div>
-              <div class="settings-field">
-                <label>{t().settings.endpoint}</label>
+              <div class="settings-field"><label>{t().settings.endpoint}</label>
                 <select value={endpointId()} onChange={(e) => handleEndpointChange(e.currentTarget.value)}>
                   <For each={currentEndpoints()}>{(ep: Endpoint) => <option value={ep.id}>{ep.display}</option>}</For>
                 </select>
               </div>
-              <div class="settings-field">
-                <label>{t().settings.baseUrl}</label>
+              <div class="settings-field"><label>{t().settings.baseUrl}</label>
                 <input value={baseUrl()} onInput={(e) => setBaseUrl(e.currentTarget.value)} placeholder="https://api.example.com" />
               </div>
             </div>
@@ -126,32 +146,20 @@ export default function SettingsView(props: SettingsViewProps) {
             {/* ── Model ── */}
             <div class="settings-section">
               <h3 class="settings-section-title">{t().settings.sectionModel}</h3>
-              <div class="settings-field">
-                <label>{t().settings.model}</label>
-                <input
-                  list="model-suggestions"
-                  value={model()}
-                  onInput={(e) => setModel(e.currentTarget.value)}
-                  placeholder="e.g. deepseek-chat"
-                />
-                <datalist id="model-suggestions">
-                  <For each={currentModels()}>{(m: string) => <option value={m} />}</For>
-                </datalist>
+              <div class="settings-field"><label>{t().settings.model}</label>
+                <input list="model-suggestions" value={model()} onInput={(e) => setModel(e.currentTarget.value)} placeholder="e.g. deepseek-chat" />
+                <datalist id="model-suggestions"><For each={currentModels()}>{(m: string) => <option value={m} />}</For></datalist>
                 <div class="hint">{t().settings.modelHint}</div>
               </div>
-              <div class="settings-field">
-                <label>{t().settings.maxTokens}</label>
+              <div class="settings-field"><label>{t().settings.maxTokens}</label>
                 <input type="number" value={maxTokens()} onInput={(e) => setMaxTokens(parseInt(e.currentTarget.value) || 16384)} step={1024} />
               </div>
-              <div class="settings-field">
-                <label>{t().settings.contextLimit}</label>
+              <div class="settings-field"><label>{t().settings.contextLimit}</label>
                 <input type="number" value={contextLimit()} onInput={(e) => setContextLimit(parseInt(e.currentTarget.value) || 1000000)} step={100000} />
               </div>
-              <div class="settings-field">
-                <label>{t().settings.reasoningEffort}</label>
+              <div class="settings-field"><label>{t().settings.reasoningEffort}</label>
                 <select value={reasoningEffort()} onChange={(e) => setReasoningEffort(e.currentTarget.value)}>
-                  <option value="high">high</option>
-                  <option value="max">max</option>
+                  <option value="high">high</option><option value="max">max</option>
                 </select>
               </div>
             </div>
@@ -159,20 +167,10 @@ export default function SettingsView(props: SettingsViewProps) {
             {/* ── API Keys ── */}
             <div class="settings-section">
               <h3 class="settings-section-title">{t().settings.sectionApi}</h3>
-              <div class="settings-field">
-                <label>{t().settings.apiKey}</label>
+              <div class="settings-field"><label>{t().settings.apiKey}</label>
                 <div class="settings-secret-row">
-                  <input
-                    type={showApiKey() ? "text" : "password"}
-                    value={apiKey()}
-                    onInput={(e) => setApiKey(e.currentTarget.value)}
-                    placeholder="sk-..."
-                  />
-                  <button
-                    class="settings-toggle-btn"
-                    onClick={() => setShowApiKey(v => !v)}
-                    title={showApiKey() ? t().settings.hide : t().settings.show}
-                  >
+                  <input type={showApiKey() ? "text" : "password"} value={apiKey()} onInput={(e) => setApiKey(e.currentTarget.value)} placeholder="sk-..." />
+                  <button class="settings-toggle-btn" onClick={() => setShowApiKey(v => !v)} title={showApiKey() ? t().settings.hide : t().settings.show}>
                     {showApiKey() ? (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                     ) : (
@@ -182,20 +180,10 @@ export default function SettingsView(props: SettingsViewProps) {
                 </div>
                 <div class="hint">{t().settings.apiKeyHint}</div>
               </div>
-              <div class="settings-field">
-                <label>{t().settings.context7Key}</label>
+              <div class="settings-field"><label>{t().settings.context7Key}</label>
                 <div class="settings-secret-row">
-                  <input
-                    type={showC7Key() ? "text" : "password"}
-                    value={context7Key()}
-                    onInput={(e) => setContext7Key(e.currentTarget.value)}
-                    placeholder="c7-..."
-                  />
-                  <button
-                    class="settings-toggle-btn"
-                    onClick={() => setShowC7Key(v => !v)}
-                    title={showC7Key() ? t().settings.hide : t().settings.show}
-                  >
+                  <input type={showC7Key() ? "text" : "password"} value={context7Key()} onInput={(e) => setContext7Key(e.currentTarget.value)} placeholder="c7-..." />
+                  <button class="settings-toggle-btn" onClick={() => setShowC7Key(v => !v)} title={showC7Key() ? t().settings.hide : t().settings.show}>
                     {showC7Key() ? (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                     ) : (
@@ -203,15 +191,61 @@ export default function SettingsView(props: SettingsViewProps) {
                     )}
                   </button>
                 </div>
-                <div class="hint">{t().settings.context7KeyHint}</div>
+                <div class="hint">{t().settings.context7KeyHint || "Context7 API key for documentation search"}</div>
+              </div>
+            </div>
+
+            {/* ── Subagent Defaults ── */}
+            <div class="settings-section">
+              <h3 class="settings-section-title">Subagent Defaults</h3>
+              <div class="settings-section-desc">Default model and tools for spawned sub-agents. Individual spawn_subagent calls can override these.</div>
+
+              <div class="settings-field"><label>Model</label>
+                <input value={subModel()} onInput={(e) => setSubModel(e.currentTarget.value)} placeholder="Inherit from main agent" />
+                <div class="hint">Leave empty to inherit the main agent's model.</div>
+              </div>
+              <div class="settings-field"><label>Base URL</label>
+                <input value={subBaseUrl()} onInput={(e) => setSubBaseUrl(e.currentTarget.value)} placeholder="Inherit from main agent" />
+              </div>
+              <div class="settings-field"><label>API Key</label>
+                <div class="settings-secret-row">
+                  <input type={showSubApiKey() ? "text" : "password"} value={subApiKey()} onInput={(e) => setSubApiKey(e.currentTarget.value)} placeholder="Inherit from main agent" />
+                  <button class="settings-toggle-btn" onClick={() => setShowSubApiKey(v => !v)} title={showSubApiKey() ? "Hide" : "Show"}>
+                    {showSubApiKey() ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    )}
+                  </button>
+                </div>
+                <div class="hint">Use a different provider's key to route sub-tasks elsewhere.</div>
+              </div>
+              <div class="settings-field"><label>Max Tokens</label>
+                <input type="number" value={subMaxTokens()} onInput={(e) => setSubMaxTokens(parseInt(e.currentTarget.value) || 4096)} step={512} />
+              </div>
+              <div class="settings-field"><label>Timeout (seconds)</label>
+                <input type="number" value={subTimeout()} onInput={(e) => setSubTimeout(parseInt(e.currentTarget.value) || 120)} step={30} />
+              </div>
+              <div class="settings-field">
+                <label>Default Tools</label>
+                <div class="settings-checkbox-grid">
+                  <For each={ALL_TOOLS}>
+                    {(name) => (
+                      <label class={`settings-checkbox-item ${subTools().includes(name) ? "checked" : ""}`}>
+                        <input type="checkbox" checked={subTools().includes(name)} onChange={() => toggleTool(name)} />
+                        <span>{name}</span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+                <div class="hint">Tools available to sub-agents by default. Read-only tools are recommended.</div>
               </div>
             </div>
 
             {/* ── Interface ── */}
             <div class="settings-section">
               <h3 class="settings-section-title">{t().settings.sectionInterface}</h3>
-              <div class="settings-field">
-                <label>{t().settings.theme}</label>
+              <div class="settings-field"><label>{t().settings.theme}</label>
                 <select value={props.theme()} onChange={(e) => props.onThemeChange(e.currentTarget.value as ThemeMode)}>
                   <option value="system">{t().settings.themeSystem}</option>
                   <option value="light">{t().settings.themeLight}</option>
@@ -219,31 +253,22 @@ export default function SettingsView(props: SettingsViewProps) {
                   <option value="dark-gray">{t().settings.themeDarkGray}</option>
                 </select>
               </div>
-              <div class="settings-field">
-                <label>{t().settings.language}</label>
+              <div class="settings-field"><label>{t().settings.language}</label>
                 <select value={props.lang()} onChange={(e) => props.onLangChange(e.currentTarget.value as Lang)}>
-                  <option value="en">English</option>
-                  <option value="zh">{"\u4e2d\u6587"}</option>
+                  <option value="en">English</option><option value="zh">{"\u4e2d\u6587"}</option>
                 </select>
               </div>
             </div>
           </div>
 
-          {/* Footer */}
           <div class="settings-float-footer">
-            <button class="settings-btn-save" onClick={save}>
-              {saved() ? t().settings.saved : t().settings.save}
-            </button>
-            <button class="settings-btn-cancel" onClick={props.onClose}>
-              {t().settings.cancel}
-            </button>
+            <button class="settings-btn-save" onClick={save}>{saved() ? t().settings.saved : t().settings.save}</button>
+            <button class="settings-btn-cancel" onClick={props.onClose}>{t().settings.cancel}</button>
           </div>
         </Show>
       </div>
 
-      <Show when={saved()}>
-        <div class="settings-toast">{t().settings.saved}</div>
-      </Show>
+      <Show when={saved()}><div class="settings-toast">{t().settings.saved}</div></Show>
     </div>
   );
 }

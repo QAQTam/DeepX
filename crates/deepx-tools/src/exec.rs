@@ -131,6 +131,11 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         None => return format!("[ERROR] {}   0s   0 bytes [NO PIPE]", command),
     };
 
+    // Register in process registry BEFORE starting (so it's findable on timeout)
+    let registry_id = crate::process_registry::ProcessRegistry::register(
+        &format!("exec:{}", &command[..command.len().min(30)])
+    );
+
     let pt_out = progress_tx.clone();
     let tc_id = tool_call_id.to_string();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -149,6 +154,8 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
                     if let Some(ref tx) = pt_out {
                         let _ = tx.send((tc_id.clone(), line.clone()));
                     }
+                    // Also write to registry
+                    crate::process_registry::ProcessRegistry::append_output(registry_id, &line);
                     let _ = done_tx_thread.send(line.clone());
                 }
             }
@@ -168,6 +175,7 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         // Cancel
         if crate::CANCEL.load(Ordering::SeqCst) {
             let _ = proc.kill();
+            crate::process_registry::ProcessRegistry::kill(registry_id);
             let elapsed = start_time.elapsed();
             let n = output_buf.len();
             return format!("[CANCELLED] {}   {:.1}s   {} bytes [CANCELLED]{}",
@@ -175,15 +183,30 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
                 if n > 0 { format!("\n{}", output_buf.trim()) } else { String::new() });
         }
 
-        // Timeout
+        // Timeout — register and keep alive instead of killing
         if remaining.is_zero() {
-            let _ = proc.kill();
+            // Move proc to background watcher thread
+            std::thread::spawn(move || {
+                let exit = proc.wait(None).ok();
+                if let Some(es) = exit {
+                    crate::process_registry::ProcessRegistry::mark_exited(registry_id, es.code());
+                } else {
+                    crate::process_registry::ProcessRegistry::mark_exited(registry_id, -1);
+                }
+                log::info!("[EXEC] background watcher done for pid={}", registry_id);
+            });
+
             let elapsed = start_time.elapsed();
             let n = output_buf.len();
             let output = truncate_1mb(&output_buf, MAX_EXEC_OUTPUT);
-            return format!("[OK] {}   {:.1}s   {} bytes [TIMEOUT]\n{}",
-                command, elapsed.as_secs_f64(), n,
-                if output.is_empty() { "(no output)" } else { &output });
+            return format!(
+                "[TIMEOUT] {}   {:.1}s   {} bytes   process_id={}\n{}\n\
+                 [HINT] Process still running. Use check_process({}) to inspect, \
+                 wait_process({}) to wait longer, kill_process({}) to terminate.",
+                command, elapsed.as_secs_f64(), n, registry_id,
+                if output.is_empty() { "(no output yet)" } else { &output },
+                registry_id, registry_id, registry_id,
+            );
         }
 
         // Read output chunk
@@ -206,6 +229,11 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     // ── Normal exit: try to capture exit status, then drain ──
     // On Windows (conpty), wait() always returns code=0; on Unix, we get the real exit code.
     let exit_status = proc.wait(Some(500)).ok();
+    if let Some(ref es) = exit_status {
+        crate::process_registry::ProcessRegistry::mark_exited(registry_id, es.code());
+    } else {
+        crate::process_registry::ProcessRegistry::mark_exited(registry_id, 0);
+    }
     drop(proc);
 
     // Final drain of any remaining lines

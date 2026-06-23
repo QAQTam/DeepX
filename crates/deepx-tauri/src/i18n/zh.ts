@@ -2,7 +2,7 @@ import type { I18nStrings } from "./en";
 
 const zh: I18nStrings = {
   app: { title: "DeepX", subtitle: "AI 编程助手" },
-  nav: { chat: "对话", settings: "设置" },
+  nav: { home: "首页", chat: "对话", settings: "设置" },
   chat: {
     placeholder: "向 DeepX 提问\u2026",
     send: "发送",

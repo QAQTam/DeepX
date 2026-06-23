@@ -14,6 +14,8 @@ pub struct AgentState {
     pub tool_defs: Vec<deepx_types::ToolDef>,
     pub dsml_compat_count: u32,
     pub turn_count: u32,
+    /// If true, skip all disk persistence (subagent disposable mode).
+    pub ephemeral: bool,
 }
 
 impl AgentState {
@@ -27,6 +29,7 @@ impl AgentState {
             tool_defs: Vec::new(),
             dsml_compat_count: 0,
             turn_count: 0,
+            ephemeral: false,
         }
     }
 
@@ -38,12 +41,39 @@ impl AgentState {
                 Config::default()
             }
         };
-        bridge::init_tools(caller, &[]);
+        bridge::init_tools(caller, &[], &[deepx_subagent::register]);
         if let Some(ref key) = config.context7_api_key {
             if !key.is_empty() { bridge::set_context7_key(key); }
         }
         let mut agent = Self::new(config);
         agent.tool_defs = bridge::all_tools();
+        agent
+    }
+
+    /// Initialize agent in subagent mode with a restricted tool allowlist and optional ephemeral flag.
+    pub fn init_subagent(allowed_tools: &[String], ephemeral: bool) -> Self {
+        let config = match Config::load() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("deepx-agent: Config::load failed ({e}), using default config");
+                Config::default()
+            }
+        };
+        bridge::init_tools("subagent", &[], &[deepx_subagent::register]);
+        if let Some(ref key) = config.context7_api_key {
+            if !key.is_empty() { bridge::set_context7_key(key); }
+        }
+        let mut agent = Self::new(config);
+        agent.ephemeral = ephemeral;
+        // Filter tool defs to only allowed tools
+        let all = bridge::all_tools();
+        if allowed_tools.is_empty() {
+            agent.tool_defs = all;
+        } else {
+            agent.tool_defs = all.into_iter()
+                .filter(|t| allowed_tools.contains(&t.function.name))
+                .collect();
+        }
         agent
     }
 

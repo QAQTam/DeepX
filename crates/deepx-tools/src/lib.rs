@@ -47,6 +47,9 @@ pub mod ask_user;
 
 pub mod task;
 
+pub mod process_registry;
+pub mod process_inspect;
+
 pub mod registration;
 
 pub mod persistence;

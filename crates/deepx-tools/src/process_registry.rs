@@ -1,0 +1,203 @@
+//! ProcessRegistry — tracks child processes spawned by exec / subagent tools.
+//!
+//! Enables timeout → inspect → wait/kill flow instead of blind termination.
+//! Thread-safe: all access through Mutex, with static convenience methods.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+/// Status of a tracked process.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProcStatus {
+    Running,
+    Exited(i32),
+    Killed,
+}
+
+/// One tracked process entry.
+pub struct ProcEntry {
+    pub id: u32,
+    pub name: String,
+    pub status: Arc<Mutex<ProcStatus>>,
+    pub started: Instant,
+    pub output: Arc<Mutex<String>>,
+    pub stderr: Arc<Mutex<String>>,
+    /// Final answer collected from subagent stdout.
+    pub answer: Arc<Mutex<Option<String>>>,
+    child: Arc<Mutex<Option<std::process::Child>>>,
+}
+
+/// Global process registry.
+static REGISTRY: std::sync::LazyLock<Mutex<ProcessRegistry>> =
+    std::sync::LazyLock::new(|| Mutex::new(ProcessRegistry::new()));
+
+pub struct ProcessRegistry {
+    entries: HashMap<u32, ProcEntry>,
+    next_id: u32,
+}
+
+impl ProcessRegistry {
+    fn new() -> Self {
+        Self { entries: HashMap::new(), next_id: 1 }
+    }
+
+    fn with<R>(f: impl FnOnce(&mut ProcessRegistry) -> R) -> R {
+        f(&mut REGISTRY.lock().expect("ProcessRegistry lock"))
+    }
+
+    // ── Static convenience methods ──
+
+    /// Register a new process. Returns the assigned id.
+    pub fn register(name: &str) -> u32 {
+        Self::with(|r| {
+            let id = r.next_id;
+            r.next_id += 1;
+            r.entries.insert(id, ProcEntry {
+                id,
+                name: name.to_string(),
+                status: Arc::new(Mutex::new(ProcStatus::Running)),
+                started: Instant::now(),
+                output: Arc::new(Mutex::new(String::new())),
+                stderr: Arc::new(Mutex::new(String::new())),
+                answer: Arc::new(Mutex::new(None)),
+                child: Arc::new(Mutex::new(None)),
+            });
+            id
+        })
+    }
+
+    /// Attach an OS child handle to an entry.
+    pub fn attach_child(id: u32, child: std::process::Child) {
+        Self::with(|r| {
+            if let Some(entry) = r.entries.get(&id) {
+                *entry.child.lock().unwrap() = Some(child);
+            }
+        });
+    }
+
+    /// Mark a process as exited.
+    pub fn mark_exited(id: u32, code: i32) {
+        Self::with(|r| {
+            if let Some(entry) = r.entries.get(&id) {
+                *entry.status.lock().unwrap() = ProcStatus::Exited(code);
+                *entry.child.lock().unwrap() = None;
+            }
+        });
+    }
+
+    /// Set the final answer for a subagent process.
+    pub fn set_answer(id: u32, answer: String) {
+        Self::with(|r| {
+            if let Some(entry) = r.entries.get(&id) {
+                *entry.answer.lock().unwrap() = Some(answer);
+            }
+        });
+    }
+
+    /// Append stdout output to a tracked process.
+    pub fn append_output(id: u32, chunk: &str) {
+        Self::with(|r| {
+            if let Some(entry) = r.entries.get(&id) {
+                let mut out = entry.output.lock().unwrap();
+                out.push_str(chunk);
+                if out.len() > 5000 {
+                    let drain = out.len() - 4000;
+                    *out = out.chars().skip(drain).collect();
+                }
+            }
+        });
+    }
+
+    /// Append stderr output.
+    pub fn append_stderr(id: u32, chunk: &str) {
+        Self::with(|r| {
+            if let Some(entry) = r.entries.get(&id) {
+                let mut err = entry.stderr.lock().unwrap();
+                err.push_str(chunk);
+                if err.len() > 3000 {
+                    let drain = err.len() - 2000;
+                    *err = err.chars().skip(drain).collect();
+                }
+            }
+        });
+    }
+
+    /// Get info for a process as JSON.
+    pub fn get_info(id: u32) -> Option<serde_json::Value> {
+        Self::with(|r| {
+            let entry = r.entries.get(&id)?;
+            let status = entry.status.lock().unwrap().clone();
+            let output = entry.output.lock().unwrap().clone();
+            let stderr = entry.stderr.lock().unwrap().clone();
+            let answer = entry.answer.lock().unwrap().clone();
+            let elapsed = entry.started.elapsed().as_secs();
+
+            let mut info = match status {
+                ProcStatus::Exited(c) => serde_json::json!({
+                    "id": id, "name": entry.name, "status": "exited",
+                    "exit_code": c, "elapsed_secs": elapsed,
+                    "output": output, "stderr": stderr,
+                }),
+                ProcStatus::Killed => serde_json::json!({
+                    "id": id, "name": entry.name, "status": "killed",
+                    "elapsed_secs": elapsed,
+                    "output": output, "stderr": stderr,
+                }),
+                ProcStatus::Running => serde_json::json!({
+                    "id": id, "name": entry.name, "status": "running",
+                    "elapsed_secs": elapsed,
+                    "output_tail": if output.len() > 500 {
+                        format!("...({} total)\n{}", output.len(), &output[output.len().saturating_sub(500)..])
+                    } else { output.clone() },
+                    "stderr_tail": if stderr.len() > 300 {
+                        format!("...(stderr {} total)\n{}", stderr.len(), &stderr[stderr.len().saturating_sub(300)..])
+                    } else { stderr.clone() },
+                    "output_size": output.len(),
+                }),
+            };
+            if let Some(ans) = answer {
+                if let serde_json::Value::Object(ref mut map) = info {
+                    map.insert("answer".to_string(), serde_json::json!(ans));
+                }
+            }
+            Some(info)
+        })
+    }
+
+    /// Kill a process by id.
+    pub fn kill(id: u32) -> bool {
+        Self::with(|r| {
+            if let Some(entry) = r.entries.get(&id) {
+                let mut child_opt = entry.child.lock().unwrap();
+                if let Some(mut c) = child_opt.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                *entry.status.lock().unwrap() = ProcStatus::Killed;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Wait for a process to exit (polling up to timeout_secs).
+    pub fn wait_for(id: u32, timeout_secs: u64) -> Option<serde_json::Value> {
+        let start = Instant::now();
+        loop {
+            if start.elapsed().as_secs() > timeout_secs {
+                return Self::get_info(id);
+            }
+            let exited = Self::with(|r| {
+                r.entries.get(&id).map(|e| {
+                    matches!(*e.status.lock().unwrap(), ProcStatus::Exited(_) | ProcStatus::Killed)
+                }).unwrap_or(true)
+            });
+            if exited {
+                return Self::get_info(id);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+}

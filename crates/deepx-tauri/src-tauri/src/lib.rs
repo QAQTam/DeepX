@@ -2,22 +2,18 @@
 
 mod agent_bridge;
 
-use tauri::Manager;
-
 /// Entry point called by the `deepx` binary when run without flags.
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // Spawn the agent child process and expose its stdin writer via the bridge singleton.
-            let bridge = agent_bridge::AgentBridge::init(app.handle());
-            app.manage(bridge);
+            // Initialize the multi-agent registry (replaces old singleton AgentBridge).
+            agent_bridge::AgentRegistry::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             agent_bridge::cmd_send_message,
-            agent_bridge::cmd_create_session,
             agent_bridge::cmd_cancel,
             agent_bridge::cmd_get_debug_snapshot,
             agent_bridge::cmd_save_config,
@@ -33,11 +29,12 @@ pub fn run() {
             agent_bridge::cmd_load_more_turns,
             agent_bridge::cmd_get_workspace,
             agent_bridge::cmd_set_workspace,
+            agent_bridge::cmd_close_session,
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Gracefully terminate the agent child process before the window closes.
-                agent_bridge::shutdown_agent();
+                // Gracefully terminate all agent child processes.
+                agent_bridge::shutdown_all_agents();
             }
         })
         .run(tauri::generate_context!())
