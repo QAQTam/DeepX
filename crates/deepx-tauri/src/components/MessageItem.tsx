@@ -62,7 +62,7 @@ export default function MessageItem(props: MessageItemProps) {
                       fallback={
                         <>
                           <Show when={round.thinking}><ThinkingBlock content={round.thinking!} streaming={props.status === "streaming"} /></Show>
-                          <Show when={round.answer}><MarkdownBody class="md-body bubble-ai" content={round.answer!} /></Show>
+                          <Show when={round.answer}><MarkdownBody class="md-body bubble-ai" content={round.answer!} final={!!(round.blocks && round.blocks.length > 0)} /></Show>
                           <For each={mergedToolCalls()}>
                             {(item) => <ToolCallCard call={item.call} result={item.result} streamingOutput={item.streamOutput} />}
                           </For>
@@ -76,7 +76,7 @@ export default function MessageItem(props: MessageItemProps) {
                               <ThinkingBlock content={block.content!} />
                             </Match>
                             <Match when={block.type === "text"}>
-                              <MarkdownBody class="md-body bubble-ai" content={block.content!} />
+                              <MarkdownBody class="md-body bubble-ai" content={block.content!} final={true} />
                             </Match>
                             <Match when={block.type === "tool"}>
                               <ToolCallCard call={block.card!} result={block.card._result} streamingOutput={block.card._streamOutput} />

@@ -8,6 +8,7 @@ import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
 import InfoBar from "./components/InfoBar";
 import StatusPanel from "./components/StatusPanel";
+import TokenChart from "./components/TokenChart";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
 
@@ -39,34 +40,49 @@ export default function App() {
   const [view, setView] = createSignal<View>("chat");
   const [configLang, setConfigLang] = createSignal<Lang>("en");
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
-  const [hasMore, setHasMore] = createSignal(false);
-  const [workspace, setWorkspace] = createSignal("");
   // Active session seed — drives which ChatStore is displayed
   const [activeSeed, setActiveSeed] = createSignal<string>("");
   // Has the user explicitly chosen a session?
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
   const [theme, setTheme] = createSignal<ThemeMode>("system");
+  const [refreshKey, setRefreshKey] = createSignal(0); // bump to refresh TokenChart
 
   // Registry of open session ChatStores
   const chatStores = new Map<string, ChatStore>();
-  let unlistenFns: (() => void)[] = [];
+  // Per-seed unlisten functions for event listeners
+  const unlistenMap = new Map<string, () => void>();
+  // Pending store creations — deduplicate concurrent getOrCreateChatStore calls
+  const pendingStores = new Map<string, Promise<ChatStore>>();
   let unlistenTheme: (() => void) | undefined;
 
-  /** Get or create a ChatStore for the given seed. Also sets up event listener. */
-  function getOrCreateChatStore(seed: string): ChatStore {
+  /** Get or create a ChatStore for the given seed. Also sets up event listener.
+   * Returns a Promise that resolves when the listener is ready.
+   * Deduplicates concurrent calls for the same seed. */
+  async function getOrCreateChatStore(seed: string): Promise<ChatStore> {
     let store = chatStores.get(seed);
-    if (!store) {
-      store = createChatStore(seed);
-      chatStores.set(seed, store);
+    if (store) return store;
+    // If a creation is already in-flight for this seed, wait for it
+    const pending = pendingStores.get(seed);
+    if (pending) return pending;
+    // Start creation and store the promise for deduplication
+    const creation = (async () => {
+      const s = createChatStore(seed);
+      chatStores.set(seed, s);
       // Subscribe to per-seed agent events
       const eventName = `agent-${seed}-event`;
-      listen<Record<string, unknown>>(eventName, (e) => {
-        handleAgentEvent(store!, e.payload);
+      await listen<Record<string, unknown>>(eventName, (e) => {
+        handleAgentEvent(s, e.payload, seed);
       }).then(unlisten => {
-        unlistenFns.push(unlisten);
+        unlistenMap.set(seed, unlisten);
       }).catch(console.error);
+      return s;
+    })();
+    pendingStores.set(seed, creation);
+    try {
+      return await creation;
+    } finally {
+      pendingStores.delete(seed);
     }
-    return store;
   }
 
   /** Current active ChatStore (derived from activeSeed). */
@@ -77,7 +93,7 @@ export default function App() {
   }
 
   /** Handle incoming agent events for a specific store. */
-  function handleAgentEvent(chat: ChatStore, p: Record<string, unknown>) {
+  function handleAgentEvent(chat: ChatStore, p: Record<string, unknown>, listenerSeed: string) {
     switch (p.type as string) {
       case "ready": break;
       case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
@@ -85,12 +101,19 @@ export default function App() {
       case "tool_call_preview": chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
       case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
       case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
-      case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); break;
+      case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); if (listenerSeed === activeSeed()) setRefreshKey((k) => k + 1); break;
       case "session_created": {
         const evtSeed = p.seed as string;
         chat.clearTurns();
         chat.handleSessionCreated(evtSeed);
         localStorage.setItem(LS_KEY, evtSeed);
+        // If the agent created a different seed (fallback from failed resume),
+        // remap chatStores and activeSeed to the new seed.
+        if (evtSeed !== listenerSeed) {
+          chatStores.delete(listenerSeed);
+          chatStores.set(evtSeed, chat);
+          setActiveSeed(evtSeed);
+        }
         refreshSessions();
         break;
       }
@@ -99,11 +122,18 @@ export default function App() {
         chat.clearTurns();
         chat.handleSessionCreated(evtSeed);
         localStorage.setItem(LS_KEY, evtSeed);
-        if (p.turns) { chat.loadTurnsFromRestore(p.turns as any[]); }
-        setHasMore(!!p.has_more);
+        const turnsArr = p.turns as any[] | undefined;
+        if (turnsArr && turnsArr.length > 0) {
+          chat.loadTurnsFromRestore(turnsArr);
+        } else if (!turnsArr || turnsArr.length === 0) {
+          // Session exists but has no messages yet (freshly created).
+          // This is normal — show empty chat, not an error.
+          console.log("[App] session_restored with 0 turns — empty session");
+        }
+        chat.setHasMore(!!p.has_more);
         refreshSessions();
       } break;
-      case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); setHasMore(!!p.has_more); } break;
+      case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); chat.setHasMore(!!p.has_more); } break;
       case "dashboard": chat.handleDashboard(p); break;
       case "done": chat.setInputDisabled(false); chat.handleDone(); break;
       case "cancelled": chat.handleCancelled(); break;
@@ -129,21 +159,34 @@ export default function App() {
     console.log("[App] resumeSession called, seed:", seed);
     try {
       const existing = chatStores.get(seed);
-      // If already open, just switch — don't clear or re-invoke
+      // If already open and fully initialized, just switch — don't clear or re-invoke
       if (existing && existing.sessionInfo.seed) {
         setActiveSeed(seed);
         setHasChosenSession(true);
+        setView("chat");
         localStorage.setItem(LS_KEY, seed);
+        // Restore per-session workspace
+        try {
+          const ws = await invoke<string>("cmd_get_workspace", { seed });
+          existing.setWorkspace(ws);
+        } catch (_) {}
         return;
       }
-      const chat = getOrCreateChatStore(seed);
-      localStorage.setItem(LS_KEY, seed);
-      setActiveSeed(seed);
-      setHasChosenSession(true);
+      const chat = await getOrCreateChatStore(seed);
       console.log("[App] invoking cmd_resume_session...");
       await invoke("cmd_resume_session", { seed });
       console.log("[App] cmd_resume_session returned");
-    } catch (e) { console.error("[App] resumeSession error:", e); }
+      // Only commit UI state after successful backend call
+      localStorage.setItem(LS_KEY, seed);
+      setActiveSeed(seed);
+      setHasChosenSession(true);
+      setView("chat");
+    } catch (e) {
+      console.error("[App] resumeSession error:", e);
+      // Reset to home on failure so user isn't stuck in blank chat view
+      setHasChosenSession(false);
+      setView("home");
+    }
   }
 
   async function deleteSession(seed: string) {
@@ -152,6 +195,9 @@ export default function App() {
       if (activeSeed() === seed) {
         const chat = chatStores.get(seed);
         if (chat) chat.clear();
+        // Clean up event listener
+        const unlisten = unlistenMap.get(seed);
+        if (unlisten) { unlisten(); unlistenMap.delete(seed); }
         chatStores.delete(seed);
         localStorage.removeItem(LS_KEY);
         setActiveSeed("");
@@ -175,11 +221,12 @@ export default function App() {
   async function newSession() {
     try {
       const seed: string = await invoke("cmd_new_session");
-      const chat = getOrCreateChatStore(seed);
+      const chat = await getOrCreateChatStore(seed);
       chat.clear();
       localStorage.removeItem(LS_KEY);
       setActiveSeed(seed);
       setHasChosenSession(true);
+      setView("chat");
       await refreshSessions();
     } catch (e) { console.error(e); }
   }
@@ -188,11 +235,12 @@ export default function App() {
   async function startNewSessionAndSend(text: string) {
     try {
       const seed: string = await invoke("cmd_new_session");
-      const chat = getOrCreateChatStore(seed);
+      const chat = await getOrCreateChatStore(seed);
       chat.clear();
       localStorage.removeItem(LS_KEY);
       setActiveSeed(seed);
       setHasChosenSession(true);
+      setView("chat");
       await refreshSessions();
       // Now send the message
       await invoke("cmd_send_message", { seed, text });
@@ -200,9 +248,10 @@ export default function App() {
   }
 
   async function saveWorkspace(val: string) {
-    setWorkspace(val);
     const seed = activeSeed();
     if (!seed) return;
+    const chat = activeChat();
+    if (chat) chat.setWorkspace(val);
     try { await invoke("cmd_set_workspace", { seed, path: val }); } catch (e) { console.error(e); }
   }
 
@@ -210,8 +259,9 @@ export default function App() {
     try {
       const selected = await open({ directory: true, multiple: false, title: t().session.workspace });
       if (selected && typeof selected === "string") {
-        setWorkspace(selected);
         const seed = activeSeed();
+        const chat = activeChat();
+        if (chat) chat.setWorkspace(selected);
         if (seed) await invoke("cmd_set_workspace", { seed, path: selected });
       }
     } catch (e) { console.error(e); }
@@ -231,16 +281,10 @@ export default function App() {
     mq.addEventListener("change", onSysThemeChange);
     unlistenTheme = () => mq.removeEventListener("change", onSysThemeChange);
 
-    // Clear stray saved seed
-    if (!activeSeed()) {
-      localStorage.removeItem(LS_KEY);
-    }
+    // Load config
     try {
       const raw = await invoke<string>("cmd_load_config");
       const cfg = JSON.parse(raw);
-      if (cfg.model) {
-        // Forward model info to all stores
-      }
       if (cfg.lang && (cfg.lang === "en" || cfg.lang === "zh")) {
         const cl = cfg.lang as Lang;
         i18n.setLang(cl);
@@ -250,22 +294,46 @@ export default function App() {
     } catch (_) {}
 
     await refreshSessions();
-    try {
-      const savedSeed = localStorage.getItem(LS_KEY);
-      if (savedSeed) {
-        const ws = await invoke<string>("cmd_get_workspace", { seed: savedSeed });
-        setWorkspace(ws);
+
+    // Auto-resume saved session from last app close
+    const savedSeed = localStorage.getItem(LS_KEY);
+    if (savedSeed) {
+      // Verify the session still exists in the list
+      const exists = sessions().some((s) => s.seed === savedSeed);
+      if (exists) {
+        try {
+          const ws = await invoke<string>("cmd_get_workspace", { seed: savedSeed });
+          // Store workspace in the session's ChatStore once created
+          const existingStore = chatStores.get(savedSeed);
+          if (existingStore) existingStore.setWorkspace(ws);
+        } catch (_) {}
+        // Resume the session — this spawns the agent and loads history
+        resumeSession(savedSeed);
+      } else {
+        // Session was deleted externally — clear stale key
+        localStorage.removeItem(LS_KEY);
       }
-    } catch (e) { console.error(e); }
+    }
   });
 
   onCleanup(() => {
-    for (const fn of unlistenFns) { fn?.(); }
-    unlistenTheme?.();
-    // Close all open sessions
-    for (const seed of chatStores.keys()) {
-      invoke("cmd_close_session", { seed }).catch(() => {});
+    // Unregister all event listeners
+    for (const [seed, unlisten] of unlistenMap) {
+      try { unlisten(); } catch (_) {}
     }
+    unlistenMap.clear();
+    unlistenTheme?.();
+    // Close all open sessions — await all to prevent lock contention
+    // with the next page load's cmd_resume_session.
+    const closePromises: Promise<void>[] = [];
+    for (const seed of chatStores.keys()) {
+      closePromises.push(
+        invoke("cmd_close_session", { seed }).catch(() => {})
+      );
+    }
+    // Fire-and-forget but stored so cleanup runs before page fully unloads.
+    // Tauri's on_window_close can await these if needed.
+    Promise.allSettled(closePromises);
   });
 
   const t = () => i18n.t() ?? en;
@@ -333,9 +401,9 @@ export default function App() {
               <input
                 class="sidebar-workspace-input"
                 type="text"
-                value={workspace()}
+                value={activeChat()?.workspace() ?? ""}
                 placeholder={t().session.workspaceHint}
-                onInput={(e) => setWorkspace(e.currentTarget.value)}
+                onInput={(e) => { const chat = activeChat(); if (chat) chat.setWorkspace(e.currentTarget.value); }}
                 onChange={(e) => saveWorkspace(e.currentTarget.value)}
               />
               <button class="sidebar-workspace-browse" onClick={browseWorkspace} title={t().session.workspaceBrowse}>
@@ -352,7 +420,7 @@ export default function App() {
               {(seed) => (
                 <button
                   class={`tab-btn ${seed === activeSeed() ? "active" : ""}`}
-                  onClick={() => { setActiveSeed(seed); setHasChosenSession(true); }}
+                  onClick={() => { setActiveSeed(seed); setHasChosenSession(true); setView("chat"); }}
                 >
                   <span>{seed.substring(0, 8)}</span>
                   <span
@@ -360,6 +428,9 @@ export default function App() {
                     onClick={(e) => {
                       e.stopPropagation();
                       invoke("cmd_close_session", { seed }).catch(console.error);
+                      // Unregister event listener to prevent ghost updates
+                      const unlisten = unlistenMap.get(seed);
+                      if (unlisten) { unlisten(); unlistenMap.delete(seed); }
                       chatStores.delete(seed);
                       if (activeSeed() === seed) {
                         const remaining = [...chatStores.keys()];
@@ -376,15 +447,18 @@ export default function App() {
               <SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} theme={theme} onThemeChange={switchTheme} />
             </Match>
             <Match when={view() === "home"}>
-              <StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} showHeatmap={true} />
+              <div class="home-dashboard">
+                <TokenChart refreshKey={refreshKey()} />
+                <StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} showHeatmap={true} />
+              </div>
             </Match>
             <Match when={view() === "chat"}>
               <Show when={hasChosenSession() && activeSeed() && activeChat()} fallback={<StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} />}>
                 {activeChat() && (
-                  <>
-                    <ChatView chat={activeChat()!} hasMore={hasMore()} onLoadMore={loadMoreTurns} />
+                  <div class="chat-area">
+                    <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} />
                     <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} />
-                  </>
+                  </div>
                 )}
               </Show>
             </Match>

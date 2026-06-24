@@ -30,6 +30,7 @@ pub fn run() {
             agent_bridge::cmd_get_workspace,
             agent_bridge::cmd_set_workspace,
             agent_bridge::cmd_close_session,
+            agent_bridge::cmd_get_token_stats,
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {

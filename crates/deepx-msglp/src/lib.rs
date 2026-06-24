@@ -26,6 +26,7 @@ pub mod logger;
 use dashboard::{build_documents, build_recent_edits, build_tasks};
 use deepx_message::Effect;
 use deepx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
+use deepx_types::platform;
 
 /// Number of recent turns sent on session restore for incremental loading.
 const INITIAL_LOAD_COUNT: usize = 20;
@@ -83,7 +84,7 @@ enum LoopPhase {
 pub struct Loop {
     agent: AgentState,
     cmd_rx: mpsc::Receiver<Ui2Agent>,
-    event_tx: mpsc::Sender<Agent2Ui>,
+    event_tx: mpsc::SyncSender<Agent2Ui>,
     cancel: CancelToken,
     phase: LoopPhase,
     /// Pending session switch requested while busy (seed to resume).
@@ -111,8 +112,8 @@ impl Loop {
         let cancel = CancelToken::new();
         let cancel_for_reader = cancel.clone();
 
-        let (cmd_tx, cmd_rx) = mpsc::channel::<Ui2Agent>();
-        let (event_tx, event_rx) = mpsc::channel::<Agent2Ui>();
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<Ui2Agent>(256);
+        let (event_tx, event_rx) = mpsc::sync_channel::<Agent2Ui>(256);
 
         // Reader thread: stdin → cmd_tx
         std::thread::spawn(move || {
@@ -954,6 +955,11 @@ impl Loop {
 
             self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
 
+            // Persist per-turn token usage for dashboard statistics
+            if let Some(ref usage) = last_usage {
+                record_token_usage(usage, &self.agent.config.model);
+            }
+
             self.emit(Agent2Ui::TurnEnd {
                 turn_id: turn_id.clone(),
                 stop_reason: None,
@@ -1067,7 +1073,7 @@ fn build_assistant_message(
 }
 
 fn emit_round_complete(
-    event_tx: &mpsc::Sender<Agent2Ui>,
+    event_tx: &mpsc::SyncSender<Agent2Ui>,
     turn_id: &str, round_num: u32, assistant_msg: &deepx_types::Message,
     _content: &str, _reasoning: &str, _parsed: &[deepx_types::ToolCall],
 ) {
@@ -1169,4 +1175,51 @@ fn build_compact_prompt(contexts: &[String]) -> String {
         Use concise bullet points under 1500 characters.\n\n\
         {}\n\nSummary:", conv
     )
+}
+
+/// Append per-turn token usage to `token_stats.jsonl` for dashboard aggregation.
+fn record_token_usage(usage: &deepx_types::UsageInfo, model: &str) {
+    use std::io::Write;
+    let dir = platform::data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("token_stats.jsonl");
+    let today = chrono_local_date();
+    let line = serde_json::json!({
+        "date": today,
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "cache_hit": usage.prompt_cache_hit_tokens,
+        "cache_miss": usage.prompt_cache_miss_tokens,
+        "model": model,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{}", serde_json::to_string(&line).unwrap_or_default());
+    }
+}
+
+/// Return today's date as "YYYY-MM-DD" (UTC-based, good enough for daily aggregation).
+fn chrono_local_date() -> String {
+    let dur = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let days = dur.as_secs() / 86400;
+    // Convert days since Unix epoch to date using civil::from_days (simple algorithm)
+    let (y, m, d) = civil_from_days(days as i64 + 719468); // 719468 = days from 0000-01-01 to 1970-01-01
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Convert days since epoch 0000-01-01 to (year, month, day).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    // Algorithm from Howard Hinnant
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }

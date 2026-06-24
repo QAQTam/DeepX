@@ -104,7 +104,7 @@ fn handle_spawn_subagent(ctx: ToolCallCtx) -> ToolResult {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    log::info!("[SUBAGENT] spawning '{}' seed={} tools={}", name, &sub_seed[..8], tools.len());
+    log::info!("[SUBAGENT] spawning '{}' seed={} tools={}", name, &sub_seed[..sub_seed.len().min(8)], tools.len());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

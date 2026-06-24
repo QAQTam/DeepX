@@ -87,6 +87,11 @@ impl SessionManager {
         Some((meta, messages))
     }
 
+    /// Check whether a session directory exists on disk (fast path).
+    pub fn exists(&self, seed: &str) -> bool {
+        self.session_dir(seed).is_some()
+    }
+
     /// Load only metadata (fast, no message parsing).
     pub fn load_meta(&self, seed: &str) -> Option<SessionMeta> {
         let dir = self.session_dir(seed)?;

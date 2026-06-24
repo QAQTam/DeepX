@@ -17,6 +17,8 @@ export default function MessageList(props: MessageListProps) {
   let listRef!: HTMLDivElement;
   const heightCache = new Map<string, number>();
   const [autoScroll, setAutoScroll] = createSignal(true);
+  // Track turns identity to reset virtualizer on session switch
+  let prevTurnsRef: Turn[] | null = null;
 
   const virtualizer = createVirtualizer({
     get count() { return props.turns.length; },
@@ -29,6 +31,26 @@ export default function MessageList(props: MessageListProps) {
     anchorTo: "end",
     followOnAppend: true,
     getItemKey: (index: number) => props.turns[index]?.turnId ?? String(index),
+  });
+
+  // When turns array reference changes (session switch), reset virtualizer state
+  createEffect(() => {
+    const cur = props.turns;
+    if (cur !== prevTurnsRef) {
+      prevTurnsRef = cur;
+      heightCache.clear();
+      // Reset scroll state for the new session
+      setAutoScroll(true);
+      prevLen = 0;
+      // Force virtualizer to recalculate with new measurements
+      requestAnimationFrame(() => {
+        virtualizer.measure();
+        // Scroll to end after measurements are applied
+        requestAnimationFrame(() => {
+          virtualizer.scrollToEnd();
+        });
+      });
+    }
   });
 
   // Detect manual scroll away from bottom (debounced to avoid momentary misfires).

@@ -9,7 +9,7 @@ default:
 # === Development ===
 
 # Start Tauri dev server (clean dist first)
-dev: clean-fe
+dev: 
     cd crates/deepx-tauri && pnpm tauri dev
 
 # Start TUI in dev mode

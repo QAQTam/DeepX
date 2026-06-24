@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
 
 use tauri::{AppHandle, Emitter};
@@ -23,7 +23,7 @@ use deepx_proto::{Agent2Ui, Ui2Agent};
 pub struct AgentInstance {
     #[allow(dead_code)]
     seed: String,
-    stdin: Mutex<Box<dyn Write + Send>>,
+    stdin: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Option<std::process::Child>>,
 }
 
@@ -121,7 +121,7 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
                 }
             };
             let event_type = agent2ui_event_name(&event);
-            log::info!("[REGISTRY] agent {} got event: {}", &seed_owned[..8], event_type);
+            log::info!("[REGISTRY] agent {} got event: {}", &seed_owned[..seed_owned.len().min(8)], event_type);
             let payload = serde_json::to_value(&event).unwrap_or_default();
             if app_handle.emit(&format!("agent-{}-event", seed_owned), payload.clone()).is_err() {
                 break;
@@ -133,7 +133,7 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
 
     Ok(AgentInstance {
         seed: seed.to_string(),
-        stdin: Mutex::new(Box::new(stdin)),
+        stdin: Arc::new(Mutex::new(Box::new(stdin))),
         child: Mutex::new(Some(child)),
     })
 }
@@ -187,32 +187,34 @@ impl AgentRegistry {
     }
 
     /// Send a Ui2Agent frame to a specific agent instance.
+    /// Only holds the registry lock during lookup, not during the write.
     pub fn send_to(&self, seed: &str, frame: &Ui2Agent) -> Result<(), String> {
-        let instance = self.instances.get(seed)
-            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.len().min(8)]))?;
+        let stdin_arc = self.instances.get(seed)
+            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.len().min(8)]))?
+            .stdin.clone();
+        // Registry lock released here via the caller dropping the MutexGuard
         let json = serde_json::to_string(frame).map_err(|e| format!("serialize: {e}"))?;
-        let mut stdin = instance.stdin.lock().map_err(|e| format!("lock: {e}"))?;
+        let mut stdin = stdin_arc.lock().map_err(|e| format!("lock: {e}"))?;
         writeln!(*stdin, "{}", json).map_err(|e| format!("write: {e}"))?;
         stdin.flush().map_err(|e| format!("flush: {e}"))
     }
 
-    /// Kill and remove a specific agent instance.
-    pub fn kill_agent(&mut self, seed: &str) {
-        if let Some(instance) = self.instances.remove(seed) {
-            let _ = instance.send_shutdown();
-            if let Some(mut child) = instance.child.lock().ok().and_then(|mut c| c.take()) {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-            log::info!("[REGISTRY] killed agent for seed={}", &seed[..seed.len().min(8)]);
+    /// Kill and remove a specific agent instance from the registry.
+    /// Returns the removed instance so the caller can wait for process exit
+    /// **outside** the registry lock.
+    pub fn kill_agent(&mut self, seed: &str) -> Option<AgentInstance> {
+        let instance = self.instances.remove(seed);
+        if instance.is_some() {
+            log::info!("[REGISTRY] removed agent for seed={}", &seed[..seed.len().min(8)]);
         }
+        instance
     }
 
-    /// Shutdown all agents gracefully.
+    /// Shutdown all agents gracefully. Waits for each process **outside** the lock.
     pub fn shutdown_all(&mut self) {
-        let seeds: Vec<String> = self.instances.keys().cloned().collect();
-        for seed in seeds {
-            self.kill_agent(&seed);
+        let drained: Vec<AgentInstance> = self.instances.drain().map(|(_, v)| v).collect();
+        for inst in drained {
+            inst.shutdown_and_wait();
         }
     }
 }
@@ -226,6 +228,39 @@ impl AgentInstance {
         let _ = stdin.flush();
         Ok(())
     }
+
+    /// Send shutdown, kill the child process, and wait for it to exit.
+    /// Designed to be called **outside** the registry lock.
+    pub fn shutdown_and_wait(self) {
+        let seed = &self.seed[..self.seed.len().min(8)];
+        let _ = self.send_shutdown();
+        if let Ok(mut guard) = self.child.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                // Wait up to 5s, then force-kill again if still running
+                let start = std::time::Instant::now();
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) => {
+                            if start.elapsed() > std::time::Duration::from_secs(5) {
+                                log::warn!("[REGISTRY] agent {seed} did not exit after kill, force-killing again");
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        Err(e) => {
+                            log::warn!("[REGISTRY] error waiting for agent {seed}: {e}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        log::info!("[REGISTRY] killed agent for seed={seed}");
+    }
 }
 
 // ── Public API ──
@@ -238,11 +273,20 @@ fn ensure_agent(seed: &str) -> Result<(), String> {
 }
 
 /// Send a Ui2Agent frame to the agent for the given seed.
+/// Only holds the registry lock during lookup — the actual write happens outside the lock.
 fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
     log::info!("[REGISTRY] send_to_agent seed={} type={}",
         &seed[..seed.len().min(8)], agent2ui_event_name_for_ui(&frame));
-    let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
-    registry.send_to(seed, &frame)
+    let json = serde_json::to_string(&frame).map_err(|e| format!("serialize: {e}"))?;
+    let stdin_arc = {
+        let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
+        registry.instances.get(seed)
+            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.len().min(8)]))?
+            .stdin.clone()
+    }; // Registry lock dropped here
+    let mut stdin = stdin_arc.lock().map_err(|e| format!("lock: {e}"))?;
+    writeln!(*stdin, "{}", json).map_err(|e| format!("write: {e}"))?;
+    stdin.flush().map_err(|e| format!("flush: {e}"))
 }
 
 /// Shutdown all running agents. Called on window close.
@@ -429,9 +473,15 @@ pub fn cmd_set_active_session(seed: String) -> Result<(), String> {
 #[tauri::command]
 pub fn cmd_delete_session(seed: String) -> Result<(), String> {
     log::info!("[REGISTRY] cmd_delete_session seed={}", &seed[..seed.len().min(8)]);
-    // Kill the agent first so it doesn't resurrect the session on flush
-    if let Ok(mut registry) = AgentRegistry::get().lock() {
-        registry.kill_agent(&seed);
+    // Kill the agent first so it doesn't resurrect the session on flush.
+    // Extract instance under lock, then wait outside lock.
+    let instance = {
+        if let Ok(mut registry) = AgentRegistry::get().lock() {
+            registry.kill_agent(&seed)
+        } else { None }
+    };
+    if let Some(inst) = instance {
+        inst.shutdown_and_wait();
     }
     deepx_session::SessionManager::global().delete(&seed)
 }
@@ -478,10 +528,167 @@ pub fn cmd_set_workspace(seed: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn cmd_close_session(seed: String) -> Result<(), String> {
     log::info!("[REGISTRY] cmd_close_session seed={}", &seed[..seed.len().min(8)]);
-    if let Ok(mut registry) = AgentRegistry::get().lock() {
-        registry.kill_agent(&seed);
+    // Extract instance under lock, then wait outside lock.
+    let instance = {
+        if let Ok(mut registry) = AgentRegistry::get().lock() {
+            registry.kill_agent(&seed)
+        } else { None }
+    };
+    if let Some(inst) = instance {
+        inst.shutdown_and_wait();
     }
     Ok(())
+}
+
+/// Get aggregated token usage stats for the last N days.
+/// Returns JSON: { daily: [{date, prompt_tokens, completion_tokens, cache_hit, cache_miss, calls}], totals: {...} }
+#[tauri::command]
+pub fn cmd_get_token_stats(days: u32) -> Result<String, String> {
+    use std::collections::BTreeMap;
+    use std::io::BufRead;
+
+    let path = deepx_types::platform::data_dir().join("token_stats.jsonl");
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => {
+            // No data yet — return empty result
+            let result = serde_json::json!({
+                "daily": generate_date_range(days),
+                "totals": { "prompt_tokens": 0, "completion_tokens": 0, "calls": 0, "cache_hit_pct": 0.0 },
+            });
+            return serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"));
+        }
+    };
+    let reader = std::io::BufReader::new(file);
+
+    // Compute cutoff date string "YYYY-MM-DD"
+    let cutoff = days_before_today(days);
+
+    // Aggregate: date -> { prompt_tokens, completion_tokens, cache_hit, cache_miss, calls }
+    let mut daily: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("read: {e}"))?;
+        if line.trim().is_empty() { continue; }
+        let entry: serde_json::Value =
+            serde_json::from_str(&line).map_err(|e| format!("parse: {e}"))?;
+        let date = entry["date"].as_str().unwrap_or("").to_string();
+        if date < cutoff { continue; } // before range, skip
+
+        let prompt = entry["prompt_tokens"].as_u64().unwrap_or(0);
+        let completion = entry["completion_tokens"].as_u64().unwrap_or(0);
+        let hit = entry["cache_hit"].as_u64().unwrap_or(0);
+        let miss = entry["cache_miss"].as_u64().unwrap_or(0);
+
+        let day = daily.entry(date).or_insert_with(|| serde_json::json!({
+            "prompt_tokens": 0u64,
+            "completion_tokens": 0u64,
+            "cache_hit": 0u64,
+            "cache_miss": 0u64,
+            "calls": 0u64,
+        }));
+        day["prompt_tokens"] = serde_json::json!(day["prompt_tokens"].as_u64().unwrap_or(0) + prompt);
+        day["completion_tokens"] = serde_json::json!(day["completion_tokens"].as_u64().unwrap_or(0) + completion);
+        day["cache_hit"] = serde_json::json!(day["cache_hit"].as_u64().unwrap_or(0) + hit);
+        day["cache_miss"] = serde_json::json!(day["cache_miss"].as_u64().unwrap_or(0) + miss);
+        day["calls"] = serde_json::json!(day["calls"].as_u64().unwrap_or(0) + 1);
+    }
+
+    // Build daily array sorted by date, filling gaps with zeros
+    let mut daily_arr = Vec::new();
+    let mut totals = serde_json::json!({
+        "prompt_tokens": 0u64,
+        "completion_tokens": 0u64,
+        "cache_hit": 0u64,
+        "cache_miss": 0u64,
+        "calls": 0u64,
+    });
+
+    // Generate all dates in range
+    for d in 0..days {
+        let date = days_before_today(days - 1 - d); // start from cutoff, go forward
+        let entry = daily.get(&date).cloned().unwrap_or_else(|| serde_json::json!({
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_hit": 0,
+            "cache_miss": 0,
+            "calls": 0,
+        }));
+        for key in &["prompt_tokens", "completion_tokens", "cache_hit", "cache_miss", "calls"] {
+            let v = entry[key].as_u64().unwrap_or(0);
+            totals[key] = serde_json::json!(totals[key].as_u64().unwrap_or(0) + v);
+        }
+        daily_arr.push(serde_json::json!({
+            "date": date,
+            "prompt_tokens": entry["prompt_tokens"],
+            "completion_tokens": entry["completion_tokens"],
+            "cache_hit": entry["cache_hit"],
+            "cache_miss": entry["cache_miss"],
+            "calls": entry["calls"],
+        }));
+    }
+
+    // Compute cache hit percentage
+    let total_hit = totals["cache_hit"].as_u64().unwrap_or(0);
+    let total_miss = totals["cache_miss"].as_u64().unwrap_or(0);
+    let total_cache = total_hit + total_miss;
+    let hit_pct = if total_cache > 0 {
+        (total_hit as f64 / total_cache as f64 * 100.0 * 10.0).round() / 10.0
+    } else {
+        0.0
+    };
+    totals["cache_hit_pct"] = serde_json::json!(hit_pct);
+    // Remove raw hit/miss from totals (keep only percentage)
+    totals.as_object_mut().map(|o| { o.remove("cache_hit"); o.remove("cache_miss"); });
+
+    let result = serde_json::json!({
+        "daily": daily_arr,
+        "totals": totals,
+    });
+    serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Generate the daily array for the given range, all zeroed.
+fn generate_date_range(days: u32) -> Vec<serde_json::Value> {
+    let mut arr = Vec::new();
+    for d in 0..days {
+        let date = days_before_today(days - 1 - d);
+        arr.push(serde_json::json!({
+            "date": date,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_hit": 0,
+            "cache_miss": 0,
+            "calls": 0,
+        }));
+    }
+    arr
+}
+
+/// Compute the date string `days` days before today (UTC-based).
+fn days_before_today(days: u32) -> String {
+    let dur = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = dur.as_secs().saturating_sub((days as u64) * 86400);
+    let epoch_days = total_secs / 86400;
+    // Use same civil_from_days algorithm as in deepx-msglp
+    let (y, m, d) = civil_from_days_tauri(epoch_days as i64 + 719468);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn civil_from_days_tauri(days: i64) -> (i64, u32, u32) {
+    let z = days;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 // ── Helpers ──
@@ -509,6 +716,8 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
         Agent2Ui::ShutdownAck => "shutdown_ack",
         Agent2Ui::AuditRecord { .. } => "audit_record",
         Agent2Ui::Ready => "ready",
+        Agent2Ui::ExecProgress { .. } => "exec_progress",
+        Agent2Ui::ToolCallPreview { .. } => "tool_call_preview",
         _ => "unknown",
     }
 }

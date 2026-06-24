@@ -14,6 +14,16 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     let seed = match restore_seed {
         Some(s) => {
             log::info!("[LIFECYCLE] init_session: loading seed={s}");
+            // Fast check: if the session directory doesn't exist at all, fail early
+            // instead of silently creating a new session. This lets the caller
+            // send a proper Error event rather than a confusing SessionCreated.
+            if !SessionManager::global().exists(s) {
+                log::error!(
+                    "deepx-agent: session {} not found — directory does not exist",
+                    s
+                );
+                return false;
+            }
             if let Some((meta, messages)) = SessionManager::global().load(s) {
                 log::info!("[LIFECYCLE] loaded session, {} messages", messages.len());
                 agent.session = meta;
@@ -36,10 +46,10 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 }
                 return true;
             }
-            // Session file not found — don't reuse broken seed.
-            // Generate a fresh seed so we don't overwrite the corrupted file.
+            // Directory exists but meta or messages are corrupt — generate a
+            // fresh seed so we don't overwrite the corrupted files.
             log::error!(
-                "deepx-agent: session {} load failed — creating fresh session",
+                "deepx-agent: session {} load failed (corrupt?) — creating fresh session",
                 s
             );
             log::warn!("[LIFECYCLE] load failed for {s}, generating new seed");

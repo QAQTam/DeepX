@@ -20,7 +20,12 @@ pub fn write_meta(session_dir: &Path, meta: &SessionMeta) -> Result<(), String> 
     let tmp = session_dir.join(".meta.tmp");
     let dst = session_dir.join("meta.json");
     let json = serde_json::to_string_pretty(meta).map_err(|e| format!("serialize meta: {e}"))?;
-    fs::write(&tmp, &json).map_err(|e| format!("write meta tmp: {e}"))?;
+    {
+        let mut f = fs::File::create(&tmp).map_err(|e| format!("create meta tmp: {e}"))?;
+        f.write_all(json.as_bytes()).map_err(|e| format!("write meta tmp: {e}"))?;
+        f.flush().map_err(|e| format!("flush meta tmp: {e}"))?;
+        f.sync_all().map_err(|e| format!("sync meta tmp: {e}"))?;
+    }
     fs::rename(&tmp, &dst).map_err(|e| format!("rename meta: {e}"))?;
     Ok(())
 }
@@ -46,6 +51,7 @@ pub fn append_one(session_dir: &Path, msg: &Message) -> Result<(), String> {
     let line = serde_json::to_string(msg).map_err(|e| format!("serialize message: {e}"))?;
     writeln!(file, "{line}").map_err(|e| format!("write message: {e}"))?;
     file.flush().map_err(|e| format!("flush: {e}"))?;
+    file.sync_all().map_err(|e| format!("sync: {e}"))?;
     Ok(())
 }
 
@@ -63,6 +69,7 @@ pub fn append_messages(session_dir: &Path, messages: &[Message]) -> Result<(), S
         writeln!(file, "{line}").map_err(|e| format!("write message: {e}"))?;
     }
     file.flush().map_err(|e| format!("flush messages: {e}"))?;
+    file.sync_all().map_err(|e| format!("sync messages: {e}"))?;
     Ok(())
 }
 
@@ -113,6 +120,7 @@ pub fn rewrite_messages(session_dir: &Path, messages: &[Message]) -> Result<(), 
             writeln!(file, "{line}").map_err(|e| format!("write: {e}"))?;
         }
         file.flush().map_err(|e| format!("flush: {e}"))?;
+        file.sync_all().map_err(|e| format!("sync: {e}"))?;
     }
     fs::rename(&tmp, &dst).map_err(|e| format!("rename: {e}"))?;
     Ok(())
@@ -154,12 +162,59 @@ pub fn write_index(sessions_dir: &Path, metas: &[SessionMeta]) {
     let Ok(json) = serde_json::to_string_pretty(metas) else { return };
     let tmp = sessions_dir.join(".index.tmp");
     let dst = sessions_dir.join("index.json");
-    let _ = fs::write(&tmp, &json);
+    let write_and_sync = || -> Result<(), String> {
+        let mut f = std::fs::File::create(&tmp).map_err(|e| format!("create index tmp: {e}"))?;
+        f.write_all(json.as_bytes()).map_err(|e| format!("write index tmp: {e}"))?;
+        f.flush().map_err(|e| format!("flush index tmp: {e}"))?;
+        f.sync_all().map_err(|e| format!("sync index tmp: {e}"))?;
+        Ok(())
+    };
+    if write_and_sync().is_err() { return; }
     let _ = fs::rename(&tmp, &dst);
+}
+
+/// Acquire an advisory file lock on the index for cross-process safety.
+/// Uses a lock file with exponential backoff. Returns a guard that
+/// removes the lock on drop.
+struct IndexLock {
+    lock_path: std::path::PathBuf,
+}
+impl IndexLock {
+    fn acquire(sessions_dir: &Path) -> Self {
+        let lock_path = sessions_dir.join(".index.lock");
+        let mut backoff = std::time::Duration::from_millis(1);
+        let max_backoff = std::time::Duration::from_millis(200);
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(_) => return IndexLock { lock_path },
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    std::thread::sleep(backoff);
+                    backoff = (backoff * 2).min(max_backoff);
+                }
+                Err(_) => {
+                    // Can't acquire lock — proceed without it (better than hanging)
+                    log::warn!("[IndexLock] cannot create lock file, proceeding unlocked");
+                    return IndexLock { lock_path: std::path::PathBuf::new() };
+                }
+            }
+        }
+    }
+}
+impl Drop for IndexLock {
+    fn drop(&mut self) {
+        if !self.lock_path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.lock_path);
+        }
+    }
 }
 
 /// Upsert a single session meta into the index (avoids full rewrite).
 pub fn upsert_index(sessions_dir: &Path, meta: &SessionMeta) {
+    let _lock = IndexLock::acquire(sessions_dir);
     let mut index = read_index(sessions_dir);
     if let Some(existing) = index.iter_mut().find(|m| m.seed == meta.seed) {
         *existing = meta.clone();
@@ -171,6 +226,7 @@ pub fn upsert_index(sessions_dir: &Path, meta: &SessionMeta) {
 
 /// Remove a session from the index.
 pub fn remove_from_index(sessions_dir: &Path, seed: &str) {
+    let _lock = IndexLock::acquire(sessions_dir);
     let mut index = read_index(sessions_dir);
     index.retain(|m| m.seed != seed);
     write_index(sessions_dir, &index);
