@@ -51,26 +51,21 @@ pub(super) fn exec_sed(args: &str) -> String {
     }
 }
 
-/// Enrich output: if a unified diff is present, append a [CHANGE] trailer so Tauri
-/// can parse the line-level change summary (same format as edit_file_diff).
+/// Enrich output: if a unified diff is present, build a clean [OK] one-liner + diff.
 fn post_process_output(raw: &str, script: &str, path: &str) -> String {
     if raw.starts_with("[ERROR]") || raw.starts_with("[PARTIAL]") {
         return raw.to_string();
     }
-    // If the output already contains a unified diff, extract stats and add [CHANGE]
     if let Some(diff_start) = raw.find("--- a/") {
-        let prefix = &raw[..diff_start].trim_end();
         let diff = &raw[diff_start..];
         let (added, removed, first_line) = diff_stats(diff);
         if added > 0 || removed > 0 {
             return format!(
-                "{}\n\n{}\n\n[CHANGE] {}:{} +{} -{} | sed {}",
-                prefix, diff.trim_end(), path, first_line, added, removed, script
+                "[OK] {path}:{first_line} +{added} -{removed} | sed {script}\n\n{diff}",
+                path = path, first_line = first_line, added = added, removed = removed, script = script, diff = diff.trim_end()
             );
         }
     }
-    // Non-in-place: deepx-sed may return "[OK] sed ... (use --in-place for complex scripts)"
-    // If no diff found, return as-is
     raw.to_string()
 }
 
@@ -164,11 +159,8 @@ pub(crate) fn exec_gnu_sed(
                     let added_count = added.max(1);
                     let removed_count = removed.max(1);
                     format!(
-                        "[OK] {} — sed {}: +{} -{}\n\n{}\n[CHANGE] {}:{} +{} -{} | sed {}",
-                        path, desc,
-                        added_count, removed_count,
-                        diff.trim_end(),
-                        path, first_line, added_count, removed_count, desc
+                        "[OK] {path}:{first_line} +{added_count} -{removed_count} | sed {desc}\n\n{diff}",
+                        path = path, first_line = first_line, added_count = added_count, removed_count = removed_count, desc = desc, diff = diff.trim_end()
                     )
                 }
             } else {

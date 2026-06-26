@@ -23,6 +23,7 @@ ureq = { version = "3", features = ["json"] }
 unicode-width = "0.2"
 chrono = { version = "0.4", features = ["clock"] }
 syntect = "5"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 [lints]
 workspace = true

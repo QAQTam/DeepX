@@ -1,0 +1,58 @@
+/* ── Startup View ── */
+.startup-view { flex: 1; display: flex; align-items: center; justify-content: center; animation: pageIn 0.3s ease; }
+.startup-center { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 520px; width: 100%; padding: 40px 24px; }
+.startup-logo { font-size: 48px; color: var(--accent); font-weight: 700; font-family: var(--font-mono); line-height: 1; }
+.startup-title { font-size: 28px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; }
+.startup-subtitle { font-size: 16px; color: var(--text-secondary); font-weight: 400; margin-top: -8px; }
+.startup-input-wrap { display: flex; gap: 10px; width: 100%; margin-top: 8px; }
+.startup-input-wrap textarea { flex: 1; background: var(--bg-secondary); border: 0.5px solid var(--border-input); border-radius: var(--radius-md); padding: 12px 16px; color: var(--text-primary); font-family: var(--font-sans); font-size: 15px; resize: none; outline: none; line-height: 1.5; min-height: 48px; max-height: 160px; transition: border-color var(--transition); }
+.startup-input-wrap textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12); }
+.startup-send { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; border: none; border-radius: var(--radius-md); background: var(--accent); color: #fff; cursor: pointer; transition: background var(--transition), transform var(--transition); flex-shrink: 0; align-self: flex-end; }
+.startup-send:hover { background: var(--accent-hover); transform: scale(1.05); }
+.startup-send:active { transform: scale(0.94); }
+.startup-hint { font-size: 13px; color: var(--text-muted); text-align: center; }
+.startup-recent { width: 100%; margin-top: 12px; }
+.startup-recent-label { font-size: 12px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+.startup-recent-list { display: flex; flex-direction: column; gap: 4px; }
+.startup-recent-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border: 0.5px solid var(--border-card); border-radius: var(--radius); background: var(--bg-secondary); cursor: pointer; transition: background var(--transition), border-color var(--transition); font-family: var(--font-sans); text-align: left; width: 100%; }
+.startup-recent-item:hover { background: var(--bg-hover); border-color: var(--border); }
+.startup-recent-summary { font-size: 14px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 12px; }
+.startup-recent-meta { font-size: 12px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+
+/* ── Contribution Heatmap ── */
+.heatmap-card {
+  width: 100%; max-width: 580px;
+  margin-top: 12px;
+  padding: 14px 16px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-card);
+}
+.heatmap-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 10px;
+}
+.heatmap-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.heatmap-total { font-size: 11px; color: var(--text-muted); }
+.heatmap-grid {
+  display: flex; gap: 3px; flex-wrap: wrap;
+}
+.heatmap-cell {
+  width: 14px; height: 14px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.heatmap-cell:hover { transform: scale(1.4); }
+.heatmap-cell.hm-l0 { background: var(--bg-tertiary); }
+.heatmap-cell.hm-l1 { background: var(--heatmap-l1); }
+.heatmap-cell.hm-l2 { background: var(--heatmap-l2); }
+.heatmap-cell.hm-l3 { background: var(--heatmap-l3); }
+.heatmap-cell.hm-l4 { background: var(--heatmap-l4); }
+.heatmap-legend {
+  display: flex; align-items: center; gap: 4px;
+  justify-content: flex-end; margin-top: 8px;
+  font-size: 10px; color: var(--text-muted);
+}
+.heatmap-legend .heatmap-cell { width: 10px; height: 10px; }
+.heatmap-legend .heatmap-cell:hover { transform: none; }

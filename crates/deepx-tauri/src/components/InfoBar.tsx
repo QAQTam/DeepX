@@ -1,6 +1,8 @@
 import { Show, createSignal, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
+import StockChart from "./StockChart";
+import type { CodeDelta } from "../store/chat";
 
 const FMT = (n: number) => n.toLocaleString();
 
@@ -17,6 +19,7 @@ export default function InfoBar(props: {
   isCompacting: () => boolean;
   compactResult: () => string | null;
   onCompact?: () => void;
+  codeDeltas: () => CodeDelta[];
 }) {
   const { t } = useI18n();
   const seedShort = () => props.seed.substring(0, 8);
@@ -33,6 +36,7 @@ export default function InfoBar(props: {
   };
 
   const [compactPct, setCompactPct] = createSignal(0);
+  const [showChart, setShowChart] = createSignal(false);
   let compactTimer: ReturnType<typeof setInterval> | null = null;
 
   createEffect(() => {
@@ -62,6 +66,7 @@ export default function InfoBar(props: {
   }
 
   return (
+    <div>
     <div class="info-bar">
       <Show when={props.error}>
         <div class="info-error" onClick={props.onDismissError}>
@@ -114,9 +119,26 @@ export default function InfoBar(props: {
           </div>
         </Show>
       </div>
-      <Show when={props.compactResult()}>
-        <div class="compact-toast">{props.compactResult()}</div>
-      </Show>
+      <div class="info-item">
+        <button class="info-compact-btn" onClick={() => setShowChart(!showChart())} title="Stock chart">
+          📈
+        </button>
+        <Show when={props.compactResult()}>
+          <div class="compact-toast">{props.compactResult()}</div>
+        </Show>
+      </div>
     </div>
+    <Show when={showChart()}>
+      <div class="stock-chart-overlay" onClick={() => setShowChart(false)}>
+        <div class="stock-chart-panel" onClick={(e) => e.stopPropagation()}>
+          <div class="stock-chart-header">
+            <span>📈 Code Stock</span>
+            <button class="stock-chart-close" onClick={() => setShowChart(false)}>×</button>
+          </div>
+          <StockChart seed={props.seed} codeDeltas={props.codeDeltas} />
+        </div>
+      </div>
+    </Show>
+  </div>
   );
 }

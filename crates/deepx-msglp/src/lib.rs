@@ -93,6 +93,8 @@ pub struct Loop {
     pending_new_session: bool,
     /// Pending shutdown.
     pending_shutdown: bool,
+    /// Accumulated code deltas (flushed on save_full/save_append).
+    code_stats: Vec<deepx_proto::CodeDeltaRecord>,
 }
 
 impl Loop {
@@ -161,6 +163,7 @@ impl Loop {
             pending_session: None,
             pending_new_session: false,
             pending_shutdown: false,
+            code_stats: Vec::new(),
         }
     }
 
@@ -278,7 +281,7 @@ impl Loop {
             Ui2Agent::NewSession => { self.handle_create_session(); }
             Ui2Agent::ReloadConfig => { self.handle_reload_config(); }
             Ui2Agent::Shutdown => {
-                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 self.emit(Agent2Ui::ShutdownAck);
                 self.pending_shutdown = true;
             }
@@ -352,7 +355,30 @@ impl Loop {
         }
 
         deepx_tools::bridge::shutdown_tools();
+        self.flush_meta_and_stats();
+    }
+
+    fn flush_code_stats(&mut self) {
+        if self.code_stats.is_empty() { return; }
+        let seed = &self.agent.session.seed;
+        if seed.is_empty() { return; }
+        let dir = deepx_types::platform::sessions_dir().join(seed);
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("code_stats.jsonl");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            for delta in self.code_stats.drain(..) {
+                let line = serde_json::to_string(&delta).unwrap_or_default();
+                let _ = writeln!(f, "{line}");
+            }
+            let _ = f.flush();
+            let _ = f.sync_all();
+        }
+    }
+
+    fn flush_meta_and_stats(&mut self) {
         self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+        self.flush_code_stats();
     }
 
     fn handle_cancel(&mut self) {
@@ -478,7 +504,7 @@ impl Loop {
         let args_s = args.to_string();
         let handle = std::thread::spawn(move || {
             let result = deepx_tools::bridge::execute_tool_with_id_full(&tool_name, "", &args_s, &tool_id, Some(progress_tx));
-            (tool_id, result.content, result.success)
+            (tool_id, result.content, result.success, result.code_delta)
         });
         // Drain progress while tool runs
         loop {
@@ -493,7 +519,17 @@ impl Loop {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let (tid, output, success) = handle.join().unwrap_or_else(|_| (tool_id_for_result, "[ERROR] tool thread panicked".into(), false));
+        let (tid, output, success, code_delta) = handle.join().unwrap_or_else(|_| (tool_id_for_result, "[ERROR] tool thread panicked".into(), false, None));
+        if let Some(ref delta) = code_delta {
+            self.code_stats.push(delta.clone());
+            self.emit(Agent2Ui::CodeDelta {
+                lines_added: delta.lines_added,
+                lines_removed: delta.lines_removed,
+                files_created: delta.files_created,
+                files_deleted: delta.files_deleted,
+                file: delta.file.clone(),
+            });
+        }
         self.emit(Agent2Ui::ToolResults {
             turn_id: turn_id.clone(),
             round_num,
@@ -664,20 +700,20 @@ impl Loop {
             // ── Check for interrupt commands between rounds ──
             if self.check_interrupts() {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
             // Check for pending session switch (set by check_interrupts)
             if self.pending_session.is_some() || self.pending_new_session {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
@@ -816,7 +852,7 @@ impl Loop {
             );
 
             if had_error || result.is_err() {
-                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
@@ -825,7 +861,7 @@ impl Loop {
             // prevent processing partial content / executing tools.
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
@@ -844,7 +880,7 @@ impl Loop {
                     if !pending.is_empty() {
                         let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(String, String)>();
                         // Track (tc_id, JoinHandle) so we can identify panicked threads.
-                        let mut handles: Vec<(String, std::thread::JoinHandle<(String, String, bool)>)> = Vec::new();
+                        let mut handles: Vec<(String, std::thread::JoinHandle<(String, String, bool, Option<deepx_proto::CodeDeltaRecord>)>)> = Vec::new();
                         let mut tool_infos = Vec::new();
 
                         for tool in &pending {
@@ -856,7 +892,7 @@ impl Loop {
                             let id_for_handle = id.clone();
                             let handle = std::thread::spawn(move || {
                                 let result = deepx_tools::bridge::execute_tool_with_id_full(&name, "", &args, &id, Some(tx));
-                                (id, result.content, result.success)
+                                (id, result.content, result.success, result.code_delta)
                             });
                             handles.push((id_for_handle, handle));
                         }
@@ -905,8 +941,18 @@ impl Loop {
                         } else {
                             for (tc_id, h) in handles {
                                 match h.join() {
-                                    Ok((_id, content, _success)) => {
+                                    Ok((_id, content, _success, code_delta)) => {
                                         self.agent.msg.push_tool_result_direct(&tc_id, &content);
+                                        if let Some(ref delta) = code_delta {
+                                            self.code_stats.push(delta.clone());
+                                            self.emit(Agent2Ui::CodeDelta {
+                                                lines_added: delta.lines_added,
+                                                lines_removed: delta.lines_removed,
+                                                files_created: delta.files_created,
+                                                files_deleted: delta.files_deleted,
+                                                file: delta.file.clone(),
+                                            });
+                                        }
                                     }
                                     Err(_) => {
                                         // Thread panicked — inject an error result
@@ -953,7 +999,7 @@ impl Loop {
                 _ => {}
             }
 
-            self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+            self.flush_meta_and_stats();
 
             // Persist per-turn token usage for dashboard statistics
             if let Some(ref usage) = last_usage {
@@ -1072,6 +1118,61 @@ fn build_assistant_message(
     Message { msg_id: None, role: "assistant".into(), name: None, content: blocks }
 }
 
+/// Extract a short human-readable display string from a tool call's arguments.
+fn format_tool_args_display(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "linuxmod" | "exec" => input.get("command")
+            .and_then(|v| v.as_str())
+            .map(|c| c.chars().take(80).collect())
+            .unwrap_or_else(|| name.into()),
+        "read_file" | "file_read" => input.get("path")
+            .and_then(|v| v.as_str())
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| name.into()),
+        "write_file" | "file_write" => input.get("path")
+            .and_then(|v| v.as_str())
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| name.into()),
+        "edit_file" | "edit_file_diff" => input.get("path")
+            .and_then(|v| v.as_str())
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| name.into()),
+        "web_search" => input.get("query")
+            .and_then(|v| v.as_str())
+            .map(|q| q.chars().take(60).collect())
+            .unwrap_or_else(|| name.into()),
+        "web_fetch" => input.get("url")
+            .and_then(|v| v.as_str())
+            .map(|u| u.chars().take(80).collect())
+            .unwrap_or_else(|| name.into()),
+        "search" | "grep" | "file_search" => input.get("pattern")
+            .and_then(|v| v.as_str())
+            .map(|p| p.chars().take(80).collect())
+            .unwrap_or_else(|| name.into()),
+        "glob" | "file_glob" => input.get("pattern")
+            .and_then(|v| v.as_str())
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| name.into()),
+        "list_dir" | "file_list_dir" => input.get("path")
+            .and_then(|v| v.as_str())
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| name.into()),
+        "explore" => input.get("path")
+            .and_then(|v| v.as_str())
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| name.into()),
+        "ask_user" => input.get("question")
+            .and_then(|v| v.as_str())
+            .map(|q| q.chars().take(60).collect())
+            .unwrap_or_else(|| name.into()),
+        "task_create" => input.get("subject")
+            .and_then(|v| v.as_str())
+            .map(|s| s.chars().take(80).collect())
+            .unwrap_or_else(|| name.into()),
+        _ => name.into(),
+    }
+}
+
 fn emit_round_complete(
     event_tx: &mpsc::SyncSender<Agent2Ui>,
     turn_id: &str, round_num: u32, assistant_msg: &deepx_types::Message,
@@ -1089,14 +1190,7 @@ fn emit_round_complete(
                 blocks.push(deepx_proto::RoundBlock::Text { content: text.clone() });
             }
             ContentBlock::ToolUse { id, name, input } => {
-                let display = if name == "ask_user" {
-                    input.get("question")
-                        .and_then(|v| v.as_str())
-                        .map(|q| q.to_string())
-                        .unwrap_or_else(|| name.clone())
-                } else {
-                    name.clone()
-                };
+                let display = format_tool_args_display(name, input);
                 tool_calls.push(deepx_proto::ToolCallDef {
                     id: id.clone(), name: name.clone(),
                     args_display: display.clone(), args_json: input.to_string(),

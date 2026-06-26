@@ -343,6 +343,17 @@ pub enum Agent2Ui {
         name: String,
         args_so_far: String,
     },
+
+    /// Realtime code stats delta from a file operation (write/edit/delete/move).
+    #[serde(rename = "code_delta")]
+    CodeDelta {
+        lines_added: usize,
+        lines_removed: usize,
+        files_created: usize,
+        files_deleted: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+    },
 }
 
 fn default_load_count() -> u32 { 20 }
@@ -357,4 +368,26 @@ pub enum RoundDeltaKind {
     ToolCalling,
     /// Model is generating the visible answer.
     Answering,
+}
+
+/// A single code delta record for persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeDeltaRecord {
+    pub timestamp: u64,
+    pub lines_added: usize,
+    pub lines_removed: usize,
+    pub files_created: usize,
+    pub files_deleted: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+/// Daily aggregated code stats.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeDaily {
+    pub date: String,
+    pub lines_added: usize,
+    pub lines_removed: usize,
+    pub files_created: usize,
+    pub files_deleted: usize,
 }

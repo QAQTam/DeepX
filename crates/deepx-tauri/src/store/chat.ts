@@ -17,6 +17,21 @@ export interface SessionMeta { seed: string; model: string; created_at: number; 
 export interface TaskInfo { id: string; subject: string; description: string; status: string; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
 export interface AskState { question: string; options: string[]; show: boolean; }
+export interface CodeDelta {
+ lines_added: number;
+ lines_removed: number;
+ files_created: number;
+ files_deleted: number;
+ file?: string;
+}
+
+export interface CodeDelta {
+  lines_added: number;
+  lines_removed: number;
+  files_created: number;
+  files_deleted: number;
+  file?: string;
+}
 
 export function createChatStore(seed: string) {
   const [turns, setTurns] = createStore<Turn[]>([]);
@@ -25,6 +40,7 @@ export function createChatStore(seed: string) {
   const [inputDisabled, setInputDisabled] = createSignal(false);
   const [hasMore, setHasMore] = createSignal(false);
   const [workspace, setWorkspace] = createSignal("");
+  const [codeDeltas, setCodeDeltas] = createSignal<CodeDelta[]>([]);
 
   // Debug hook: inject mock data from browser console
   if (typeof window !== "undefined") {
@@ -40,6 +56,7 @@ export function createChatStore(seed: string) {
   const [activityLog, setActivityLog] = createSignal<ActivityEntry[]>([]);
   const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], show: false });
   const [isCompacting, setIsCompacting] = createSignal(false);
+
   const [compactResult, setCompactResult] = createSignal<string | null>(null);
   let streamBuffer = { thinking: "", answer: "" };
 
@@ -292,8 +309,7 @@ export function createChatStore(seed: string) {
           const toolCalls: ToolCallDef[] = msg.content
             .filter((b) => b.type === "tool_use")
             .map((b) => ({ id: b.id ?? "", name: b.name ?? "", args_display: b.name ?? "", args_json: JSON.stringify(b.input ?? {}) }));
-          const blocks: RoundBlock[] = msg.content.map((b) => {
-            if (b.type === "reasoning") return { type: "reasoning", content: b.reasoning ?? "" };
+ const blocks: RoundBlock[] = msg.content.map((b) => {
             if (b.type === "text") return { type: "text", content: b.text ?? "" };
             if (b.type === "tool_use") return { type: "tool", card: { id: b.id ?? "", name: b.name ?? "", args_display: b.name ?? "", args_json: JSON.stringify(b.input ?? {}) } };
             return { type: "text", content: "" };
@@ -368,5 +384,5 @@ export function createChatStore(seed: string) {
 
   function dismissAsk() { setAskState({ question: "", options: [], show: false }); }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+ return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

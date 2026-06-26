@@ -524,6 +524,67 @@ pub fn cmd_set_workspace(seed: String, path: String) -> Result<(), String> {
     send_to_agent(&seed, Ui2Agent::ReloadConfig)
 }
 
+/// Get aggregated code stats for the last N days.
+/// Returns JSON array of CodeDaily sorted oldest-first.
+#[tauri::command]
+pub fn cmd_get_code_stats(seed: String, days: u32) -> Result<String, String> {
+    use std::collections::BTreeMap;
+    use std::io::BufRead;
+
+    let dir = deepx_types::platform::sessions_dir().join(&seed);
+    let path = dir.join("code_stats.jsonl");
+    let mut daily: BTreeMap<String, deepx_proto::CodeDaily> = BTreeMap::new();
+    if let Ok(file) = std::fs::File::open(&path) {
+        let reader = std::io::BufReader::new(file);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if let Ok(rec) = serde_json::from_str::<deepx_proto::CodeDeltaRecord>(&line) {
+                    let date = chrono_local_date_from_epoch(rec.timestamp);
+                    let entry = daily.entry(date.clone()).or_insert_with(|| deepx_proto::CodeDaily {
+                        date,
+                        lines_added: 0,
+                        lines_removed: 0,
+                        files_created: 0,
+                        files_deleted: 0,
+                    });
+                    entry.lines_added += rec.lines_added;
+                    entry.lines_removed += rec.lines_removed;
+                    entry.files_created += rec.files_created;
+                    entry.files_deleted += rec.files_deleted;
+                }
+            }
+        }
+    }
+    let mut result: Vec<deepx_proto::CodeDaily> = daily.into_values().collect();
+    result.sort_by(|a, b| b.date.cmp(&a.date));
+    let take = days as usize;
+    if result.len() > take { result.truncate(take); }
+    result.reverse();
+    serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Convert epoch seconds to "YYYY-MM-DD" UTC.
+fn chrono_local_date_from_epoch(epoch_secs: u64) -> String {
+    let total_days = (epoch_secs / 86400) as i64;
+    let (y, m, d) = civil_from_days(total_days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Convert days since Unix epoch to (year, month, day).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
 /// Kill the agent for a session (when tab is closed but session not deleted).
 #[tauri::command]
 pub fn cmd_close_session(seed: String) -> Result<(), String> {
@@ -718,6 +779,7 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
         Agent2Ui::Ready => "ready",
         Agent2Ui::ExecProgress { .. } => "exec_progress",
         Agent2Ui::ToolCallPreview { .. } => "tool_call_preview",
+        Agent2Ui::CodeDelta { .. } => "code_delta",
         _ => "unknown",
     }
 }

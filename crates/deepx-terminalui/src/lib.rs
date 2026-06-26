@@ -257,6 +257,30 @@ fn run_session_screen(
                     app.should_quit = true;
                     return Ok(());
                 }
+                (KeyModifiers::SHIFT, KeyCode::Up) => {
+                    if let Some(ref mut pane) = app.detail_pane {
+                        pane.scroll_up(1);
+                        app.message_version = app.message_version.wrapping_add(1);
+                    }
+                }
+                (KeyModifiers::SHIFT, KeyCode::Down) => {
+                    if let Some(ref mut pane) = app.detail_pane {
+                        pane.scroll_down(1);
+                        app.message_version = app.message_version.wrapping_add(1);
+                    }
+                }
+                (KeyModifiers::SHIFT, KeyCode::PageUp) => {
+                    if let Some(ref mut pane) = app.detail_pane {
+                        pane.scroll_up(6);
+                        app.message_version = app.message_version.wrapping_add(1);
+                    }
+                }
+                (KeyModifiers::SHIFT, KeyCode::PageDown) => {
+                    if let Some(ref mut pane) = app.detail_pane {
+                        pane.scroll_down(6);
+                        app.message_version = app.message_version.wrapping_add(1);
+                    }
+                }
                 (_, KeyCode::Up) => {
                     if app.session_index > 0 {
                         app.session_index -= 1;
@@ -400,6 +424,11 @@ fn run_chat(
                 (KeyModifiers::NONE, KeyCode::F(9)) => {
                     app.show_tasks = !app.show_tasks;
                 }
+                (KeyModifiers::NONE, KeyCode::F(11)) => {
+                    // Toggle detail pane
+                    app.detail_pane = None;
+                    app.message_version = app.message_version.wrapping_add(1);
+                }
                 (KeyModifiers::NONE, KeyCode::F(8)) => {
                     app.show_context = !app.show_context;
                 }
@@ -478,6 +507,30 @@ fn run_chat(
                     }
                     app.input.insert(app.cursor, c);
                     app.cursor += c.len_utf8();
+                }
+                (KeyModifiers::SHIFT, KeyCode::Up) => {
+                    if let Some(ref mut pane) = app.detail_pane {
+                        pane.scroll_up(1);
+                        app.message_version = app.message_version.wrapping_add(1);
+                    }
+                }
+                (KeyModifiers::SHIFT, KeyCode::Down) => {
+                    if let Some(ref mut pane) = app.detail_pane {
+                        pane.scroll_down(1);
+                        app.message_version = app.message_version.wrapping_add(1);
+                    }
+                }
+                (KeyModifiers::SHIFT, KeyCode::PageUp) => {
+                    if let Some(ref mut pane) = app.detail_pane {
+                        pane.scroll_up(6);
+                        app.message_version = app.message_version.wrapping_add(1);
+                    }
+                }
+                (KeyModifiers::SHIFT, KeyCode::PageDown) => {
+                    if let Some(ref mut pane) = app.detail_pane {
+                        pane.scroll_down(6);
+                        app.message_version = app.message_version.wrapping_add(1);
+                    }
                 }
                 (_, KeyCode::Up) => {
                     // If cursor is on the first line of input, browse history
@@ -621,11 +674,20 @@ fn run_menu(
                         None => continue,
                     };
                     if menu.editing {
-                        if !menu.edit_buf.is_empty() {
-                            let item = &mut menu.items[menu.selected];
+                        let item = &mut menu.items[menu.selected];
+                        if !menu.edit_buf.is_empty() || item.key == "api_key" {
                             item.value = menu.edit_buf.clone();
                             if item.key == "api_key" {
                                 item.secret = menu.edit_buf.clone();
+                                // Update display mask for the cleared/updated key
+                                let l = menu.lang;
+                                item.value = if menu.edit_buf.is_empty() {
+                                    if l.as_str() == "zh" { "(未设置)" } else { "(not set)" }.into()
+                                } else if menu.edit_buf.len() > 3 {
+                                    format!("sk-{}", "●".repeat(menu.edit_buf.len().saturating_sub(3).min(20)))
+                                } else {
+                                    menu.edit_buf.clone()
+                                };
                             }
                         }
                         menu.editing = false;
@@ -649,6 +711,11 @@ fn run_menu(
                 }
                 (_, KeyCode::Char(c)) => {
                     if menu.editing {
+                        menu.edit_buf.push(c);
+                    } else if menu.items.get(menu.selected).map_or(false, |i| i.editable) {
+                        // Start editing on any editable item when user types
+                        menu.editing = true;
+                        menu.edit_buf.clear();
                         menu.edit_buf.push(c);
                     }
                 }

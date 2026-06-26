@@ -1,28 +1,21 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-#[cfg(target_os = "windows")]
-unsafe fn windows_allocate_console() {
-    unsafe extern "system" {
-        fn AllocConsole() -> i32;
-        fn AttachConsole(pid: u32) -> i32;
-    }
-    // Try attaching to parent console first (e.g. launched from cmd/pwsh)
-    // ATTACH_PARENT_PROCESS = 0xFFFFFFFF
-    if unsafe { AttachConsole(0xFFFF_FFFF) } == 0 {
-        // No parent console — create a new one
-        unsafe { AllocConsole(); }
-    }
-}
+// No windows_subsystem attribute — always a console application.
+// For GUI mode (Tauri), we hide the console window at startup.
+// For TUI/agent modes, the console is used normally.
 
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
         "--tui" => {
-            // On Windows, the binary is built with windows_subsystem="windows"
-            // (no console). TUI needs a console — allocate one here.
+            // Always a console app — no special allocation needed.
+            // Set UTF-8 code page for box-drawing and CJK.
             #[cfg(target_os = "windows")]
-            {
-                unsafe { windows_allocate_console(); }
+            unsafe {
+                unsafe extern "system" {
+                    fn SetConsoleOutputCP(codePage: u32) -> i32;
+                    fn SetConsoleCP(codePage: u32) -> i32;
+                }
+                SetConsoleOutputCP(65001);
+                SetConsoleCP(65001);
             }
             if let Err(e) = deepx_terminalui::run_tui() {
                 eprintln!("deepx-terminalui: {e}");
@@ -39,7 +32,18 @@ fn main() {
             run_config();
         }
         _ => {
-            // Default: Tauri GUI
+            // Default: Tauri GUI — hide the console window.
+            #[cfg(target_os = "windows")]
+            unsafe {
+                unsafe extern "system" {
+                    fn GetConsoleWindow() -> isize;
+                    fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+                }
+                let hwnd = GetConsoleWindow();
+                if hwnd != 0 {
+                    ShowWindow(hwnd, 0); // SW_HIDE
+                }
+            }
             deepx_tauri_lib::run();
         }
     }

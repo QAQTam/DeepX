@@ -35,6 +35,13 @@ fn format_ts(seconds: u64) -> String {
     } else { String::new() }
 }
 
+fn format_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 { format!("{}s", secs) }
+    else if secs < 3600 { format!("{}m{}s", secs / 60, secs % 60) }
+    else { format!("{}h{}m", secs / 3600, (secs % 3600) / 60) }
+}
+
 /// Short single-char icon for activity log and file entries.
 fn tool_activity_icon(name: &str) -> &'static str {
     match name {
@@ -218,8 +225,16 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
     }
     let input_lines = app.input.chars().filter(|&c| c == '\n').count() + 1;
     let input_height = (input_lines as u16 + 2).min(12).max(3);
-    let [header_area, body, input_area] = Layout::vertical([
-        Constraint::Length(2), Constraint::Fill(1), Constraint::Length(input_height),
+    let detail_height: u16 = if app.detail_pane.is_some() {
+        10u16.min(area.height.saturating_sub(6 + input_height))
+    } else {
+        0
+    };
+    let [header_area, body, detail_area, input_area] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Fill(1),
+        Constraint::Length(detail_height),
+        Constraint::Length(input_height),
     ]).spacing(1).areas(area);
     let [header_line1, header_line2] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(header_area);
 
@@ -281,6 +296,174 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
     let mut scrollbar_state = ScrollbarState::new(total_wrapped).position(scroll as usize).viewport_content_length(content_height);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).thumb_symbol("█").track_symbol(Some("│"));
     frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+
+    // ── Detail pane: PTY output or side-by-side diff ──
+    if detail_height > 0 {
+        match &app.detail_pane {
+            Some(crate::app::DetailPane::Pty(pane)) => {
+                let pty_block = Block::new()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(if pane.running { Color::Rgb(100, 200, 255) } else if pane.exit_code == Some(0) { GREEN } else { Color::Rgb(220, 100, 100) }))
+                    .title({
+                        let status = if pane.running {
+                            format!("{} running...", format_elapsed(pane.elapsed()))
+                        } else if pane.exit_code == Some(0) {
+                            format!("{} ok", format_elapsed(pane.elapsed()))
+                        } else {
+                            format!("{} exit:{}", format_elapsed(pane.elapsed()), pane.exit_code.unwrap_or(-1))
+                        };
+                        Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled("▶", Style::new().fg(ACCENT)),
+                            Span::raw(" "),
+                            Span::styled(&pane.command, Style::new().fg(Color::White).bold()),
+                            Span::raw("  "),
+                            Span::styled(status, Style::new().fg(if pane.running { Color::Yellow } else { Color::Gray })),
+                            Span::raw(" "),
+                        ])
+                    });
+                let inner = pty_block.inner(detail_area);
+                frame.render_widget(pty_block, detail_area);
+
+                let ansi_lines = crate::markdown::render_ansi(&pane.output);
+                let visible = inner.height as usize;
+                let total = ansi_lines.len();
+                let bottom_offset = if total > visible { total - visible } else { 0 };
+                let shown: Vec<Line<'_>> = ansi_lines.into_iter().skip(bottom_offset).take(visible).collect();
+                frame.render_widget(Paragraph::new(shown), inner);
+            }
+            Some(crate::app::DetailPane::Diff(pane)) => {
+                let diff_block = Block::new()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(ACCENT))
+                    .title(Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled("≠", Style::new().fg(Color::Rgb(200, 180, 100))),
+                        Span::raw(" "),
+                        Span::styled(&pane.label, Style::new().fg(Color::White).bold()),
+                        Span::raw(" "),
+                    ]));
+                let inner = diff_block.inner(detail_area);
+                frame.render_widget(diff_block, detail_area);
+
+                let visible = inner.height as usize;
+                let offset = pane.scroll_offset.min(pane.rows.len().saturating_sub(visible));
+                let shown = &pane.rows[offset..(offset + visible).min(pane.rows.len())];
+
+                // Split into three columns: old | sep | new
+                let col_w = inner.width.saturating_sub(1) / 2; // 1 for separator
+                let [old_area, _sep_area, new_area] = Layout::horizontal([
+                    Constraint::Length(col_w),
+                    Constraint::Length(1),
+                    Constraint::Length(col_w),
+                ]).areas(inner);
+
+                // Separator bar
+                let sep_style = Style::new().fg(Color::Rgb(60, 70, 80));
+                for y in 0..visible.min(inner.height as usize) {
+                    frame.render_widget(
+                        Span::styled("│", sep_style),
+                        Rect { x: _sep_area.x, y: old_area.y + y as u16, width: 1, height: 1 },
+                    );
+                }
+
+                let dim = Color::Rgb(90, 100, 110);
+                let body_w = col_w.saturating_sub(7) as usize; // 4 for ln + 1 space + 1 │ + 1 space
+                let mut old_lines: Vec<Line<'static>> = Vec::new();
+                let mut new_lines: Vec<Line<'static>> = Vec::new();
+
+                for (old, new, old_body, new_body, kind) in shown {
+                    match kind.as_str() {
+                        "mod" => {
+                            old_lines.push(Line::from(vec![
+                                Span::styled(format!("{:>4} │ ", old), Style::new().fg(Color::Rgb(200, 100, 100)).bg(Color::Rgb(50, 20, 20))),
+                                Span::styled(format!("{:<width$}", old_body, width = body_w), Style::new().fg(Color::Rgb(255, 140, 140)).bg(Color::Rgb(50, 20, 20))),
+                            ]));
+                            new_lines.push(Line::from(vec![
+                                Span::styled(format!("{:>4} │ ", new), Style::new().fg(Color::Rgb(100, 200, 100)).bg(Color::Rgb(20, 50, 20))),
+                                Span::styled(format!("{:<width$}", new_body, width = body_w), Style::new().fg(Color::Rgb(140, 255, 140)).bg(Color::Rgb(20, 50, 20))),
+                            ]));
+                        }
+                        "del" => {
+                            old_lines.push(Line::from(vec![
+                                Span::styled(format!("{:>4} │ ", old), Style::new().fg(dim).bg(Color::Rgb(50, 20, 20))),
+                                Span::styled(format!("{:<width$}", old_body, width = body_w), Style::new().fg(Color::Rgb(255, 140, 140)).bg(Color::Rgb(50, 20, 20))),
+                            ]));
+                            new_lines.push(Line::from(vec![
+                                Span::styled(format!("{:>4} │ ", ""), Style::new().fg(dim)),
+                                Span::styled(format!("{:<width$}", "", width = body_w), Style::new()),
+                            ]));
+                        }
+                        "add" => {
+                            old_lines.push(Line::from(vec![
+                                Span::styled(format!("{:>4} │ ", ""), Style::new().fg(dim)),
+                                Span::styled(format!("{:<width$}", "", width = body_w), Style::new()),
+                            ]));
+                            new_lines.push(Line::from(vec![
+                                Span::styled(format!("{:>4} │ ", new), Style::new().fg(dim).bg(Color::Rgb(20, 50, 20))),
+                                Span::styled(format!("{:<width$}", new_body, width = body_w), Style::new().fg(Color::Rgb(140, 255, 140)).bg(Color::Rgb(20, 50, 20))),
+                            ]));
+                        }
+                        _ => {
+                            let bg = Color::Rgb(24, 28, 32);
+                            old_lines.push(Line::from(vec![
+                                Span::styled(format!("{:>4} │ ", old), Style::new().fg(dim).bg(bg)),
+                                Span::styled(format!("{:<width$}", old_body, width = body_w), Style::new().fg(Color::Rgb(200, 210, 220)).bg(bg)),
+                            ]));
+                            new_lines.push(Line::from(vec![
+                                Span::styled(format!("{:>4} │ ", new), Style::new().fg(dim).bg(bg)),
+                                Span::styled(format!("{:<width$}", old_body, width = body_w), Style::new().fg(Color::Rgb(200, 210, 220)).bg(bg)),
+                            ]));
+                        }
+                    }
+                }
+                frame.render_widget(Paragraph::new(old_lines), old_area);
+                frame.render_widget(Paragraph::new(new_lines), new_area);
+
+                // Scroll indicator
+                if pane.scroll_offset > 0 {
+                    frame.render_widget(
+                        Span::styled(format!(" ↑{}↓ ", pane.scroll_offset), Style::new().fg(Color::Rgb(100, 200, 255)).bold()),
+                        Rect { x: detail_area.x + detail_area.width.saturating_sub(10), y: detail_area.y, width: 8, height: 1 },
+                    );
+                }
+            }
+            Some(crate::app::DetailPane::Output(pane)) => {
+                let output_block = Block::new()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(ACCENT))
+                    .title(Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled("📄", Style::new().fg(Color::Rgb(200, 180, 100))),
+                        Span::raw(" "),
+                        Span::styled(&pane.label, Style::new().fg(Color::White).bold()),
+                        Span::raw(" "),
+                    ]));
+                let inner = output_block.inner(detail_area);
+                frame.render_widget(output_block, detail_area);
+
+                let text_lines: Vec<Line<'static>> = pane.output.lines()
+                    .map(|l| Line::from(Span::raw(l.to_string())))
+                    .collect();
+                let visible = inner.height as usize;
+                let total = text_lines.len();
+                let offset = pane.scroll_offset.min(total.saturating_sub(visible));
+                let shown: Vec<Line<'_>> = text_lines.into_iter().skip(offset).take(visible).collect();
+                frame.render_widget(Paragraph::new(shown), inner);
+
+                if pane.scroll_offset > 0 {
+                    frame.render_widget(
+                        Span::styled(format!(" ↑{}↓ ", pane.scroll_offset), Style::new().fg(Color::Rgb(100, 200, 255)).bold()),
+                        Rect { x: detail_area.x + detail_area.width.saturating_sub(10), y: detail_area.y, width: 8, height: 1 },
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
 
     let line_count = app.input.chars().filter(|&c| c == '\n').count() + 1;
     let char_count = app.input.chars().count();
@@ -464,6 +647,7 @@ pub fn render_help(frame: &mut Frame, app: &App) {
         ("F8", "Context", "上下文"),
         ("F9", "Status", "状态面板"),
         ("F10", "Settings", "设置"),
+        ("F11", "PTY Pane", "终端窗格"),
         ("F12", "Debug", "调试"),
         ("?", "Help", "帮助"),
         ("Ctrl+C / F3", "Quit", "退出"),

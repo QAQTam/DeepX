@@ -1,8 +1,8 @@
-import { createSignal, onMount, onCleanup, Show, For, Switch, Match } from "solid-js";
+﻿import { createSignal, onMount, onCleanup, Show, For, Switch, Match } from "solid-js";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { createChatStore, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
+import { createChatStore, type CodeDelta, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
 import ChatView from "./components/ChatView";
 import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
@@ -137,12 +137,37 @@ export default function App() {
       case "dashboard": chat.handleDashboard(p); break;
       case "done": chat.setInputDisabled(false); chat.handleDone(); break;
       case "cancelled": chat.handleCancelled(); break;
+      case "code_delta": {
+        const delta: CodeDelta = {
+          lines_added: (p.lines_added ?? 0) as number,
+          lines_removed: (p.lines_removed ?? 0) as number,
+          files_created: (p.files_created ?? 0) as number,
+          files_deleted: (p.files_deleted ?? 0) as number,
+          file: p.file as string | undefined,
+        };
+        const cur = chat.codeDeltas();
+        chat.setCodeDeltas([...cur.slice(-499), delta]);
+        break;
+      }
       case "error": chat.handleError((p.message ?? "Unknown error") as string); break;
       case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, result_summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean }); break;
       case "compact_start": chat.handleCompactStart(p); break;
       case "compact_end": chat.handleCompactEnd(p); break;
       case "tool_notice": chat.handleToolNotice(p); break;
+
       case "exec_progress": chat.handleExecProgress((p.tool_call_id ?? "") as string, (p.chunk ?? "") as string); break;
+      case "code_delta": {
+        const delta: CodeDelta = {
+          lines_added: (p.lines_added ?? 0) as number,
+          lines_removed: (p.lines_removed ?? 0) as number,
+          files_created: (p.files_created ?? 0) as number,
+          files_deleted: (p.files_deleted ?? 0) as number,
+          file: p.file as string | undefined,
+        };
+        const current = chat.codeDeltas();
+        chat.setCodeDeltas([...current.slice(-499), delta]);
+        break;
+      }
     }
   }
 
@@ -328,7 +353,7 @@ export default function App() {
     const closePromises: Promise<void>[] = [];
     for (const seed of chatStores.keys()) {
       closePromises.push(
-        invoke("cmd_close_session", { seed }).catch(() => {})
+        invoke("cmd_close_session", { seed }).then(() => {}).catch(() => {})
       );
     }
     // Fire-and-forget but stored so cleanup runs before page fully unloads.

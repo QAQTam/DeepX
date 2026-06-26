@@ -154,8 +154,8 @@ pub(super) fn apply_diff_and_format(
         for i in (match_idx + win)..ctx_end {
             result.push_str(&format!(" {}\n", out_lines[i]));
         }
-        let desc = if description.is_empty() { "edited" } else { description };
-        result.push_str(&format!("\n[CHANGE] {}:{} +{} -{} | {} (dry run)", path, line, added, removed, desc));
+        let desc = if description.is_empty() { "edit_file_diff" } else { description };
+        result.push_str(&format!("\n[DRY RUN] {path}:{line} +{added} -{removed} | {desc} (dry run)"));
         return result;
     }
 
@@ -192,8 +192,8 @@ pub(super) fn apply_diff_and_format(
             for i in (match_idx + win)..ctx_end {
                 result.push_str(&format!(" {}\n", out_lines[i]));
             }
-            let desc = if description.is_empty() { "edited" } else { description };
-            result.push_str(&format!("\n[CHANGE] {}:{} +{} -{} | {}", path, line, added, removed, desc));
+            let desc = if description.is_empty() { "edit_file_diff" } else { description };
+            result.push_str(&format!("\n[OK] {path}:{line} +{added} -{removed} | {desc}"));
             result
         }
         Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.", path, e),

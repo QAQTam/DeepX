@@ -1,6 +1,6 @@
 use deepx_proto::{Agent2Ui, DocInfo, RoundBlock, RoundDeltaKind, TaskInfo, TurnData};
 use deepx_types::{ConfigStore, SessionMeta};
-use crate::markdown::MarkdownRenderer;
+use crate::markdown::{render_markdown, render_diff, parse_diff_rows};
 
 // ── Active screen ──
 
@@ -59,9 +59,13 @@ pub struct App {
     pub tool_batch_done: u32,
     /// Timestamp of the most recent message push (for pulse-on-new-content).
     pub last_msg_time: std::time::Instant,
+    /// Streaming tool call names collected for status bar display.
+    pub streaming_tool_names: Vec<String>,
     pub debug: DebugState,
     pub ask: Option<AskState>,
     pub balance: String,
+    /// Live detail pane for exec output or diffs.
+    pub detail_pane: Option<DetailPane>,
     /// Tool execution activity log (max 50 entries).
     pub activity_log: Vec<ActivityEntry>,
     pub validating: bool,
@@ -80,7 +84,6 @@ pub struct App {
     pub cached_text_lines: Vec<ratatui::text::Line<'static>>,
     pub cached_text_version: u64,
     pub cached_text_width: u16,
-    md_renderer: Option<MarkdownRenderer>,
     // Input caching
     pub cached_input_lines: Vec<ratatui::text::Line<'static>>,
     pub cached_input_len: usize,
@@ -92,6 +95,8 @@ pub struct ChatMessage {
     pub lines: Vec<ratatui::text::Line<'static>>,
     pub tool_status: ToolStatus,
     pub tool_id: String,
+    /// Tool label for one-liner display (e.g. "read_file src/main.rs")
+    pub tool_label: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -127,6 +132,85 @@ pub struct ActivityEntry {
     pub summary: String,
     pub success: bool,
     pub time: std::time::Instant,
+}
+
+/// Live PTY output pane state — displays exec stdout/stderr in a fixed bottom pane.
+#[derive(Clone)]
+pub struct PtyPaneState {
+    /// Shell command being executed (e.g. "cargo build")
+    pub command: String,
+    /// Accumulated raw output (may contain ANSI escape codes).
+    pub output: String,
+    /// When the command started.
+    pub started: std::time::Instant,
+    /// Whether the command is still running.
+    pub running: bool,
+    /// Exit status code, if completed.
+    pub exit_code: Option<i32>,
+}
+
+impl PtyPaneState {
+    pub fn new(command: &str) -> Self {
+        Self {
+            command: command.to_string(),
+            output: String::new(),
+            started: std::time::Instant::now(),
+            running: true,
+            exit_code: None,
+        }
+    }
+
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.started.elapsed()
+    }
+}
+
+/// Side-by-side diff rendering state.
+#[derive(Clone)]
+pub struct DiffPaneState {
+    /// File path or tool label.
+    pub label: String,
+    /// Parsed diff lines: (old_ln, new_ln, old_body, new_body, kind)
+    /// kind is "del" | "add" | "ctx" | "mod".
+    pub rows: Vec<(String, String, String, String, String)>,
+    /// Scroll offset from top.
+    pub scroll_offset: usize,
+}
+
+/// Generic tool output pane — read_file, search, web_fetch, etc.
+#[derive(Clone)]
+pub struct OutputPaneState {
+    /// Tool label (e.g. "read_file src/main.rs")
+    pub label: String,
+    /// Full output text.
+    pub output: String,
+    /// Scroll offset from top.
+    pub scroll_offset: usize,
+}
+
+/// Bottom detail pane — PTY, diff, or generic tool output.
+#[derive(Clone)]
+pub enum DetailPane {
+    Pty(PtyPaneState),
+    Diff(DiffPaneState),
+    Output(OutputPaneState),
+}
+
+impl DetailPane {
+    pub fn scroll_up(&mut self, n: usize) {
+        match self {
+            DetailPane::Diff(d) => d.scroll_offset = d.scroll_offset.saturating_add(n),
+            DetailPane::Output(o) => o.scroll_offset = o.scroll_offset.saturating_add(n),
+            _ => {}
+        }
+    }
+    pub fn scroll_down(&mut self, n: usize) {
+        match self {
+            DetailPane::Diff(d) => d.scroll_offset = d.scroll_offset.saturating_sub(n),
+            DetailPane::Output(o) => o.scroll_offset = o.scroll_offset.saturating_sub(n),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -458,8 +542,7 @@ impl MenuState {
                     config.lang = Some(item.value.clone());
                 }
                 "api_key" => {
-                    let v = item.secret.trim().to_string();
-                    if !v.is_empty() { config.api_key = Some(v); }
+                    config.api_key = Some(item.secret.trim().to_string());
                 }
                 "base_url" => {
                     let v = item.value.trim().to_string();
@@ -526,20 +609,59 @@ fn tool_icon(name: &str) -> &'static str {
 
 fn format_tool_label(name: &str, args_display: &str) -> String {
     let icon = tool_icon(name);
+    // Avoid duplicate: if args_display equals or starts with the tool name, skip it
+    let args = if args_display == name || args_display.starts_with(&format!("{} ", name)) {
+        args_display.to_string()
+    } else if args_display.is_empty() {
+        name.to_string()
+    } else {
+        format!("{} {}", name, args_display)
+    };
     match name {
-        "exec" => format!("{} exec: {}", icon, args_display),
-        _ => format!("{} {} {}", icon, name, args_display),
+        "exec" => format!("{} exec: {}", icon, args.trim_start_matches("exec ").trim_start_matches("exec: ")),
+        _ => format!("{} {}", icon, args),
     }
 }
 
 fn format_tool_result_summary(output: &str, success: bool) -> String {
     if !success {
         let first_line = output.lines().next().unwrap_or("failed");
-        return format!(" → ✗ {}", first_line.chars().take(80).collect::<String>());
+        let clean = first_line
+            .strip_prefix("[ERROR] ").unwrap_or(first_line)
+            .split(" | ").next().unwrap_or(first_line);
+        return format!("✗ {}", clean.chars().take(80).collect::<String>());
     }
-    let first_line = output.lines().next().unwrap_or("done");
-    let summary: String = first_line.chars().take(80).collect();
-    format!(" → {}", summary)
+    // Structured output with [OK] prefix — strip prefix and tool suffix
+    if output.starts_with("[OK] ") || output.starts_with("[DRY RUN] ") {
+        let first_line = output.lines().next().unwrap_or("done");
+        let clean = first_line
+            .strip_prefix("[OK] ").unwrap_or_else(|| first_line.strip_prefix("[DRY RUN] ").unwrap_or(first_line))
+            .split(" | ").next().unwrap_or(first_line);
+        return clean.chars().take(80).collect();
+    }
+    // Unstructured output (read_file, search, etc.) — show line/byte count
+    let lines = output.lines().count();
+    let bytes = output.len();
+    if lines > 0 {
+        format!("{} lines, {} bytes", lines, bytes)
+    } else {
+        "empty".into()
+    }
+}
+
+/// Extract a short label from tool output for the diff pane title.
+fn format_tool_label_from_output(output: &str) -> String {
+    // Try to find the file header in a unified diff
+    for line in output.lines() {
+        if line.starts_with("--- ") {
+            return line[4..].to_string();
+        }
+        if line.starts_with("+++ ") {
+            return line[4..].to_string();
+        }
+    }
+    // Fallback: first non-empty line
+    output.lines().find(|l| !l.trim().is_empty()).unwrap_or("diff").chars().take(60).collect()
 }
 
 
@@ -578,7 +700,6 @@ impl App {
             cached_text_lines: Vec::new(),
             cached_text_version: 0,
             cached_text_width: 0,
-            md_renderer: None,
             cached_input_lines: Vec::new(),
             cached_input_len: 0,
             frame_count: 0,
@@ -594,6 +715,7 @@ impl App {
             tool_batch_total: 0,
             tool_batch_done: 0,
             last_msg_time: std::time::Instant::now(),
+            streaming_tool_names: Vec::new(),
             debug: DebugState {
                 hp_connected: false,
                 session_seed: String::new(),
@@ -608,6 +730,7 @@ impl App {
             },
             ask: None,
             balance: String::new(),
+            detail_pane: None,
             activity_log: Vec::new(),
             validating: false,
             busy: false,
@@ -674,65 +797,26 @@ impl App {
         } else {
             content.to_string()
         };
-        let mut renderer = MarkdownRenderer::new();
-        let mut lines = Vec::new();
-        for line in content.lines() {
-            for l in renderer.push_line(line) {
-                lines.push(l);
-            }
-        }
-        for l in renderer.flush() {
-            lines.push(l);
-        }
+        let lines = render_markdown(&content);
         self.streaming_rendered_len = content.len();
-        self.md_renderer = None;
         self.last_msg_time = std::time::Instant::now();
-        self.messages.push(ChatMessage { role, content, lines, tool_status: ToolStatus::None, tool_id: String::new() });
+        self.messages.push(ChatMessage { role, content, lines, tool_status: ToolStatus::None, tool_id: String::new(), tool_label: String::new() });
     }
 
     /// Push a message placeholder for streaming — rendering is deferred to append_last().
     fn push_streaming_msg(&mut self, role: ChatRole, content: &str) {
         self.streaming_rendered_len = 0;
-        self.md_renderer = None;  // Reset markdown state to avoid state pollution
         self.pending_tail_lines = 0;
         self.message_version = self.message_version.wrapping_add(1);
-        self.messages.push(ChatMessage { role, content: content.to_string(), lines: Vec::new(), tool_status: ToolStatus::None, tool_id: String::new() });
+        self.messages.push(ChatMessage { role, content: content.to_string(), lines: Vec::new(), tool_status: ToolStatus::None, tool_id: String::new(), tool_label: String::new() });
     }
 
     fn append_last(&mut self, content: &str) {
         if let Some(last) = self.messages.last_mut() {
             self.message_version = self.message_version.wrapping_add(1);
             last.content.push_str(content);
-            let renderer = self.md_renderer.get_or_insert_with(MarkdownRenderer::new);
-            let start = self.streaming_rendered_len.min(last.content.len());
-            let full = &last.content[start..];
-            let mut processed = 0;
-
-            // Remove previous pending tail (incomplete line rendered as raw text)
-            for _ in 0..self.pending_tail_lines {
-                last.lines.pop();
-            }
-            self.pending_tail_lines = 0;
-
-            // Push complete lines through markdown
-            while let Some(nl) = full[processed..].find('\n') {
-                let line = &full[processed..processed + nl];
-                for l in renderer.push_line(line) {
-                    last.lines.push(l);
-                }
-                processed += nl + 1;
-            }
-            self.streaming_rendered_len += processed;
-
-            // Render remaining incomplete tail as raw text for character-by-character streaming
-            let remaining = &full[processed..];
-            if !remaining.is_empty() {
-                let prefix = if last.lines.is_empty() { "" } else { "" };
-                last.lines.push(ratatui::text::Line::from(
-                    ratatui::text::Span::raw(format!("{}{}", prefix, remaining))
-                ));
-                self.pending_tail_lines = 1;
-            }
+            // Re-render full text with pulldown-cmark — fast enough for streaming
+            last.lines = render_markdown(&last.content);
         }
     }
 
@@ -745,16 +829,7 @@ impl App {
     fn upsert_tool_card(&mut self, tool_id: &str, label: &str, status: ToolStatus) {
         self.message_version = self.message_version.wrapping_add(1);
         let content = label.to_string();
-        let mut renderer = MarkdownRenderer::new();
-        let mut lines = Vec::new();
-        for line in content.lines() {
-            for l in renderer.push_line(line) {
-                lines.push(l);
-            }
-        }
-        for l in renderer.flush() {
-            lines.push(l);
-        }
+        let lines = render_markdown(&content);
         self.last_msg_time = std::time::Instant::now();
         // Upsert: update existing card if one exists with same tool_id
         if let Some(msg) = self.messages.iter_mut().rev()
@@ -770,37 +845,20 @@ impl App {
                 lines,
                 tool_status: status,
                 tool_id: tool_id.to_string(),
+                tool_label: label.to_string(),
             });
         }
     }
 
-    /// Flush the incremental renderer and write remaining lines to the last message.
+    /// Re-render the last message with full markdown — called at end of streaming.
     fn finalize_last_message(&mut self) {
-        // Remove pending tail (raw streaming preview) before full markdown render
         if let Some(last) = self.messages.last_mut() {
-            for _ in 0..self.pending_tail_lines {
-                last.lines.pop();
+            if !last.content.is_empty() {
+                last.lines = render_markdown(&last.content);
             }
         }
+        self.streaming_rendered_len = 0;
         self.pending_tail_lines = 0;
-
-        if let Some(mut renderer) = self.md_renderer.take() {
-            if let Some(last) = self.messages.last_mut() {
-                let start = self.streaming_rendered_len.min(last.content.len());
-                let remaining = last.content[start..].to_string();
-                if !remaining.is_empty() {
-                    for l in renderer.push_line(&remaining) {
-                        last.lines.push(l);
-                    }
-                }
-            }
-            let flushed = renderer.flush();
-            if let Some(last) = self.messages.last_mut() {
-                for l in flushed {
-                    last.lines.push(l);
-                }
-            }
-        }
     }
 
     pub fn handle_frame(&mut self, frame: Agent2Ui) {
@@ -812,12 +870,13 @@ impl App {
                 self.tool_batch_total = 0;
                 self.tool_batch_done = 0;
                 self.last_error.clear();
+                self.detail_pane = None;
+                self.streaming_tool_names.clear();
                 // Reset streaming draft state across turns — prevents stale
                 // draft_round_msg_idx from a cancelled previous turn leaking
                 // into the next RoundComplete and truncating wrong messages.
                 self.draft_round_msg_idx = None;
                 self.streaming_rendered_len = 0;
-                self.md_renderer = None;
                 self.pending_tail_lines = 0;
                 self.push_msg(ChatRole::Divider, "");
                 self.push_msg(ChatRole::User, &user_text);
@@ -851,7 +910,6 @@ impl App {
                 if self.streaming && self.streaming_kind != new_role {
                     self.finalize_last_message();
                     self.streaming_rendered_len = 0;
-                    self.md_renderer = None;
                     self.pending_tail_lines = 0;
                     self.streaming = false;
                     // `draft_round_msg_idx` must NOT be overwritten — it always
@@ -877,7 +935,6 @@ impl App {
                 }
                 self.streaming = false;
                 self.streaming_rendered_len = 0;
-                self.md_renderer = None;
                 self.pending_tail_lines = 0;
                 self.debug.streaming = false;
 
@@ -899,6 +956,11 @@ impl App {
                             tool_count += 1;
                             let label = format_tool_label(&card.name, &card.args_display);
                             self.push_tool_msg(&card.id, &label, ToolStatus::Pending);
+                            // Open PTY pane for exec commands
+                            if card.name == "exec" {
+                                self.detail_pane = Some(DetailPane::Pty(PtyPaneState::new(&card.args_display)));
+                                self.message_version = self.message_version.wrapping_add(1);
+                            }
                         }
                     }
                 }
@@ -925,20 +987,38 @@ impl App {
                         .find(|m| m.role == ChatRole::Tool && m.tool_id == r.tool_call_id)
                     {
                         let summary = format_tool_result_summary(&r.output, r.success);
-                        msg.content = format!("{} {}", msg.content, summary);
-                        self.message_version = self.message_version.wrapping_add(1);
                         msg.tool_status = if r.success { ToolStatus::Success } else { ToolStatus::Failed };
-                        let mut renderer = MarkdownRenderer::new();
-                        let mut new_lines = Vec::new();
-                        for line in msg.content.lines() {
-                            for l in renderer.push_line(line) {
-                                new_lines.push(l);
+
+                        // Detect tool type from label, not output (all tools use [OK] now)
+                        let label = if msg.tool_label.is_empty() { "tool".into() } else { msg.tool_label.clone() };
+                        let is_exec = label.starts_with("⚡") || label.contains("exec");
+                        let is_diff = render_diff(&r.output).is_some();
+
+                        // One-liner card: just "label summary" (no redundant [OK] prefix)
+                        msg.content = format!("{} {}", label, summary);
+                        msg.lines = render_markdown(&msg.content);
+                        self.message_version = self.message_version.wrapping_add(1);
+
+                        // Populate detail pane
+                        if is_exec {
+                            if matches!(self.detail_pane, Some(DetailPane::Pty(_))) {
+                                // already set up by RoundComplete + ExecProgress
                             }
+                        } else if is_diff {
+                            let diff_label = format_tool_label_from_output(&r.output);
+                            self.detail_pane = Some(DetailPane::Diff(DiffPaneState {
+                                label: diff_label,
+                                rows: parse_diff_rows(&r.output),
+                                scroll_offset: 0,
+                            }));
+                        } else {
+                            // Generic tool output
+                            self.detail_pane = Some(DetailPane::Output(OutputPaneState {
+                                label,
+                                output: r.output.clone(),
+                                scroll_offset: 0,
+                            }));
                         }
-                        for l in renderer.flush() {
-                            new_lines.push(l);
-                        }
-                        msg.lines = new_lines;
                     }
                     if r.success {
                         if let Some(json_str) = r.output.strip_prefix("[USER_QUERY] ") {
@@ -957,12 +1037,31 @@ impl App {
                         }
                     }
                 }
-                // Advance tool batch progress for elapsed / gauge animation
+                // Advance tool batch progress
                 self.tool_batch_done += results.len() as u32;
                 if self.tool_batch_done >= self.tool_batch_total {
                     self.tool_batch_start = None;
                     self.tool_batch_total = 0;
                     self.tool_batch_done = 0;
+                }
+                // Finalize PTY pane if any exec completed
+                if let Some(DetailPane::Pty(ref mut pane)) = self.detail_pane {
+                    if pane.running {
+                        for r in &results {
+                            if r.success {
+                                pane.running = false;
+                                if let Some(code_start) = r.output.rfind("[EXIT:") {
+                                    let rest = &r.output[code_start + 6..];
+                                    if let Some(end) = rest.find(']') {
+                                        pane.exit_code = rest[..end].parse().ok();
+                                    }
+                                }
+                                if pane.exit_code.is_none() { pane.exit_code = Some(0); }
+                                self.message_version = self.message_version.wrapping_add(1);
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             Agent2Ui::SessionRestored { seed, turns, tokens_used, .. } => {
@@ -993,6 +1092,10 @@ impl App {
                 self.busy = false;
                 self.scroll_offset = 0;
                 self.finalize_last_message();
+                // Terminal bell — flashes taskbar / sounds beep when answer completes
+                use std::io::Write;
+                let _ = std::io::stdout().write_all(b"\x07");
+                let _ = std::io::stdout().flush();
             }
             Agent2Ui::Cancelled => {
                 self.draft_round_msg_idx = None;
@@ -1032,16 +1135,23 @@ impl App {
                     self.status = "Agent shut down".into();
                 }
             }
-            Agent2Ui::ToolCallPreview { turn_id: _, round_num: _, index: _, id: _, name, args_so_far } => {
-                // Tool calls during streaming are transient — show in status bar
-                // rather than creating a message that would break append_last.
-                let preview = format!("🔧 {} {}", name, args_so_far);
-                self.status = if preview.len() > 80 {
-                    let bound = preview.floor_char_boundary(80);
-                    format!("{}…", &preview[..bound])
+            Agent2Ui::ToolCallPreview { turn_id: _, round_num: _, index: _, id: _, name, .. } => {
+                // Tool calls during streaming — show compact summary in status bar
+                // Deduplicate: only add name if not already tracked this round
+                if !self.streaming_tool_names.contains(&name) {
+                    self.streaming_tool_names.push(name);
+                }
+                let count = self.streaming_tool_names.len();
+                let names: String = self.streaming_tool_names.iter()
+                    .map(|n| tool_icon(n).to_string() + " " + n)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let label = if self.setup.lang.as_str() == "zh" {
+                    format!("🔧 {} 个工具调用中：{}…", count, names)
                 } else {
-                    preview
+                    format!("🔧 {} tool(s): {}…", count, names)
                 };
+                self.status = label.chars().take(80).collect();
             }
             Agent2Ui::ExecProgress { tool_call_id, chunk } => {
                 // Stream exec stdout/stderr into the tool card in real-time.
@@ -1050,18 +1160,17 @@ impl App {
                 {
                     msg.content.push_str(&chunk);
                     self.message_version = self.message_version.wrapping_add(1);
-                    // Re-render with new content
-                    let mut renderer = MarkdownRenderer::new();
-                    let mut new_lines = Vec::new();
-                    for line in msg.content.lines() {
-                        for l in renderer.push_line(line) {
-                            new_lines.push(l);
-                        }
-                    }
-                    for l in renderer.flush() {
-                        new_lines.push(l);
-                    }
-                    msg.lines = new_lines;
+                    // PTY output carries ANSI escape codes — route to ANSI renderer
+                    msg.lines = if crate::markdown::has_ansi(&msg.content) {
+                        crate::markdown::render_ansi(&msg.content)
+                    } else {
+                        render_markdown(&msg.content)
+                    };
+                }
+                // Also feed the live PTY pane
+                if let Some(DetailPane::Pty(ref mut pane)) = self.detail_pane {
+                    pane.output.push_str(&chunk);
+                    self.message_version = self.message_version.wrapping_add(1);
                 }
             }
             Agent2Ui::MoreTurns { turns, has_more: _ } => {
@@ -1131,36 +1240,27 @@ impl App {
         for turn in turns {
             new_msgs.push(ChatMessage {
                 role: ChatRole::Divider, content: String::new(), lines: Vec::new(),
-                tool_status: ToolStatus::None, tool_id: String::new(),
+                tool_status: ToolStatus::None, tool_id: String::new(), tool_label: String::new(),
             });
             let content = &turn.user_text;
-            let mut r = MarkdownRenderer::new();
-            let mut md_lines = Vec::new();
-            for line in content.lines() {
-                for l in r.push_line(line) { md_lines.push(l); }
-            }
-            for l in r.flush() { md_lines.push(l); }
+            let md_lines = render_markdown(content);
             new_msgs.push(ChatMessage {
                 role: ChatRole::User, content: content.clone(), lines: md_lines,
-                tool_status: ToolStatus::None, tool_id: String::new(),
+                tool_status: ToolStatus::None, tool_id: String::new(), tool_label: String::new(),
             });
             for round in &turn.rounds {
                 if let Some(ref t) = round.thinking { if !t.is_empty() {
-                    let mut r = MarkdownRenderer::new(); let mut md_lines = Vec::new();
-                    for line in t.lines() { for l in r.push_line(line) { md_lines.push(l); } }
-                    for l in r.flush() { md_lines.push(l); }
+                    let md_lines = render_markdown(t);
                     new_msgs.push(ChatMessage {
                         role: ChatRole::Thinking, content: t.clone(), lines: md_lines,
-                        tool_status: ToolStatus::None, tool_id: String::new(),
+                        tool_status: ToolStatus::None, tool_id: String::new(), tool_label: String::new(),
                     });
                 }}
                 if let Some(ref a) = round.answer { if !a.is_empty() {
-                    let mut r = MarkdownRenderer::new(); let mut md_lines = Vec::new();
-                    for line in a.lines() { for l in r.push_line(line) { md_lines.push(l); } }
-                    for l in r.flush() { md_lines.push(l); }
+                    let md_lines = render_markdown(a);
                     new_msgs.push(ChatMessage {
                         role: ChatRole::Assistant, content: a.clone(), lines: md_lines,
-                        tool_status: ToolStatus::None, tool_id: String::new(),
+                        tool_status: ToolStatus::None, tool_id: String::new(), tool_label: String::new(),
                     });
                 }}
                 for tc in &round.tool_calls {
@@ -1169,12 +1269,11 @@ impl App {
                     if let Some(tr) = round.tool_results.iter().find(|r| r.tool_call_id == tc.id) {
                         if !tr.success { status = ToolStatus::Failed; }
                     }
-                    let mut r = MarkdownRenderer::new(); let mut md_lines = Vec::new();
-                    for line in label.lines() { for l in r.push_line(line) { md_lines.push(l); } }
-                    for l in r.flush() { md_lines.push(l); }
+                    let md_lines = render_markdown(&label);
                     new_msgs.push(ChatMessage {
-                        role: ChatRole::Tool, content: label, lines: md_lines,
+                        role: ChatRole::Tool, content: label.clone(), lines: md_lines,
                         tool_status: status, tool_id: tc.id.clone(),
+                        tool_label: label,
                     });
                 }
             }

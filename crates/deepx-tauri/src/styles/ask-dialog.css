@@ -1,0 +1,94 @@
+/* ── Ask Dialog ── */
+.ask-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0,0,0,0.3);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+}
+.ask-dialog {
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  padding: 20px 24px;
+  min-width: 360px;
+  max-width: 480px;
+  width: 90%;
+}
+.ask-header {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 12px;
+}
+.ask-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: var(--radius);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent); font-weight: 700; font-size: 16px;
+}
+.ask-title {
+  font-size: 14px; font-weight: 600; color: var(--text-secondary);
+  flex: 1;
+}
+.ask-close {
+  background: none; border: none; color: var(--text-muted);
+  cursor: pointer; padding: 4px; border-radius: var(--radius);
+  display: flex; align-items: center; justify-content: center;
+}
+.ask-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+.ask-question {
+  font-size: 15px; color: var(--text-primary);
+  margin-bottom: 16px; line-height: 1.5;
+}
+.ask-options {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.ask-option-btn {
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-sans); font-size: 14px;
+  cursor: pointer; text-align: left;
+  transition: background var(--transition), border-color var(--transition);
+}
+.ask-option-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ask-custom {
+  display: flex; gap: 8px;
+}
+.ask-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-sans); font-size: 14px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.ask-input:focus {
+  border-color: var(--accent);
+}
+.ask-send-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px;
+  border: none; border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: opacity var(--transition);
+  flex-shrink: 0;
+}
+.ask-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ask-send-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}

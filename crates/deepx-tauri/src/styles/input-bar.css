@@ -1,0 +1,19 @@
+/* ── Input Bar ── */
+.input-bar {
+  display: flex; gap: 10px;
+  --side: max(24px, calc((100% - var(--panel-foot) - var(--content-w)) / 2));
+  padding: 12px var(--side) 16px;
+  padding-right: calc(var(--panel-foot) + var(--side));
+  border-top: 1px solid transparent; background: var(--bg-primary); transition: border-color 150ms;
+}
+.input-bar:focus-within { border-top-color: var(--border-divider); }
+.input-bar textarea { flex: 1; background: var(--bg-secondary); border: 0.5px solid var(--border-input); border-radius: var(--radius-md); padding: 10px 14px; color: var(--text-primary); font-family: var(--font-sans); font-size: 14px; resize: none; outline: none; line-height: 1.5; transition: border-color var(--transition); min-height: 40px; max-height: 160px; }
+.input-bar textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12); }
+.input-bar textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+.input-bar button { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: none; border-radius: var(--radius-md); cursor: pointer; transition: background var(--transition), transform var(--transition); flex-shrink: 0; align-self: flex-end; }
+.input-bar button.send { background: var(--accent); color: #fff; }
+.input-bar button.send:hover:not(:disabled) { background: var(--accent-hover); transform: scale(1.05); }
+.input-bar button.send:active:not(:disabled) { transform: scale(0.94); }
+.input-bar button.send:disabled { opacity: 0.4; cursor: not-allowed; background: var(--bg-tertiary); color: var(--text-muted); }
+.input-bar button.stop { background: var(--red); color: #fff; }
+.input-bar button.stop:hover { background: var(--red); filter: brightness(1.1); transform: scale(1.05); }

@@ -1,0 +1,44 @@
+/* ── Sidebar ── */
+.sidebar { grid-row: 1 / -1; background: var(--bg-secondary); border-right: 0.5px solid var(--border-panel); display: flex; flex-direction: column; padding: 16px 12px; gap: 20px; }
+.sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
+.sidebar-logo { font-size: 20px; color: var(--accent); font-weight: 700; font-family: var(--font-mono); }
+.sidebar-title { font-size: 16px; font-weight: 600; }
+.sidebar-nav { display: flex; flex-direction: column; gap: 4px; }
+.sidebar-btn { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: none; border-radius: var(--radius); background: transparent; color: var(--text-secondary); font-size: 14px; cursor: pointer; transition: background var(--transition), color var(--transition); font-family: var(--font-sans); }
+.sidebar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar-btn.active { background: var(--bg-tertiary); color: var(--accent); font-weight: 500; }
+.sidebar-btn svg { flex-shrink: 0; }
+
+/* ── Session sidebar ── */
+.sidebar-section-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; padding: 0 8px; margin-top: 8px; }
+.sidebar-sessions { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; max-height: 40vh; }
+.sidebar-new-session-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; margin: 0 8px 4px;
+  border: 0.5px dashed var(--border-input); border-radius: var(--radius);
+  background: transparent; color: var(--text-muted);
+  font-size: 12px; font-family: var(--font-sans); cursor: pointer;
+  transition: all var(--transition);
+}
+.sidebar-new-session-btn:hover { background: var(--bg-hover); color: var(--accent); border-color: var(--accent); border-style: solid; }
+.sidebar-session-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: none; border-radius: var(--radius); background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: all var(--transition); font-family: var(--font-sans); text-align: left; width: 100%; }
+.sidebar-session-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar-session-item.active { background: var(--bg-tertiary); color: var(--text-primary); }
+.sidebar-session-item.active .session-dot { background: var(--accent); }
+.session-dot { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--text-muted); flex-shrink: 0; }
+.session-info { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.session-summary { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-meta { font-size: 10px; color: var(--text-muted); }
+.session-delete-btn { opacity: 0; margin-left: auto; padding: 2px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 3px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: opacity var(--transition), color var(--transition), background var(--transition); }
+.sidebar-session-item:hover .session-delete-btn { opacity: 1; }
+.session-delete-btn:hover { color: var(--red); background: var(--bg-hover); }
+
+.sidebar-spacer { flex: 1; min-height: 8px; }
+.sidebar-workspace { padding: 0 8px; display: flex; flex-direction: column; gap: 4px; }
+.sidebar-workspace-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.sidebar-workspace-row { display: flex; gap: 4px; align-items: stretch; }
+.sidebar-workspace-input { flex: 1; padding: 5px 8px; border: 0.5px solid var(--border-card); border-radius: var(--radius); background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; font-family: var(--font-mono); outline: none; transition: border var(--transition); box-sizing: border-box; }
+.sidebar-workspace-input:focus { border-color: var(--accent); }
+.sidebar-workspace-input::placeholder { color: var(--text-muted); }
+.sidebar-workspace-browse { padding: 5px 8px; border: 0.5px solid var(--border-card); border-radius: var(--radius); background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background var(--transition), color var(--transition), border var(--transition); flex-shrink: 0; min-width: 32px; }
+.sidebar-workspace-browse:hover { background: var(--bg-primary); color: var(--text-primary); border-color: var(--accent); }

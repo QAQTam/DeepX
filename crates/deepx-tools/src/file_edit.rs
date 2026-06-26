@@ -143,7 +143,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
             let (added, removed, first_line) = diff_stats(&diff);
             let added_count = added.max(1);
             let removed_count = removed.max(1);
-            results.push(format!("[DRY RUN] {path} — {n} pattern(s), no changes written\n\n{diff}\n[CHANGE] {path}:{first_line} +{added_count} -{removed_count} | edit_file (dry run)", n = patterns.len()));
+            results.push(format!("[DRY RUN] {path}:{first_line} +{added_count} -{removed_count} | edit_file\n\n{diff}", path = path, first_line = first_line, added_count = added_count, removed_count = removed_count, diff = diff));
         } else {
             match std::fs::write(path, &content) {
                 Ok(_) => {
@@ -151,7 +151,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
                     let (added, removed, first_line) = diff_stats(&diff);
                     let added_count = added.max(1);
                     let removed_count = removed.max(1);
-                    results.push(format!("[OK] {path} — {n} pattern(s): {summary}\n\n{diff}\n[CHANGE] {path}:{first_line} +{added_count} -{removed_count} | edit_file", n = patterns.len(), summary = msgs.join("; ")));
+                    results.push(format!("[OK] {path}:{first_line} +{added_count} -{removed_count} | edit_file\n\n{diff}", path = path, first_line = first_line, added_count = added_count, removed_count = removed_count, diff = diff));
                 }
                 Err(e) => {
                     results.push(format!("[ERROR] Cannot write {path}: {e}"));
