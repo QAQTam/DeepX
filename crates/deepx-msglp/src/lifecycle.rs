@@ -1,6 +1,7 @@
 //! Session lifecycle: initialization, health status.
 
 use crate::agent::AgentState;
+use crate::chrono_local_date;
 use deepx_tools;
 use deepx_session::SessionManager;
 
@@ -69,7 +70,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
         deepx_message::MessageStore::new(&seed)
     };
     agent.msg.push_system(deepx_types::Message::system(
-        &deepx_config::prompt::full_system_prompt()
+        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
     ));
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     deepx_tools::bridge::load_workspace(&agent.session.seed);
@@ -90,7 +91,7 @@ pub fn create_session(agent: &mut AgentState) {
         deepx_message::MessageStore::new(&agent.session.seed)
     };
     agent.msg.push_system(deepx_types::Message::system(
-        &deepx_config::prompt::full_system_prompt()
+        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
     ));
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     deepx_tools::bridge::load_workspace(&agent.session.seed);
@@ -109,7 +110,7 @@ pub fn create_session_with_seed(agent: &mut AgentState) {
         deepx_message::MessageStore::new(&agent.session.seed)
     };
     agent.msg.push_system(deepx_types::Message::system(
-        &deepx_config::prompt::full_system_prompt()
+        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
     ));
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     deepx_tools::bridge::load_workspace(&agent.session.seed);

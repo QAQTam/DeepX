@@ -924,9 +924,10 @@ impl Loop {
 
                         if cancelled {
                             log::info!("[AGENT] cancelled, pushing placeholder results + background reaper");
+                            let ts = chrono_local_datetime();
                             // Push placeholder results so the store doesn't get stuck
                             for (tc_id, _tool_name) in &tool_infos {
-                                self.agent.msg.push_tool_result_direct(tc_id, "[CANCELLED]");
+                                self.agent.msg.push_tool_result_direct(tc_id, &format!("[timeis: {ts}]\n[CANCELLED]"));
                             }
                             // Spawn a background reaper thread to join the tool
                             // threads. This avoids leaking threads (M1) while
@@ -939,10 +940,11 @@ impl Loop {
                                 }
                             });
                         } else {
+                            let ts = chrono_local_datetime();
                             for (tc_id, h) in handles {
                                 match h.join() {
                                     Ok((_id, content, _success, code_delta)) => {
-                                        self.agent.msg.push_tool_result_direct(&tc_id, &content);
+                                        self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n{content}"));
                                         if let Some(ref delta) = code_delta {
                                             self.code_stats.push(delta.clone());
                                             self.emit(Agent2Ui::CodeDelta {
@@ -959,7 +961,7 @@ impl Loop {
                                         // so the step's all_tools_satisfied() can
                                         // eventually return true (fixes M2).
                                         log::error!("[AGENT] tool thread panicked for {tc_id}");
-                                        self.agent.msg.push_tool_result_direct(&tc_id, "[ERROR] tool thread panicked");
+                                        self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n[ERROR] tool thread panicked"));
                                     }
                                 }
                             }
@@ -1291,15 +1293,28 @@ fn record_token_usage(usage: &deepx_types::UsageInfo, model: &str) {
     }
 }
 
-/// Return today's date as "YYYY-MM-DD" (UTC-based, good enough for daily aggregation).
-fn chrono_local_date() -> String {
+/// Return today's date as "YYYY-MM-DD" (UTC-based).
+pub(crate) fn chrono_local_date() -> String {
     let dur = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let days = dur.as_secs() / 86400;
-    // Convert days since Unix epoch to date using civil::from_days (simple algorithm)
-    let (y, m, d) = civil_from_days(days as i64 + 719468); // 719468 = days from 0000-01-01 to 1970-01-01
+    let (y, m, d) = civil_from_days(days as i64 + 719468);
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Return current time as "YYYY-MM-DD HH:MM" (UTC-based).
+pub(crate) fn chrono_local_datetime() -> String {
+    let dur = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = dur.as_secs();
+    let days = secs / 86400;
+    let day_secs = secs % 86400;
+    let hours = day_secs / 3600;
+    let minutes = (day_secs % 3600) / 60;
+    let (y, m, d) = civil_from_days(days as i64 + 719468);
+    format!("{y:04}-{m:02}-{d:02} {hours:02}:{minutes:02}")
 }
 
 /// Convert days since epoch 0000-01-01 to (year, month, day).

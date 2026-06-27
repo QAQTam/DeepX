@@ -56,3 +56,15 @@ pub fn full_system_prompt() -> String {
     p.push_str(PROMPT);
     p
 }
+
+/// System prompt with the current date injected.
+/// The date is captured once at session creation and never updated,
+/// preserving LLM cache prefix stability across turns.
+pub fn full_system_prompt_with_date(today: &str) -> String {
+    let mut p = String::new();
+    p.push_str(THINK_MAX);
+    p.push('\n');
+    p.push_str(&format!("Today: {today}\n\n"));
+    p.push_str(PROMPT);
+    p
+}
