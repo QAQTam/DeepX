@@ -59,6 +59,10 @@ pub struct App {
     pub tool_batch_done: u32,
     /// Timestamp of the most recent message push (for pulse-on-new-content).
     pub last_msg_time: std::time::Instant,
+    /// When the current user turn started (for elapsed-time display).
+    pub turn_start_time: Option<std::time::Instant>,
+    /// When the current thinking phase started (for "thinking Ns" display).
+    pub thinking_start_time: Option<std::time::Instant>,
     /// Streaming tool call names collected for status bar display.
     pub streaming_tool_names: Vec<String>,
     pub debug: DebugState,
@@ -225,6 +229,10 @@ pub struct DebugState {
     pub documents: Vec<DocInfo>,
     pub tasks: Vec<TaskInfo>,
     pub recent_edits: Vec<String>,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+    pub files_created: u64,
+    pub files_deleted: u64,
 }
 
 #[derive(Clone)]
@@ -609,17 +617,22 @@ fn tool_icon(name: &str) -> &'static str {
 
 fn format_tool_label(name: &str, args_display: &str) -> String {
     let icon = tool_icon(name);
-    // Avoid duplicate: if args_display equals or starts with the tool name, skip it
-    let args = if args_display == name || args_display.starts_with(&format!("{} ", name)) {
-        args_display.to_string()
-    } else if args_display.is_empty() {
+    // Compact single-line label: icon + args_display (or name if empty).
+    let body = if args_display.is_empty() {
         name.to_string()
+    } else if name == "exec" {
+        // For exec, just show the command without the "exec:" prefix
+        args_display.trim_start_matches("exec ").trim_start_matches("exec: ").to_string()
     } else {
         format!("{} {}", name, args_display)
     };
-    match name {
-        "exec" => format!("{} exec: {}", icon, args.trim_start_matches("exec ").trim_start_matches("exec: ")),
-        _ => format!("{} {}", icon, args),
+    // Truncate to keep cards compact
+    let max_w = 60;
+    let truncated: String = body.chars().take(max_w).collect();
+    if truncated.len() < body.len() {
+        format!("{} {}…", icon, truncated)
+    } else {
+        format!("{} {}", icon, truncated)
     }
 }
 
@@ -715,6 +728,8 @@ impl App {
             tool_batch_total: 0,
             tool_batch_done: 0,
             last_msg_time: std::time::Instant::now(),
+            turn_start_time: None,
+            thinking_start_time: None,
             streaming_tool_names: Vec::new(),
             debug: DebugState {
                 hp_connected: false,
@@ -727,6 +742,10 @@ impl App {
                 documents: Vec::new(),
                 tasks: Vec::new(),
                 recent_edits: Vec::new(),
+                lines_added: 0,
+                lines_removed: 0,
+                files_created: 0,
+                files_deleted: 0,
             },
             ask: None,
             balance: String::new(),
@@ -811,12 +830,29 @@ impl App {
         self.messages.push(ChatMessage { role, content: content.to_string(), lines: Vec::new(), tool_status: ToolStatus::None, tool_id: String::new(), tool_label: String::new() });
     }
 
+    /// During streaming, always do plain-text incremental append to avoid
+    /// pulldown-cmark re-layout jitter at high token rates (200+ token/s).
+    /// Full markdown rendering is deferred to finalize_last_message() which
+    /// runs on RoundComplete / kind switch / TurnEnd.
     fn append_last(&mut self, content: &str) {
         if let Some(last) = self.messages.last_mut() {
             self.message_version = self.message_version.wrapping_add(1);
             last.content.push_str(content);
-            // Re-render full text with pulldown-cmark — fast enough for streaming
-            last.lines = render_markdown(&last.content);
+            // Plain-text incremental: append delta to last line's last span.
+            // This avoids any markdown re-parsing during streaming, giving
+            // smooth 30 FPS output even at 200+ token/s.
+            if let Some(last_line) = last.lines.last_mut() {
+                if let Some(last_span) = last_line.spans.last_mut() {
+                    last_span.content = format!("{}{}", last_span.content, content).into();
+                } else {
+                    last_line.spans.push(ratatui::text::Span::raw(content.to_string()));
+                }
+            } else {
+                // First delta — create initial plain-text line
+                last.lines = vec![ratatui::text::Line::from(
+                    ratatui::text::Span::raw(content.to_string())
+                )];
+            }
         }
     }
 
@@ -866,6 +902,8 @@ impl App {
             Agent2Ui::TurnStart { turn_id: _, user_text } => {
                 self.streaming = false;
                 self.debug.streaming = false;
+                self.turn_start_time = Some(std::time::Instant::now());
+                self.thinking_start_time = None;
                 self.tool_batch_start = None;
                 self.tool_batch_total = 0;
                 self.tool_batch_done = 0;
@@ -880,7 +918,7 @@ impl App {
                 self.pending_tail_lines = 0;
                 self.push_msg(ChatRole::Divider, "");
                 self.push_msg(ChatRole::User, &user_text);
-                self.scroll_offset = 0;
+                if self.scroll_offset <= 3 { self.scroll_offset = 0; }
             }
             Agent2Ui::TurnEnd { turn_id: _, stop_reason: _, usage } => {
                 if let Some(u) = &usage {
@@ -893,13 +931,18 @@ impl App {
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.busy = false;
-                self.scroll_offset = 0;
+                if self.scroll_offset <= 3 { self.scroll_offset = 0; }
                 self.status = self.setup.lang.t_chat_ready().to_string();
             }
             Agent2Ui::RoundDelta { turn_id: _, round_num: _, kind, delta } => {
                 self.debug.streaming = true;
                 let new_role = match kind {
-                    RoundDeltaKind::Thinking => ChatRole::Thinking,
+                    RoundDeltaKind::Thinking => {
+                        if self.thinking_start_time.is_none() {
+                            self.thinking_start_time = Some(std::time::Instant::now());
+                        }
+                        ChatRole::Thinking
+                    }
                     RoundDeltaKind::Answering => ChatRole::Assistant,
                     // ToolCalling is metadata, not a content kind switch.
                     // Don't create a new draft — the tool names are transient;
@@ -977,7 +1020,7 @@ impl App {
                 if is_final {
                     self.status = self.setup.lang.t_chat_ready().to_string();
                     self.busy = false;
-                    self.scroll_offset = 0;
+                    if self.scroll_offset <= 3 { self.scroll_offset = 0; }
                 }
             }
             Agent2Ui::ToolResults { turn_id: _, round_num: _, results } => {
@@ -1006,9 +1049,12 @@ impl App {
                             }
                         } else if is_diff {
                             let diff_label = format_tool_label_from_output(&r.output);
+                            let rows = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                parse_diff_rows(&r.output)
+                            })).unwrap_or_default();
                             self.detail_pane = Some(DetailPane::Diff(DiffPaneState {
                                 label: diff_label,
-                                rows: parse_diff_rows(&r.output),
+                                rows,
                                 scroll_offset: 0,
                             }));
                         } else {
@@ -1090,7 +1136,7 @@ impl App {
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.busy = false;
-                self.scroll_offset = 0;
+                if self.scroll_offset <= 3 { self.scroll_offset = 0; }
                 self.finalize_last_message();
                 // Terminal bell — flashes taskbar / sounds beep when answer completes
                 use std::io::Write;
@@ -1103,7 +1149,7 @@ impl App {
                 self.streaming = false;
                 self.debug.streaming = false;
                 self.busy = false;
-                self.scroll_offset = 0;
+                if self.scroll_offset <= 3 { self.scroll_offset = 0; }
                 self.finalize_last_message();
             }
             Agent2Ui::Dashboard { hp_connected, session_seed, usage, context_limit,
@@ -1136,22 +1182,16 @@ impl App {
                 }
             }
             Agent2Ui::ToolCallPreview { turn_id: _, round_num: _, index: _, id: _, name, .. } => {
-                // Tool calls during streaming — show compact summary in status bar
-                // Deduplicate: only add name if not already tracked this round
+                // Tool calls during streaming — just track count, names visible in cards.
                 if !self.streaming_tool_names.contains(&name) {
                     self.streaming_tool_names.push(name);
                 }
                 let count = self.streaming_tool_names.len();
-                let names: String = self.streaming_tool_names.iter()
-                    .map(|n| tool_icon(n).to_string() + " " + n)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let label = if self.setup.lang.as_str() == "zh" {
-                    format!("🔧 {} 个工具调用中：{}…", count, names)
+                self.status = if self.setup.lang.as_str() == "zh" {
+                    format!("🔧 {} 个工具调用中", count)
                 } else {
-                    format!("🔧 {} tool(s): {}…", count, names)
+                    format!("🔧 {} tool(s) running", count)
                 };
-                self.status = label.chars().take(80).collect();
             }
             Agent2Ui::ExecProgress { tool_call_id, chunk } => {
                 // Stream exec stdout/stderr into the tool card in real-time.
@@ -1200,6 +1240,32 @@ impl App {
                 });
                 if self.activity_log.len() > 50 {
                     self.activity_log.remove(0);
+                }
+            }
+            Agent2Ui::SessionCreated { seed } => {
+                self.debug.session_seed = seed;
+            }
+            Agent2Ui::CodeDelta { lines_added, lines_removed, files_created, files_deleted, file: _ } => {
+                self.debug.lines_added += lines_added as u64;
+                self.debug.lines_removed += lines_removed as u64;
+                self.debug.files_created += files_created as u64;
+                self.debug.files_deleted += files_deleted as u64;
+            }
+            Agent2Ui::ToolExecDelta { tool_call_id, delta } => {
+                if let Some(msg) = self.messages.iter_mut().rev()
+                    .find(|m| m.role == ChatRole::Tool && m.tool_id == tool_call_id)
+                {
+                    msg.content.push_str(&delta);
+                    self.message_version = self.message_version.wrapping_add(1);
+                    msg.lines = if crate::markdown::has_ansi(&msg.content) {
+                        crate::markdown::render_ansi(&msg.content)
+                    } else {
+                        render_markdown(&msg.content)
+                    };
+                }
+                if let Some(DetailPane::Pty(ref mut pane)) = self.detail_pane {
+                    pane.output.push_str(&delta);
+                    self.message_version = self.message_version.wrapping_add(1);
                 }
             }
             _ => {}

@@ -44,33 +44,49 @@ fn spawn_agent_subprocess(
 
     // Writer thread: mpsc → child stdin (Ui2Agent → JSON lines)
     std::thread::spawn(move || {
-        while let Ok(frame) = tui_rx.recv() {
-            let json = match serde_json::to_string(&frame) {
-                Ok(j) => j,
-                Err(_) => break,
-            };
-            if writeln!(stdin, "{}", json).is_err() {
-                break;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            while let Ok(frame) = tui_rx.recv() {
+                let json = match serde_json::to_string(&frame) {
+                    Ok(j) => j,
+                    Err(_) => break,
+                };
+                if writeln!(stdin, "{}", json).is_err() {
+                    break;
+                }
+                if stdin.flush().is_err() {
+                    break;
+                }
             }
-            if stdin.flush().is_err() {
-                break;
-            }
+        }));
+        if let Err(e) = result {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+                else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                else { "unknown panic".into() };
+            eprintln!("[TUI] writer thread panicked: {}", msg);
         }
     });
 
     // Reader thread: child stdout → mpsc (JSON lines → Agent2Ui)
     std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => break,
-            };
-            if let Ok(event) = serde_json::from_str::<Agent2Ui>(&line) {
-                if agent_tx.send(event).is_err() {
-                    break;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break,
+                };
+                if let Ok(event) = serde_json::from_str::<Agent2Ui>(&line) {
+                    if agent_tx.send(event).is_err() {
+                        break;
+                    }
                 }
             }
+        }));
+        if let Err(e) = result {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+                else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                else { "unknown panic".into() };
+            eprintln!("[TUI] reader thread panicked: {}", msg);
         }
     });
 
@@ -103,28 +119,55 @@ pub fn run_tui() -> anyhow::Result<()> {
         match spawn_agent_subprocess(app.resume_seed.as_deref()) {
             Ok((mut tui_tx, agent_rx, mut child_handle)) => {
                 if app.resume_seed.is_none() {
-                    // Wait for Ready frame before sending CreateSession
-                    loop {
-                        match agent_rx.recv() {
-                            Ok(Agent2Ui::Ready) => break,
-                            Ok(_) => continue,
-                            Err(_) => {
-                                app.status = "Agent died before ready".into();
-                                break;
+                    // Wait for Ready frame before sending CreateSession (10s timeout)
+                    match agent_rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                        Ok(Agent2Ui::Ready) => {},
+                        Ok(_) => {
+                            // Drain remaining and check for Ready
+                            let mut ready = false;
+                            while let Ok(frame) = agent_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                                if matches!(frame, Agent2Ui::Ready) { ready = true; break; }
                             }
+                            if !ready {
+                                app.status = "Agent did not send Ready within 10s".into();
+                                let _ = child_handle.kill();
+                                return Ok(());
+                            }
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            app.status = "Agent startup timed out (10s)".into();
+                            let _ = child_handle.kill();
+                            return Ok(());
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            app.status = "Agent died before ready".into();
+                            return Ok(());
                         }
                     }
                     let _ = tui_tx.send(Ui2Agent::CreateSession);
                 } else {
-                    // Wait for Ready frame before sending ResumeSession
-                    loop {
-                        match agent_rx.recv() {
-                            Ok(Agent2Ui::Ready) => break,
-                            Ok(_) => continue,
-                            Err(_) => {
-                                app.status = "Agent died before ready".into();
-                                break;
+                    // Wait for Ready frame before sending ResumeSession (10s timeout)
+                    match agent_rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                        Ok(Agent2Ui::Ready) => {},
+                        Ok(_) => {
+                            let mut ready = false;
+                            while let Ok(frame) = agent_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                                if matches!(frame, Agent2Ui::Ready) { ready = true; break; }
                             }
+                            if !ready {
+                                app.status = "Agent did not send Ready within 10s".into();
+                                let _ = child_handle.kill();
+                                return Ok(());
+                            }
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            app.status = "Agent startup timed out (10s)".into();
+                            let _ = child_handle.kill();
+                            return Ok(());
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            app.status = "Agent died before ready".into();
+                            return Ok(());
                         }
                     }
                     let seed = app.resume_seed.clone().expect("resume_seed is Some");
@@ -359,7 +402,15 @@ fn run_chat(
                     had_input = true;
                 }
                 Event::Paste(data) => {
-                    let text = data.trim_end_matches(|c: char| c == '\n' || c == '\r');
+                    // Replace all newlines with space so multi-line paste becomes single line.
+                    let mut text = data.replace("\r\n", " ").replace('\n', " ").replace('\r', " ");
+                    // Collapse consecutive spaces
+                    while text.contains("  ") { text = text.replace("  ", " "); }
+                    let text = text.trim();
+                    const MAX_INPUT: usize = 10_000;
+                    let available = MAX_INPUT.saturating_sub(app.input.len());
+                    if available == 0 { continue; }
+                    let text = if text.len() > available { &text[..available] } else { text };
                     app.input.insert_str(app.cursor, text);
                     app.cursor += text.len();
                     had_input = true;
@@ -500,6 +551,8 @@ fn run_chat(
                 (_, KeyCode::Home) => { app.cursor = 0; }
                 (_, KeyCode::End) => { app.cursor = app.input.len(); }
                 (_, KeyCode::Char(c)) => {
+                    const MAX_INPUT: usize = 10_000;
+                    if app.input.len() >= MAX_INPUT { continue; }
                     // Typing exits history browse mode
                     if app.history_idx.is_some() {
                         app.history_idx = None;

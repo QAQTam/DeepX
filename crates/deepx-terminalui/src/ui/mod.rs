@@ -242,6 +242,15 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
     else if app.streaming { format!("{} {}", app.spinner(), &app.status) }
     else if app.busy { format!("{} {}", app.pulse(), &app.status) }
     else { app.status.clone() };
+    // Turn / thinking timer
+    let turn_elapsed = app.turn_start_time.map(|t| t.elapsed()).unwrap_or_default();
+    let thinking_elapsed = app.thinking_start_time.map(|t| t.elapsed()).unwrap_or_default();
+    let timer_text = if turn_elapsed.as_secs() > 0 {
+        format!("⚡{:.0}s", turn_elapsed.as_secs_f64())
+    } else { String::new() };
+    let think_text = if app.thinking_start_time.is_some() && thinking_elapsed.as_secs_f64() > 0.5 {
+        format!("💭{:.0}s", thinking_elapsed.as_secs_f64())
+    } else { String::new() };
     let cache_total = app.cache_hit + app.cache_miss;
     let cache_rate = if cache_total > 0 { app.cache_hit as f64 / cache_total as f64 * 100.0 } else { 0.0 };
     let cache_color = if cache_rate > 0.5 { Color::Rgb(100, 200, 120) } else { Color::Rgb(200, 150, 100) };
@@ -252,6 +261,10 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         Span::styled(format!("Context: {} / {} ({:.0}%)", app.context_tokens, app.context_limit, ctx_pct), Style::new().fg(Color::Yellow)),
         Span::raw(" | "),
         Span::styled(&status_text, Style::new().fg(if !app.last_error.is_empty() { Color::Red } else if app.streaming { Color::Yellow } else { Color::Green })),
+        if !timer_text.is_empty() { Span::raw(" | ") } else { Span::raw("") },
+        Span::styled(&timer_text, Style::new().fg(Color::Rgb(100, 220, 180))),
+        if !think_text.is_empty() { Span::raw(" ") } else { Span::raw("") },
+        Span::styled(&think_text, Style::new().fg(Color::Rgb(200, 180, 100))),
         Span::raw(""), Span::raw(""),
     ]);
     frame.render_widget(h1, header_line1);
@@ -289,7 +302,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         app.cached_line_count = count; app.line_count_version = app.message_version; app.line_count_width = body_content.width; count
     } else { app.cached_line_count };
     let max_scroll = total_wrapped.saturating_sub(content_height);
-    let at_bottom = app.streaming || app.scroll_offset == 0;
+    let at_bottom = app.scroll_offset == 0;
     let scroll = if at_bottom { max_scroll.min(u16::MAX as usize) as u16 }
     else { let offset = app.scroll_offset.min(max_scroll); (max_scroll - offset).min(u16::MAX as usize) as u16 };
     frame.render_widget(paragraph.scroll((scroll, 0)), body_content);
@@ -616,7 +629,8 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
     }
     if app.show_context {
         let ctx_w = 50u16; let ctx_h = 4u16;
-        let ctx_rect = Rect::new(area.width.saturating_sub(ctx_w + 2), area.y + 18, ctx_w, ctx_h);
+        let ctx_y = (body.y + 2).min(area.y.saturating_add(area.height.saturating_sub(ctx_h)));
+        let ctx_rect = Rect::new(area.width.saturating_sub(ctx_w + 2), ctx_y, ctx_w, ctx_h);
         frame.render_widget(Clear, ctx_rect);
         let ctx_block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::new().fg(Color::Rgb(180, 180, 100))).title(" Context Window ").style(Style::new().bg(Color::Rgb(18, 22, 30)));
         frame.render_widget(&ctx_block, ctx_rect);
