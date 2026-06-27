@@ -1293,28 +1293,31 @@ fn record_token_usage(usage: &deepx_types::UsageInfo, model: &str) {
     }
 }
 
-/// Return today's date as "YYYY-MM-DD" (UTC-based).
+/// Return today's date as "YYYY-MM-DD" (UTC+8).
 pub(crate) fn chrono_local_date() -> String {
     let dur = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let days = dur.as_secs() / 86400;
-    let (y, m, d) = civil_from_days(days as i64 + 719468);
+    // UTC+8 offset
+    let secs = dur.as_secs() + 8 * 3600;
+    let days = secs / 86400;
+    let (y, m, d) = civil_from_days(days as i64);
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Return current time as "YYYY-MM-DD HH:MM" (UTC-based).
+/// Return current time as "UTC+8 YYYY-MM-DD HH:MM".
 pub(crate) fn chrono_local_datetime() -> String {
     let dur = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = dur.as_secs();
+    // UTC+8 offset
+    let secs = dur.as_secs() + 8 * 3600;
     let days = secs / 86400;
     let day_secs = secs % 86400;
     let hours = day_secs / 3600;
     let minutes = (day_secs % 3600) / 60;
-    let (y, m, d) = civil_from_days(days as i64 + 719468);
-    format!("{y:04}-{m:02}-{d:02} {hours:02}:{minutes:02}")
+    let (y, m, d) = civil_from_days(days as i64);
+    format!("UTC+8 {y:04}-{m:02}-{d:02} {hours:02}:{minutes:02}")
 }
 
 /// Convert days since epoch 0000-01-01 to (year, month, day).
