@@ -194,15 +194,21 @@ fn spawn_agent_child(
             while let Ok(frame) = tui_rx.recv() {
                 let json = match serde_json::to_string(&frame) {
                     Ok(j) => j,
-                    Err(_) => break,
+                    Err(e) => {
+                        eprintln!("[TUI] writer: JSON serialize error: {e}");
+                        break;
+                    }
                 };
                 if writeln!(stdin, "{}", json).is_err() {
+                    eprintln!("[TUI] writer: stdin write error — pipe broken");
                     break;
                 }
                 if stdin.flush().is_err() {
+                    eprintln!("[TUI] writer: stdin flush error — pipe broken");
                     break;
                 }
             }
+            eprintln!("[TUI] writer: tui_rx disconnected — exiting");
         }));
         if let Err(e) = result {
             let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
@@ -210,6 +216,7 @@ fn spawn_agent_child(
                 else { "unknown panic".into() };
             eprintln!("[TUI] writer thread panicked: {}", msg);
         }
+        eprintln!("[TUI] writer thread exited");
     });
 
     // Reader thread: child stdout → mpsc (JSON lines → Agent2Ui)
