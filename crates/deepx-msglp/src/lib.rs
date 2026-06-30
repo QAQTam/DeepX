@@ -204,9 +204,15 @@ impl Loop {
         }
     }
 
-    /// Convenience: send an event to the writer thread.
+    /// Send a critical event (blocking — must be delivered).
     fn emit(&self, event: Agent2Ui) {
         let _ = self.event_tx.send(event);
+    }
+
+    /// Send a delta event (non-blocking — dropped if channel full).
+    /// Use for streaming content that has overlapping successors (RoundDelta, ExecProgress).
+    fn emit_delta(&self, event: Agent2Ui) {
+        let _ = self.event_tx.try_send(event);
     }
 
     /// Drain all pending commands from the channel (non-blocking).
@@ -796,14 +802,14 @@ impl Loop {
                                 || answer_buf.len() >= FLUSH_CHAR_THRESHOLD
                             {
                                 if !think_buf.is_empty() {
-                                    self.emit(Agent2Ui::RoundDelta {
+                                    self.emit_delta(Agent2Ui::RoundDelta {
                                         turn_id: turn_id.clone(), round_num,
                                         kind: RoundDeltaKind::Thinking,
                                         delta: std::mem::take(&mut think_buf),
                                     });
                                 }
                                 if !answer_buf.is_empty() {
-                                    self.emit(Agent2Ui::RoundDelta {
+                                    self.emit_delta(Agent2Ui::RoundDelta {
                                         turn_id: turn_id.clone(), round_num,
                                         kind: RoundDeltaKind::Answering,
                                         delta: std::mem::take(&mut answer_buf),
@@ -820,14 +826,14 @@ impl Loop {
                                 || think_buf.len() >= FLUSH_CHAR_THRESHOLD
                             {
                                 if !think_buf.is_empty() {
-                                    self.emit(Agent2Ui::RoundDelta {
+                                    self.emit_delta(Agent2Ui::RoundDelta {
                                         turn_id: turn_id.clone(), round_num,
                                         kind: RoundDeltaKind::Thinking,
                                         delta: std::mem::take(&mut think_buf),
                                     });
                                 }
                                 if !answer_buf.is_empty() {
-                                    self.emit(Agent2Ui::RoundDelta {
+                                    self.emit_delta(Agent2Ui::RoundDelta {
                                         turn_id: turn_id.clone(), round_num,
                                         kind: RoundDeltaKind::Answering,
                                         delta: std::mem::take(&mut answer_buf),
@@ -839,14 +845,14 @@ impl Loop {
                         deepx_gate::StreamEvent::Done { raw_message, usage, .. } => {
                             // Flush buffered deltas before processing completion
                             if !think_buf.is_empty() {
-                                self.emit(Agent2Ui::RoundDelta {
+                                self.emit_delta(Agent2Ui::RoundDelta {
                                     turn_id: turn_id.clone(), round_num,
                                     kind: RoundDeltaKind::Thinking,
                                     delta: std::mem::take(&mut think_buf),
                                 });
                             }
                             if !answer_buf.is_empty() {
-                                self.emit(Agent2Ui::RoundDelta {
+                                self.emit_delta(Agent2Ui::RoundDelta {
                                     turn_id: turn_id.clone(), round_num,
                                     kind: RoundDeltaKind::Answering,
                                     delta: std::mem::take(&mut answer_buf),
@@ -878,7 +884,7 @@ impl Loop {
                             }
                         }
                         deepx_gate::StreamEvent::ToolCallProgress { index, id, name, args_so_far } => {
-                            self.emit(Agent2Ui::ToolCallPreview {
+                        self.emit_delta(Agent2Ui::ToolCallPreview {
                                 turn_id: turn_id.clone(),
                                 round_num,
                                 index,
@@ -1009,7 +1015,7 @@ impl Loop {
                                     // Flush all accumulated batches
                                     for (tid, merged) in batches.drain() {
                                         log::info!("[AGENT] ExecProgress batch: {} {} chars", tid, merged.len());
-                                        self.emit(Agent2Ui::ExecProgress {
+                                self.emit_delta(Agent2Ui::ExecProgress {
                                             tool_call_id: tid,
                                             chunk: merged,
                                         });
@@ -1019,7 +1025,7 @@ impl Loop {
                                     // No new data in 50ms — flush any pending batches
                                     if !batches.is_empty() {
                                         for (tid, merged) in batches.drain() {
-                                            self.emit(Agent2Ui::ExecProgress {
+                                    self.emit_delta(Agent2Ui::ExecProgress {
                                                 tool_call_id: tid,
                                                 chunk: merged,
                                             });
@@ -1031,7 +1037,7 @@ impl Loop {
                                     log::info!("[AGENT] drain loop disconnected");
                                     // Flush final batches
                                     for (tid, merged) in batches.drain() {
-                                        self.emit(Agent2Ui::ExecProgress {
+                                self.emit_delta(Agent2Ui::ExecProgress {
                                             tool_call_id: tid,
                                             chunk: merged,
                                         });
