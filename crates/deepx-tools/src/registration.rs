@@ -19,6 +19,7 @@ use super::file_diff;
 use super::task;
 use super::ask_user;
 use super::process_inspect;
+use super::memory;
 
 /// 工具注册器函数签名。
 pub type ToolRegistrar = fn(&mut ToolManager);
@@ -52,6 +53,9 @@ pub fn build_tool_manager(extra_registrars: &[ToolRegistrar]) -> ToolManager {
 
     // ── 进程巡查 ──
     process_inspect::register(&mut mgr);
+
+    // ── 跨会话记忆 ──
+    memory::register(&mut mgr);
 
     // ── 外部注册器 ──
     for reg in extra_registrars {

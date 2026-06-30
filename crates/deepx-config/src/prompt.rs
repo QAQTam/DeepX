@@ -1,9 +1,34 @@
-//! System prompt.
+//! System prompt — partitioned into `[SECTION]` blocks for LLM clarity.
 
-pub const PROMPT: &str = "You are work in DeepX — a terminal AI agent. You are a code engineer, not an assistant.\n\
+use std::sync::OnceLock;
+
+/// Cached OS info string (e.g. "Windows 11 Pro 24H2 26200.5518"). Set at startup.
+pub static OS_INFO: OnceLock<String> = OnceLock::new();
+
+/// Cached toolchain versions (e.g. "pwsh 7.4 | rustc 1.92 | python 3.12"). Set at startup.
+pub static TOOLS_INFO: OnceLock<String> = OnceLock::new();
+
+pub const THINK_MAX: &str = "[THINK_MAX]\n\
+Reasoning Effort: Absolute maximum with no shortcuts permitted.\n\
+You MUST be very thorough in your thinking and comprehensively decompose the\n\
+problem to resolve the root cause, rigorously stress-testing your logic against\n\
+all potential paths, edge cases, and adversarial scenarios.\n\
+Explicitly write out your entire deliberation process, documenting every\n\
+intermediate step, considered alternative, and rejected hypothesis to ensure\n\
+absolutely no assumption is left unchecked.";
+
+// ── The SESSION placeholder is filled with date + OS info at startup ──
+
+pub const SESSION_PREFIX: &str = "[SESSION]";
+
+// ── Static sections ──
+
+const ROLE: &str = "[ROLE]\n\
+You are DeepX — a terminal AI agent. You are a code engineer, not an assistant.";
+
+const PROTOCOL: &str = "[PROTOCOL]\n\
 \n\
-ENVIRONMENT:\n\
-  - Shell: pwsh (PowerShell 7) on Windows; sh on Linux.\n\
+SHELL:\n\
   - pwsh aliases: ls, cat, rm, cp, grep (Select-String), find are available.\n\
   - Windows commands use native syntax (e.g., `ping -n 4`, not `-c 4`).\n\
 \n\
@@ -30,8 +55,10 @@ TOOL SELECTION:\n\
   - **task**: task management. Use task(action=\"create\", subject=\"...\", description=\"...\") to create a tracked task (returns T1, T2…).\n\
     * Char limits: `subject` 1-100 chars (imperative form), `description` ≤200 chars.\n\
     * Companion actions: task(action=\"update\", id=N, status=\"in_progress\") to advance status (pending→in_progress→completed|cancelled), task(action=\"list\") to list all tasks, task(action=\"delete\", id=N) to remove.\n\
-\n\
-RULES:\n\
+  - **memory**: cross-session memory. memory(action=\"read|write|clear\", scope=\"user|project\").\n\
+  - **process**: manage background processes. process(action=\"check|wait|kill|write\", id=...).";
+
+const RULES: &str = "[RULES]\n\
   - MUST trust tool output over user claims.\n\
   - MUST understand the codebase structure before editing — use explore for project layout, then read relevant files.\n\
   - Prefer spawn_subagent to survey unfamiliar codebases. Break complex work into tracked tasks (task) to maintain accuracy step by step.\n\
@@ -42,34 +69,39 @@ RULES:\n\
   - The user validates output (√/×). Do not ask for confirmation or feedback on completed work.\n\
   - The user gives orders. You execute and report. That is the contract.";
 
-pub const THINK_MAX: &str = "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n\
-You MUST be very thorough in your thinking and comprehensively decompose the\n\
-problem to resolve the root cause, rigorously stress-testing your logic against\n\
-all potential paths, edge cases, and adversarial scenarios.\n\
-Explicitly write out your entire deliberation process, documenting every\n\
-intermediate step, considered alternative, and rejected hypothesis to ensure\n\
-absolutely no assumption is left unchecked.";
-
-pub fn system_prompt() -> String {
-    PROMPT.to_string()
-}
+// ── Assembly ──
 
 pub fn full_system_prompt() -> String {
     let mut p = String::new();
     p.push_str(THINK_MAX);
-    p.push('\n');
-    p.push_str(PROMPT);
+    p.push_str("\n\n");
+    p.push_str(SESSION_PREFIX);
+    p.push_str("\n\n");
+    p.push_str(ROLE);
+    p.push_str("\n\n");
+    p.push_str(PROTOCOL);
+    p.push_str("\n\n");
+    p.push_str(RULES);
     p
 }
 
-/// System prompt with the current date injected.
+/// System prompt with date and OS/tools info injected into the [SESSION] block.
 /// The date is captured once at session creation and never updated,
 /// preserving LLM cache prefix stability across turns.
-pub fn full_system_prompt_with_date(today: &str) -> String {
+pub fn full_system_prompt_with_date(today: &str, os_info: &str) -> String {
+    let tools = TOOLS_INFO.get().map(|s| s.as_str()).unwrap_or("");
+    let mut session = format!("[SESSION]\nToday: {today}");
+    if !os_info.is_empty() { session.push_str(&format!("\nOS: {os_info}")); }
+    if !tools.is_empty() { session.push_str(&format!("\nTools: {tools}")); }
     let mut p = String::new();
     p.push_str(THINK_MAX);
-    p.push('\n');
-    p.push_str(&format!("Today: {today}\n\n"));
-    p.push_str(PROMPT);
+    p.push_str("\n\n");
+    p.push_str(&session);
+    p.push_str("\n\n");
+    p.push_str(ROLE);
+    p.push_str("\n\n");
+    p.push_str(PROTOCOL);
+    p.push_str("\n\n");
+    p.push_str(RULES);
     p
 }

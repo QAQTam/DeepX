@@ -1,14 +1,13 @@
 //! Unix PTY backend via `libc::forkpty`.
 
 use std::io;
-use std::os::fd::RawFd;
 use std::os::unix::io::FromRawFd;
 
 use super::ExitStatus;
 
 pub struct Imp {
     pid: u32,
-    master_fd: RawFd,
+    detached: bool,
 }
 
 impl Imp {
@@ -41,14 +40,24 @@ impl Imp {
         if ret != 0 {
             return Err(io::Error::last_os_error());
         }
+        // Reap the zombie
+        unsafe { libc::waitpid(self.pid as i32, std::ptr::null_mut(), 0); }
         Ok(())
+    }
+
+    pub fn detach(&mut self) {
+        self.detached = true;
     }
 }
 
 impl Drop for Imp {
     fn drop(&mut self) {
-        unsafe {
-            libc::close(self.master_fd);
+        if !self.detached {
+            // Kill and reap child
+            unsafe {
+                libc::kill(self.pid as i32, libc::SIGKILL);
+                libc::waitpid(self.pid as i32, std::ptr::null_mut(), 0);
+            }
         }
     }
 }
@@ -101,15 +110,24 @@ pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> 
         }
     }
 
-    // Parent: wrap master_fd into a reader
-    let file = unsafe { std::fs::File::from_raw_fd(master_fd) };
-    let output: Box<dyn io::Read + Send> = Box::new(file);
+    // Parent: dup the fd for writing, wrap original for reading.
+    // Both File objects own their fds and will close them on drop.
+    let writer_fd = unsafe { libc::dup(master_fd) };
+    if writer_fd < 0 {
+        unsafe { libc::close(master_fd); }
+        return Err(io::Error::last_os_error());
+    }
+    let reader = unsafe { std::fs::File::from_raw_fd(master_fd) };
+    let writer = unsafe { std::fs::File::from_raw_fd(writer_fd) };
+    let output: Box<dyn io::Read + Send> = Box::new(reader);
+    let input: Option<Box<dyn io::Write + Send>> = Some(Box::new(writer));
 
     Ok(super::PtyProcess {
         inner: Imp {
             pid: pid as u32,
-            master_fd,
+            detached: false,
         },
         output: Some(output),
+        input,
     })
 }

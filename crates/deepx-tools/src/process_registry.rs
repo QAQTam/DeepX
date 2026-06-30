@@ -26,6 +26,8 @@ pub struct ProcEntry {
     /// Final answer collected from subagent stdout.
     pub answer: Arc<Mutex<Option<String>>>,
     child: Arc<Mutex<Option<std::process::Child>>>,
+    /// PTY stdin writer for interactive processes.
+    pty_writer: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
 }
 
 /// Global process registry.
@@ -62,6 +64,7 @@ impl ProcessRegistry {
                 stderr: Arc::new(Mutex::new(String::new())),
                 answer: Arc::new(Mutex::new(None)),
                 child: Arc::new(Mutex::new(None)),
+                pty_writer: Arc::new(Mutex::new(None)),
             });
             id
         })
@@ -74,6 +77,34 @@ impl ProcessRegistry {
                 *entry.child.lock().unwrap() = Some(child);
             }
         });
+    }
+
+    /// Attach a PTY stdin writer to an entry (for interactive processes).
+    pub fn attach_writer(id: u32, writer: Box<dyn std::io::Write + Send>) {
+        Self::with(|r| {
+            if let Some(entry) = r.entries.get(&id) {
+                *entry.pty_writer.lock().unwrap() = Some(writer);
+            }
+        });
+    }
+
+    /// Write text to a process's PTY stdin. Returns true if the write succeeded.
+    pub fn write_to(id: u32, text: &str) -> Result<usize, String> {
+        let writer_arc = Self::with(|r| {
+            r.entries.get(&id).and_then(|e| {
+                if matches!(*e.status.lock().unwrap(), ProcStatus::Running) {
+                    Some(e.pty_writer.clone())
+                } else {
+                    None
+                }
+            })
+        }).ok_or_else(|| format!("process {id} not found or not running"))?;
+
+        let mut guard = writer_arc.lock().map_err(|e| format!("lock: {e}"))?;
+        match guard.as_mut() {
+            Some(w) => w.write(text.as_bytes()).map_err(|e| format!("write: {e}")),
+            None => Err(format!("process {id} has no PTY stdin (not interactive)")),
+        }
     }
 
     /// Mark a process as exited.

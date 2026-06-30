@@ -78,9 +78,6 @@ impl AgentState {
                 "<workspace_path>{ws}</workspace_path>"
             ));
         }
-        // Future extensibility:
-        // annotations.push("<active_agent>Alpha</active_agent>");
-        // annotations.push("<teammates><agent>Beta</agent></teammates>");
         self.msg.build_context_for_gate("", &annotations)
     }
 

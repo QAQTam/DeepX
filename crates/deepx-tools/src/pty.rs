@@ -26,6 +26,7 @@ impl ExitStatus {
 pub struct PtyProcess {
     inner: Imp,
     output: Option<Box<dyn io::Read + Send>>,
+    input: Option<Box<dyn io::Write + Send>>,
 }
 
 impl PtyProcess {
@@ -37,6 +38,17 @@ impl PtyProcess {
     /// Take ownership of the output reader. Call once.
     pub fn take_output(&mut self) -> Option<Box<dyn io::Read + Send>> {
         self.output.take()
+    }
+
+    /// Take ownership of the stdin writer. Call once.
+    pub fn take_input(&mut self) -> Option<Box<dyn io::Write + Send>> {
+        self.input.take()
+    }
+
+    /// Detach from the process: prevents Drop from killing it.
+    /// Use when handing the process off to background management.
+    pub fn detach(&mut self) {
+        self.inner.detach();
     }
 
     /// Check if the process is still running.

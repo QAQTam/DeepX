@@ -7,6 +7,7 @@ fn main() {
     // strips it. This is injected into child agent processes so pwsh/conpty
     // can find git, cargo, etc.
     deepx_tauri_lib::agent_bridge::cache_system_path();
+    deepx_tauri_lib::agent_bridge::detect_os_info();
     
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {

@@ -139,6 +139,26 @@ pub fn cache_system_path() {
     unsafe { std::env::set_var("PATH", &path); }
 }
 
+/// Detect OS version and store it for injection into the system prompt [SESSION] block.
+/// Must be called from main() early, before any session is created.
+pub fn detect_os_info() {
+    #[cfg(target_os = "windows")]
+    {
+        let info = windows_os_info();
+        if !info.is_empty() {
+            let _ = deepx_config::prompt::OS_INFO.set(info);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let info = unix_os_info();
+        let _ = deepx_config::prompt::OS_INFO.set(info);
+    }
+    // Detect shell + toolchain versions
+    let tools = detect_tools();
+    let _ = deepx_config::prompt::TOOLS_INFO.set(tools);
+}
+
 #[cfg(target_os = "windows")]
 fn windows_reg_path() -> String {
     
@@ -201,6 +221,125 @@ fn windows_reg_path() -> String {
         
         result
     }
+}
+
+/// Read a string value from a Windows registry key (returns empty if not found).
+#[cfg(target_os = "windows")]
+fn reg_read_string(hkey: isize, subkey_str: &str, value_name_str: &str) -> String {
+    unsafe {
+        unsafe extern "system" {
+            fn RegOpenKeyExW(
+                hkey: isize, subkey: *const u16, _uloptions: u32,
+                _samdesired: u32, phkresult: *mut isize,
+            ) -> i32;
+            fn RegQueryValueExW(
+                hkey: isize, value: *const u16, _reserved: *const u8,
+                pdwtype: *mut u32, pbdata: *mut u8, pcbdata: *mut u32,
+            ) -> i32;
+            fn RegCloseKey(hkey: isize) -> i32;
+        }
+        const KEY_READ: u32 = 0x20019;
+        let subkey_wide: Vec<u16> = subkey_str.encode_utf16().collect();
+        let value_wide: Vec<u16> = value_name_str.encode_utf16().collect();
+        let mut key_handle: isize = 0;
+        if RegOpenKeyExW(hkey, subkey_wide.as_ptr(), 0, KEY_READ, &mut key_handle) != 0 {
+            return String::new();
+        }
+        let mut data_type: u32 = 0;
+        let mut data_size: u32 = 0;
+        if RegQueryValueExW(key_handle, value_wide.as_ptr(), std::ptr::null(),
+            &mut data_type, std::ptr::null_mut(), &mut data_size) != 0 || data_size == 0 {
+            RegCloseKey(key_handle);
+            return String::new();
+        }
+        let mut buf: Vec<u16> = vec![0u16; (data_size / 2) as usize + 1];
+        if RegQueryValueExW(key_handle, value_wide.as_ptr(), std::ptr::null(),
+            &mut data_type, buf.as_mut_ptr() as *mut u8, &mut data_size) != 0 {
+            RegCloseKey(key_handle);
+            return String::new();
+        }
+        RegCloseKey(key_handle);
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..len])
+    }
+}
+
+/// Build an OS info string like "Windows 11 Pro 24H2 26200.5518".
+#[cfg(target_os = "windows")]
+fn windows_os_info() -> String {
+    const HKLM: isize = -2147483646i64 as isize; // 0x80000002
+    let nt = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0";
+    let name = reg_read_string(HKLM, nt, "ProductName\0");
+    if name.is_empty() { return String::new(); }
+    let display = reg_read_string(HKLM, nt, "DisplayVersion\0");
+    let build = reg_read_string(HKLM, nt, "CurrentBuild\0");
+    let ubr = reg_read_string(HKLM, nt, "UBR\0");
+    if build.is_empty() { return name; }
+    let mut s = name;
+    if !display.is_empty() {
+        s.push_str(&format!(" {} ({}.{})", display, build, ubr));
+    } else {
+        s.push_str(&format!(" ({}.{})", build, ubr));
+    }
+    s
+}
+
+/// Detect OS info on Unix via uname.
+#[cfg(not(target_os = "windows"))]
+fn unix_os_info() -> String {
+    use std::process::Command;
+    let sysname = Command::new("uname").arg("-s").output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let release = Command::new("uname").arg("-r").output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if sysname.is_empty() { return String::new(); }
+    if release.is_empty() { sysname } else { format!("{} {}", sysname, release) }
+}
+
+/// Quick scan of shell version and common toolchains on PATH.
+fn detect_tools() -> String {
+    use std::process::Command;
+    /// Run a command, return first line of output or empty.
+    fn try_version(cmd: &str, args: &[&str]) -> Option<String> {
+        let child = Command::new(cmd)
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        let output = child.wait_with_output().ok()?;
+        // Some tools (python, java) output version to stderr
+        let raw = if output.stdout.is_empty() { &output.stderr } else { &output.stdout };
+        let s = String::from_utf8_lossy(raw);
+        let first_line = s.lines().next().unwrap_or("").trim().to_string();
+        if first_line.is_empty() { None } else { Some(first_line) }
+    }
+    // Ordered: shell first, then important toolchains
+    let probes: &[(&str, &[&str])] = &[
+        #[cfg(target_os = "windows")]
+        ("pwsh", &["--version"]),
+        #[cfg(not(target_os = "windows"))]
+        ("bash", &["--version"]),
+        ("rustc", &["--version"]),
+        ("cargo", &["--version"]),
+        ("python", &["--version"]),
+        ("python3", &["--version"]),
+        ("node", &["--version"]),
+        ("git", &["--version"]),
+        ("java", &["--version"]),
+    ];
+    let mut parts: Vec<String> = Vec::new();
+    for (cmd, args) in probes {
+        if let Some(v) = try_version(cmd, args) {
+            // Compact: "rustc 1.92.0" or "pwsh 7.4.6"
+            // Keep first 60 chars to avoid junk
+            let short = if v.len() > 80 { format!("{}...", &v[..77]) } else { v };
+            parts.push(short);
+        }
+    }
+    parts.join(" | ")
 }
 
 pub struct AgentRegistry {

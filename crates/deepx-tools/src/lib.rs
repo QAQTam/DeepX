@@ -42,6 +42,8 @@ pub mod registration;
 
 pub mod persistence;
 
+pub mod memory;
+
 pub mod manager;
 
 pub use web::set_c7_key;

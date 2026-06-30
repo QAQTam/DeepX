@@ -12,6 +12,7 @@ use super::ExitStatus;
 pub struct Imp {
     proc: conpty::Process,
     exit_cached: Option<ExitStatus>,
+    detached: bool,
 }
 
 impl Imp {
@@ -46,12 +47,18 @@ impl Imp {
     pub fn kill(&mut self) -> io::Result<()> {
         self.proc.exit(1).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
+
+    pub fn detach(&mut self) {
+        self.detached = true;
+    }
 }
 
 impl Drop for Imp {
     fn drop(&mut self) {
-        let _ = self.proc.exit(1);
-        let _ = self.proc.wait(None);
+        if !self.detached {
+            let _ = self.proc.exit(1);
+            let _ = self.proc.wait(None);
+        }
     }
 }
 
@@ -65,13 +72,15 @@ fn encode_pwsh_command(command: &str) -> String {
 
 pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> {
     let mut cmd = Command::new("pwsh");
-    let encoded = encode_pwsh_command(command);
+    // Prepend env-var overrides to the command: conpty discards the parent
+    // environment if ANY explicit env vars are set via Command::env().
+    // See conpty-0.7.0 src/process.rs:302-312 (environment_block_unicode).
+    let full_command = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $env:GIT_PAGER='cat'; $env:PAGER='cat'; $env:SYSTEMD_PAGER='cat'; {}",
+        command
+    );
+    let encoded = encode_pwsh_command(&full_command);
     cmd.args(["-NoLogo", "-NoProfile", "-EncodedCommand", &encoded]);
-    // Disable interactive pagers: PTY means isatty()=true, so git etc
-    // would invoke less/pager and block waiting for stdin.
-    cmd.env("GIT_PAGER", "cat");
-    cmd.env("PAGER", "cat");
-    cmd.env("SYSTEMD_PAGER", "cat");
     // Suppress console window flash
     #[cfg(target_os = "windows")]
     {
@@ -91,8 +100,14 @@ pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> 
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
     );
 
+    let input: Option<Box<dyn io::Write + Send>> = Some(Box::new(
+        proc.input()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+    ));
+
     Ok(super::PtyProcess {
-        inner: Imp { proc, exit_cached: None },
+        inner: Imp { proc, exit_cached: None, detached: false },
         output: Some(output),
+        input,
     })
 }

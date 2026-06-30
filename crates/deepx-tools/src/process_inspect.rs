@@ -9,7 +9,7 @@ use crate::{ToolCallCtx, ToolResult, process_registry::ProcessRegistry};
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(crate::ToolHandler {
         key: crate::ToolKey::new("process", "check"),
-        description: "Process management: check, wait, kill. Use check to inspect a running background process (exec or subagent). \
+        description: "Process management: check, wait, kill, write. Use check to inspect a running background process (exec or subagent). \
             Returns status, elapsed time, and the last output tail. \
             Use when a previous exec/subagent timed out — you can peek at whether it's \
             still making progress or has stalled.",
@@ -57,6 +57,25 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_kill,
+        safety: |_| crate::SafetyVerdict::Allow,
+        default_timeout: std::time::Duration::from_secs(15),
+    });
+
+    mgr.register(crate::ToolHandler {
+        key: crate::ToolKey::new("process", "write"),
+        description: "Write text to the stdin of a running interactive process. \
+            Use when a background exec process is waiting for input (e.g. password prompt, [Y/n] confirmation). \
+            Append \\n to submit the input.",
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "Process ID to write to."},
+                "text": {"type": "string", "description": "Text to send to stdin. Use \\n for newline."}
+            },
+            "required": ["id", "text"],
+            "additionalProperties": false
+        }),
+        handler: handle_write,
         safety: |_| crate::SafetyVerdict::Allow,
         default_timeout: std::time::Duration::from_secs(15),
     });
@@ -117,5 +136,27 @@ fn handle_kill(ctx: ToolCallCtx) -> ToolResult {
             success: false,
             content: format!("[ERROR] kill_process: process {id} not found or already exited"),
         }
+    }
+}
+
+fn handle_write(ctx: ToolCallCtx) -> ToolResult {
+    let id: u32 = match ctx.args.get("id").and_then(|v| v.as_u64()) {
+        Some(v) if v <= u32::MAX as u64 => v as u32,
+        _ => return ToolResult { success: false, content: "[ERROR] process write: id required".into() },
+    };
+    let text = match ctx.args.get("text").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t,
+        _ => return ToolResult { success: false, content: "[ERROR] process write: text required".into() },
+    };
+
+    match ProcessRegistry::write_to(id, text) {
+        Ok(n) => ToolResult {
+            success: true,
+            content: format!("[OK] Wrote {n} bytes to process {id}."),
+        },
+        Err(e) => ToolResult {
+            success: false,
+            content: format!("[ERROR] process write: {e}"),
+        },
     }
 }

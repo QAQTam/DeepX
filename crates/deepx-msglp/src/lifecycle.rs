@@ -72,7 +72,10 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     deepx_tools::bridge::load_workspace(&agent.session.seed);
     agent.msg.push_system(deepx_types::Message::system(
-        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
+        &deepx_config::prompt::full_system_prompt_with_date(
+            &chrono_local_date(),
+            deepx_config::prompt::OS_INFO.get().map(|s| s.as_str()).unwrap_or(""),
+        )
     ));
     agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session {}", agent.session.seed);
@@ -93,7 +96,10 @@ pub fn create_session(agent: &mut AgentState) {
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     deepx_tools::bridge::load_workspace(&agent.session.seed);
     agent.msg.push_system(deepx_types::Message::system(
-        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
+        &deepx_config::prompt::full_system_prompt_with_date(
+            &chrono_local_date(),
+            deepx_config::prompt::OS_INFO.get().map(|s| s.as_str()).unwrap_or(""),
+        )
     ));
     agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session {}", agent.session.seed);
@@ -112,7 +118,10 @@ pub fn create_session_with_seed(agent: &mut AgentState) {
     deepx_tools::bridge::set_current_session(&agent.session.seed);
     deepx_tools::bridge::load_workspace(&agent.session.seed);
     agent.msg.push_system(deepx_types::Message::system(
-        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
+        &deepx_config::prompt::full_system_prompt_with_date(
+            &chrono_local_date(),
+            deepx_config::prompt::OS_INFO.get().map(|s| s.as_str()).unwrap_or(""),
+        )
     ));
     agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session with preset seed {}", agent.session.seed);
