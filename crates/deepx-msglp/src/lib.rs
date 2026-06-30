@@ -388,8 +388,10 @@ impl Loop {
                 self.handle_reload_config();
             }
 
-            // Signal readiness before blocking (for Tauri refresh recovery)
-            self.emit(Agent2Ui::Ready);
+            // Signal readiness before blocking (for Tauri refresh recovery).
+            // Use emit_delta: if channel is full, drop it — Done already implies
+            // readiness. Only startup/reconnect need guaranteed delivery.
+            self.emit_delta(Agent2Ui::Ready);
 
             // Block waiting for next command
             let frame: Ui2Agent = match self.cmd_rx.recv() {
