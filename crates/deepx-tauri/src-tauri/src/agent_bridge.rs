@@ -335,7 +335,10 @@ fn detect_tools() -> String {
         if let Some(v) = try_version(cmd, args) {
             // Compact: "rustc 1.92.0" or "pwsh 7.4.6"
             // Keep first 60 chars to avoid junk
-            let short = if v.len() > 80 { format!("{}...", &v[..77]) } else { v };
+            let short = if v.len() > 80 {
+                let boundary = v.floor_char_boundary(77);
+                format!("{}...", &v[..boundary])
+            } else { v };
             parts.push(short);
         }
     }
@@ -656,8 +659,14 @@ fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
             .stdin.clone()
     };
     let mut stdin = stdin_arc.lock().map_err(|e| format!("lock: {e}"))?;
-    writeln!(*stdin, "{}", json).map_err(|e| format!("write: {e}"))?;
-    stdin.flush().map_err(|e| format!("flush: {e}"))
+    if writeln!(*stdin, "{}", json).is_err() || stdin.flush().is_err() {
+        // Agent process is dead — remove it so the next ensure_agent respawns
+        let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
+        registry.instances.remove(seed);
+        log::warn!("[REGISTRY] agent {} pipe broken, removed from registry", &seed[..seed.len().min(8)]);
+        return Err(format!("agent {seed} process died"));
+    }
+    Ok(())
 }
 
 /// Shutdown all running agents. Called on window close.

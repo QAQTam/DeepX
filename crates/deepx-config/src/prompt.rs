@@ -75,17 +75,19 @@ pub fn full_system_prompt() -> String {
     let mut p = String::new();
     p.push_str(THINK_MAX);
     p.push_str("\n\n");
-    p.push_str(SESSION_PREFIX);
-    p.push_str("\n\n");
     p.push_str(ROLE);
     p.push_str("\n\n");
     p.push_str(PROTOCOL);
     p.push_str("\n\n");
     p.push_str(RULES);
+    p.push_str("\n\n");
+    p.push_str(SESSION_PREFIX);
     p
 }
 
 /// System prompt with date and OS/tools info injected into the [SESSION] block.
+/// [SESSION] is placed last so prefix cache is shared across sessions —
+/// the static blocks (THINK_MAX/ROLE/PROTOCOL/RULES) occupy identical positions.
 /// The date is captured once at session creation and never updated,
 /// preserving LLM cache prefix stability across turns.
 pub fn full_system_prompt_with_date(today: &str, os_info: &str) -> String {
@@ -96,12 +98,12 @@ pub fn full_system_prompt_with_date(today: &str, os_info: &str) -> String {
     let mut p = String::new();
     p.push_str(THINK_MAX);
     p.push_str("\n\n");
-    p.push_str(&session);
-    p.push_str("\n\n");
     p.push_str(ROLE);
     p.push_str("\n\n");
     p.push_str(PROTOCOL);
     p.push_str("\n\n");
     p.push_str(RULES);
+    p.push_str("\n\n");
+    p.push_str(&session);
     p
 }

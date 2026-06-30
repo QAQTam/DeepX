@@ -3,6 +3,24 @@
 // For TUI/agent modes, the console is used normally.
 
 fn main() {
+    // Flush logs and write crash marker on panic, then abort.
+    // This ensures CJK-related panics (byte boundary, encoding) leave debug traces.
+    std::panic::set_hook(Box::new(|info| {
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic".to_string()
+        };
+        let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        eprintln!("[FATAL] panicked at {loc}: {msg}");
+        log::error!("[FATAL] panicked at {loc}: {msg}");
+        // Flush log crate before abort
+        log::logger().flush();
+        std::process::abort();
+    }));
+    
     // Capture full system PATH at process start, before Windows GUI subsystem
     // strips it. This is injected into child agent processes so pwsh/conpty
     // can find git, cargo, etc.

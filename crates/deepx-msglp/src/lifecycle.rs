@@ -36,6 +36,8 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 
                 deepx_tools::bridge::set_current_session(&agent.session.seed);
                 deepx_tools::bridge::load_workspace(&agent.session.seed);
+                // Hot-load latest tool schema (order-stable: new tools appended at end)
+                agent.tool_defs = deepx_tools::bridge::all_tools();
                 log::info!(
                     "deepx-agent: restored session {} ({} msgs, {} tokens)",
                     agent.session.seed,

@@ -24,6 +24,7 @@ impl Log for FileLogger {
             record.target(),
             record.args()
         );
+        let _ = f.flush(); // ensure crash visibility
     }
 
     fn flush(&self) {

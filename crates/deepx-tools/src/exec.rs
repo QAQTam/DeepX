@@ -52,11 +52,15 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         let mut reader = reader; // take ownership and make mutable
         let mut buf = [0u8; 4096];
         let mut pending = String::new();
+        let mut partial = Vec::new(); // trailing incomplete multi-byte bytes
         let mut line_count = 0u32;
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => {
-                    // EOF — flush any remaining partial line
+                    // EOF — flush any remaining partial bytes + pending line
+                    if !partial.is_empty() {
+                        pending.push_str(&String::from_utf8_lossy(&partial));
+                    }
                     if !pending.is_empty() {
                         line_count += 1;
                         if let Some(ref tx) = pt_out {
@@ -68,7 +72,31 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
                     break;
                 }
                 Ok(n) => {
-                    pending.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    // Handle CJK split across pipe read boundaries: accumulate
+                    // incomplete trailing bytes from previous read and prepend them.
+                    let chunk_bytes: Vec<u8> = if partial.is_empty() {
+                        buf[..n].to_vec()
+                    } else {
+                        let mut merged = std::mem::take(&mut partial);
+                        merged.extend_from_slice(&buf[..n]);
+                        merged
+                    };
+                    // Detect incomplete trailing multi-byte sequence.
+                    let decoded_strict = String::from_utf8(chunk_bytes.clone());
+                    match decoded_strict {
+                        Ok(clean) => {
+                            pending.push_str(&clean);
+                        }
+                        Err(utf8_err) => {
+                            // Save the incomplete tail for next read
+                            let valid_len = utf8_err.utf8_error().valid_up_to();
+                            let valid = chunk_bytes[..valid_len].to_vec();
+                            partial = chunk_bytes[valid_len..].to_vec();
+                            if let Ok(s) = String::from_utf8(valid) {
+                                pending.push_str(&s);
+                            }
+                        }
+                    }
                     // Emit complete lines (ending with \n) for real-time progress
                     while let Some(pos) = pending.find('\n') {
                         let raw_line: String = pending[..=pos].to_string(); // include \n
