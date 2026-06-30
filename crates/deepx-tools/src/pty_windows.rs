@@ -11,6 +11,7 @@ use super::ExitStatus;
 
 pub struct Imp {
     proc: conpty::Process,
+    exit_cached: Option<ExitStatus>,
 }
 
 impl Imp {
@@ -18,11 +19,24 @@ impl Imp {
         self.proc.pid()
     }
 
-    pub fn is_alive(&self) -> bool {
-        self.proc.is_alive()
+    /// Check if the child process has exited.
+    /// Uses non-blocking wait instead of conpty's is_alive()
+    /// (which checks the conpty host, not the actual command).
+    pub fn is_alive(&mut self) -> bool {
+        // wait(Some(0)) = non-blocking poll. Err means still running.
+        match self.proc.wait(Some(0)) {
+            Ok(_) => {
+                self.exit_cached = Some(ExitStatus { code: 0, success: true });
+                false
+            }
+            Err(_) => true,
+        }
     }
 
     pub fn wait(&self, timeout_millis: Option<u64>) -> io::Result<ExitStatus> {
+        if let Some(ref es) = self.exit_cached {
+            return Ok(es.clone());
+        }
         let timeout = timeout_millis.map(|t| t as u32);
         self.proc.wait(timeout)
             .map(|_| ExitStatus { code: 0, success: true })
@@ -66,7 +80,7 @@ pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> 
     );
 
     Ok(super::PtyProcess {
-        inner: Imp { proc },
+        inner: Imp { proc, exit_cached: None },
         output: Some(output),
     })
 }

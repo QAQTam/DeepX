@@ -131,6 +131,10 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
 
         // Timeout — register and keep alive instead of killing
         if remaining.is_zero() {
+            // Final drain: capture any output already in the channel
+            while let Ok(chunk) = done_rx.try_recv() {
+                output_buf.push_str(&chunk);
+            }
             // Move proc to background watcher thread
             std::thread::spawn(move || {
                 let exit = proc.wait(None).ok();

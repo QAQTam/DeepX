@@ -40,7 +40,7 @@ impl PtyProcess {
     }
 
     /// Check if the process is still running.
-    pub fn is_alive(&self) -> bool {
+    pub fn is_alive(&mut self) -> bool {
         self.inner.is_alive()
     }
 
