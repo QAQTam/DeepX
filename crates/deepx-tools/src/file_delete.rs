@@ -73,8 +73,8 @@ handler!(handle_delete_file, exec_delete_file);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("delete_file", ""),
-        description: "Move a file or directory to trash (.deepx-trash/) instead of permanent deletion. Use restore_file to recover.",
+        key: ToolKey::new("file", "delete"),
+        description: "Move file to trash (.deepx-trash/) instead of permanent deletion.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path to delete"}},"required":["path"],"additionalProperties":false}),
         handler: handle_delete_file,
         safety: crate::default_allow,

@@ -143,7 +143,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
             let (added, removed, first_line) = diff_stats(&diff);
             let added_count = added.max(1);
             let removed_count = removed.max(1);
-            results.push(format!("[DRY RUN] {path} — {n} pattern(s), no changes written\n\n{diff}\n[CHANGE] {path}:{first_line} +{added_count} -{removed_count} | edit_file (dry run)", n = patterns.len()));
+            results.push(format!("[DRY RUN] {path}:{first_line} +{added_count} -{removed_count} | edit_file\n\n{diff}", path = path, first_line = first_line, added_count = added_count, removed_count = removed_count, diff = diff));
         } else {
             match std::fs::write(path, &content) {
                 Ok(_) => {
@@ -151,7 +151,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
                     let (added, removed, first_line) = diff_stats(&diff);
                     let added_count = added.max(1);
                     let removed_count = removed.max(1);
-                    results.push(format!("[OK] {path} — {n} pattern(s): {summary}\n\n{diff}\n[CHANGE] {path}:{first_line} +{added_count} -{removed_count} | edit_file", n = patterns.len(), summary = msgs.join("; ")));
+                    results.push(format!("[OK] {path}:{first_line} +{added_count} -{removed_count} | edit_file\n\n{diff}", path = path, first_line = first_line, added_count = added_count, removed_count = removed_count, diff = diff));
                 }
                 Err(e) => {
                     results.push(format!("[ERROR] Cannot write {path}: {e}"));
@@ -168,8 +168,8 @@ handler!(handle_edit_file, exec_edit_file);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("edit_file", ""),
-        description: "String replacement in files. old_string: text to find. new_string: replacement text. path: target file. Set replace_all=true for all occurrences. Set regex=true if old_string is regex. Use patterns array for batch edits, paths array for editing multiple files.",
+        key: ToolKey::new("file", "edit"),
+        description: "String replacement in files.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"paths":{"type":"array","items":{"type":"string"},"description":"Multiple file paths"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"patterns":{"type":"array","items":{"type":"object","properties":{"old":{"type":"string"},"new":{"type":"string"}},"required":["old","new"]},"description":"Array of {old, new} for batch edits"},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file","default":false},"reason":{"type":"string","description":"Why this change is needed"}},"required":["path","old_string","new_string"],"additionalProperties":false}),
         handler: handle_edit_file,
         safety: crate::default_allow,

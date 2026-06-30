@@ -98,7 +98,58 @@ impl ToolManager {
         let mut defs = Vec::new();
         for (key, handler) in &self.handlers {
             if seen.insert(key.name.clone()) {
-                defs.push(handler.to_tool_def());
+                let mut def = handler.to_tool_def();
+                // Build generic schema for multi-action namespaces
+                let actions: Vec<&str> = self.handlers.keys()
+                    .filter(|k| k.name == key.name && !k.action.is_empty())
+                    .map(|k| k.action.as_str())
+                    .collect();
+                if actions.len() > 1 {
+                    let actions_str = actions.join(", ");
+                    def.function.description = format!("{} -- actions: [{}]", def.function.description, actions_str);
+                    def.function.parameters = serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": actions, "description": "Sub-action to perform"},
+                            "path": {"type": "string", "description": "File or directory path"},
+                            "source": {"type": "string", "description": "Source path (move/copy)"},
+                            "dest": {"type": "string", "description": "Destination path (move/copy)"},
+                            "content": {"type": "string", "description": "Content to write"},
+                            "pattern": {"type": "string", "description": "Search pattern (regex)"},
+                            "old_string": {"type": "string", "description": "Text to find (edit)"},
+                            "new_string": {"type": "string", "description": "Replacement text (edit)"},
+                            "old_lines": {"type": "array", "items": {"type": "string"}, "description": "Lines to remove (edit_diff)"},
+                            "new_lines": {"type": "array", "items": {"type": "string"}, "description": "Lines to insert (edit_diff)"},
+                            "query": {"type": "string", "description": "Search query / C7 query"},
+                            "url": {"type": "string", "description": "URL to fetch"},
+                            "name": {"type": "string", "description": "Library name (C7 resolve)"},
+                            "library_id": {"type": "string", "description": "Context7 library ID"},
+                            "subject": {"type": "string", "description": "Task subject"},
+                            "description": {"type": "string", "description": "Task description"},
+                            "id": {"type": "integer", "description": "Task/Process ID"},
+                            "status": {"type": "string", "description": "Task status"},
+                            "command": {"type": "string", "description": "Shell command"},
+                            "start_line": {"type": "integer", "description": "First line to read (1-based)"},
+                            "end_line": {"type": "integer", "description": "Last line to read (inclusive)"},
+                            "append": {"type": "boolean", "description": "Append instead of overwrite"},
+                            "replace_all": {"type": "boolean", "description": "Replace all occurrences"},
+                            "regex": {"type": "boolean", "description": "Treat old_string as regex"},
+                            "dry_run": {"type": "boolean", "description": "Preview only, do not write"},
+                            "glob": {"type": "string", "description": "File glob filter (e.g. *.rs)"},
+                            "recursive": {"type": "boolean", "description": "Search recursively"},
+                            "reason": {"type": "string", "description": "Why this change is needed"},
+                            "timeout_secs": {"type": "integer", "description": "Max seconds to wait"},
+                            "question": {"type": "string", "description": "Question to ask user"},
+                            "options": {"type": "array", "items": {"type": "string"}, "description": "Preset choices"},
+                            "allow_custom": {"type": "boolean", "description": "Allow custom text input"},
+                            "model": {"type": "string", "description": "Override model"},
+                            "tools": {"type": "array", "items": {"type": "string"}, "description": "Allowed tool names"},
+                            "max_tokens": {"type": "integer", "description": "Max output tokens"}
+                        },
+                        "required": ["action"]
+                    });
+                }
+                defs.push(def);
             }
         }
         defs
@@ -142,7 +193,7 @@ impl ToolManager {
     pub fn prepare_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> Result<PreparedCall, ToolExecReport> {
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                let msg = format!("[ERROR] Tool '{}' not in allowed list", name);
+                let msg = format!("[ERROR] Tool '{}' is not in the allowed list for this subagent. Allowed tools: [{}]", name, allowed.join(", "));
                 return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
             }
         }

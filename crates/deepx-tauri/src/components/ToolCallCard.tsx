@@ -1,9 +1,11 @@
-import { createSignal, Show, createEffect, on } from "solid-js";
+import { createSignal, Show, createEffect, on, onMount, onCleanup } from "solid-js";
 import type { ToolCallDef, ToolResultDef } from "../store/chat";
 import { useI18n } from "../i18n";
 import AnsiUp from "ansi-to-html";
 
-const ansiUp = new AnsiUp();
+// escapeXML: true — escape <, >, & in text content so that tool output
+// containing HTML/CSS/code is displayed as text, not rendered as DOM.
+const ansiUp = new AnsiUp({ escapeXML: true });
 
 const isUnifiedDiff = (text: string): boolean =>
   /^(--- (a\/|\/)|@@ -\d+)/m.test(text);
@@ -93,6 +95,25 @@ export default function ToolCallCard(props: {
   const hasResult = !!props.result;
   // Default open for running tools so streaming output is immediately visible
   const [open, setOpen] = createSignal(!hasResult);
+  const [elapsed, setElapsed] = createSignal(0);
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  // Track elapsed time while tool is running
+  onMount(() => {
+    if (!hasResult) {
+      timer = setInterval(() => setElapsed((n) => n + 1), 1000);
+    }
+  });
+  onCleanup(() => {
+    if (timer) { clearInterval(timer); timer = null; }
+  });
+  // Stop timer when result arrives
+  createEffect(() => {
+    if (hasResult && timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  });
   const stateClass = () =>
     hasResult
       ? props.result!.success ? "tool-success" : "tool-error"
@@ -126,6 +147,9 @@ export default function ToolCallCard(props: {
         </Show>
         <Show when={!hasResult}>
           <span class="tool-card-status tool-running-text">{t().tool.running}</span>
+          <Show when={elapsed() > 0}>
+            <span class="tool-card-elapsed">{elapsed()}s</span>
+          </Show>
         </Show>
       </div>
       <Show when={open() && (hasResult || props.streamingOutput)} fallback={
@@ -134,9 +158,9 @@ export default function ToolCallCard(props: {
         </Show>
       }>
         <div class="tool-card-body" ref={bodyRef} innerHTML={
-          (props.streamingOutput || "") +
-          (hasResult && props.streamingOutput ? "\n\n" : "") +
-          (hasResult ? renderOutput(props.result!.output) : "")
+          hasResult
+            ? renderOutput(props.result!.output)
+            : (props.streamingOutput || "")
         } />
       </Show>
     </div>
@@ -152,3 +176,4 @@ function toolIcon(name: string): string {
   };
   return icons[name] ?? "*";
 }
+

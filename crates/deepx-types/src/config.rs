@@ -37,6 +37,20 @@ pub struct PersistentConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<serde_json::Value>,
+
+    // ── Subagent defaults ──
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_default_tools: Option<Vec<String>>,
 }
 
 // ── Profile / Preferences ──

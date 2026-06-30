@@ -8,19 +8,14 @@ members = [
     "crates/deepx-types",
     "crates/deepx-proto",
     "crates/deepx-tools",
-    "crates/deepx-tui",
+    "crates/deepx-terminalui",
     "crates/deepx-session",
-    "crates/deepx-sed",
+    "crates/deepx-subagent",
     "crates/deepx-tauri/src-tauri",
-    "crates/deepx-grep-matcher",
-    "crates/deepx-grep-regex",
-    "crates/deepx-grep-searcher",
-    "crates/deepx-globset",
-    "crates/deepx-ignore",
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 

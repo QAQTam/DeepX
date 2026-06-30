@@ -17,6 +17,8 @@ export default function MessageList(props: MessageListProps) {
   let listRef!: HTMLDivElement;
   const heightCache = new Map<string, number>();
   const [autoScroll, setAutoScroll] = createSignal(true);
+  // Track turns identity to reset virtualizer on session switch
+  let prevTurnsRef: Turn[] | null = null;
 
   const virtualizer = createVirtualizer({
     get count() { return props.turns.length; },
@@ -31,7 +33,31 @@ export default function MessageList(props: MessageListProps) {
     getItemKey: (index: number) => props.turns[index]?.turnId ?? String(index),
   });
 
-  // Detect manual scroll away from bottom (debounced to avoid momentary misfires)
+  // When turns array reference changes (session switch), reset virtualizer state
+  createEffect(() => {
+    const cur = props.turns;
+    if (cur !== prevTurnsRef) {
+      prevTurnsRef = cur;
+      heightCache.clear();
+      // Reset scroll state for the new session
+      setAutoScroll(true);
+      prevLen = 0;
+      // Force virtualizer to recalculate with new measurements
+      requestAnimationFrame(() => {
+        virtualizer.measure();
+        // Scroll to end after measurements are applied
+        requestAnimationFrame(() => {
+          virtualizer.scrollToEnd();
+        });
+      });
+    }
+  });
+
+  // Detect manual scroll away from bottom (debounced to avoid momentary misfires).
+  // Hysteresis: larger threshold to LEAVE auto-scroll mode, smaller to RE-ENTER.
+  // This prevents flickering when the virtualizer recalculates item heights
+  // during streaming — the momentary scroll-position shift won't cross the
+  // wider "leave" threshold, so autoScroll stays stable.
   let scrollTimer: ReturnType<typeof setTimeout> | null = null;
   const onScroll = () => {
     const el = listRef;
@@ -39,9 +65,12 @@ export default function MessageList(props: MessageListProps) {
     if (scrollTimer) return; // debounce: skip rapid scroll events
     scrollTimer = setTimeout(() => {
       scrollTimer = null;
-      const threshold = 50;
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-      setAutoScroll(atBottom);
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (autoScroll() && dist > 120) {
+        setAutoScroll(false);
+      } else if (!autoScroll() && dist < 30) {
+        setAutoScroll(true);
+      }
     }, 150);
   };
 

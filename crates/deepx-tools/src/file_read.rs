@@ -76,8 +76,8 @@ handler!(handle_read_file, exec_read_file);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("read_file", ""),
-        description: "Read file content. Default preview: first 50 lines + last 30 lines for large files, full content for files ≤200 lines. Use start_line/end_line for precise range.",
+        key: ToolKey::new("file", "read"),
+        description: "File operations: read, write, edit, search, list, move, copy, delete, diff.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"start_line":{"type":"integer","description":"First line to read (1-based)","default":1},"end_line":{"type":"integer","description":"Last line to read (inclusive). If omitted, reads to end of file."}},"required":["path"],"additionalProperties":false}),
         handler: handle_read_file,
         safety: crate::default_allow,

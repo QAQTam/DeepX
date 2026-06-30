@@ -4,12 +4,15 @@ import { onMount, onCleanup, createEffect } from "solid-js";
 interface MarkdownBodyProps {
   content: string;
   class?: string;
+  /** Whether the content is finalized (streaming complete). When true, parser_end is called to flush. */
+  final?: boolean;
 }
 
 export default function MarkdownBody(props: MarkdownBodyProps) {
   let container!: HTMLDivElement;
   let parser: smd.Parser | null = null;
   let lastLen = 0;
+  let finalized = false; // guard against double parser_end
 
   onMount(() => {
     const renderer = smd.default_renderer(container);
@@ -18,6 +21,11 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
     if (props.content) {
       smd.parser_write(parser, props.content);
       lastLen = props.content.length;
+    }
+    // If already finalized, flush pending
+    if (props.final && !finalized) {
+      finalized = true;
+      smd.parser_end(parser);
     }
   });
 
@@ -29,11 +37,18 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
       smd.parser_write(parser, delta);
       lastLen = props.content.length;
     }
+    // Flush remaining pending when content is finalized (once)
+    if (props.final && !finalized) {
+      finalized = true;
+      smd.parser_end(parser);
+    }
   });
 
   onCleanup(() => {
     if (parser) {
-      smd.parser_end(parser);
+      if (!finalized) {
+        smd.parser_end(parser);
+      }
       parser = null;
     }
   });

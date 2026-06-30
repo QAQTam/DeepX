@@ -344,8 +344,8 @@ use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("web_fetch", ""),
-        description: "Fetch a URL and return readable text content.",
+        key: ToolKey::new("web", "fetch"),
+        description: "Web operations: fetch, search, context7_resolve, context7_query. Use fetch to get URL content, search to query the web.",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -360,8 +360,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("web_search", ""),
-        description: "Search the web via BochaAI (China-friendly search API). Returns titles, URLs, and snippets.",
+        key: ToolKey::new("web", "search"),
+        description: "Search the web",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -375,8 +375,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("context7_resolve", ""),
-        description: "Resolve a library name to a Context7 library ID.",
+        key: ToolKey::new("web", "context7_resolve"),
+        description: "Resolve library name to Context7 ID",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -391,8 +391,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("context7_query", ""),
-        description: "Query Context7 documentation for a library.",
+        key: ToolKey::new("web", "context7_query"),
+        description: "Query Context7 docs",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

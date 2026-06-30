@@ -80,8 +80,8 @@ handler!(handle_edit_file_diff, exec_edit_file_diff);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("edit_file_diff", ""),
-        description: "Fuzzy multi-line edit via old_lines+new_lines. Tolerant of whitespace changes. Dry-run by default (preview only); set dry_run=false to actually write. Prefer edit_file for simple single-string replacements.",
+        key: ToolKey::new("file", "edit_diff"),
+        description: "Fuzzy multi-line edit via old_lines+new_lines.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
         safety: crate::default_allow,

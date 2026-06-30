@@ -24,7 +24,7 @@ pub(super) fn exec_write_file(args: &str) -> String {
                 if let Some(ref old) = old_content {
                     let old_line_count = old.lines().count();
                     let first_line = if old_line_count == 0 { 1u32 } else { old_line_count as u32 + 1 };
-                    format!("[OK] {} — appended {} bytes, {} lines\n\n+{}\n\n[CHANGE] {}:{} +{} -0 | write_file (append)", path, content.len(), line_count, content.trim_end(), path, first_line, line_count as u32)
+                    format!("[OK] {path}:{first_line} +{line_count} -0 | write_file\n\n+{content_trim}", path = path, first_line = first_line, line_count = line_count, content_trim = content.trim_end())
                 } else {
                     format!("[OK] {} — appended {} bytes, {} lines (new file)", path, content.len(), line_count)
                 }
@@ -43,7 +43,7 @@ pub(super) fn exec_write_file(args: &str) -> String {
                         format!("[OK] {} — {} bytes, {} lines (no changes)", path, content.len(), line_count)
                     } else {
                         let (added, removed, first_line) = diff_stats(&diff);
-                        format!("[OK] {} — {} bytes, {} lines\n\n{}\n[CHANGE] {}:{} +{} -{} | write_file", path, content.len(), line_count, diff.trim_end(), path, first_line, added.max(1), removed.max(1))
+                        format!("[OK] {path}:{first_line} +{added} -{removed} | write_file\n\n{diff}", path = path, first_line = first_line, added = added.max(1), removed = removed.max(1), diff = diff.trim_end())
                     }
                 } else {
                     format!("[OK] {} — {} bytes, {} lines (new file)", path, content.len(), line_count)
@@ -59,8 +59,8 @@ handler!(handle_write_file, exec_write_file);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("write_file", ""),
-        description: "Create, overwrite, or append to a file. Creates parent dirs. For new files or full rewrites; prefer edit_file for small changes.",
+        key: ToolKey::new("file", "write"),
+        description: "Create, overwrite, or append to a file.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","content"],"additionalProperties":false}),
         handler: handle_write_file,
         safety: crate::default_allow,

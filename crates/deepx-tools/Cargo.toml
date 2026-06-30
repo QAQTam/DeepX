@@ -12,16 +12,7 @@ path = "src/main.rs"
 deepx-message = { path = "../deepx-message" }
 deepx-proto = { path = "../deepx-proto" }
 deepx-types = { path = "../deepx-types" }
-deepx-sed = { path = "../deepx-sed" }
-grep-matcher = { path = "../deepx-grep-matcher" }
-grep-regex = { path = "../deepx-grep-regex" }
-grep-searcher = { path = "../deepx-grep-searcher" }
-ignore = { path = "../deepx-ignore" }
 similar = { version = "2", features = ["text"] }
-jaq-core = "3"
-jaq-std = "3"
-jaq-json = { version = "2", features = ["serde"] }
-shell-words = "1.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"

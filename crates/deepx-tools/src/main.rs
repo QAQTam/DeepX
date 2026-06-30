@@ -9,7 +9,7 @@
 use std::env;
 
 fn main() {
-    let mut mgr = deepx_tools::registration::build_tool_manager();
+    let mut mgr = deepx_tools::registration::build_tool_manager(&[]);
     let cwd = env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".into());

@@ -11,6 +11,8 @@ pub struct ToolExecResult {
     pub content: String,
     pub success: bool,
     pub meta: crate::ToolExecMeta,
+    /// Code delta for file operations (write_file, edit_file, delete_file, move_file).
+    pub code_delta: Option<deepx_proto::CodeDeltaRecord>,
 }
 
 // ── Global state ──
@@ -19,9 +21,12 @@ static TOOL_MANAGER: OnceLock<Mutex<crate::ToolManager>> = OnceLock::new();
 
 /// Initialize the in-process tool manager.
 /// Must be called once at startup, before any tool execution.
-pub fn init_tools(session_seed: &str, mcp_servers: &[crate::mcp_bridge::McpServerConfig]) {
-    let mut mgr = crate::registration::build_tool_manager();
-    mgr.apply_init(vec![], session_seed);
+/// `extra_registrars` allows external crates to inject tools (e.g. deepx-subagent).
+/// `allowed_tools` restricts which tools can execute (empty = all allowed).
+/// Tool defs exposed to the LLM are always the full set (cache-friendly).
+pub fn init_tools(session_seed: &str, mcp_servers: &[crate::mcp_bridge::McpServerConfig], extra_registrars: &[crate::registration::ToolRegistrar], allowed_tools: Vec<String>) {
+    let mut mgr = crate::registration::build_tool_manager(extra_registrars);
+    mgr.apply_init(allowed_tools, session_seed);
 
     if !mcp_servers.is_empty() {
         if let Err(e) = crate::mcp_bridge::register_mcp_servers(&mut mgr, mcp_servers) {
@@ -82,7 +87,11 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     } else {
         tool_call_id.to_string()
     };
-    let effective_action = if action.is_empty() { name } else { action };
+    let effective_action = if action.is_empty() {
+        args_val.get("action").and_then(|v| v.as_str()).unwrap_or(name)
+    } else {
+        action
+    };
 
     let source = if call_id.starts_with("dsml_tc_") {
         "DSML"
@@ -98,21 +107,24 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
             content: "[CANCELLED]".to_string(),
             success: false,
             meta: crate::ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
+            code_delta: None,
         };
     }
 
     // Phase 1: prepare (brief lock)
+    let args_val_clone = args_val.clone();
     let prepared = with_mgr(|mgr| {
-        mgr.prepare_req(call_id.clone(), name, effective_action, args_val, Some(60), progress_tx)
+        mgr.prepare_req(call_id.clone(), name, effective_action, args_val_clone, Some(60), progress_tx)
     });
 
     let prepared = match prepared {
         Some(Ok(p)) => p,
-        Some(Err(report)) => return ToolExecResult { content: report.content, success: report.success, meta: report.meta },
+        Some(Err(report)) => return ToolExecResult { content: report.content, success: report.success, meta: report.meta, code_delta: None },
         None => return ToolExecResult {
             content: "[ERROR] tool manager not initialised — call init_tools() first".to_string(),
             success: false,
             meta: crate::ToolExecMeta { name: String::new(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
+            code_delta: None,
         },
     };
 
@@ -133,17 +145,85 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     };
 
     // Phase 3: finalize (brief lock)
+    let success = tool_result.success;
     let report = with_mgr(|mgr| {
         mgr.finalize_req(prepared, tool_result, elapsed_ms)
     });
 
+    // Compute code delta for file operations
+    let code_delta = if success {
+        compute_code_delta(name, &args_val)
+    } else { None };
+
     match report {
-        Some(r) => ToolExecResult { content: r.content, success: r.success, meta: r.meta },
+        Some(r) => ToolExecResult { content: r.content, success: r.success, meta: r.meta, code_delta },
         None => ToolExecResult {
             content: "[ERROR] tool manager not initialised".to_string(),
             success: false,
             meta: crate::ToolExecMeta { name: name.to_string(), elapsed_ms, output_size: 0, success: false, args_summary: String::new() },
+            code_delta: None,
         },
+    }
+}
+
+/// Compute code delta for file-operation tools.
+fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx_proto::CodeDeltaRecord> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or(tool_name);
+    match (tool_name, action) {
+        ("file", "write") => {
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            Some(deepx_proto::CodeDeltaRecord {
+                timestamp: now,
+                lines_added: content.lines().count(),
+                lines_removed: 0,
+                files_created: 1,
+                files_deleted: 0,
+                file,
+            })
+        }
+        ("file", "edit") => {
+            let old_s = args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+            let new_s = args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+            let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            Some(deepx_proto::CodeDeltaRecord {
+                timestamp: now,
+                lines_added: new_s.lines().count(),
+                lines_removed: old_s.lines().count(),
+                files_created: 0,
+                files_deleted: 0,
+                file,
+            })
+        }
+        ("file", "delete") => {
+            let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            Some(deepx_proto::CodeDeltaRecord {
+                timestamp: now,
+                lines_added: 0,
+                lines_removed: 0,
+                files_created: 0,
+                files_deleted: 1,
+                file,
+            })
+        }
+        ("file", "edit_diff") => {
+            let old_count = args.get("old_lines").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let new_count = args.get("new_lines").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            Some(deepx_proto::CodeDeltaRecord {
+                timestamp: now,
+                lines_added: new_count,
+                lines_removed: old_count,
+                files_created: 0,
+                files_deleted: 0,
+                file,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -159,7 +239,7 @@ pub fn load_workspace(seed: &str) {
     let ws = ws.trim();
     let ws = if !ws.is_empty() { ws } else { "." };
     crate::set_workspace(ws);
-    // Set process current directory so all relative paths in exec/linuxmod/file tools
+    // Set process current directory so all relative paths in exec/file tools
     // resolve against the workspace root instead of the installation directory.
     if let Err(e) = std::env::set_current_dir(ws) {
         log::warn!("load_workspace: cannot cd to '{}': {e}", ws);

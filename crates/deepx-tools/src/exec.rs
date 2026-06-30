@@ -8,103 +8,11 @@
 //! semantics: ANSI colors, `isatty()`=true for the child process.
 //!
 //! 安全检测逻辑由 safety.rs 集中管理。
-//!
-//! ## Exec interceptor
-//!
-//! When the model uses exec to run a known tool (e.g. `sed -i 's/.../...' file`),
-//! the interceptor routes it directly to the native toolcall handler, bypassing
-//! PTY/spawn and shell quoting entirely.
 
 use std::io::{BufRead, BufReader};
 
 use crate::{ToolCallCtx, ToolResult};
 use std::sync::mpsc;
-
-// ── Exec interceptor: route known tools to native toolcalls ──
-
-/// Try to intercept an exec command and route it to a native toolcall.
-/// Returns `Some(ToolResult)` if intercepted, `None` to fall through to PTY.
-fn intercept_toolcall(command: &str, _ctx: &ToolCallCtx) -> Option<ToolResult> {
-    let cmd_trimmed = command.trim();
-
-    // On Windows: intercept sed and route to deepx-sed (no GNU sed available).
-    // On Linux: let sed pass through to PTY so GNU sed runs natively.
-    #[cfg(windows)]
-    if let Some(result) = intercept_sed(cmd_trimmed) {
-        return Some(result);
-    }
-    let _ = cmd_trimmed; // suppress unused warning on Linux
-
-    None
-}
-
-/// Parse `sed [-i] ['"]s/pattern/repl/flags['"] path` and route to sed toolcall.
-#[cfg(windows)]
-fn intercept_sed(cmd: &str) -> Option<ToolResult> {
-    let rest = cmd
-        .strip_prefix("sed ")
-        .or_else(|| {
-            if cmd.contains("sed") && cmd.contains(' ') {
-                let idx = cmd.rfind("sed ")?;
-                Some(&cmd[idx + 4..])
-            } else { None }
-        })?;
-
-    let mut rest = rest.trim();
-    let mut in_place = false;
-    let mut quiet = false;
-
-    while let Some(r) = rest.strip_prefix("-i") {
-        rest = r.trim_start();
-        in_place = true;
-    }
-    if let Some(r) = rest.strip_prefix("-n") {
-        rest = r.trim_start();
-        quiet = true;
-    }
-
-    let (script, after_script) = extract_quoted_arg(rest)?;
-    rest = after_script.trim_start();
-
-    let path = if rest.starts_with('\'') || rest.starts_with('"') {
-        extract_quoted_arg(rest)?.0
-    } else {
-        rest.split(' ').next()?.to_string()
-    };
-
-    if path.is_empty() { return None; }
-
-    let args = serde_json::json!({
-        "script": script,
-        "path": path,
-        "in_place": in_place,
-        "quiet": quiet,
-    });
-    let result = crate::sed::exec_sed(&args.to_string());
-    let success = !result.starts_with("[ERROR]");
-    Some(ToolResult { success, content: result })
-}
-
-/// Extract a single- or double-quoted argument, returning the inner content
-/// and the remainder of the string. Also handles unquoted arguments (split on space).
-#[cfg(windows)]
-fn extract_quoted_arg(s: &str) -> Option<(String, &str)> {
-    let s = s.trim_start();
-    if s.is_empty() { return None; }
-
-    let first_char = s.chars().next()?;
-    if first_char == '\'' || first_char == '"' {
-        // Quoted: find matching close quote
-        let quote = first_char;
-        let inner = &s[1..];
-        let end = inner.find(quote)?;
-        Some((inner[..end].to_string(), &inner[end + 1..]))
-    } else {
-        // Unquoted: take until first space
-        let end = s.find(' ').unwrap_or(s.len());
-        Some((s[..end].to_string(), &s[end..]))
-    }
-}
 
 pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> String {
     const MAX_EXEC_OUTPUT: usize = 1024 * 1024;
@@ -131,6 +39,11 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         None => return format!("[ERROR] {}   0s   0 bytes [NO PIPE]", command),
     };
 
+    // Register in process registry BEFORE starting (so it's findable on timeout)
+    let registry_id = crate::process_registry::ProcessRegistry::register(
+        &format!("exec:{}", &command[..command.len().min(30)])
+    );
+
     let pt_out = progress_tx.clone();
     let tc_id = tool_call_id.to_string();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -149,6 +62,8 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
                     if let Some(ref tx) = pt_out {
                         let _ = tx.send((tc_id.clone(), line.clone()));
                     }
+                    // Also write to registry
+                    crate::process_registry::ProcessRegistry::append_output(registry_id, &line);
                     let _ = done_tx_thread.send(line.clone());
                 }
             }
@@ -168,6 +83,7 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         // Cancel
         if crate::CANCEL.load(Ordering::SeqCst) {
             let _ = proc.kill();
+            crate::process_registry::ProcessRegistry::kill(registry_id);
             let elapsed = start_time.elapsed();
             let n = output_buf.len();
             return format!("[CANCELLED] {}   {:.1}s   {} bytes [CANCELLED]{}",
@@ -175,15 +91,30 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
                 if n > 0 { format!("\n{}", output_buf.trim()) } else { String::new() });
         }
 
-        // Timeout
+        // Timeout — register and keep alive instead of killing
         if remaining.is_zero() {
-            let _ = proc.kill();
+            // Move proc to background watcher thread
+            std::thread::spawn(move || {
+                let exit = proc.wait(None).ok();
+                if let Some(es) = exit {
+                    crate::process_registry::ProcessRegistry::mark_exited(registry_id, es.code());
+                } else {
+                    crate::process_registry::ProcessRegistry::mark_exited(registry_id, -1);
+                }
+                log::info!("[EXEC] background watcher done for pid={}", registry_id);
+            });
+
             let elapsed = start_time.elapsed();
             let n = output_buf.len();
             let output = truncate_1mb(&output_buf, MAX_EXEC_OUTPUT);
-            return format!("[OK] {}   {:.1}s   {} bytes [TIMEOUT]\n{}",
-                command, elapsed.as_secs_f64(), n,
-                if output.is_empty() { "(no output)" } else { &output });
+            return format!(
+                "[TIMEOUT] {}   {:.1}s   {} bytes   process_id={}\n{}\n\
+                 [HINT] Process still running. Use check_process({}) to inspect, \
+                 wait_process({}) to wait longer, kill_process({}) to terminate.",
+                command, elapsed.as_secs_f64(), n, registry_id,
+                if output.is_empty() { "(no output yet)" } else { &output },
+                registry_id, registry_id, registry_id,
+            );
         }
 
         // Read output chunk
@@ -206,6 +137,11 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     // ── Normal exit: try to capture exit status, then drain ──
     // On Windows (conpty), wait() always returns code=0; on Unix, we get the real exit code.
     let exit_status = proc.wait(Some(500)).ok();
+    if let Some(ref es) = exit_status {
+        crate::process_registry::ProcessRegistry::mark_exited(registry_id, es.code());
+    } else {
+        crate::process_registry::ProcessRegistry::mark_exited(registry_id, 0);
+    }
     drop(proc);
 
     // Final drain of any remaining lines
@@ -316,11 +252,6 @@ fn strip_ansi(s: &str) -> String {
 
 pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     let command = ctx.get_str("command").unwrap_or("").to_string();
-
-    // ── Interceptor: route known tools to native toolcalls ──
-    if let Some(result) = intercept_toolcall(&command, &ctx) {
-        return result;
-    }
 
     let args = serde_json::json!({
         "command": command,

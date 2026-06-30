@@ -26,6 +26,7 @@ pub mod logger;
 use dashboard::{build_documents, build_recent_edits, build_tasks};
 use deepx_message::Effect;
 use deepx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
+use deepx_types::platform;
 
 /// Number of recent turns sent on session restore for incremental loading.
 const INITIAL_LOAD_COUNT: usize = 20;
@@ -83,7 +84,7 @@ enum LoopPhase {
 pub struct Loop {
     agent: AgentState,
     cmd_rx: mpsc::Receiver<Ui2Agent>,
-    event_tx: mpsc::Sender<Agent2Ui>,
+    event_tx: mpsc::SyncSender<Agent2Ui>,
     cancel: CancelToken,
     phase: LoopPhase,
     /// Pending session switch requested while busy (seed to resume).
@@ -92,6 +93,8 @@ pub struct Loop {
     pending_new_session: bool,
     /// Pending shutdown.
     pending_shutdown: bool,
+    /// Accumulated code deltas (flushed on save_full/save_append).
+    code_stats: Vec<deepx_proto::CodeDeltaRecord>,
 }
 
 impl Loop {
@@ -111,8 +114,8 @@ impl Loop {
         let cancel = CancelToken::new();
         let cancel_for_reader = cancel.clone();
 
-        let (cmd_tx, cmd_rx) = mpsc::channel::<Ui2Agent>();
-        let (event_tx, event_rx) = mpsc::channel::<Agent2Ui>();
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<Ui2Agent>(256);
+        let (event_tx, event_rx) = mpsc::sync_channel::<Agent2Ui>(256);
 
         // Reader thread: stdin → cmd_tx
         std::thread::spawn(move || {
@@ -160,6 +163,7 @@ impl Loop {
             pending_session: None,
             pending_new_session: false,
             pending_shutdown: false,
+            code_stats: Vec::new(),
         }
     }
 
@@ -277,7 +281,7 @@ impl Loop {
             Ui2Agent::NewSession => { self.handle_create_session(); }
             Ui2Agent::ReloadConfig => { self.handle_reload_config(); }
             Ui2Agent::Shutdown => {
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 self.emit(Agent2Ui::ShutdownAck);
                 self.pending_shutdown = true;
             }
@@ -290,8 +294,28 @@ impl Loop {
 
     pub fn run(&mut self) {
         self.agent.rebind_store();
-        self.emit_dashboard();
-        self.emit(Agent2Ui::Ready);
+
+        // Auto-init: if seed is pre-set (from --seed or --resume-seed CLI args),
+        // create or resume the session immediately instead of waiting for IPC commands.
+        let resume_seed = self.agent.session.resume_seed.take();
+        let has_seed = !self.agent.session.seed.is_empty();
+
+        if let Some(seed) = resume_seed {
+            self.handle_resume_session(&seed);
+            self.emit(Agent2Ui::Ready);
+        } else if has_seed && !self.agent.session.from_resume {
+            // New session with pre-set seed (from --seed)
+            lifecycle::create_session_with_seed(&mut self.agent);
+            self.agent.rebind_store();
+            self.emit(Agent2Ui::SessionCreated {
+                seed: self.agent.session.seed.clone(),
+            });
+            self.emit_dashboard();
+            self.emit(Agent2Ui::Ready);
+        } else {
+            self.emit_dashboard();
+            self.emit(Agent2Ui::Ready);
+        }
 
         log::info!("[AGENT] entering main event loop, waiting for Ui2Agent...");
         loop {
@@ -331,7 +355,30 @@ impl Loop {
         }
 
         deepx_tools::bridge::shutdown_tools();
-        self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+        self.flush_meta_and_stats();
+    }
+
+    fn flush_code_stats(&mut self) {
+        if self.code_stats.is_empty() { return; }
+        let seed = &self.agent.session.seed;
+        if seed.is_empty() { return; }
+        let dir = deepx_types::platform::sessions_dir().join(seed);
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("code_stats.jsonl");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            for delta in self.code_stats.drain(..) {
+                let line = serde_json::to_string(&delta).unwrap_or_default();
+                let _ = writeln!(f, "{line}");
+            }
+            let _ = f.flush();
+            let _ = f.sync_all();
+        }
+    }
+
+    fn flush_meta_and_stats(&mut self) {
+        self.agent.msg.flush_meta(&self.agent.config.model, &self.agent.config.reasoning_effort);
+        self.flush_code_stats();
     }
 
     fn handle_cancel(&mut self) {
@@ -457,7 +504,7 @@ impl Loop {
         let args_s = args.to_string();
         let handle = std::thread::spawn(move || {
             let result = deepx_tools::bridge::execute_tool_with_id_full(&tool_name, "", &args_s, &tool_id, Some(progress_tx));
-            (tool_id, result.content, result.success)
+            (tool_id, result.content, result.success, result.code_delta)
         });
         // Drain progress while tool runs
         loop {
@@ -472,7 +519,17 @@ impl Loop {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let (tid, output, success) = handle.join().unwrap_or_else(|_| (tool_id_for_result, "[ERROR] tool thread panicked".into(), false));
+        let (tid, output, success, code_delta) = handle.join().unwrap_or_else(|_| (tool_id_for_result, "[ERROR] tool thread panicked".into(), false, None));
+        if let Some(ref delta) = code_delta {
+            self.code_stats.push(delta.clone());
+            self.emit(Agent2Ui::CodeDelta {
+                lines_added: delta.lines_added,
+                lines_removed: delta.lines_removed,
+                files_created: delta.files_created,
+                files_deleted: delta.files_deleted,
+                file: delta.file.clone(),
+            });
+        }
         self.emit(Agent2Ui::ToolResults {
             turn_id: turn_id.clone(),
             round_num,
@@ -494,7 +551,8 @@ impl Loop {
         log::info!("[AGENT] UndoTurn {turn_id} — turns before: {}", self.agent.msg.turn_count());
         if self.agent.msg.truncate_before_turn(turn_id) {
             log::info!("[AGENT] UndoTurn — truncated, turns after: {}", self.agent.msg.turn_count());
-            self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+            // Full rewrite needed — the JSONL on disk still has the truncated messages.
+            self.agent.msg.snapshot_full(&self.agent.config.model, &self.agent.config.reasoning_effort);
             let all_turns = build_turns_from_context(&self.agent);
             let total = all_turns.len() as u32;
             let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
@@ -575,7 +633,8 @@ impl Loop {
 
         let chars = summary.chars().count();
         self.agent.msg.apply_compact(&summary, KEEP);
-        self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+        // Full rewrite needed — compact changes system_messages, not just new messages.
+        self.agent.msg.snapshot_full(&self.agent.config.model, &self.agent.config.reasoning_effort);
         self.emit(Agent2Ui::CompactEnd {
             summary_chars: chars, turns_compacted: compact_count as u32,
         });
@@ -590,10 +649,16 @@ impl Loop {
 
     fn handle_user_input(&mut self, text: &str) {
         if self.agent.session.seed.is_empty() {
-            self.emit(Agent2Ui::Error {
-                message: "No session — create one first".into(),
+            // Auto-create a session on first user input.
+            // The frontend is responsible for ensuring this only happens
+            // when the user explicitly starts a new conversation.
+            log::info!("[AGENT] seed is empty — auto-creating session on first user input");
+            lifecycle::create_session(&mut self.agent);
+            self.agent.rebind_store();
+            self.emit(Agent2Ui::SessionCreated {
+                seed: self.agent.session.seed.clone(),
             });
-            return;
+            self.emit_dashboard();
         }
 
         self.cancel.clear();
@@ -635,20 +700,20 @@ impl Loop {
             // ── Check for interrupt commands between rounds ──
             if self.check_interrupts() {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
             // Check for pending session switch (set by check_interrupts)
             if self.pending_session.is_some() || self.pending_new_session {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
@@ -787,7 +852,7 @@ impl Loop {
             );
 
             if had_error || result.is_err() {
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
@@ -796,7 +861,7 @@ impl Loop {
             // prevent processing partial content / executing tools.
             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
                 self.agent.msg.remove_last_step_if_incomplete();
-                self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+                self.flush_meta_and_stats();
                 break;
             }
 
@@ -815,7 +880,7 @@ impl Loop {
                     if !pending.is_empty() {
                         let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(String, String)>();
                         // Track (tc_id, JoinHandle) so we can identify panicked threads.
-                        let mut handles: Vec<(String, std::thread::JoinHandle<(String, String, bool)>)> = Vec::new();
+                        let mut handles: Vec<(String, std::thread::JoinHandle<(String, String, bool, Option<deepx_proto::CodeDeltaRecord>)>)> = Vec::new();
                         let mut tool_infos = Vec::new();
 
                         for tool in &pending {
@@ -827,7 +892,7 @@ impl Loop {
                             let id_for_handle = id.clone();
                             let handle = std::thread::spawn(move || {
                                 let result = deepx_tools::bridge::execute_tool_with_id_full(&name, "", &args, &id, Some(tx));
-                                (id, result.content, result.success)
+                                (id, result.content, result.success, result.code_delta)
                             });
                             handles.push((id_for_handle, handle));
                         }
@@ -859,9 +924,10 @@ impl Loop {
 
                         if cancelled {
                             log::info!("[AGENT] cancelled, pushing placeholder results + background reaper");
+                            let ts = chrono_local_datetime();
                             // Push placeholder results so the store doesn't get stuck
                             for (tc_id, _tool_name) in &tool_infos {
-                                self.agent.msg.push_tool_result_direct(tc_id, "[CANCELLED]");
+                                self.agent.msg.push_tool_result_direct(tc_id, &format!("[timeis: {ts}]\n[CANCELLED]"));
                             }
                             // Spawn a background reaper thread to join the tool
                             // threads. This avoids leaking threads (M1) while
@@ -874,17 +940,28 @@ impl Loop {
                                 }
                             });
                         } else {
+                            let ts = chrono_local_datetime();
                             for (tc_id, h) in handles {
                                 match h.join() {
-                                    Ok((_id, content, _success)) => {
-                                        self.agent.msg.push_tool_result_direct(&tc_id, &content);
+                                    Ok((_id, content, _success, code_delta)) => {
+                                        self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n{content}"));
+                                        if let Some(ref delta) = code_delta {
+                                            self.code_stats.push(delta.clone());
+                                            self.emit(Agent2Ui::CodeDelta {
+                                                lines_added: delta.lines_added,
+                                                lines_removed: delta.lines_removed,
+                                                files_created: delta.files_created,
+                                                files_deleted: delta.files_deleted,
+                                                file: delta.file.clone(),
+                                            });
+                                        }
                                     }
                                     Err(_) => {
                                         // Thread panicked — inject an error result
                                         // so the step's all_tools_satisfied() can
                                         // eventually return true (fixes M2).
                                         log::error!("[AGENT] tool thread panicked for {tc_id}");
-                                        self.agent.msg.push_tool_result_direct(&tc_id, "[ERROR] tool thread panicked");
+                                        self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n[ERROR] tool thread panicked"));
                                     }
                                 }
                             }
@@ -924,7 +1001,12 @@ impl Loop {
                 _ => {}
             }
 
-            self.agent.msg.snapshot(&self.agent.config.model, &self.agent.config.reasoning_effort);
+            self.flush_meta_and_stats();
+
+            // Persist per-turn token usage for dashboard statistics
+            if let Some(ref usage) = last_usage {
+                record_token_usage(usage, &self.agent.config.model);
+            }
 
             self.emit(Agent2Ui::TurnEnd {
                 turn_id: turn_id.clone(),
@@ -936,6 +1018,37 @@ impl Loop {
         }
 
         self.emit(Agent2Ui::Done);
+
+        // ── Desktop notification: response preview ──
+        let preview = self.agent.msg.turns().last()
+            .and_then(|t| t.steps.last())
+            .map(|s| {
+                s.assistant.content.iter()
+                    .filter_map(|b| match b {
+                        deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        if !preview.is_empty() {
+            let first_20: String = preview.split_whitespace().take(20).collect::<Vec<_>>().join(" ");
+            let body = if preview.split_whitespace().count() > 20 {
+                format!("{}...", first_20)
+            } else {
+                first_20
+            };
+            // Spawn thread to avoid blocking — notification API may be slow
+            std::thread::spawn(move || {
+                let _ = notify_rust::Notification::new()
+                    .summary("DeepX")
+                    .body(&body)
+                    .appname("DeepX")
+                    .timeout(notify_rust::Timeout::Milliseconds(8000))
+                    .show();
+            });
+        }
     }
 
     // ── Dashboard ──
@@ -1004,11 +1117,59 @@ fn build_assistant_message(
         let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
         blocks.push(ContentBlock::ToolUse { id: tc.id.clone(), name: tc.function.name.clone(), input });
     }
-    Message { role: "assistant".into(), name: None, content: blocks }
+    Message { msg_id: None, role: "assistant".into(), name: None, content: blocks }
+}
+
+/// Extract a short human-readable display string from a tool call's arguments.
+fn format_tool_args_display(name: &str, input: &serde_json::Value) -> String {
+    // Try action field first (for namespace-style tools)
+    let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let display_name = if action.is_empty() { name.to_string() } else { format!("{}/{}", name, action) };
+
+    match name {
+        "exec" => input.get("command")
+            .and_then(|v| v.as_str())
+            .map(|c| c.chars().take(80).collect())
+            .unwrap_or(display_name),
+        "file" => {
+            // Show path/pattern based on action
+            let primary = match action {
+                "search" => input.get("pattern"),
+                _ => input.get("path"),
+            };
+            primary.and_then(|v| v.as_str())
+                .map(|p| format!("{} {}", action, p.chars().take(60).collect::<String>()))
+                .unwrap_or(display_name)
+        }
+        "task" => input.get("subject")
+            .or_else(|| input.get("status"))
+            .and_then(|v| v.as_str())
+            .map(|s| format!("{}/{}", action, s.chars().take(60).collect::<String>()))
+            .unwrap_or(display_name),
+        "web" => input.get("url")
+            .or_else(|| input.get("query"))
+            .or_else(|| input.get("name"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.chars().take(80).collect())
+            .unwrap_or(display_name),
+        "process" => input.get("id")
+            .and_then(|v| v.as_u64())
+            .map(|id| format!("{}/{}", action, id))
+            .unwrap_or(display_name),
+        "explore" => input.get("path")
+            .and_then(|v| v.as_str())
+            .map(|p| p.to_string())
+            .unwrap_or(display_name),
+        "ask_user" => input.get("question")
+            .and_then(|v| v.as_str())
+            .map(|q| q.chars().take(60).collect())
+            .unwrap_or(display_name),
+        _ => display_name,
+    }
 }
 
 fn emit_round_complete(
-    event_tx: &mpsc::Sender<Agent2Ui>,
+    event_tx: &mpsc::SyncSender<Agent2Ui>,
     turn_id: &str, round_num: u32, assistant_msg: &deepx_types::Message,
     _content: &str, _reasoning: &str, _parsed: &[deepx_types::ToolCall],
 ) {
@@ -1024,14 +1185,7 @@ fn emit_round_complete(
                 blocks.push(deepx_proto::RoundBlock::Text { content: text.clone() });
             }
             ContentBlock::ToolUse { id, name, input } => {
-                let display = if name == "ask_user" {
-                    input.get("question")
-                        .and_then(|v| v.as_str())
-                        .map(|q| q.to_string())
-                        .unwrap_or_else(|| name.clone())
-                } else {
-                    name.clone()
-                };
+                let display = format_tool_args_display(name, input);
                 tool_calls.push(deepx_proto::ToolCallDef {
                     id: id.clone(), name: name.clone(),
                     args_display: display.clone(), args_json: input.to_string(),
@@ -1110,4 +1264,67 @@ fn build_compact_prompt(contexts: &[String]) -> String {
         Use concise bullet points under 1500 characters.\n\n\
         {}\n\nSummary:", conv
     )
+}
+
+/// Append per-turn token usage to `token_stats.jsonl` for dashboard aggregation.
+fn record_token_usage(usage: &deepx_types::UsageInfo, model: &str) {
+    use std::io::Write;
+    let dir = platform::data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("token_stats.jsonl");
+    let today = chrono_local_date();
+    let line = serde_json::json!({
+        "date": today,
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "cache_hit": usage.prompt_cache_hit_tokens,
+        "cache_miss": usage.prompt_cache_miss_tokens,
+        "model": model,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{}", serde_json::to_string(&line).unwrap_or_default());
+    }
+}
+
+/// Return today's date as "YYYY-MM-DD" (UTC+8).
+pub(crate) fn chrono_local_date() -> String {
+    let dur = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    // UTC+8 offset
+    let secs = dur.as_secs() + 8 * 3600;
+    let days = secs / 86400;
+    let (y, m, d) = civil_from_days(days as i64);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Return current time as "UTC+8 YYYY-MM-DD HH:MM".
+pub(crate) fn chrono_local_datetime() -> String {
+    let dur = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    // UTC+8 offset
+    let secs = dur.as_secs() + 8 * 3600;
+    let days = secs / 86400;
+    let day_secs = secs % 86400;
+    let hours = day_secs / 3600;
+    let minutes = (day_secs % 3600) / 60;
+    let (y, m, d) = civil_from_days(days as i64);
+    format!("UTC+8 {y:04}-{m:02}-{d:02} {hours:02}:{minutes:02}")
+}
+
+/// Convert days since epoch 0000-01-01 to (year, month, day).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    // Algorithm from Howard Hinnant
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }

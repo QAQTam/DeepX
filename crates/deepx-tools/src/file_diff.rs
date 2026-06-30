@@ -26,8 +26,8 @@ handler!(handle_diff, exec_diff);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("diff", ""),
-        description: "Compare two files line by line. Shows first diff region with context.",
+        key: ToolKey::new("file", "diff"),
+        description: "Compare two files line by line.",
         input_schema: serde_json::json!({"type":"object","properties":{"path_a":{"type":"string","description":"First file path"},"path_b":{"type":"string","description":"Second file path"}},"required":["path_a","path_b"],"additionalProperties":false}),
         handler: handle_diff,
         safety: crate::default_allow,

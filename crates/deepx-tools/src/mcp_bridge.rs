@@ -99,7 +99,7 @@ fn initialize_mcp_session(config: &McpServerConfig) -> Result<(Arc<McpSession>, 
     let _init = rpc_call(&session, "initialize", Some(serde_json::json!({
         "protocolVersion": "2025-06-18",
         "capabilities": {},
-        "clientInfo": {"name": "deepx", "version": "0.2.0"}
+        "clientInfo": {"name": "deepx", "version": "0.4.0"}
     })))?;
 
     // Send initialized notification

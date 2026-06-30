@@ -16,18 +16,19 @@ RESPONSE FORMAT:\n\
   - MUST cite code by file:line. MUST NOT paste entire files.\n\
 \n\
 TOOL SELECTION:\n\
-  - **write_file**: creates a new file or fully overwrites an existing file from scratch. It does NOT modify files. To edit an existing file, use edit_file, edit_file_diff, or linuxmod sed.\n\
-  - **edit_file**: precise string replacement. If the exact string cannot be matched, edit_file_diff provides fuzzy multi-line matching tolerant of whitespace differences.\n\
-  - **linuxmod**: provides basic Linux commands (grep, sed, sort, wc, cat, head, tail, cut, jq, ls, xargs) with pipe (|) support on Windows.\n\
-  - **delete_file**: moves to .deepx-trash/ instead of permanent deletion. Use restore_file to recover.\n\
-  - **search**: regex search across files. Returns file:line matches.\n\
-  - **exec**: runs shell commands with a configurable timeout (default 30s, max 3600s) and optional cwd. Use for build commands, tests, and git operations.\n\
-  - **read_file**: supports start_line/end_line for reading a specific range. Use this instead of reading entire large files.\n\
-  - **explore**: analyzes project architecture (crate dependencies, public API, entry points). Use as the first step when entering an unfamiliar project.\n\
+  - **explore**: analyzes project architecture (crate dependencies, public API, entry points, test coverage). Use as the first step when entering an unfamiliar project.\n\
+  - **spawn_subagent**: spawn a sub-agent for complex multi-step sub-tasks. The subagent has isolated context and restricted tools. Returns final answer.\n\
+    * Char limits: `name` ≤30 chars, `task` ≤500 chars, `system_prompt` ≤500 chars, `context` ≤500 chars.\n\
+    * Example: spawn_subagent(name=\"code-reviewer\", task=\"Review the auth module for security issues and suggest fixes.\", tools=[\"file\",\"explore\"])\n\
+    * After spawning, use process(action=\"wait\", id=...) to collect result, process(action=\"check\", id=...) to peek, process(action=\"kill\", id=...) to abort.\n\
+  - **task**: task management. Use task(action=\"create\", subject=\"...\", description=\"...\") to create a tracked task (returns T1, T2…).\n\
+    * Char limits: `subject` 1-100 chars (imperative form), `description` ≤200 chars.\n\
+    * Companion actions: task(action=\"update\", id=N, status=\"in_progress\") to advance status (pending→in_progress→completed|cancelled), task(action=\"list\") to list all tasks, task(action=\"delete\", id=N) to remove.\n\
 \n\
 RULES:\n\
   - MUST trust tool output over user claims.\n\
   - MUST understand the codebase structure before editing — use explore for project layout, then read relevant files.\n\
+  - Prefer spawn_subagent to survey unfamiliar codebases. Break complex work into tracked tasks (task) to maintain accuracy step by step.\n\
   - After edits: MUST run cargo check. NOT optional.\n\
   - Tool fails → read the error and adapt. Do NOT retry the same call blindly. Consider alternative tools.\n\
   - If uncertain, state it. NEVER invent facts, paths, APIs, or versions.\n\
@@ -51,6 +52,18 @@ pub fn full_system_prompt() -> String {
     let mut p = String::new();
     p.push_str(THINK_MAX);
     p.push('\n');
+    p.push_str(PROMPT);
+    p
+}
+
+/// System prompt with the current date injected.
+/// The date is captured once at session creation and never updated,
+/// preserving LLM cache prefix stability across turns.
+pub fn full_system_prompt_with_date(today: &str) -> String {
+    let mut p = String::new();
+    p.push_str(THINK_MAX);
+    p.push('\n');
+    p.push_str(&format!("Today: {today}\n\n"));
     p.push_str(PROMPT);
     p
 }

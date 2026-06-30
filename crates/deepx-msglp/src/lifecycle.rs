@@ -1,6 +1,7 @@
 //! Session lifecycle: initialization, health status.
 
 use crate::agent::AgentState;
+use crate::chrono_local_date;
 use deepx_tools;
 use deepx_session::SessionManager;
 
@@ -14,15 +15,24 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     let seed = match restore_seed {
         Some(s) => {
             log::info!("[LIFECYCLE] init_session: loading seed={s}");
-            if let Some(file) = SessionManager::global().load(s) {
-                log::info!("[LIFECYCLE] loaded session file, {} messages", file.messages.len());
-                agent.session.seed = file.seed.clone();
-                agent.session.start = file.created_at;
-                let (msg, repairs) = deepx_message::MessageStore::from_session(&file);
-                log::info!("[LIFECYCLE] from_session done, {} turns, {} repairs", msg.turn_count(), repairs.len());
-                agent.msg = msg;
+            // Fast check: if the session directory doesn't exist at all, fail early
+            // instead of silently creating a new session. This lets the caller
+            // send a proper Error event rather than a confusing SessionCreated.
+            if !SessionManager::global().exists(s) {
+                log::error!(
+                    "deepx-agent: session {} not found — directory does not exist",
+                    s
+                );
+                return false;
+            }
+            if let Some((meta, messages)) = SessionManager::global().load(s) {
+                log::info!("[LIFECYCLE] loaded session, {} messages", messages.len());
+                agent.session = meta;
                 agent.session.from_resume = true;
                 agent.session.tokens = 0;
+                let (msg, repairs) = deepx_message::MessageStore::from_messages(&agent.session.seed, &messages);
+                log::info!("[LIFECYCLE] from_messages done, {} turns, {} repairs", msg.turn_count(), repairs.len());
+                agent.msg = msg;
 
                 deepx_tools::bridge::set_current_session(&agent.session.seed);
                 deepx_tools::bridge::load_workspace(&agent.session.seed);
@@ -37,10 +47,10 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 }
                 return true;
             }
-            // Session file not found or checksum mismatch — don't reuse broken seed.
-            // Generate a fresh seed so we don't overwrite the corrupted file.
+            // Directory exists but meta or messages are corrupt — generate a
+            // fresh seed so we don't overwrite the corrupted files.
             log::error!(
-                "deepx-agent: session {} load failed — creating fresh session",
+                "deepx-agent: session {} load failed (corrupt?) — creating fresh session",
                 s
             );
             log::warn!("[LIFECYCLE] load failed for {s}, generating new seed");
@@ -51,20 +61,20 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 
     // Create fresh session (either no restore_seed, or restore failed)
     agent.session.seed = seed.clone();
-    agent.session.start = SessionManager::now_epoch();
+    agent.session.created_at = SessionManager::now_epoch();
     agent.session.tokens = 0;
     agent.session.from_resume = false;
-    agent.msg = deepx_message::MessageStore::new(&seed);
+    agent.msg = if agent.ephemeral {
+        deepx_message::MessageStore::new_ephemeral(&seed)
+    } else {
+        deepx_message::MessageStore::new(&seed)
+    };
     agent.msg.push_system(deepx_types::Message::system(
-        &deepx_config::prompt::full_system_prompt()
+        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
     ));
     deepx_tools::bridge::set_current_session(&agent.session.seed);
-    SessionManager::global().save(
-        &agent.session.seed,
-        &agent.msg.to_vec(),
-        &agent.config.model,
-        Some(&agent.config.reasoning_effort),
-    );
+    deepx_tools::bridge::load_workspace(&agent.session.seed);
+    agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session {}", agent.session.seed);
     true
 }
@@ -72,19 +82,38 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
 /// Create a brand-new session with a fresh seed, clearing all prior state.
 pub fn create_session(agent: &mut AgentState) {
     agent.session.seed = SessionManager::generate_seed();
-    agent.session.start = SessionManager::now_epoch();
+    agent.session.created_at = SessionManager::now_epoch();
     agent.session.tokens = 0;
     agent.session.from_resume = false;
-    agent.msg = deepx_message::MessageStore::new(&agent.session.seed);
+    agent.msg = if agent.ephemeral {
+        deepx_message::MessageStore::new_ephemeral(&agent.session.seed)
+    } else {
+        deepx_message::MessageStore::new(&agent.session.seed)
+    };
     agent.msg.push_system(deepx_types::Message::system(
-        &deepx_config::prompt::full_system_prompt()
+        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
     ));
     deepx_tools::bridge::set_current_session(&agent.session.seed);
-    SessionManager::global().save(
-        &agent.session.seed,
-        &agent.msg.to_vec(),
-        &agent.config.model,
-        Some(&agent.config.reasoning_effort),
-    );
+    deepx_tools::bridge::load_workspace(&agent.session.seed);
+    agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session {}", agent.session.seed);
+}
+
+/// Create a new session with a pre-set seed (from CLI --seed).
+/// Unlike create_session, this does NOT generate a new seed.
+pub fn create_session_with_seed(agent: &mut AgentState) {
+    agent.session.tokens = 0;
+    agent.session.from_resume = false;
+    agent.msg = if agent.ephemeral {
+        deepx_message::MessageStore::new_ephemeral(&agent.session.seed)
+    } else {
+        deepx_message::MessageStore::new(&agent.session.seed)
+    };
+    agent.msg.push_system(deepx_types::Message::system(
+        &deepx_config::prompt::full_system_prompt_with_date(&chrono_local_date())
+    ));
+    deepx_tools::bridge::set_current_session(&agent.session.seed);
+    deepx_tools::bridge::load_workspace(&agent.session.seed);
+    agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
+    log::info!("deepx-agent: new session with preset seed {}", agent.session.seed);
 }

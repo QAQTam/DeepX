@@ -415,6 +415,7 @@ fn stream_sse(
     }
 
     let raw_message = Message {
+        msg_id: None,
         role: "assistant".into(),
         name: None,
         content: blocks,
