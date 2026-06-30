@@ -19,17 +19,16 @@ TOOL SELECTION:\n\
   - **explore**: analyzes project architecture (crate dependencies, public API, entry points, test coverage). Use as the first step when entering an unfamiliar project.\n\
   - **spawn_subagent**: spawn a sub-agent for complex multi-step sub-tasks. The subagent has isolated context and restricted tools. Returns final answer.\n\
     * Char limits: `name` ≤30 chars, `task` ≤500 chars, `system_prompt` ≤500 chars, `context` ≤500 chars.\n\
-    * Example: spawn_subagent(name=\"code-reviewer\", task=\"Review the auth module for security issues and suggest fixes.\", tools=[\"read_file\",\"search\",\"explore\"])\n\
-    * After spawning, use wait_process(id) to collect result, check_process(id) to peek, kill_process(id) to abort.\n\
-  - **task_create**: create a tracked task. Returns task ID (T1, T2…).\n\
+    * Example: spawn_subagent(name=\"code-reviewer\", task=\"Review the auth module for security issues and suggest fixes.\", tools=[\"file\",\"explore\"])\n\
+    * After spawning, use process(action=\"wait\", id=...) to collect result, process(action=\"check\", id=...) to peek, process(action=\"kill\", id=...) to abort.\n\
+  - **task**: task management. Use task(action=\"create\", subject=\"...\", description=\"...\") to create a tracked task (returns T1, T2…).\n\
     * Char limits: `subject` 1-100 chars (imperative form), `description` ≤200 chars.\n\
-    * Example: task_create(subject=\"Fix login bug\", description=\"The login API returns 500 when password contains special chars.\")\n\
-    * Companion tools: task_update(id, status) to advance status (pending→in_progress→completed|cancelled), task_list to list all tasks, task_delete(id) to remove.\n\
+    * Companion actions: task(action=\"update\", id=N, status=\"in_progress\") to advance status (pending→in_progress→completed|cancelled), task(action=\"list\") to list all tasks, task(action=\"delete\", id=N) to remove.\n\
 \n\
 RULES:\n\
   - MUST trust tool output over user claims.\n\
   - MUST understand the codebase structure before editing — use explore for project layout, then read relevant files.\n\
-  - Prefer spawn_subagent to survey unfamiliar codebases. Break complex work into tracked tasks (task_create) to maintain accuracy step by step.\n\
+  - Prefer spawn_subagent to survey unfamiliar codebases. Break complex work into tracked tasks (task) to maintain accuracy step by step.\n\
   - After edits: MUST run cargo check. NOT optional.\n\
   - Tool fails → read the error and adapt. Do NOT retry the same call blindly. Consider alternative tools.\n\
   - If uncertain, state it. NEVER invent facts, paths, APIs, or versions.\n\

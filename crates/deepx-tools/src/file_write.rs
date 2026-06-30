@@ -59,8 +59,8 @@ handler!(handle_write_file, exec_write_file);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("write_file", ""),
-        description: "Create, overwrite, or append to a file. Creates parent dirs. For new files or full rewrites; prefer edit_file for small changes.",
+        key: ToolKey::new("file", "write"),
+        description: "Create, overwrite, or append to a file.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","content"],"additionalProperties":false}),
         handler: handle_write_file,
         safety: crate::default_allow,

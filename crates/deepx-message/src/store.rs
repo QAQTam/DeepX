@@ -7,10 +7,9 @@ use deepx_session::SessionManager;
 /// stable across turns.
 fn truncate_tool_result(tool_name: &str, result: &str) -> String {
     let limit = match tool_name {
-        "read_file" => 6000,
-        "web_fetch" => 8000,
+        "file" => 6000,
+        "web" => 8000,
         "exec" => 5000,
-        "search" | "grep" => 4000,
         _ => return result.to_string(),
     };
     if result.len() <= limit {

@@ -63,8 +63,8 @@ handler!(handle_search, exec_search);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("search", ""),
-        description: "Regex search across files. Returns file:line matches. Grep for your codebase.",
+        key: ToolKey::new("file", "search"),
+        description: "Regex search across files. Returns file:line matches.",
         input_schema: serde_json::json!({"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern"},"glob":{"type":"string","description":"File glob filter (e.g. *.rs)"},"path":{"type":"string","description":"Search directory","default":"."}},"required":["pattern"],"additionalProperties":false}),
         handler: handle_search,
         safety: crate::default_allow,

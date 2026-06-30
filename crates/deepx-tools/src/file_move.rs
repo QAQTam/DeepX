@@ -37,7 +37,7 @@ handler!(handle_copy_file, exec_copy_file);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("move_file", ""),
+        key: ToolKey::new("file", "move"),
         description: "Move or rename a file or directory. Creates parent dirs of dest.",
         input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
         handler: handle_move_file,
@@ -45,7 +45,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("copy_file", ""),
+        key: ToolKey::new("file", "copy"),
         description: "Copy a file. Creates parent dirs of dest.",
         input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
         handler: handle_copy_file,

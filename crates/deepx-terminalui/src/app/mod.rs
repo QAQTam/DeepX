@@ -596,21 +596,14 @@ impl MenuState {
 
 fn tool_icon(name: &str) -> &'static str {
     match name {
-        "read_file" | "file_read" => "📖",
-        "write_file" | "file_write" => "📝",
-        "edit_file" | "edit_file_diff" => "✏️",
-        "file_delete" | "delete_file" => "🗑",
-        "file_move" | "move_file" => "📦",
-        "file_diff" | "diff" => "🔍",
-        "file_glob" | "glob" => "🌐",
-        "file_list_dir" | "list_dir" => "📂",
-        "file_search" | "search" | "grep" => "🔎",
+        "file" => "📄",
         "exec" => "⚡",
-        "web_fetch" => "🌍",
-        "web_search" => "🔗",
+        "web" => "🌍",
         "explore" => "🧭",
-        "task_create" | "task_update" => "📋",
+        "task" => "📋",
+        "process" => "⚙️",
         "ask_user" => "❓",
+        "spawn_subagent" => "🤖",
         _ => "🔧",
     }
 }

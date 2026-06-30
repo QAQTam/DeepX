@@ -41,8 +41,8 @@ handler!(handle_list_dir, exec_list_dir);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("list_dir", ""),
-        description: "List files and directories with names and sizes.",
+        key: ToolKey::new("file", "list"),
+        description: "List directory contents with names and sizes.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"Directory path","default":"."}},"additionalProperties":false}),
         handler: handle_list_dir,
         safety: crate::default_allow,

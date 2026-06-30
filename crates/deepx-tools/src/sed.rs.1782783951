@@ -69,41 +69,6 @@ fn post_process_output(raw: &str, script: &str, path: &str) -> String {
     raw.to_string()
 }
 
-/// Platform-dispatch sed with raw args — used by linuxmod.
-/// On Windows: deepx-sed (pure-Rust). On Linux: GNU sed binary.
-pub(crate) fn run_sed_core(script: &str, path: &str, in_place: bool) -> String {
-    #[cfg(windows)]
-    {
-        deepx_sed::deepx_run_sed(script, path, in_place, false)
-    }
-    #[cfg(not(windows))]
-    {
-        exec_gnu_sed(script, &[], path, in_place, false)
-    }
-}
-
-/// Apply sed to piped stdin (linuxmod pipe mode).
-/// Writes stdin to temp file, runs deepx-sed in-place, reads back result.
-pub(crate) fn apply_sed_to_stdin(input: &str, script: &str) -> String {
-    let tmp_dir = std::env::temp_dir();
-    let tmp_path = tmp_dir.join(format!("deepx-sed-{}.tmp", std::process::id()));
-    if let Err(e) = std::fs::write(&tmp_path, input) {
-        return format!("[ERROR] sed: cannot write temp file: {e}");
-    }
-    let path_str = tmp_path.to_string_lossy();
-    let result = deepx_sed::deepx_run_sed(script, &path_str, true, false);
-    // For in-place, deepx_run_sed already modified the file. Read it back.
-    let content = std::fs::read_to_string(&tmp_path);
-    let _ = std::fs::remove_file(&tmp_path);
-    if result.starts_with("[ERROR]") {
-        return result;
-    }
-    match content {
-        Ok(c) => c,
-        Err(e) => format!("[ERROR] sed: cannot read temp file: {e}"),
-    }
-}
-
 /// Run GNU sed binary on Linux/macOS.
 #[cfg(not(windows))]
 pub(crate) fn exec_gnu_sed(

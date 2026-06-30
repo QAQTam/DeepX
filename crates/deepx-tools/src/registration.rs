@@ -9,15 +9,13 @@ use super::web;
 use super::file_read;
 use super::file_write;
 use super::file_edit;
-use super::jaq;
 use super::file_edit_diff;
 use super::file_list_dir;
 use super::file_search;
 use super::file_delete;
 use super::file_move;
-use super::file_glob;
 use super::file_diff;
-use super::linuxmod;
+
 use super::task;
 use super::ask_user;
 use super::process_inspect;
@@ -34,19 +32,16 @@ pub fn build_tool_manager(extra_registrars: &[ToolRegistrar]) -> ToolManager {
     exec::register(&mut mgr);
     explore::register(&mut mgr);
     web::register(&mut mgr);
-    linuxmod::register(&mut mgr);
 
     // ── 文件操作 ──
     file_read::register(&mut mgr);
     file_write::register(&mut mgr);
     file_edit::register(&mut mgr);
-    jaq::register(&mut mgr);
     file_edit_diff::register(&mut mgr);
     file_list_dir::register(&mut mgr);
     file_search::register(&mut mgr);
     file_delete::register(&mut mgr);
     file_move::register(&mut mgr);
-    file_glob::register(&mut mgr);
     file_diff::register(&mut mgr);
 
     // ── 任务 ──

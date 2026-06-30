@@ -10,14 +10,8 @@ members = [
     "crates/deepx-tools",
     "crates/deepx-terminalui",
     "crates/deepx-session",
-    "crates/deepx-sed",
     "crates/deepx-subagent",
     "crates/deepx-tauri/src-tauri",
-    "crates/deepx-grep-matcher",
-    "crates/deepx-grep-regex",
-    "crates/deepx-grep-searcher",
-    "crates/deepx-globset",
-    "crates/deepx-ignore",
 ]
 
 [workspace.package]

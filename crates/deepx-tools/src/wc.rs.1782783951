@@ -21,7 +21,7 @@ pub(super) fn exec_wc(args: &str) -> String {
 handler!(handle_wc, exec_wc);
 
 /// Count lines/words/chars/bytes with raw args — used by linuxmod.
-pub(crate) fn run_wc_core(content: &str, label: &str, lines_only: bool) -> String {
+fn run_wc_core(content: &str, label: &str, lines_only: bool) -> String {
     let line_count = content.lines().count();
     let byte_count = content.len();
 

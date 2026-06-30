@@ -87,7 +87,11 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     } else {
         tool_call_id.to_string()
     };
-    let effective_action = if action.is_empty() { name } else { action };
+    let effective_action = if action.is_empty() {
+        args_val.get("action").and_then(|v| v.as_str()).unwrap_or(name)
+    } else {
+        action
+    };
 
     let source = if call_id.starts_with("dsml_tc_") {
         "DSML"
@@ -168,8 +172,9 @@ fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    match tool_name {
-        "write_file" => {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or(tool_name);
+    match (tool_name, action) {
+        ("file", "write") => {
             let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
             let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
             Some(deepx_proto::CodeDeltaRecord {
@@ -181,7 +186,7 @@ fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx
                 file,
             })
         }
-        "edit_file" => {
+        ("file", "edit") => {
             let old_s = args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
             let new_s = args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
             let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
@@ -194,7 +199,7 @@ fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx
                 file,
             })
         }
-        "delete_file" => {
+        ("file", "delete") => {
             let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
             Some(deepx_proto::CodeDeltaRecord {
                 timestamp: now,
@@ -205,7 +210,7 @@ fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx
                 file,
             })
         }
-        "edit_file_diff" => {
+        ("file", "edit_diff") => {
             let old_count = args.get("old_lines").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
             let new_count = args.get("new_lines").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
             let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
@@ -234,7 +239,7 @@ pub fn load_workspace(seed: &str) {
     let ws = ws.trim();
     let ws = if !ws.is_empty() { ws } else { "." };
     crate::set_workspace(ws);
-    // Set process current directory so all relative paths in exec/linuxmod/file tools
+    // Set process current directory so all relative paths in exec/file tools
     // resolve against the workspace root instead of the installation directory.
     if let Err(e) = std::env::set_current_dir(ws) {
         log::warn!("load_workspace: cannot cd to '{}': {e}", ws);

@@ -8,103 +8,11 @@
 //! semantics: ANSI colors, `isatty()`=true for the child process.
 //!
 //! 安全检测逻辑由 safety.rs 集中管理。
-//!
-//! ## Exec interceptor
-//!
-//! When the model uses exec to run a known tool (e.g. `sed -i 's/.../...' file`),
-//! the interceptor routes it directly to the native toolcall handler, bypassing
-//! PTY/spawn and shell quoting entirely.
 
 use std::io::{BufRead, BufReader};
 
 use crate::{ToolCallCtx, ToolResult};
 use std::sync::mpsc;
-
-// ── Exec interceptor: route known tools to native toolcalls ──
-
-/// Try to intercept an exec command and route it to a native toolcall.
-/// Returns `Some(ToolResult)` if intercepted, `None` to fall through to PTY.
-fn intercept_toolcall(command: &str, _ctx: &ToolCallCtx) -> Option<ToolResult> {
-    let cmd_trimmed = command.trim();
-
-    // On Windows: intercept sed and route to deepx-sed (no GNU sed available).
-    // On Linux: let sed pass through to PTY so GNU sed runs natively.
-    #[cfg(windows)]
-    if let Some(result) = intercept_sed(cmd_trimmed) {
-        return Some(result);
-    }
-    let _ = cmd_trimmed; // suppress unused warning on Linux
-
-    None
-}
-
-/// Parse `sed [-i] ['"]s/pattern/repl/flags['"] path` and route to sed toolcall.
-#[cfg(windows)]
-fn intercept_sed(cmd: &str) -> Option<ToolResult> {
-    let rest = cmd
-        .strip_prefix("sed ")
-        .or_else(|| {
-            if cmd.contains("sed") && cmd.contains(' ') {
-                let idx = cmd.rfind("sed ")?;
-                Some(&cmd[idx + 4..])
-            } else { None }
-        })?;
-
-    let mut rest = rest.trim();
-    let mut in_place = false;
-    let mut quiet = false;
-
-    while let Some(r) = rest.strip_prefix("-i") {
-        rest = r.trim_start();
-        in_place = true;
-    }
-    if let Some(r) = rest.strip_prefix("-n") {
-        rest = r.trim_start();
-        quiet = true;
-    }
-
-    let (script, after_script) = extract_quoted_arg(rest)?;
-    rest = after_script.trim_start();
-
-    let path = if rest.starts_with('\'') || rest.starts_with('"') {
-        extract_quoted_arg(rest)?.0
-    } else {
-        rest.split(' ').next()?.to_string()
-    };
-
-    if path.is_empty() { return None; }
-
-    let args = serde_json::json!({
-        "script": script,
-        "path": path,
-        "in_place": in_place,
-        "quiet": quiet,
-    });
-    let result = crate::sed::exec_sed(&args.to_string());
-    let success = !result.starts_with("[ERROR]");
-    Some(ToolResult { success, content: result })
-}
-
-/// Extract a single- or double-quoted argument, returning the inner content
-/// and the remainder of the string. Also handles unquoted arguments (split on space).
-#[cfg(windows)]
-fn extract_quoted_arg(s: &str) -> Option<(String, &str)> {
-    let s = s.trim_start();
-    if s.is_empty() { return None; }
-
-    let first_char = s.chars().next()?;
-    if first_char == '\'' || first_char == '"' {
-        // Quoted: find matching close quote
-        let quote = first_char;
-        let inner = &s[1..];
-        let end = inner.find(quote)?;
-        Some((inner[..end].to_string(), &inner[end + 1..]))
-    } else {
-        // Unquoted: take until first space
-        let end = s.find(' ').unwrap_or(s.len());
-        Some((s[..end].to_string(), &s[end..]))
-    }
-}
 
 pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> String {
     const MAX_EXEC_OUTPUT: usize = 1024 * 1024;
@@ -344,11 +252,6 @@ fn strip_ansi(s: &str) -> String {
 
 pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     let command = ctx.get_str("command").unwrap_or("").to_string();
-
-    // ── Interceptor: route known tools to native toolcalls ──
-    if let Some(result) = intercept_toolcall(&command, &ctx) {
-        return result;
-    }
 
     let args = serde_json::json!({
         "command": command,

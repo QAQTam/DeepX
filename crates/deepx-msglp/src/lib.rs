@@ -1122,56 +1122,49 @@ fn build_assistant_message(
 
 /// Extract a short human-readable display string from a tool call's arguments.
 fn format_tool_args_display(name: &str, input: &serde_json::Value) -> String {
+    // Try action field first (for namespace-style tools)
+    let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let display_name = if action.is_empty() { name.to_string() } else { format!("{}/{}", name, action) };
+
     match name {
-        "linuxmod" | "exec" => input.get("command")
+        "exec" => input.get("command")
             .and_then(|v| v.as_str())
             .map(|c| c.chars().take(80).collect())
-            .unwrap_or_else(|| name.into()),
-        "read_file" | "file_read" => input.get("path")
+            .unwrap_or(display_name),
+        "file" => {
+            // Show path/pattern based on action
+            let primary = match action {
+                "search" => input.get("pattern"),
+                _ => input.get("path"),
+            };
+            primary.and_then(|v| v.as_str())
+                .map(|p| format!("{} {}", action, p.chars().take(60).collect::<String>()))
+                .unwrap_or(display_name)
+        }
+        "task" => input.get("subject")
+            .or_else(|| input.get("status"))
             .and_then(|v| v.as_str())
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| name.into()),
-        "write_file" | "file_write" => input.get("path")
+            .map(|s| format!("{}/{}", action, s.chars().take(60).collect::<String>()))
+            .unwrap_or(display_name),
+        "web" => input.get("url")
+            .or_else(|| input.get("query"))
+            .or_else(|| input.get("name"))
             .and_then(|v| v.as_str())
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| name.into()),
-        "edit_file" | "edit_file_diff" => input.get("path")
-            .and_then(|v| v.as_str())
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| name.into()),
-        "web_search" => input.get("query")
-            .and_then(|v| v.as_str())
-            .map(|q| q.chars().take(60).collect())
-            .unwrap_or_else(|| name.into()),
-        "web_fetch" => input.get("url")
-            .and_then(|v| v.as_str())
-            .map(|u| u.chars().take(80).collect())
-            .unwrap_or_else(|| name.into()),
-        "search" | "grep" | "file_search" => input.get("pattern")
-            .and_then(|v| v.as_str())
-            .map(|p| p.chars().take(80).collect())
-            .unwrap_or_else(|| name.into()),
-        "glob" | "file_glob" => input.get("pattern")
-            .and_then(|v| v.as_str())
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| name.into()),
-        "list_dir" | "file_list_dir" => input.get("path")
-            .and_then(|v| v.as_str())
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| name.into()),
+            .map(|s| s.chars().take(80).collect())
+            .unwrap_or(display_name),
+        "process" => input.get("id")
+            .and_then(|v| v.as_u64())
+            .map(|id| format!("{}/{}", action, id))
+            .unwrap_or(display_name),
         "explore" => input.get("path")
             .and_then(|v| v.as_str())
             .map(|p| p.to_string())
-            .unwrap_or_else(|| name.into()),
+            .unwrap_or(display_name),
         "ask_user" => input.get("question")
             .and_then(|v| v.as_str())
             .map(|q| q.chars().take(60).collect())
-            .unwrap_or_else(|| name.into()),
-        "task_create" => input.get("subject")
-            .and_then(|v| v.as_str())
-            .map(|s| s.chars().take(80).collect())
-            .unwrap_or_else(|| name.into()),
-        _ => name.into(),
+            .unwrap_or(display_name),
+        _ => display_name,
     }
 }
 

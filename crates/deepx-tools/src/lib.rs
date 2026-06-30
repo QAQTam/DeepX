@@ -15,16 +15,6 @@ pub mod file_write;
 
 pub mod file_edit;
 
-pub mod sed;
-
-pub mod grep;
-
-pub mod jaq;
-
-pub mod wc;
-
-pub mod sort;
-
 pub mod file_edit_diff;
 
 pub mod file_list_dir;
@@ -34,8 +24,6 @@ pub mod file_search;
 pub mod file_delete;
 
 pub mod file_move;
-
-pub mod file_glob;
 
 pub mod file_diff;
 
@@ -57,8 +45,6 @@ pub mod persistence;
 pub mod manager;
 
 pub mod mcp_bridge;
-
-pub mod linuxmod;
 
 pub use web::set_c7_key;
 pub use web::set_bocha_key;

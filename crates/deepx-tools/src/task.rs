@@ -235,7 +235,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("task_update", ""),
+        key: ToolKey::new("task", "update"),
         description: "Update task status by ID: pending → in_progress → completed | cancelled.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
@@ -248,8 +248,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("task_delete", ""),
-        description: "Delete a task by ID.",
+        key: ToolKey::new("task", "delete"),
+        description: "Delete a task",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
                 "id": {"type": "integer", "description": "Task ID to delete (T1, T2, … — use the number only)"}
@@ -260,7 +260,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("task_list", ""),
+        key: ToolKey::new("task", "list"),
         description: "List tasks, optionally filtered by status.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {

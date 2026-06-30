@@ -24,7 +24,7 @@ pub(super) fn exec_jaq(args: &str) -> String {
     out
 }
 
-pub(crate) fn run_jaq(filter: &str, input: &str, path: &str) -> Result<String, String> {
+fn run_jaq(filter: &str, input: &str, path: &str) -> Result<String, String> {
     use jaq_core::{Ctx, Vars, Compiler, unwrap_valr};
     use jaq_core::load::{Arena, File, Loader};
     use jaq_json::Val;

@@ -38,7 +38,7 @@ pub fn parse_xml_tool_calls(content: &str, tool_names: &[String]) -> (String, Ve
     let mut tag_map: Vec<(String, String)> = tool_names.iter()
         .map(|n| (n.clone(), n.clone()))
         .collect();
-    for (alias, name) in &[("read", "read_file"), ("write", "write_file"), ("edit", "edit_file")] {
+    for (alias, name) in &[("read", "file"), ("write", "file"), ("edit", "file")] {
         if tool_names.iter().any(|n| n == name) {
             tag_map.push((alias.to_string(), name.to_string()));
         }

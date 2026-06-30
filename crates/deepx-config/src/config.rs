@@ -33,8 +33,7 @@ impl Default for SubagentConfig {
             max_tokens: 4096,
             timeout_secs: 120,
             default_tools: vec![
-                "read_file".into(), "search".into(), "grep".into(),
-                "exec".into(), "list_dir".into(), "glob".into(),
+                "file".into(), "exec".into(), "explore".into(),
             ],
         }
     }

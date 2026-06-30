@@ -21,20 +21,6 @@ pub(super) fn exec_sort(args: &str) -> String {
 
 handler!(handle_sort, exec_sort);
 
-/// Sort lines of a file with raw args — used by linuxmod.
-pub(crate) fn run_sort_core(path: &str, unique: bool, reverse: bool) -> String {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => return format!("[ERROR] sort: cannot read {path}: {e}"),
-    };
-    run_sort_core_with_content(&content, path, unique, reverse)
-}
-
-/// Sort already-loaded content — used by linuxmod pipe segments.
-pub(crate) fn run_sort_str(content: &str, unique: bool, reverse: bool) -> String {
-    run_sort_core_with_content(content, "<stdin>", unique, reverse)
-}
-
 fn run_sort_core_with_content(content: &str, label: &str, unique: bool, reverse: bool) -> String {
     let mut lines: Vec<&str> = content.lines().collect();
 

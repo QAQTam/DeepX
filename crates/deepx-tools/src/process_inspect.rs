@@ -8,8 +8,8 @@ use crate::{ToolCallCtx, ToolResult, process_registry::ProcessRegistry};
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("check_process", ""),
-        description: "Check the status of a running background process (exec or subagent). \
+        key: crate::ToolKey::new("process", "check"),
+        description: "Process management: check, wait, kill. Use check to inspect a running background process (exec or subagent). \
             Returns status, elapsed time, and the last output tail. \
             Use when a previous exec/subagent timed out — you can peek at whether it's \
             still making progress or has stalled.",
@@ -27,7 +27,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("wait_process", ""),
+        key: crate::ToolKey::new("process", "wait"),
         description: "Wait for a background process to complete, with a timeout. \
             Returns the final output when the process exits, or a snapshot if timeout is reached. \
             Use when you want to give a previously-timed-out process more time to finish.",
@@ -46,9 +46,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("kill_process", ""),
-        description: "Kill a running background process. \
-            Use when a process has clearly stalled or is no longer needed.",
+        key: crate::ToolKey::new("process","kill"),
+        description: "Kill a process",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

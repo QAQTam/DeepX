@@ -45,21 +45,14 @@ fn format_elapsed(d: std::time::Duration) -> String {
 /// Short single-char icon for activity log and file entries.
 fn tool_activity_icon(name: &str) -> &'static str {
     match name {
-        "read_file" | "file_read" => "R",
-        "write_file" | "file_write" => "W",
-        "edit_file" | "edit_file_diff" | "file_edit" => "E",
-        "delete_file" | "file_delete" => "D",
-        "file_move" | "move_file" => "M",
+        "file" => "F",
         "exec" => ">",
         "explore" => "S",
-        "search" | "grep" | "file_search" => "Z",
-        "glob" | "file_glob" => "G",
-        "list_dir" | "file_list_dir" => "L",
-        "diff" | "file_diff" => "=",
-        "web_search" | "web_fetch" => "@",
-        "task_create" | "task_update" | "task_delete" | "task_list" => "T",
+        "web" => "@",
+        "task" => "T",
+        "process" => "P",
         "ask_user" => "?",
-        "sed" => "~",
+        "spawn_subagent" => "&",
         _ => "*",
     }
 }
