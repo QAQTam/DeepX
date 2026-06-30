@@ -158,12 +158,32 @@ fn spawn_agent_child(
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped()) // capture crash logs — was null()
         .spawn()
         .map_err(|e| format!("spawn agent subprocess: {e}"))?;
 
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+
+    // Pipe agent stderr to log file for crash diagnosis
+    let debug_seed = if let Some(s) = resume_seed { s.to_string() } else { _seed.to_string() };
+    std::thread::spawn(move || {
+        let log_path = deepx_types::platform::data_dir()
+            .join(format!("agent_{}_debug.log", &debug_seed[..debug_seed.len().min(8)]));
+        let mut writer = std::fs::File::create(&log_path)
+            .unwrap_or_else(|_| std::fs::File::create(deepx_types::platform::data_dir().join("agent_debug.log")).unwrap());
+        use std::io::BufRead;
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => { use std::io::Write; let _ = write!(writer, "{}", line); }
+            }
+        }
+    });
 
     let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
     let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
@@ -199,20 +219,29 @@ fn spawn_agent_child(
             for line in reader.lines() {
                 let line = match line {
                     Ok(l) => l,
-                    Err(_) => break,
+                    Err(e) => {
+                        eprintln!("[TUI] reader thread: stdout read error: {e}");
+                        break;
+                    }
                 };
+                if line.trim().is_empty() { continue; }
                 if let Ok(event) = serde_json::from_str::<Agent2Ui>(&line) {
                     if agent_tx.send(event).is_err() {
                         break;
                     }
                 }
             }
+            // Agent stdout pipe broke — emit error so TUI can react
+            let _ = agent_tx.send(Agent2Ui::Error {
+                message: "Agent process stdout pipe closed — agent may have exited".into(),
+            });
         }));
         if let Err(e) = result {
             let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
                 else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
                 else { "unknown panic".into() };
             eprintln!("[TUI] reader thread panicked: {}", msg);
+            let _ = agent_tx.send(Agent2Ui::Error { message: format!("Reader thread panicked: {msg}") });
         }
     });
 

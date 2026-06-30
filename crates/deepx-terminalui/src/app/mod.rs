@@ -1112,8 +1112,9 @@ impl App {
                 self.load_turns(&turns);
             }
             Agent2Ui::Error { message } => {
-                self.draft_round_msg_idx = None;
-                let status_text = format!("{}: {}", self.setup.lang.t_chat_error(), message);
+                self.streaming = false;
+                self.debug.streaming = false;
+                let status_text = format!("{}: {}", self.setup.lang.t_chat_error(), &message);
                 self.push_msg(ChatRole::Status, &status_text);
                 self.status = status_text.clone();
                 self.last_error = status_text;
