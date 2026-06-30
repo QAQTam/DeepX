@@ -89,6 +89,11 @@ const zh: I18nStrings = {
     files: "文件",
     noFiles: "无文件",
   },
+  toast: {
+    agentDisconnected: "Agent 进程已断开 — 正在重连...",
+    agentReconnected: "Agent 已重连",
+    agentLost: "Agent 连接丢失 — 点击发送重连",
+  },
 };
 
 export default zh;

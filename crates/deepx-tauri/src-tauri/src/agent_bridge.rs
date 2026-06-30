@@ -102,7 +102,7 @@ pub struct AgentInstance {
     #[allow(dead_code)]
     seed: String,
     stdin: Arc<Mutex<Box<dyn Write + Send>>>,
-    child: Mutex<Option<std::process::Child>>,
+    child: Arc<Mutex<Option<std::process::Child>>>,
 }
 
 /// Global registry of all running agent subprocesses, keyed by session seed.
@@ -421,6 +421,9 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
 
     let app_handle = app_handle.clone();
     let seed_owned = seed.to_string();
+    // Arc for try_wait check on reader exit (diagnose kill-vs-crash)
+    let child_for_check = Arc::new(Mutex::new(Some(child)));
+    let child_for_thread = child_for_check.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
@@ -449,13 +452,24 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
             }
             let _ = app_handle.emit("agent-event", payload);
         }
-        log::info!("[REGISTRY] agent {} stdout reader thread exiting", seed_owned);
+        log::warn!("[REGISTRY] agent {} stdout reader thread exiting", seed_owned);
+        // Check if the child process actually exited (vs just pipe closed)
+        let exit_status = child_for_thread.lock().ok()
+            .and_then(|mut c| c.as_mut().and_then(|c| c.try_wait().ok()).flatten());
+        log::warn!("[REGISTRY] agent {} child exit status: {:?}", &seed_owned[..seed_owned.len().min(8)], exit_status);
+        // Notify frontend that the agent died so it can trigger reconnection
+        let error_event = Agent2Ui::Error {
+            message: format!("Agent process for session {} has exited unexpectedly", &seed_owned[..seed_owned.len().min(8)]),
+        };
+        let payload = serde_json::to_value(&error_event).unwrap_or_default();
+        let _ = app_handle.emit(&format!("agent-{}-event", seed_owned), payload.clone());
+        let _ = app_handle.emit("agent-event", payload);
     });
 
     Ok(AgentInstance {
         seed: seed.to_string(),
         stdin: Arc::new(Mutex::new(Box::new(stdin))),
-        child: Mutex::new(Some(child)),
+        child: child_for_check,
     })
 }
 

@@ -170,7 +170,10 @@ impl Loop {
                             break; // Loop dropped
                         }
                     }
-                    Ok(None) | Err(_) => break, // EOF or error
+                    Ok(None) | Err(_) => {
+                log::warn!("[AGENT] reader thread: stdin EOF or read error — exiting");
+                break;
+            }
                 }
             }
             log::info!("[AGENT] reader thread exiting");
@@ -389,7 +392,10 @@ impl Loop {
                     f
                 }
                 Err(_) => {
-                    log::info!("[AGENT] cmd_rx closed — exiting");
+                    // cmd_rx closed — the reader thread exited, meaning stdin pipe broke.
+                    // Log detailed exit reason for debugging agent kill issues.
+                    log::error!("[AGENT] cmd_rx closed — reader thread stopped, stdin pipe broken. Exiting main loop. pending_shutdown={}", self.pending_shutdown);
+                    eprintln!("[DEEPX AGENT] stdin pipe broken — exiting. pending_shutdown={}", self.pending_shutdown);
                     break;
                 }
             };

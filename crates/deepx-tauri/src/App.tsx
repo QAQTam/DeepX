@@ -9,6 +9,7 @@ import SettingsView from "./components/SettingsView";
 import InfoBar from "./components/InfoBar";
 import StatusPanel from "./components/StatusPanel";
 import TokenChart from "./components/TokenChart";
+import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
 
@@ -46,6 +47,9 @@ export default function App() {
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
   const [theme, setTheme] = createSignal<ThemeMode>("system");
   const [refreshKey, setRefreshKey] = createSignal(0); // bump to refresh TokenChart
+
+  // ── Toast notifications (disconnect warnings, errors) ──
+  const toastCtrl: ToastCtrl = createToastCtrl();
 
   // Registry of open session ChatStores
   const chatStores = new Map<string, ChatStore>();
@@ -149,7 +153,26 @@ export default function App() {
         chat.setCodeDeltas([...cur.slice(-499), delta]);
         break;
       }
-      case "error": chat.handleError((p.message ?? "Unknown error") as string); break;
+      case "error": {
+        const errMsg = (p.message ?? "Unknown error") as string;
+        chat.handleError(errMsg);
+        // Show toast for agent disconnection
+        if (errMsg.includes("exited unexpectedly") || errMsg.includes("Agent process")) {
+          toastCtrl.push(i18n.t().toast.agentLost, "error", true);
+        } else {
+          toastCtrl.push(errMsg, "error");
+        }
+        // If the error is about agent death, also trigger reconnect
+        if (errMsg.includes("exited unexpectedly")) {
+          const seed = activeSeed();
+          if (seed) {
+            resumeSession(seed).then(() => {
+              toastCtrl.push(i18n.t().toast.agentReconnected, "info");
+            }).catch(() => {});
+          }
+        }
+        break;
+      }
       case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, result_summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean }); break;
       case "compact_start": chat.handleCompactStart(p); break;
       case "compact_end": chat.handleCompactEnd(p); break;
@@ -491,6 +514,7 @@ export default function App() {
         </main>
         
       </div>
+      <ToastContainer ctrl={toastCtrl} />
     </I18nCtx.Provider>
   );
 }

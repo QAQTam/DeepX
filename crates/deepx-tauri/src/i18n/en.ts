@@ -87,6 +87,11 @@ const en = {
     files: "Files",
     noFiles: "No files",
   },
+  toast: {
+    agentDisconnected: "Agent process disconnected — reconnecting...",
+    agentReconnected: "Agent reconnected",
+    agentLost: "Agent connection lost — click Send to reconnect",
+  },
 };
 
 export default en;
