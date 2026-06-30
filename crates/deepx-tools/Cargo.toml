@@ -23,6 +23,7 @@ base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 conpty = "0.7"
+windows-sys = { version = "0.59", features = ["Win32_System_Registry"] }
 
 [target.'cfg(not(windows))'.dependencies]
 libc = "0.2"

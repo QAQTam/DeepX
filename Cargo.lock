@@ -987,6 +987,7 @@ dependencies = [
  "serde_json",
  "similar",
  "ureq 3.3.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

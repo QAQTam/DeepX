@@ -48,6 +48,13 @@ impl Imp {
     }
 }
 
+impl Drop for Imp {
+    fn drop(&mut self) {
+        let _ = self.proc.exit(1);
+        let _ = self.proc.wait(None);
+    }
+}
+
 /// Encode a command string for `pwsh -EncodedCommand`.
 /// PowerShell expects UTF-16LE bytes, then Base64.
 fn encode_pwsh_command(command: &str) -> String {
@@ -60,6 +67,11 @@ pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> 
     let mut cmd = Command::new("pwsh");
     let encoded = encode_pwsh_command(command);
     cmd.args(["-NoLogo", "-NoProfile", "-EncodedCommand", &encoded]);
+    // Disable interactive pagers: PTY means isatty()=true, so git etc
+    // would invoke less/pager and block waiting for stdin.
+    cmd.env("GIT_PAGER", "cat");
+    cmd.env("PAGER", "cat");
+    cmd.env("SYSTEMD_PAGER", "cat");
     // Suppress console window flash
     #[cfg(target_os = "windows")]
     {

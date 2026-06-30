@@ -24,7 +24,33 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
         .filter(|&n| n > 0 && n <= 3600)
         .unwrap_or(30);
 
-    // ── Spawn via PTY ──
+    // ── BISECT: bypass PTY, use direct Command to isolate PATH vs conpty ──
+    log::info!("[EXEC] BISECT: direct Command, PATH={}", std::env::var("PATH").unwrap_or_default());
+    let spawn_result = std::process::Command::new("cmd")
+        .args(["/c", &command])
+        .output();
+    match spawn_result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let mut result = String::new();
+            if !stdout.is_empty() { result.push_str(&stdout); }
+            if !stderr.is_empty() {
+                if !result.is_empty() { result.push('\n'); }
+                result.push_str("[STDERR] ");
+                result.push_str(&stderr);
+            }
+            if !output.status.success() {
+                result.push_str(&format!("\n[EXIT: {}]", output.status.code().unwrap_or(-1)));
+            }
+            return result;
+        }
+        Err(e) => {
+            return format!("[ERROR] direct spawn failed: {}\n[HINT] PATH may be broken", e);
+        }
+    }
+    /*
+    // ── Spawn via PTY (DISABLED for bisect) ──
     log::info!("[EXEC] spawn start, has_progress_tx={}", progress_tx.is_some());
     let mut proc = match crate::pty::spawn(&command, cwd.as_deref()) {
         Ok(p) => p,
@@ -222,6 +248,7 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     }
 
     format!("{}\n{}", headline, output.trim())
+    */ // end PTY bisect block
 }
 
 /// Truncate output to MAX_EXEC_OUTPUT bytes at a char boundary, appending a truncation note.

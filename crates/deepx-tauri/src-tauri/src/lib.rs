@@ -1,6 +1,6 @@
 //! deepx-tauri library — exposed for the unified deepx binary.
 
-mod agent_bridge;
+pub mod agent_bridge;
 
 /// Entry point called by the `deepx` binary when run without flags.
 pub fn run() {

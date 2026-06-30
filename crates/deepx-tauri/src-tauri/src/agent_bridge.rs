@@ -108,6 +108,101 @@ pub struct AgentInstance {
 /// Global registry of all running agent subprocesses, keyed by session seed.
 static REGISTRY: OnceLock<Mutex<AgentRegistry>> = OnceLock::new();
 
+/// Cached full system PATH captured at startup (Windows GUI apps get stripped PATH).
+static SYSTEM_PATH: OnceLock<String> = OnceLock::new();
+
+/// Capture the full system PATH at process startup, before any Windows GUI stripping.
+/// Must be called from main() early, before Tauri initialization.
+pub fn cache_system_path() {
+    let mut path = std::env::var("PATH").unwrap_or_default();
+    
+    // On Windows GUI apps, the process PATH may be stripped. Read the full
+    // system+user PATH from the registry as a reliable fallback.
+    #[cfg(target_os = "windows")]
+    {
+        let reg_path = windows_reg_path();
+        if !reg_path.is_empty() {
+            // Merge with current PATH, deduplicating
+            let mut seen: std::collections::HashSet<String> = path.split(';').map(|s| s.to_string()).collect();
+            for segment in reg_path.split(';') {
+                if !segment.is_empty() && seen.insert(segment.to_string()) {
+                    if !path.is_empty() { path.push(';'); }
+                    path.push_str(segment);
+                }
+            }
+        }
+    }
+    
+    let _ = SYSTEM_PATH.set(path.clone());
+    // Apply the full PATH to the current process so all child processes
+    // (agent subprocess, pwsh via conpty, daemon, etc.) inherit it automatically.
+    unsafe { std::env::set_var("PATH", &path); }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_reg_path() -> String {
+    
+    unsafe {
+        // Win32 FFI declarations
+        unsafe extern "system" {
+            fn RegOpenKeyExW(
+                hkey: isize, subkey: *const u16, _uloptions: u32,
+                _samdesired: u32, phkresult: *mut isize,
+            ) -> i32;
+            fn RegQueryValueExW(
+                hkey: isize, value: *const u16, _reserved: *const u8,
+                pdwtype: *mut u32, pbdata: *mut u8, pcbdata: *mut u32,
+            ) -> i32;
+            fn RegCloseKey(hkey: isize) -> i32;
+        }
+        
+        const HKEY_LOCAL_MACHINE: isize = -2147483646i64 as isize; // 0x80000002
+        const HKEY_CURRENT_USER: isize = -2147483647i64 as isize;   // 0x80000001
+        const KEY_READ: u32 = 0x20019;
+        const REG_EXPAND_SZ: u32 = 2;
+        
+        let mut result = String::new();
+        
+        for (hkey, subkey_str) in [
+            (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\0"),
+            (HKEY_CURRENT_USER, "Environment\0"),
+        ] {
+            let subkey_wide: Vec<u16> = subkey_str.encode_utf16().collect();
+            let value_name: Vec<u16> = "PATH\0".encode_utf16().collect();
+            let mut key_handle: isize = 0;
+            
+            if RegOpenKeyExW(hkey, subkey_wide.as_ptr(), 0, KEY_READ, &mut key_handle) != 0 {
+                continue;
+            }
+            
+            let mut data_type: u32 = 0;
+            let mut data_size: u32 = 0;
+            
+            if RegQueryValueExW(key_handle, value_name.as_ptr(), std::ptr::null(),
+                &mut data_type, std::ptr::null_mut(), &mut data_size) != 0 || data_size == 0 {
+                RegCloseKey(key_handle);
+                continue;
+            }
+            
+            let mut buf: Vec<u16> = vec![0u16; (data_size / 2) as usize + 1];
+            if RegQueryValueExW(key_handle, value_name.as_ptr(), std::ptr::null(),
+                &mut data_type, buf.as_mut_ptr() as *mut u8, &mut data_size) != 0 {
+                RegCloseKey(key_handle);
+                continue;
+            }
+            RegCloseKey(key_handle);
+            
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let path = String::from_utf16_lossy(&buf[..len]);
+            
+            if !result.is_empty() { result.push(';'); }
+            result.push_str(&path);
+        }
+        
+        result
+    }
+}
+
 pub struct AgentRegistry {
     instances: HashMap<String, AgentInstance>,
     app_handle: AppHandle,
@@ -137,6 +232,12 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    // Inject cached full system PATH so child processes (pwsh via conpty)
+    // can find git, cargo, etc. even when Tauri itself has a stripped PATH.
+    if let Some(path) = SYSTEM_PATH.get() {
+        cmd.env("PATH", path);
+    }
 
     #[cfg(target_os = "windows")]
     {

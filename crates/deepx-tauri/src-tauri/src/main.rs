@@ -3,6 +3,11 @@
 // For TUI/agent modes, the console is used normally.
 
 fn main() {
+    // Capture full system PATH at process start, before Windows GUI subsystem
+    // strips it. This is injected into child agent processes so pwsh/conpty
+    // can find git, cargo, etc.
+    deepx_tauri_lib::agent_bridge::cache_system_path();
+    
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
         "--tui" => {
