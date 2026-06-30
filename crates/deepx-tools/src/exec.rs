@@ -50,7 +50,7 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     let _reader_handle = std::thread::spawn(move || {
         use std::io::Read;
         let mut reader = reader; // take ownership and make mutable
-        let mut buf = [0u8; 4096];
+        let mut buf = vec![0u8; 4096];
         let mut pending = String::new();
         let mut partial = Vec::new(); // trailing incomplete multi-byte bytes
         let mut line_count = 0u32;

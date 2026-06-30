@@ -199,7 +199,7 @@ fn stream_sse(
     let mut balance_queried = false;
     let mut reader = resp.into_reader();
     let mut sse_buf = String::new();
-    let mut byte_buf = [0u8; 4096];
+    let mut byte_buf = vec![0u8; 4096];
 
     let mut text_buf = String::new();
     let mut reasoning_buf = String::new();
