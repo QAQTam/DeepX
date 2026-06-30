@@ -16,9 +16,11 @@ fn main() {
         let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
         eprintln!("[FATAL] panicked at {loc}: {msg}");
         log::error!("[FATAL] panicked at {loc}: {msg}");
-        // Flush log crate before abort
+        // Flush log before unwind continues (catch_unwind in bridge.rs will
+        // capture this panic for individual tools, so we must NOT abort here).
         log::logger().flush();
-        std::process::abort();
+        // Do NOT call abort() — let the panic unwind normally so catch_unwind
+        // in tool execution and reader/writer threads can capture it.
     }));
     
     // Capture full system PATH at process start, before Windows GUI subsystem

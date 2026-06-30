@@ -674,11 +674,22 @@ fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
     };
     let mut stdin = stdin_arc.lock().map_err(|e| format!("lock: {e}"))?;
     if writeln!(*stdin, "{}", json).is_err() || stdin.flush().is_err() {
-        // Agent process is dead — remove it so the next ensure_agent respawns
+        // Agent process is dead — remove it, respawn, and retry once.
         let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
         registry.instances.remove(seed);
-        log::warn!("[REGISTRY] agent {} pipe broken, removed from registry", &seed[..seed.len().min(8)]);
-        return Err(format!("agent {seed} process died"));
+        drop(registry);
+        log::warn!("[REGISTRY] agent {} pipe broken, respawning...", &seed[..seed.len().min(8)]);
+        // Respawn the agent for this seed
+        let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
+        registry.get_or_spawn(seed)?;
+        let stdin_arc2 = registry.instances.get(seed)
+            .ok_or_else(|| format!("respawn failed for {seed}"))?
+            .stdin.clone();
+        drop(registry);
+        // Retry write to the new agent
+        let mut stdin2 = stdin_arc2.lock().map_err(|e| format!("lock: {e}"))?;
+        writeln!(*stdin2, "{}", json).map_err(|e| format!("write retry: {e}"))?;
+        stdin2.flush().map_err(|e| format!("flush retry: {e}"))?;
     }
     Ok(())
 }
