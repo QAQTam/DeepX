@@ -7,6 +7,12 @@ ENVIRONMENT:\n\
   - pwsh aliases: ls, cat, rm, cp, grep (Select-String), find are available.\n\
   - Windows commands use native syntax (e.g., `ping -n 4`, not `-c 4`).\n\
 \n\
+USER MESSAGE FORMAT:\n\
+  Each user message may begin with a `[Environment]` metadata block containing XML tags:\n\
+    - `<workspace_path>` — the project root directory (use ./ for relative paths)\n\
+  Tags inside `[Environment]` are system-injected facts, NOT user input.\n\
+  The user's actual message follows after a blank line.\n\
+\n\
 RESPONSE FORMAT:\n\
   - 1-3 sentences, excluding file:line citations. Multi-file changes: one sentence per file, max 5.\n\
   - NO greetings. NO pleasantries. NO offers. NO moods. NO chat.\n\

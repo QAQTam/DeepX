@@ -1,14 +1,12 @@
 //! AgentRegistry — manages multiple agent child processes, one per session.
 //!
-//! Architecture (v6 — multi-session):
-//! - `AgentRegistry::init()` initializes the global registry and SessionManager.
-//! - `get_or_spawn()` spawns a new agent subprocess for a given seed if not already running.
-//! - Each agent process runs the same binary with `agent --seed {seed}` (new session)
-//!   or `agent --resume-seed {seed}` (resume existing session).
-//! - A background reader thread per agent consumes JSON-LP lines from the child's stdout
-//!   and emits them as `agent-{seed}-event` Tauri events to the frontend.
-//! - Tauri commands serialize `Ui2Agent` frames as JSON-LP lines written to the child's stdin.
-//! - `shutdown_all()` sends `Shutdown` frames to all agents, then kills and waits.
+//! Architecture (v7 — daemon + fallback):
+//! - On Unix: connects to `deepxd` daemon socket; all agent lifecycle managed by daemon.
+//! - On Windows / daemon unavailable: falls back to direct child process spawn (v6).
+//! - A single background reader thread dispatches Agent2Ui events from the daemon
+//!   to per-seed Tauri events (`agent-{seed}-event`).
+//! - Tauri commands write `FrontendToDaemon` frames to the daemon socket.
+//! - `shutdown_all()` sends `Shutdown` via daemon or kills child processes directly.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -18,6 +16,86 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter};
 
 use deepx_proto::{Agent2Ui, Ui2Agent};
+#[cfg(unix)]
+use deepx_proto::{FrontendToDaemon, DaemonToFrontend};
+
+// ── Daemon connection (Unix) ──
+
+#[cfg(unix)]
+static DAEMON_CONN: OnceLock<Mutex<Option<std::os::unix::net::UnixStream>>> = OnceLock::new();
+
+#[cfg(unix)]
+fn daemon_conn() -> &'static Mutex<Option<std::os::unix::net::UnixStream>> {
+    DAEMON_CONN.get_or_init(|| Mutex::new(None))
+}
+
+/// Try to connect to the daemon, auto-spawning it if not running.
+#[cfg(unix)]
+fn ensure_daemon() -> Result<(), String> {
+    let mut guard = daemon_conn().lock().map_err(|e| format!("lock: {e}"))?;
+    if guard.is_some() { return Ok(()); }
+    
+    let path = deepx_daemon::socket_path();
+    match deepx_daemon::transport::unix::connect(&path) {
+        Ok(stream) => {
+            log::info!("[DAEMON] connected to daemon at {}", path.display());
+            *guard = Some(stream);
+            Ok(())
+        }
+        Err(_) => {
+            // Daemon not running — try to start it
+            log::info!("[DAEMON] daemon not running, attempting auto-start...");
+            let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+            let mut child = std::process::Command::new(&exe)
+                .arg("daemon")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| format!("spawn daemon: {e}"))?;
+            // Wait for daemon to be ready
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            for _ in 0..5 {
+                match deepx_daemon::transport::unix::connect(&path) {
+                    Ok(stream) => {
+                        log::info!("[DAEMON] connected after auto-start");
+                        *guard = Some(stream);
+                        return Ok(());
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(300)),
+                }
+            }
+            // Daemon failed to start — kill and fall back
+            let _ = child.kill();
+            Err("daemon did not become ready".into())
+        }
+    }
+}
+
+/// Send a frame to the daemon. Returns Ok(true) if sent via daemon, Ok(false) if daemon unavailable.
+#[cfg(unix)]
+fn try_send_via_daemon(seed: &str, frame: &Ui2Agent) -> Result<bool, String> {
+    let mut guard = daemon_conn().lock().map_err(|e| format!("lock: {e}"))?;
+    if let Some(ref mut stream) = *guard {
+        let f2d = FrontendToDaemon { seed: seed.to_string(), frame: frame.clone() };
+        match deepx_daemon::transport::write_frame(stream, &f2d) {
+            Ok(()) => return Ok(true),
+            Err(e) => {
+                log::warn!("[DAEMON] write failed: {e}, reconnecting...");
+                *guard = None;
+                return Ok(false);
+            }
+        }
+    }
+    Ok(false)
+}
+
+// ── Windows / fallback: no daemon ──
+
+#[cfg(not(unix))]
+fn ensure_daemon() -> Result<(), String> { Err("daemon not supported on this platform".into()) }
+#[cfg(not(unix))]
+fn try_send_via_daemon(_seed: &str, _frame: &Ui2Agent) -> Result<bool, String> { Ok(false) }
 
 /// One agent child process — dedicated to a single session.
 pub struct AgentInstance {
@@ -152,6 +230,44 @@ impl AgentRegistry {
         };
         REGISTRY.set(Mutex::new(registry))
             .expect("AgentRegistry already initialized");
+        
+        // Start daemon reader thread (Unix) — dispatches daemon events to Tauri
+        #[cfg(unix)]
+        {
+            let app_handle = app.clone();
+            std::thread::spawn(move || {
+                let path = deepx_daemon::socket_path();
+                // Retry loop for daemon to become available
+                loop {
+                    match deepx_daemon::transport::unix::connect(&path) {
+                        Ok(mut stream) => {
+                            log::info!("[DAEMON] reader thread connected");
+                            loop {
+                                match deepx_daemon::transport::read_frame(&mut stream) {
+                                    Ok(Some(frame)) => {
+                                        let payload = serde_json::to_value(&frame.event).unwrap_or_default();
+                                        let _ = app_handle.emit(
+                                            &format!("agent-{}-event", frame.seed),
+                                            payload.clone(),
+                                        );
+                                        let _ = app_handle.emit("agent-event", payload);
+                                    }
+                                    Ok(None) => break, // EOF
+                                    Err(e) => {
+                                        log::warn!("[DAEMON] read error: {e}");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        }
+                    }
+                    log::info!("[DAEMON] reader thread reconnecting...");
+                }
+            });
+        }
     }
 
     /// Get or spawn an agent for the given seed. If an agent is already running for this
@@ -266,8 +382,14 @@ impl AgentInstance {
 // ── Public API ──
 
 /// Ensure an agent is running for the given seed (resume existing session).
-/// Returns error if spawn fails.
+/// Returns error if spawn fails. Tries daemon first, falls back to direct spawn.
 fn ensure_agent(seed: &str) -> Result<(), String> {
+    // Try daemon first — if available, it handles agent lifecycle
+    if ensure_daemon().is_ok() {
+        // Daemon is connected — it manages agent spawn/restart
+        return Ok(());
+    }
+    // Fallback: direct spawn
     let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
     registry.get_or_spawn(seed)
 }
@@ -277,13 +399,22 @@ fn ensure_agent(seed: &str) -> Result<(), String> {
 fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
     log::info!("[REGISTRY] send_to_agent seed={} type={}",
         &seed[..seed.len().min(8)], agent2ui_event_name_for_ui(&frame));
+    
+    // Try daemon first (Unix)
+    match try_send_via_daemon(seed, &frame) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {} // daemon unavailable, fall through
+        Err(e) => log::warn!("[DAEMON] send error: {e}"),
+    }
+    
+    // Fallback: direct pipe write
     let json = serde_json::to_string(&frame).map_err(|e| format!("serialize: {e}"))?;
     let stdin_arc = {
         let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
         registry.instances.get(seed)
             .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.len().min(8)]))?
             .stdin.clone()
-    }; // Registry lock dropped here
+    };
     let mut stdin = stdin_arc.lock().map_err(|e| format!("lock: {e}"))?;
     writeln!(*stdin, "{}", json).map_err(|e| format!("write: {e}"))?;
     stdin.flush().map_err(|e| format!("flush: {e}"))
@@ -315,11 +446,16 @@ pub fn cmd_send_message(
 
 /// Resume an existing session (spawn agent if not running). The agent auto-resumes
 /// on startup via --resume-seed, so this just ensures the agent is alive.
+/// After ensuring the agent exists, sends ResumeSession to trigger a full
+/// SessionRestored event — needed after WebView refresh when agent events were missed.
 #[tauri::command]
 pub fn cmd_resume_session(seed: String) -> Result<(), String> {
     log::info!("[REGISTRY] cmd_resume_session seed={}", &seed[..seed.len().min(8)]);
     deepx_session::SessionManager::global().set_active_seed(&seed);
-    ensure_agent(&seed)
+    ensure_agent(&seed)?;
+    // Always send ResumeSession so the agent re-emits SessionRestored.
+    // This covers: WebView refresh, frontend reconnect, session switch.
+    send_to_agent(&seed, Ui2Agent::ResumeSession { seed: seed.clone() })
 }
 
 /// Create a new session with a pre-generated seed.

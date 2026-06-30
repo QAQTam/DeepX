@@ -119,6 +119,7 @@ pub(super) fn apply_diff_and_format(
     description: &str,
     was_fuzzy: bool,
     dry_run: bool,
+    was_crlf: bool,
 ) -> String {
     let mut out_lines: Vec<&str> = file_lines.to_vec();
     out_lines.splice(match_idx..match_idx + win, std::iter::empty());
@@ -159,7 +160,13 @@ pub(super) fn apply_diff_and_format(
         return result;
     }
 
-    match std::fs::write(path, &new_content) {
+    // Restore CRLF if original file had Windows line endings
+    let write_content = if was_crlf {
+        new_content.replace('\n', "\r\n")
+    } else {
+        new_content
+    };
+    match std::fs::write(path, &write_content) {
         Ok(_) => {
             let line = match_idx + 1;
             let added = new_lines.len() as u32;
@@ -286,7 +293,7 @@ fn walk_dir(
         let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
 
         if path.is_dir() {
-            if fname.starts_with('.') || fname == "target" || fname == "node_modules" {
+            if fname == ".git" || fname == "target" || fname == "node_modules" {
                 continue;
             }
             walk_dir(&path, glob, re, line_numbers, max_results, results)?;

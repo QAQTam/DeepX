@@ -9,8 +9,6 @@
 //!
 //! 安全检测逻辑由 safety.rs 集中管理。
 
-use std::io::{BufRead, BufReader};
-
 use crate::{ToolCallCtx, ToolResult};
 use std::sync::mpsc;
 
@@ -50,21 +48,61 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     let done_tx_thread = done_tx.clone();
 
     let _reader_handle = std::thread::spawn(move || {
-        let mut reader = BufReader::new(reader);
-        let mut line = String::new();
+        use std::io::Read;
+        let mut reader = reader; // take ownership and make mutable
+        let mut buf = [0u8; 4096];
+        let mut pending = String::new();
         let mut line_count = 0u32;
         loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    line_count += 1;
-                    if let Some(ref tx) = pt_out {
-                        let _ = tx.send((tc_id.clone(), line.clone()));
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    // EOF — flush any remaining partial line
+                    if !pending.is_empty() {
+                        line_count += 1;
+                        if let Some(ref tx) = pt_out {
+                            let _ = tx.send((tc_id.clone(), pending.clone()));
+                        }
+                        crate::process_registry::ProcessRegistry::append_output(registry_id, &pending);
+                        let _ = done_tx_thread.send(pending);
                     }
-                    // Also write to registry
-                    crate::process_registry::ProcessRegistry::append_output(registry_id, &line);
-                    let _ = done_tx_thread.send(line.clone());
+                    break;
+                }
+                Ok(n) => {
+                    pending.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    // Emit complete lines (ending with \n) for real-time progress
+                    while let Some(pos) = pending.find('\n') {
+                        let raw_line: String = pending[..=pos].to_string(); // include \n
+                        pending = pending[pos + 1..].to_string();
+                        // Handle \r: CRLF → strip \r; standalone \r → keep last overwrite segment
+                        let clean_line = if raw_line.ends_with("\r\n") {
+                            // Windows CRLF → single LF
+                            raw_line.replacen("\r\n", "\n", 1)
+                        } else if raw_line.contains('\r') {
+                            // Progress-bar style: split on \r, keep final segment
+                            let segments: Vec<&str> = raw_line.rsplit('\r').collect();
+                            let last = segments[0].to_string();
+                            if last.ends_with('\n') { last } else { format!("{}\n", last) }
+                        } else {
+                            raw_line
+                        };
+                        line_count += 1;
+                        if let Some(ref tx) = pt_out {
+                            let _ = tx.send((tc_id.clone(), clean_line.clone()));
+                        }
+                        crate::process_registry::ProcessRegistry::append_output(registry_id, &clean_line);
+                        let _ = done_tx_thread.send(clean_line);
+                    }
+                }
+                Err(_) => {
+                    if !pending.is_empty() {
+                        line_count += 1;
+                        if let Some(ref tx) = pt_out {
+                            let _ = tx.send((tc_id.clone(), pending.clone()));
+                        }
+                        crate::process_registry::ProcessRegistry::append_output(registry_id, &pending);
+                        let _ = done_tx_thread.send(pending);
+                    }
+                    break;
                 }
             }
         }

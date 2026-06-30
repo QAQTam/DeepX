@@ -28,6 +28,10 @@ fn main() {
         "subagent" => {
             run_agent(true);
         }
+        "daemon" => {
+            // deepxd daemon process — managed by deepx-daemon crate
+            deepx_daemon::run();
+        }
         "config" | "init" => {
             run_config();
         }

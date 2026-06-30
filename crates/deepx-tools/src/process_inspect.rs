@@ -71,7 +71,7 @@ fn handle_check(ctx: ToolCallCtx) -> ToolResult {
     match ProcessRegistry::get_info(id) {
         Some(info) => ToolResult {
             success: true,
-            content: serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info)),
+            content: format!("[OK]\n{}", serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))),
         },
         None => ToolResult {
             success: false,
@@ -92,7 +92,7 @@ fn handle_wait(ctx: ToolCallCtx) -> ToolResult {
     match ProcessRegistry::wait_for(id, timeout_secs) {
         Some(info) => ToolResult {
             success: true,
-            content: serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info)),
+            content: format!("[OK]\n{}", serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))),
         },
         None => ToolResult {
             success: false,
@@ -110,7 +110,7 @@ fn handle_kill(ctx: ToolCallCtx) -> ToolResult {
     if ProcessRegistry::kill(id) {
         ToolResult {
             success: true,
-            content: format!("Process {id} killed."),
+            content: format!("[OK] Process {id} killed."),
         }
     } else {
         ToolResult {

@@ -838,6 +838,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepx-daemon"
+version = "0.4.0"
+dependencies = [
+ "deepx-proto",
+ "deepx-session",
+ "deepx-types",
+ "libc",
+ "log",
+ "serde",
+ "serde_json",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "deepx-gate"
 version = "0.4.0"
 dependencies = [
@@ -917,6 +931,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "deepx-config",
+ "deepx-daemon",
  "deepx-msglp",
  "deepx-proto",
  "deepx-session",
@@ -941,6 +956,7 @@ dependencies = [
  "chrono",
  "crossterm",
  "deepx-config",
+ "deepx-daemon",
  "deepx-proto",
  "deepx-session",
  "deepx-types",
@@ -958,6 +974,7 @@ dependencies = [
 name = "deepx-tools"
 version = "0.4.0"
 dependencies = [
+ "base64 0.22.1",
  "conpty",
  "deepx-message",
  "deepx-proto",

@@ -40,7 +40,7 @@ fn exec_architecture(path: &str) -> String {
     let markers: Vec<&str> = ["Cargo.toml", "package.json", "go.mod", "pyproject.toml"]
         .iter().filter(|m| abs.join(m).exists()).copied().collect();
 
-    let mut out = format!("[ARCHITECTURE]\npath: {abs_str}\n");
+    let mut out = format!("[OK] [ARCHITECTURE]\npath: {abs_str}\n");
     if !markers.is_empty() {
         out.push_str(&format!("type: {}\n", markers.join(", ")));
     }

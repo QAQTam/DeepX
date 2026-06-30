@@ -2,8 +2,8 @@ use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 use super::file_shared::unified_diff;
 
 pub(super) fn exec_diff(args: &str) -> String {
-    let path_a = parse_arg(args, "path_a");
-    let path_b = parse_arg(args, "path_b");
+    let path_a = crate::resolve_workspace_path(&parse_arg(args, "path_a"));
+    let path_b = crate::resolve_workspace_path(&parse_arg(args, "path_b"));
 
     let content_a = match std::fs::read_to_string(&path_a) {
         Ok(c) => c,
@@ -18,7 +18,7 @@ pub(super) fn exec_diff(args: &str) -> String {
         return "[OK] Files are identical".to_string();
     }
 
-    unified_diff(&content_a, &content_b, &path_a)
+    format!("[OK]\n{}", unified_diff(&content_a, &content_b, &path_a))
 }
 
 handler!(handle_diff, exec_diff);

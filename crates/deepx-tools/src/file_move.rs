@@ -3,8 +3,8 @@ use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 // ── move_file ──
 
 pub(super) fn exec_move_file(args: &str) -> String {
-    let source = parse_arg(args, "source");
-    let dest = parse_arg(args, "dest");
+    let source = crate::resolve_workspace_path(&parse_arg(args, "source"));
+    let dest = crate::resolve_workspace_path(&parse_arg(args, "dest"));
     if let Some(parent) = std::path::Path::new(&dest).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -19,8 +19,8 @@ handler!(handle_move_file, exec_move_file);
 // ── copy_file ──
 
 pub(super) fn exec_copy_file(args: &str) -> String {
-    let source = parse_arg(args, "source");
-    let dest = parse_arg(args, "dest");
+    let source = crate::resolve_workspace_path(&parse_arg(args, "source"));
+    let dest = crate::resolve_workspace_path(&parse_arg(args, "dest"));
     if let Some(parent) = std::path::Path::new(&dest).parent() {
         let _ = std::fs::create_dir_all(parent);
     }

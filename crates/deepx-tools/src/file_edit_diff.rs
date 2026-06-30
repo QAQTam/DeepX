@@ -5,10 +5,10 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
     let v: serde_json::Value = match serde_json::from_str(args) {
         Ok(v) => v, Err(_) => return "[ERROR] Invalid JSON arguments".to_string(),
     };
-    let path = match v.get("path").and_then(|v| v.as_str()) {
-        Some(p) if !p.is_empty() => p,
-        _ => return "[ERROR] Missing required field: path".to_string(),
-    };
+    let path = crate::resolve_workspace_path(
+        v.get("path").and_then(|v| v.as_str()).unwrap_or("")
+    );
+    if path.is_empty() { return "[ERROR] Missing required field: path".to_string(); }
     let old_lines: Vec<String> = v.get("old_lines").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
     if old_lines.is_empty() { return "[ERROR] Missing required field: old_lines".to_string(); }
@@ -22,7 +22,7 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
     let description = v.get("description").and_then(|v| v.as_str()).unwrap_or("");
     let dry_run = v.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
 
-    let raw = match std::fs::read_to_string(path) {
+    let raw = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
             let err = e.to_string();
@@ -66,13 +66,13 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
     }
 
     // Disambiguate with context
-    let match_idx = match disambiguate_match(&candidates, &context_before, &context_after, &file_lines, path, win) {
+    let match_idx = match disambiguate_match(&candidates, &context_before, &context_after, &file_lines, &path, win) {
         Ok(idx) => idx,
         Err(msg) => return msg,
     };
 
     // Apply diff and format result
-    apply_diff_and_format(path, &file_lines, match_idx, win, &new_lines, description, was_fuzzy, dry_run)
+    apply_diff_and_format(&path, &file_lines, match_idx, win, &new_lines, description, was_fuzzy, dry_run, was_crlf)
 }
 
 handler!(handle_edit_file_diff, exec_edit_file_diff);
@@ -82,7 +82,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("file", "edit_diff"),
         description: "Fuzzy multi-line edit via old_lines+new_lines.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"description":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
         safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),

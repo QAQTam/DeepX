@@ -44,8 +44,6 @@ pub mod persistence;
 
 pub mod manager;
 
-pub mod mcp_bridge;
-
 pub use web::set_c7_key;
 pub use web::set_bocha_key;
 pub use safety::SafetyVerdict;
@@ -101,6 +99,20 @@ pub static CURRENT_WORKSPACE: RwLock<String> = RwLock::new(String::new());
 pub fn set_workspace(path: &str) {
     let mut ws = CURRENT_WORKSPACE.write().expect("CURRENT_WORKSPACE lock");
     *ws = path.to_string();
+}
+
+/// Resolve a path against the workspace root.
+/// If the path is already absolute, return as-is.
+/// If the workspace is empty or ".", return the path as-is (OS cwd resolution).
+/// Otherwise, join the workspace root with the relative path.
+pub fn resolve_workspace_path(path: &str) -> String {
+    use std::path::Path;
+    if path.is_empty() { return path.to_string(); }
+    let p = Path::new(path);
+    if p.is_absolute() { return path.to_string(); }
+    let ws = CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock");
+    if ws.is_empty() || *ws == "." { return path.to_string(); }
+    Path::new(&*ws).join(p).to_string_lossy().to_string()
 }
 
 // ── ToolKey ──

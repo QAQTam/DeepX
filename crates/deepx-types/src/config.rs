@@ -34,9 +34,6 @@ pub struct PersistentConfig {
     pub lang: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context7_api_key: Option<String>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_servers: Option<serde_json::Value>,
 
     // ── Subagent defaults ──
     #[serde(skip_serializing_if = "Option::is_none")]

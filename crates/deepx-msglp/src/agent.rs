@@ -41,7 +41,7 @@ impl AgentState {
                 Config::default()
             }
         };
-        bridge::init_tools(caller, &[], &[deepx_subagent::register], vec![]);
+        bridge::init_tools(caller, &[deepx_subagent::register], vec![]);
         if let Some(ref key) = config.context7_api_key {
             if !key.is_empty() { bridge::set_context7_key(key); }
         }
@@ -60,7 +60,7 @@ impl AgentState {
                 Config::default()
             }
         };
-        bridge::init_tools("subagent", &[], &[deepx_subagent::register], allowed_tools.to_vec());
+        bridge::init_tools("subagent", &[deepx_subagent::register], allowed_tools.to_vec());
         if let Some(ref key) = config.context7_api_key {
             if !key.is_empty() { bridge::set_context7_key(key); }
         }
@@ -71,7 +71,16 @@ impl AgentState {
     }
 
     pub fn build_context(&mut self) -> Vec<deepx_types::Message> {
-        let annotations: Vec<String> = Vec::new();
+        let mut annotations: Vec<String> = Vec::new();
+        let ws = deepx_tools::CURRENT_WORKSPACE.read().unwrap();
+        if !ws.is_empty() && *ws != "." {
+            annotations.push(format!(
+                "<workspace_path>{ws}</workspace_path>"
+            ));
+        }
+        // Future extensibility:
+        // annotations.push("<active_agent>Alpha</active_agent>");
+        // annotations.push("<teammates><agent>Beta</agent></teammates>");
         self.msg.build_context_for_gate("", &annotations)
     }
 

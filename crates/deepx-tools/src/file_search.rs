@@ -5,7 +5,7 @@ use super::file_shared::rust_grep;
 pub(super) fn exec_search(args: &str) -> String {
     let pattern = parse_arg(args, "pattern");
     let glob = parse_opt(args, "glob");
-    let dir = parse_arg_or(args, "path", ".");
+    let dir = crate::resolve_workspace_path(&parse_arg_or(args, "path", "."));
 
     // Phase 1: try ripgrep (cross-platform, fast)
     let mut cmd = Command::new("rg");
@@ -27,14 +27,14 @@ pub(super) fn exec_search(args: &str) -> String {
             let all_lines: Vec<&str> = out.lines().collect();
             let lines: Vec<&str> = all_lines.iter().take(100).copied().collect();
             if lines.is_empty() {
-                return format!("No matches for '{}'", pattern);
+                return format!("[OK] No matches for '{}'", pattern);
             }
             let truncated = if all_lines.len() > 100 {
                 format!("\n... ({} more matches)", all_lines.len() - 100)
             } else {
                 String::new()
             };
-            return lines.join("\n") + &truncated;
+            return format!("[OK] {}", lines.join("\n")) + &truncated;
         }
         _ => {} // rg not installed or errored — fall through to pure Rust
     }
@@ -43,7 +43,7 @@ pub(super) fn exec_search(args: &str) -> String {
     match rust_grep(&pattern, &dir, true, true, glob.as_deref(), 100) {
         Ok(lines) => {
             if lines.is_empty() {
-                format!("No matches for '{}'", pattern)
+                format!("[OK] No matches for '{}'", pattern)
             } else {
                 let result: Vec<&str> = lines.iter().take(100).map(|s| s.as_str()).collect();
                 let truncated = if lines.len() > 100 {
@@ -51,7 +51,7 @@ pub(super) fn exec_search(args: &str) -> String {
                 } else {
                     String::new()
                 };
-                result.join("\n") + &truncated
+                format!("[OK] {}", result.join("\n")) + &truncated
             }
         }
         Err(e) => format!("[ERROR] search failed: {}\n[HINT] Check the pattern or path.", e),

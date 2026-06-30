@@ -409,8 +409,8 @@ impl MessageStore {
                     }
                 });
                 if let Some(text) = existing {
-                    text.push_str("\n\n## Notes\n");
-                    text.push_str(&ann_text);
+                    let original = text.clone();
+                    *text = format!("[Environment]\n{}\n\n{}", ann_text, original);
                 } else {
                     last_user.content.push(deepx_types::ContentBlock::text(&ann_text));
                 }

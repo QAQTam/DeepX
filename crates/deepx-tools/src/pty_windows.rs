@@ -1,8 +1,12 @@
 //! Windows PTY backend via `conpty`.
+//!
+//! Uses `-EncodedCommand` (Base64 UTF-16LE) to bypass pwsh string parsing:
+//! variables ($HOME), special chars ({}/() etc.) are passed verbatim.
 
 use std::io;
 use std::process::Command;
 
+use base64::Engine as _;
 use super::ExitStatus;
 
 pub struct Imp {
@@ -30,9 +34,18 @@ impl Imp {
     }
 }
 
+/// Encode a command string for `pwsh -EncodedCommand`.
+/// PowerShell expects UTF-16LE bytes, then Base64.
+fn encode_pwsh_command(command: &str) -> String {
+    let utf16: Vec<u16> = command.encode_utf16().collect();
+    let bytes: Vec<u8> = utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
+    base64::engine::general_purpose::STANDARD.encode(&bytes)
+}
+
 pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> {
     let mut cmd = Command::new("pwsh");
-    cmd.args(["-NoLogo", "-NoProfile", "-Command", command]);
+    let encoded = encode_pwsh_command(command);
+    cmd.args(["-NoLogo", "-NoProfile", "-EncodedCommand", &encoded]);
     // Suppress console window flash
     #[cfg(target_os = "windows")]
     {

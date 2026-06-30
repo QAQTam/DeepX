@@ -26,6 +26,7 @@ deepx-tools = { path = "../../deepx-tools" }
 deepx-types = { path = "../../deepx-types" }
 deepx-proto = { path = "../../deepx-proto" }
 deepx-terminalui = { path = "../../deepx-terminalui" }
+deepx-daemon = { path = "../../deepx-daemon" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

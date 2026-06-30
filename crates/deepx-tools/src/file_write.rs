@@ -2,7 +2,7 @@ use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolRe
 use super::file_shared::{unified_diff, diff_stats, normalize_newlines};
 
 pub(super) fn exec_write_file(args: &str) -> String {
-    let path = parse_arg(args, "path");
+    let path = crate::resolve_workspace_path(&parse_arg(args, "path"));
     let content = parse_arg(args, "content");
     let append = parse_opt_bool(args, "append").unwrap_or(false);
     if let Some(parent) = std::path::Path::new(&path).parent() {
@@ -61,7 +61,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("file", "write"),
         description: "Create, overwrite, or append to a file.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false},"reason":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","content"],"additionalProperties":false}),
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false}},"required":["path","content"],"additionalProperties":false}),
         handler: handle_write_file,
         safety: crate::default_allow,
         default_timeout: std::time::Duration::from_secs(30),

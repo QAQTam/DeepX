@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 deepx-types = { path = "../deepx-types" }
 deepx-proto = { path = "../deepx-proto" }
+deepx-daemon = { path = "../deepx-daemon" }
 deepx-config = { path = "../deepx-config" }
 deepx-session = { path = "../deepx-session" }
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }

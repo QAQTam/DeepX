@@ -24,16 +24,9 @@ static TOOL_MANAGER: OnceLock<Mutex<crate::ToolManager>> = OnceLock::new();
 /// `extra_registrars` allows external crates to inject tools (e.g. deepx-subagent).
 /// `allowed_tools` restricts which tools can execute (empty = all allowed).
 /// Tool defs exposed to the LLM are always the full set (cache-friendly).
-pub fn init_tools(session_seed: &str, mcp_servers: &[crate::mcp_bridge::McpServerConfig], extra_registrars: &[crate::registration::ToolRegistrar], allowed_tools: Vec<String>) {
+pub fn init_tools(session_seed: &str, extra_registrars: &[crate::registration::ToolRegistrar], allowed_tools: Vec<String>) {
     let mut mgr = crate::registration::build_tool_manager(extra_registrars);
     mgr.apply_init(allowed_tools, session_seed);
-
-    if !mcp_servers.is_empty() {
-        if let Err(e) = crate::mcp_bridge::register_mcp_servers(&mut mgr, mcp_servers) {
-            log::warn!("deepx: failed to register MCP servers: {e}");
-        }
-    }
-
     let _ = TOOL_MANAGER.set(Mutex::new(mgr));
     log::info!("deepx: tool manager inited ({} tools)", all_tools().len());
 }
@@ -460,6 +453,5 @@ pub fn cancel_current_tool() {
 // ── Shutdown ──
 
 pub fn shutdown_tools() {
-    crate::mcp_bridge::shutdown_mcp_servers();
     log::info!("deepx: tool manager shut down");
 }

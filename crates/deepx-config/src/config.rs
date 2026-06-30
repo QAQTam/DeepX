@@ -53,7 +53,6 @@ pub struct Config {
     pub active_profile: String,
     pub context7_api_key: Option<String>,
     pub lang: Option<String>,
-    pub mcp_servers: Vec<serde_json::Value>,
     pub subagent: SubagentConfig,
 }
 
@@ -79,7 +78,6 @@ impl Default for Config {
             profiles, active_profile: "default".into(),
             context7_api_key: None,
             lang: None,
-            mcp_servers: Vec::new(),
             subagent: SubagentConfig::default(),
         }
     }
@@ -148,10 +146,6 @@ impl Config {
             if let Some(ref re) = pc.reasoning_effort && !re.is_empty() { cfg.reasoning_effort = re.clone(); }
             if let Some(ref k) = pc.context7_api_key && !k.is_empty() { cfg.context7_api_key = Some(k.clone()); }
             if let Some(ref l) = pc.lang && !l.is_empty() { cfg.lang = Some(l.clone()); }
-            if let Some(ref mcp) = pc.mcp_servers
-                && let Ok(servers) = serde_json::from_value::<Vec<serde_json::Value>>(mcp.clone()) {
-                    cfg.mcp_servers = servers;
-                }
             // ── Subagent defaults ──
             if let Some(ref m) = pc.subagent_model && !m.is_empty() { cfg.subagent.model = m.clone(); }
             if let Some(ref u) = pc.subagent_base_url && !u.is_empty() { cfg.subagent.base_url = u.clone(); }
@@ -182,7 +176,6 @@ impl Config {
             base_url: self.base_url.clone(),
             endpoint: Some(self.endpoint.clone()),
         });
-        let mcp_val = serde_json::to_value(&self.mcp_servers).ok();
         let pc = PersistentConfig {
             api_key: if self.api_key.is_empty() { None } else { Some(self.api_key.clone()) },
             model: Some(self.model.clone()),
@@ -196,7 +189,6 @@ impl Config {
             active_profile: Some(self.active_profile.clone()),
             lang: self.lang.clone(),
             context7_api_key: self.context7_api_key.clone(),
-            mcp_servers: mcp_val,
             subagent_model: if self.subagent.model.is_empty() { None } else { Some(self.subagent.model.clone()) },
             subagent_base_url: if self.subagent.base_url.is_empty() { None } else { Some(self.subagent.base_url.clone()) },
             subagent_api_key: if self.subagent.api_key.is_empty() { None } else { Some(self.subagent.api_key.clone()) },

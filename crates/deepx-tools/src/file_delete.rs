@@ -1,24 +1,31 @@
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_delete_file(args: &str) -> String {
-    let path = parse_arg(args, "path");
+    let path = crate::resolve_workspace_path(&parse_arg(args, "path"));
     let p = std::path::Path::new(&path);
     if !p.exists() {
         return format!("[ERROR] {} does not exist.", path);
     }
 
     let trash_root = find_trash_root();
+    // Ensure .deepx-trash/ exists before moving
+    let _ = std::fs::create_dir_all(&trash_root);
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 
-    // Preserve relative directory structure in trash
-    let rel = if path.starts_with('/') {
-        path.trim_start_matches('/').to_string()
+    // Build a safe relative name: strip project root, replace all path separators
+    let project_root = trash_root.parent().unwrap_or_else(|| Path::new("."));
+    let rel = if let Ok(stripped) = p.strip_prefix(project_root) {
+        stripped.to_string_lossy().to_string()
+    } else if let Some(name) = p.file_name() {
+        name.to_string_lossy().to_string()
     } else {
-        path.to_string()
+        path.replace(['/', '\\', ':'], "__")
     };
-    let safe_name = rel.replace('/', "__");
+    // Replace ALL platform path separators and special chars
+    let safe_name = rel.replace(['/', '\\', ':'], "__");
     let trash_path = trash_root.join(format!("{}.{}", safe_name, ts));
 
     if let Some(parent) = trash_path.parent() {

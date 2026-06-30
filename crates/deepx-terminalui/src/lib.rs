@@ -16,15 +16,141 @@ use deepx_types::ConfigStore;
 use ratatui::DefaultTerminal;
 use std::sync::mpsc;
 
-/// Spawn the agent as a child process, communicating over stdin/stdout via bridge threads.
+/// Spawn the agent by connecting to the daemon over Unix socket.
+/// Falls back to direct child process spawn when daemon is unavailable.
 fn spawn_agent_subprocess(
+    resume_seed: Option<&str>,
+) -> Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, std::process::Child), String> {
+    // ── Determine session seed ──
+    let seed: String = match resume_seed {
+        Some(s) => s.to_string(),
+        None => {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            format!("s{:016x}", nanos)
+        }
+    };
+
+    // ── Attempt daemon socket connection (Unix only) ──
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+        use deepx_proto::{FrontendToDaemon, DaemonToFrontend};
+
+        let socket_path = deepx_daemon::socket_path();
+        let exe = std::env::current_exe().map_err(|e| format!("exe path: {e}"))?;
+
+        let stream = {
+            let mut connected = false;
+            for attempt in 0..3 {
+                match deepx_daemon::transport::unix::connect(&socket_path) {
+                    Ok(s) => {
+                        connected = true;
+                        break s;
+                    }
+                    Err(_e) => {}
+                }
+                if attempt == 0 {
+                    // Auto-spawn daemon on first failure
+                    let _ = Command::new(&exe)
+                        .arg("daemon")
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn();
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            if !connected {
+                // Fall through to child process spawn below
+                return spawn_agent_child(&seed, &exe, resume_seed);
+            }
+        };
+
+        let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
+        let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
+
+        let seed_w = seed.clone();
+        let mut stream_w = stream.try_clone()
+            .map_err(|e| format!("clone stream: {e}"))?;
+        let mut stream_r = stream;
+
+        // Writer thread: mpsc → socket (Ui2Agent → FrontendToDaemon)
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                while let Ok(frame) = tui_rx.recv() {
+                    let daemon_frame = FrontendToDaemon {
+                        seed: seed_w.clone(),
+                        frame,
+                    };
+                    if deepx_daemon::transport::write_frame(&mut stream_w, &daemon_frame).is_err() {
+                        break;
+                    }
+                }
+            }));
+            if let Err(e) = result {
+                let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+                    else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                    else { "unknown panic".into() };
+                eprintln!("[TUI] writer thread panicked: {}", msg);
+            }
+        });
+
+        // Reader thread: socket → mpsc (DaemonToFrontend → Agent2Ui)
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                loop {
+                    match deepx_daemon::transport::read_frame(&mut stream_r) {
+                        Ok(Some(frame)) => {
+                            if agent_tx.send(frame.event).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(None) => break, // clean EOF
+                        Err(_) => break,
+                    }
+                }
+            }));
+            if let Err(e) = result {
+                let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+                    else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                    else { "unknown panic".into() };
+                eprintln!("[TUI] reader thread panicked: {}", msg);
+            }
+        });
+
+        // No actual child process — return a sentinel so callers can still call kill/wait.
+        // The dummy exits instantly, so kill/wait are no-ops (errors ignored).
+        let dummy = Command::new(&exe)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("dummy child: {e}"))?;
+
+        return Ok((tui_tx, agent_rx, dummy));
+    }
+
+    // ── Fallback / Windows: spawn agent as direct child process ──
+    spawn_agent_child(&seed, &std::env::current_exe().map_err(|e| format!("exe path: {e}"))?, resume_seed)
+}
+
+/// Spawn the agent as a child process communicating over stdin/stdout.
+/// Used as fallback when the daemon is not available (Windows / Unix without daemon).
+fn spawn_agent_child(
+    _seed: &str,
+    exe: &std::path::Path,
     resume_seed: Option<&str>,
 ) -> Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, std::process::Child), String> {
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
 
-    let exe = std::env::current_exe().map_err(|e| format!("exe path: {e}"))?;
-    let mut cmd = Command::new(&exe);
+    let mut cmd = Command::new(exe);
     cmd.arg("agent");
     if let Some(seed) = resume_seed {
         cmd.arg("--resume-seed").arg(seed);

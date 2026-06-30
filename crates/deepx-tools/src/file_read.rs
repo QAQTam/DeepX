@@ -1,7 +1,7 @@
 use crate::{parse_arg, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_read_file(args: &str) -> String {
-    let path = parse_arg(args, "path");
+    let path = crate::resolve_workspace_path(&parse_arg(args, "path"));
     let start: Option<usize> = serde_json::from_str(args).ok()
         .and_then(|v: serde_json::Value| v.get("start_line")?.as_u64().map(|n| (n as usize).max(1)));
     let end: Option<usize> = serde_json::from_str(args).ok()

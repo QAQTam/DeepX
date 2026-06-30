@@ -13,6 +13,7 @@
 //!   5. Handle session lifecycle (CreateSession, ResumeSession, Shutdown)
 //!   6. Check for interrupt commands between rounds (Cancel, session switch)
 
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -93,8 +94,40 @@ pub struct Loop {
     pending_new_session: bool,
     /// Pending shutdown.
     pending_shutdown: bool,
+    /// Pending ReloadConfig requested while busy (workspace/config change).
+    pending_reload_config: bool,
     /// Accumulated code deltas (flushed on save_full/save_append).
     code_stats: Vec<deepx_proto::CodeDeltaRecord>,
+}
+
+/// Extract file paths that a tool writes to (mutates).
+/// Returns empty vec for read-only and non-file tools.
+fn file_write_paths(tool_name: &str, args: &serde_json::Value) -> Vec<String> {
+    if tool_name != "file" { return Vec::new(); }
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let mut paths = Vec::new();
+    // All actions that modify files
+    match action {
+        "write" | "edit" | "edit_diff" | "delete" => {
+            if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
+                paths.push(p.to_string());
+            }
+            if let Some(arr) = args.get("paths").and_then(|v| v.as_array()) {
+                for v in arr { if let Some(s) = v.as_str() { paths.push(s.to_string()); } }
+            }
+        }
+        "move" | "copy" => {
+            // Both source and dest are affected; dest is the write target
+            if let Some(p) = args.get("dest").and_then(|v| v.as_str()) {
+                paths.push(p.to_string());
+            }
+            if let Some(p) = args.get("source").and_then(|v| v.as_str()) {
+                paths.push(p.to_string());
+            }
+        }
+        _ => {}
+    }
+    paths
 }
 
 impl Loop {
@@ -163,6 +196,7 @@ impl Loop {
             pending_session: None,
             pending_new_session: false,
             pending_shutdown: false,
+            pending_reload_config: false,
             code_stats: Vec::new(),
         }
     }
@@ -249,6 +283,11 @@ impl Loop {
                     self.pending_shutdown = true;
                     return true;
                 }
+                Ui2Agent::ReloadConfig => {
+                    // Queue for processing when back to idle — do NOT interrupt
+                    // the current operation (workspace/config reload is non-destructive).
+                    self.pending_reload_config = true;
+                }
                 // Queue non-interrupt commands for later
                 _ => {
                     // Silently drop non-interrupt commands during busy processing;
@@ -334,6 +373,10 @@ impl Loop {
             }
             if self.pending_shutdown {
                 break;
+            }
+            if self.pending_reload_config {
+                self.pending_reload_config = false;
+                self.handle_reload_config();
             }
 
             // Signal readiness before blocking (for Tauri refresh recovery)
@@ -878,12 +921,53 @@ impl Loop {
                     // Threaded tool execution with real-time progress streaming
                     let pending = self.agent.msg.get_last_step_pending();
                     if !pending.is_empty() {
+                        // ── Conflict detection: same-file writes must be serialized ──
+                        // Build a map: file_path → tool indices that write to it
+                        let mut file_writers: HashMap<String, Vec<usize>> = HashMap::new();
+                        for (i, tool) in pending.iter().enumerate() {
+                            for path in file_write_paths(&tool.name, &tool.args) {
+                                file_writers.entry(path).or_default().push(i);
+                            }
+                        }
+                        // Merge overlapping groups via union-find over tool indices
+                        let mut serial_groups: Vec<Vec<usize>> = Vec::new();
+                        {
+                            let mut visited = vec![false; pending.len()];
+                            for indices in file_writers.values() {
+                                if indices.is_empty() { continue; }
+                                let rep = indices[0];
+                                if visited[rep] { continue; }
+                                let mut group_set: HashSet<usize> = HashSet::new();
+                                let mut stack: Vec<usize> = indices.clone();
+                                while let Some(idx) = stack.pop() {
+                                    if !group_set.insert(idx) { continue; }
+                                    visited[idx] = true;
+                                    for other in file_writers.values() {
+                                        if other.contains(&idx) {
+                                            for &oi in other {
+                                                if !group_set.contains(&oi) { stack.push(oi); }
+                                            }
+                                        }
+                                    }
+                                }
+                                let mut group: Vec<usize> = group_set.into_iter().collect();
+                                group.sort();
+                                if group.len() > 1 { serial_groups.push(group); }
+                            }
+                        }
+                        // Tools that must run after their group's first tool
+                        let mut serial_after: HashSet<usize> = HashSet::new();
+                        for group in &serial_groups {
+                            for &idx in &group[1..] { serial_after.insert(idx); }
+                        }
+
                         let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(String, String)>();
                         // Track (tc_id, JoinHandle) so we can identify panicked threads.
                         let mut handles: Vec<(String, std::thread::JoinHandle<(String, String, bool, Option<deepx_proto::CodeDeltaRecord>)>)> = Vec::new();
                         let mut tool_infos = Vec::new();
 
-                        for tool in &pending {
+                        for (i, tool) in pending.iter().enumerate() {
+                            if serial_after.contains(&i) { continue; } // run sequentially later
                             let tx = progress_tx.clone();
                             let name = tool.name.clone();
                             let id = tool.id.clone();
@@ -899,24 +983,53 @@ impl Loop {
                         drop(progress_tx); // close sender when all threads drop their clones
 
                         // Drain progress while tools run (with cancel check)
+                        // Batch chunks per tool_call_id, emit at most every 50ms
+                        // to avoid flooding the frontend with per-line re-renders.
                         log::info!("[AGENT] drain loop start");
+                        let mut batches: HashMap<String, String> = HashMap::new();
+                        let batch_interval = std::time::Duration::from_millis(50);
                         let cancelled = loop {
                             if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
-                                // Cancel: stop draining, tools will detect cancel flag
                                 log::info!("[AGENT] drain loop cancel");
                                 break true;
                             }
-                            match progress_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                            match progress_rx.recv_timeout(batch_interval) {
                                 Ok((tc_id, chunk)) => {
-                                    log::info!("[AGENT] ExecProgress: {} {}", tc_id, &chunk[..chunk.floor_char_boundary(chunk.len().min(40))]);
-                                    self.emit(Agent2Ui::ExecProgress {
-                                        tool_call_id: tc_id,
-                                        chunk,
-                                    });
+                                    batches.entry(tc_id).or_default().push_str(&chunk);
+                                    // Keep draining any additional ready chunks without blocking
+                                    while let Ok((tid, c)) = progress_rx.try_recv() {
+                                        batches.entry(tid).or_default().push_str(&c);
+                                    }
+                                    // Flush all accumulated batches
+                                    for (tid, merged) in batches.drain() {
+                                        log::info!("[AGENT] ExecProgress batch: {} {} chars", tid, merged.len());
+                                        self.emit(Agent2Ui::ExecProgress {
+                                            tool_call_id: tid,
+                                            chunk: merged,
+                                        });
+                                    }
                                 }
-                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                    // No new data in 50ms — flush any pending batches
+                                    if !batches.is_empty() {
+                                        for (tid, merged) in batches.drain() {
+                                            self.emit(Agent2Ui::ExecProgress {
+                                                tool_call_id: tid,
+                                                chunk: merged,
+                                            });
+                                        }
+                                    }
+                                    continue;
+                                }
                                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                                     log::info!("[AGENT] drain loop disconnected");
+                                    // Flush final batches
+                                    for (tid, merged) in batches.drain() {
+                                        self.emit(Agent2Ui::ExecProgress {
+                                            tool_call_id: tid,
+                                            chunk: merged,
+                                        });
+                                    }
                                     break false;
                                 }
                             }
@@ -962,6 +1075,33 @@ impl Loop {
                                         // eventually return true (fixes M2).
                                         log::error!("[AGENT] tool thread panicked for {tc_id}");
                                         self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n[ERROR] tool thread panicked"));
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── Execute serialized follow-up tools (same-file write conflicts) ──
+                        if !serial_groups.is_empty() {
+                            let ts = chrono_local_datetime();
+                            for group in &serial_groups {
+                                for &idx in &group[1..] {
+                                    let tool = &pending[idx];
+                                    let result = deepx_tools::bridge::execute_tool_with_id_full(
+                                        &tool.name, "", &tool.args.to_string(), &tool.id, None,
+                                    );
+                                    self.agent.msg.push_tool_result_direct(
+                                        &tool.id,
+                                        &format!("[timeis: {ts}]\n{}", result.content),
+                                    );
+                                    if let Some(ref delta) = result.code_delta {
+                                        self.code_stats.push(delta.clone());
+                                        self.emit(Agent2Ui::CodeDelta {
+                                            lines_added: delta.lines_added,
+                                            lines_removed: delta.lines_removed,
+                                            files_created: delta.files_created,
+                                            files_deleted: delta.files_deleted,
+                                            file: delta.file.clone(),
+                                        });
                                     }
                                 }
                             }

@@ -1,15 +1,15 @@
 use crate::{parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_list_dir(args: &str) -> String {
-    let path = parse_arg_or(args, "path", ".");
+    let path = crate::resolve_workspace_path(&parse_arg_or(args, "path", "."));
     match std::fs::read_dir(&path) {
         Ok(entries) => {
             const MAX_LIST_DIR_ENTRIES: usize = 200;
-            let mut result = String::from("Directory listing: ");
+            let mut result = String::from("[OK] Directory listing: ");
             result.push_str(&path);
             result.push('\n');
             let mut count = 0usize;
-            let all: Vec<_> = entries.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with('.')).collect();
+            let all: Vec<_> = entries.flatten().collect();
             let total = all.len();
             for entry in &all {
                 if count >= MAX_LIST_DIR_ENTRIES { break; }
@@ -18,13 +18,16 @@ pub(super) fn exec_list_dir(args: &str) -> String {
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 let name = entry.file_name();
                 let name_s = name.to_string_lossy();
+                let hidden = name_s.starts_with('.');
                 if ft == "/" {
-                    result.push_str(&format!("  {:<40} <DIR>\n", name_s + "/"));
+                    let tag = if hidden { " <DIR> (hidden)" } else { " <DIR>" };
+                    result.push_str(&format!("  {:<40}{}\n", name_s + "/", tag));
                 } else {
                     let sz = if size > 1024*1024 { format!("{:.1}M", size as f64 / 1_048_576.0) }
                         else if size > 1024 { format!("{}K", size / 1024) }
                         else { format!("{}B", size) };
-                    result.push_str(&format!("  {:<40} {:>6}\n", name_s, sz));
+                    let tag = if hidden { " (hidden)" } else { "" };
+                    result.push_str(&format!("  {:<40} {:>6}{}\n", name_s, sz, tag));
                 }
             }
             if total > MAX_LIST_DIR_ENTRIES {

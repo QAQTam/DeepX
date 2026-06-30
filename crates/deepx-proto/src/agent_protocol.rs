@@ -391,3 +391,23 @@ pub struct CodeDaily {
     pub files_created: usize,
     pub files_deleted: usize,
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Daemon ↔ Frontend protocol (socket transport)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Frontend → Daemon frame. Wraps Ui2Agent with the target session seed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrontendToDaemon {
+    pub seed: String,
+    #[serde(flatten)]
+    pub frame: Ui2Agent,
+}
+
+/// Daemon → Frontend frame. Wraps Agent2Ui with the source session seed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonToFrontend {
+    pub seed: String,
+    #[serde(flatten)]
+    pub event: Agent2Ui,
+}
