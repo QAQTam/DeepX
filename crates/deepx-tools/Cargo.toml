@@ -20,6 +20,8 @@ ureq = { version = "3", features = ["json"] }
 html2text = "0.17"
 log = "0.4"
 base64 = "0.22"
+git2 = { version = "0.21", features = ["vendored-libgit2"] }
+chrono = { version = "0.4", features = ["clock"] }
 
 [target.'cfg(windows)'.dependencies]
 conpty = "0.7"

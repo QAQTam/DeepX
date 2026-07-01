@@ -11,9 +11,7 @@ serde_json = "1"
 toml = "0.8"
 log = "0.4"
 
-[lints]
-workspace = true
-
-# Safe: only 2 string slices — one uses is_char_boundary, one is data eof check.
 [lints.clippy]
+unwrap_used = "deny"
+# Safe: only 2 string slices — one uses is_char_boundary, one is data eof check.
 string_slice = "allow"

@@ -28,6 +28,7 @@ pub mod file_move;
 pub mod file_diff;
 
 pub mod file_shared;
+pub mod git_tool;
 mod safety;
 mod web;
 
