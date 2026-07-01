@@ -936,7 +936,6 @@ dependencies = [
  "deepx-msglp",
  "deepx-proto",
  "deepx-session",
- "deepx-terminalui",
  "deepx-tools",
  "deepx-types",
  "log",
@@ -947,6 +946,22 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
  "toml 0.8.2",
+]
+
+[[package]]
+name = "deepx-terminal"
+version = "0.5.0"
+dependencies = [
+ "deepx-config",
+ "deepx-daemon",
+ "deepx-msglp",
+ "deepx-proto",
+ "deepx-session",
+ "deepx-terminalui",
+ "deepx-tools",
+ "deepx-types",
+ "log",
+ "serde_json",
 ]
 
 [[package]]

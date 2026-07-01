@@ -5,7 +5,7 @@ edition.workspace = true
 description = "DeepX Tauri desktop application"
 
 [[bin]]
-name = "deepx"
+name = "deepx-tauri"
 path = "src/main.rs"
 
 [lib]
@@ -25,7 +25,6 @@ deepx-session = { path = "../../deepx-session" }
 deepx-tools = { path = "../../deepx-tools" }
 deepx-types = { path = "../../deepx-types" }
 deepx-proto = { path = "../../deepx-proto" }
-deepx-terminalui = { path = "../../deepx-terminalui" }
 deepx-daemon = { path = "../../deepx-daemon" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

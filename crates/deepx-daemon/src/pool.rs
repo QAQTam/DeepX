@@ -70,7 +70,7 @@ impl AgentPool {
             match handle.process.try_wait() {
                 Ok(Some(_)) => {
                     // Process died — remove and re-spawn
-                    log::warn!("[POOL] agent {} died unexpectedly, restarting", &seed[..seed.len().min(8)]);
+                    log::warn!("[POOL] agent {} died unexpectedly, restarting", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
                     handle.restart_count += 1;
                     if handle.restart_count > MAX_RESTART_COUNT {
                         return Err(format!("Agent {} exceeded max restart count", seed));
@@ -111,7 +111,7 @@ impl AgentPool {
         }
 
         let mut child = cmd.spawn()
-            .map_err(|e| format!("spawn agent {}: {e}", &seed[..seed.len().min(8)]))?;
+            .map_err(|e| format!("spawn agent {}: {e}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))?;
 
         let stdin = child.stdin.take()
             .ok_or("no stdin")?;
@@ -137,7 +137,7 @@ impl AgentPool {
                     });
                 }
             }
-            log::info!("[POOL] agent {} stdout reader exiting", &seed_owned[..seed_owned.len().min(8)]);
+            log::info!("[POOL] agent {} stdout reader exiting", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))]);
         });
 
         let handle = AgentHandle {
@@ -149,14 +149,14 @@ impl AgentPool {
         };
 
         self.agents.insert(seed.to_string(), handle);
-        log::info!("[POOL] spawned agent for seed={}", &seed[..seed.len().min(8)]);
+        log::info!("[POOL] spawned agent for seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
         Ok(())
     }
 
     /// Send a Ui2Agent frame to a specific agent.
     pub fn send_to_agent(&self, seed: &str, frame: &Ui2Agent) -> Result<(), String> {
         let handle = self.agents.get(seed)
-            .ok_or_else(|| format!("no agent for seed {}", &seed[..seed.len().min(8)]))?;
+            .ok_or_else(|| format!("no agent for seed {}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))?;
         let json = serde_json::to_string(frame)
             .map_err(|e| format!("serialize: {e}"))?;
         let mut stdin = handle.stdin.lock()
@@ -180,7 +180,7 @@ impl AgentPool {
         self.agents.retain(|seed, handle| {
             let idle = now.duration_since(handle.last_activity);
             if idle > self.max_idle {
-                log::info!("[POOL] reaping idle agent {}", &seed[..seed.len().min(8)]);
+                log::info!("[POOL] reaping idle agent {}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
                 let _ = handle.process.kill();
                 let _ = handle.process.wait();
                 false
@@ -202,7 +202,7 @@ impl AgentPool {
                 }
             }
             let _ = handle.process.wait();
-            log::info!("[POOL] shut down agent {}", &seed[..seed.len().min(8)]);
+            log::info!("[POOL] shut down agent {}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
         }
     }
 }

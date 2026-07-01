@@ -1,0 +1,25 @@
+[package]
+name = "deepx-terminal"
+version.workspace = true
+edition.workspace = true
+description = "DeepX terminal user interface binary"
+
+[[bin]]
+name = "deepx-terminal"
+path = "src/main.rs"
+
+[dependencies]
+deepx-terminalui = { path = "../deepx-terminalui" }
+deepx-msglp = { path = "../deepx-msglp" }
+deepx-config = { path = "../deepx-config" }
+deepx-session = { path = "../deepx-session" }
+deepx-tools = { path = "../deepx-tools" }
+deepx-types = { path = "../deepx-types" }
+deepx-proto = { path = "../deepx-proto" }
+deepx-daemon = { path = "../deepx-daemon" }
+
+serde_json = "1"
+log = "0.4"
+
+[lints]
+workspace = true

@@ -1,6 +1,13 @@
 //! deepx-gate: LLM API gateway — HTTP streaming + message format conversion.
 //!
 //! Currently supports OpenAI-compatible protocol.
+//!
+//! # Note: string slices
+//!
+//! All string slices in this crate use indices from `find()` on ASCII
+//! patterns (`<`, `>`, `\n`, `"data: "`, etc.), always on valid UTF-8
+//! boundaries.  The clippy `string_slice` lint is allowed at the crate
+//! level (see Cargo.toml).
 
 mod types;
 mod openai;
@@ -19,6 +26,7 @@ use std::sync::Arc;
 /// streaming read loop will return `Err("cancelled by user")` within
 /// `SSE_READ_TIMEOUT` (200ms), aborting the HTTP response promptly
 /// instead of waiting for the server to finish.
+#[allow(clippy::string_slice)]
 pub fn chat_stream(
     provider: &ProviderConfig,
     messages: Vec<Message>,

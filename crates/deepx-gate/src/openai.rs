@@ -55,6 +55,7 @@ fn backoff_delay(attempt: u32) -> Duration {
 /// the streaming to abort as soon as the next read times out (within
 /// `SSE_READ_TIMEOUT`). This makes cancel responsive even while the HTTP
 /// response is still being streamed.
+#[allow(clippy::string_slice)]
 pub fn chat_stream_openai(
     provider: &ProviderConfig,
     model: &str,
@@ -151,7 +152,6 @@ pub fn chat_stream_openai(
                 let text = resp.into_string().unwrap_or_default();
                 dump_api_error(user_id.as_deref(), code as u16, &text);
                 let code_desc = http_error_description(code);
-
                 if attempt >= MAX_RETRIES || !is_retryable(code as u16) {
                     let msg = format!("OpenAI API HTTP {} ({})", code, code_desc);
                     on_event(StreamEvent::Error(format!("{}: {}", msg, text)));
@@ -430,7 +430,6 @@ fn stream_sse(
 
 fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde_json::Value> {
     let mut out: Vec<serde_json::Value> = Vec::new();
-
     if let Some(sys) = system {
         if !sys.is_empty() {
             out.push(serde_json::json!({"role": "system", "content": sys}));

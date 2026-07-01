@@ -101,6 +101,52 @@ pub struct Loop {
     /// Set to true when the writer thread dies (stdout pipe broken).
     /// The main loop checks this and exits gracefully.
     writer_dead: Arc<AtomicBool>,
+    /// Dedicated notification thread to keep COM alive across notifications.
+    notify: NotificationThread,
+}
+
+/// Dedicated notification thread that keeps COM initialized across the
+/// process lifetime, avoiding FactoryCache use-after-free that occurs
+/// when transient threads initialize COM and exit, tearing down the STA.
+struct NotificationThread {
+    tx: mpsc::Sender<String>,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl NotificationThread {
+    fn spawn() -> Self {
+        let (tx, rx) = mpsc::channel::<String>();
+        let thread = std::thread::Builder::new()
+            .name("deepx-notify".into())
+            .spawn(move || {
+                #[cfg(windows)]
+                unsafe {
+                    // COM initialized once on this persistent thread.
+                    let _ = windows::Win32::System::Com::CoInitializeEx(
+                        None,
+                        windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+                    );
+                }
+                while let Ok(body) = rx.recv() {
+                    let _ = notify_rust::Notification::new()
+                        .summary("DeepX")
+                        .body(&body)
+                        .appname("DeepX")
+                        .timeout(notify_rust::Timeout::Milliseconds(8000))
+                        .show();
+                }
+                #[cfg(windows)]
+                unsafe {
+                    windows::Win32::System::Com::CoUninitialize();
+                }
+            })
+            .expect("failed to spawn notification thread");
+        Self { tx, _thread: thread }
+    }
+
+    fn notify(&self, body: String) {
+        let _ = self.tx.send(body);
+    }
 }
 
 /// Extract file paths that a tool writes to (mutates).
@@ -230,6 +276,7 @@ impl Loop {
             pending_reload_config: false,
             code_stats: Vec::new(),
             writer_dead,
+            notify: NotificationThread::spawn(),
         }
     }
 
@@ -724,10 +771,10 @@ impl Loop {
                         deepx_types::ContentBlock::ToolUse { name, input, .. } =>
                             Some(format!("[ToolCall {} args={}]", name, input)),
                         deepx_types::ContentBlock::ToolResult { content, .. } =>
-                            Some(format!("[ToolResult {}]", &content[..content.len().min(300)])),
+                            Some(format!("[ToolResult {}]", &content[..content.floor_char_boundary(content.len().min(300))])),
                         _ => None,
                     }).collect::<Vec<_>>().join("\n");
-                    format!("[{}]: {}", m.role, &text[..text.len().min(1000)])
+                    format!("[{}]: {}", m.role, &text[..text.floor_char_boundary(text.len().min(1000))])
                 })
                 .collect()
         };
@@ -1272,30 +1319,8 @@ impl Loop {
             } else {
                 first_20
             };
-            // Spawn thread to avoid blocking — notification API may be slow
-            std::thread::spawn(move || {
-                #[cfg(windows)]
-                unsafe {
-                    // WinRT (notify-rust's toast backend) needs COM init'd
-                    // on the calling thread. New OS threads aren't
-                    // initialized — this was the source of the 0xc0000005
-                    // in windows_core::assume_vtable.
-                    let _ = windows::Win32::System::Com::CoInitializeEx(
-                        None,
-                        windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
-                    );
-                }
-                let _ = notify_rust::Notification::new()
-                    .summary("DeepX")
-                    .body(&body)
-                    .appname("DeepX")
-                    .timeout(notify_rust::Timeout::Milliseconds(8000))
-                    .show();
-                #[cfg(windows)]
-                unsafe {
-                    windows::Win32::System::Com::CoUninitialize();
-                }
-            });
+            // Send to persistent notification thread (keeps COM alive).
+            self.notify.notify(body);
         }
     }
 

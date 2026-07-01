@@ -402,7 +402,7 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
     let debug_seed = seed.to_string();
     std::thread::spawn(move || {
         let log_path = deepx_types::platform::data_dir()
-            .join(format!("agent_{}_debug.log", &debug_seed[..debug_seed.len().min(8)]));
+            .join(format!("agent_{}_debug.log", &debug_seed[..debug_seed.floor_char_boundary(debug_seed.len().min(8))]));
         let mut writer = std::fs::File::create(&log_path)
             .unwrap_or_else(|_| std::fs::File::create(deepx_types::platform::data_dir().join("agent_debug.log")).unwrap());
         let mut reader = BufReader::new(stderr);
@@ -439,13 +439,13 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
                 Ok(e) => e,
                 Err(e) => {
                     log::info!("[REGISTRY] failed to parse from {}: {} -- error: {e}",
-                        &seed_owned[..seed_owned.len().min(8)],
-                        &line[..line.len().min(80)]);
+                        &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))],
+                        &line[..line.floor_char_boundary(line.len().min(80))]);
                     continue;
                 }
             };
             let event_type = agent2ui_event_name(&event);
-            log::info!("[REGISTRY] agent {} got event: {}", &seed_owned[..seed_owned.len().min(8)], event_type);
+            log::info!("[REGISTRY] agent {} got event: {}", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))], event_type);
             let payload = serde_json::to_value(&event).unwrap_or_default();
             if app_handle.emit(&format!("agent-{}-event", seed_owned), payload.clone()).is_err() {
                 break;
@@ -456,10 +456,10 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
         // Check if the child process actually exited (vs just pipe closed)
         let exit_status = child_for_thread.lock().ok()
             .and_then(|mut c| c.as_mut().and_then(|c| c.try_wait().ok()).flatten());
-        log::warn!("[REGISTRY] agent {} child exit status: {:?}", &seed_owned[..seed_owned.len().min(8)], exit_status);
+        log::warn!("[REGISTRY] agent {} child exit status: {:?}", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))], exit_status);
         // Notify frontend that the agent died so it can trigger reconnection
         let error_event = Agent2Ui::Error {
-            message: format!("Agent process for session {} has exited unexpectedly", &seed_owned[..seed_owned.len().min(8)]),
+            message: format!("Agent process for session {} has exited unexpectedly", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))]),
         };
         let payload = serde_json::to_value(&error_event).unwrap_or_default();
         let _ = app_handle.emit(&format!("agent-{}-event", seed_owned), payload.clone());
@@ -555,7 +555,7 @@ impl AgentRegistry {
     fn spawn_agent(&mut self, seed: &str, new_seed: Option<&str>) -> Result<(), String> {
         let instance = spawn_agent_process(seed, new_seed, &self.app_handle)?;
         self.instances.insert(seed.to_string(), instance);
-        log::info!("[REGISTRY] spawned agent for seed={}", &seed[..seed.len().min(8)]);
+        log::info!("[REGISTRY] spawned agent for seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
         Ok(())
     }
 
@@ -563,7 +563,7 @@ impl AgentRegistry {
     /// Only holds the registry lock during lookup, not during the write.
     pub fn send_to(&self, seed: &str, frame: &Ui2Agent) -> Result<(), String> {
         let stdin_arc = self.instances.get(seed)
-            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.len().min(8)]))?
+            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))?
             .stdin.clone();
         // Registry lock released here via the caller dropping the MutexGuard
         let json = serde_json::to_string(frame).map_err(|e| format!("serialize: {e}"))?;
@@ -578,7 +578,7 @@ impl AgentRegistry {
     pub fn kill_agent(&mut self, seed: &str) -> Option<AgentInstance> {
         let instance = self.instances.remove(seed);
         if instance.is_some() {
-            log::info!("[REGISTRY] removed agent for seed={}", &seed[..seed.len().min(8)]);
+            log::info!("[REGISTRY] removed agent for seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
         }
         instance
     }
@@ -605,7 +605,7 @@ impl AgentInstance {
     /// Send shutdown, kill the child process, and wait for it to exit.
     /// Designed to be called **outside** the registry lock.
     pub fn shutdown_and_wait(self) {
-        let seed = &self.seed[..self.seed.len().min(8)];
+        let seed = &self.seed[..self.seed.floor_char_boundary(self.seed.len().min(8))];
         let _ = self.send_shutdown();
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
@@ -655,7 +655,7 @@ fn ensure_agent(seed: &str) -> Result<(), String> {
 /// Only holds the registry lock during lookup — the actual write happens outside the lock.
 fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
     log::info!("[REGISTRY] send_to_agent seed={} type={}",
-        &seed[..seed.len().min(8)], agent2ui_event_name_for_ui(&frame));
+        &seed[..seed.floor_char_boundary(seed.len().min(8))], agent2ui_event_name_for_ui(&frame));
     
     // Try daemon first (Unix)
     match try_send_via_daemon(seed, &frame) {
@@ -669,7 +669,7 @@ fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
     let stdin_arc = {
         let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
         registry.instances.get(seed)
-            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.len().min(8)]))?
+            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))?
             .stdin.clone()
     };
     let mut stdin = stdin_arc.lock().map_err(|e| format!("lock: {e}"))?;
@@ -678,7 +678,7 @@ fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
         let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
         registry.instances.remove(seed);
         drop(registry);
-        log::warn!("[REGISTRY] agent {} pipe broken, respawning...", &seed[..seed.len().min(8)]);
+        log::warn!("[REGISTRY] agent {} pipe broken, respawning...", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
         // Respawn the agent for this seed
         let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
         registry.get_or_spawn(seed)?;
@@ -713,7 +713,7 @@ pub fn cmd_send_message(
     seed: String,
     text: String,
 ) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_send_message seed={}: {}", &seed[..seed.len().min(8)], &text[..text.floor_char_boundary(50)]);
+    log::info!("[REGISTRY] cmd_send_message seed={}: {}", &seed[..seed.floor_char_boundary(seed.len().min(8))], &text[..text.floor_char_boundary(50)]);
     ensure_agent(&seed)?;
     send_to_agent(&seed, Ui2Agent::UserInput { text })
 }
@@ -724,7 +724,7 @@ pub fn cmd_send_message(
 /// SessionRestored event — needed after WebView refresh when agent events were missed.
 #[tauri::command]
 pub fn cmd_resume_session(seed: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_resume_session seed={}", &seed[..seed.len().min(8)]);
+    log::info!("[REGISTRY] cmd_resume_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     deepx_session::SessionManager::global().set_active_seed(&seed);
     ensure_agent(&seed)?;
     // Always send ResumeSession so the agent re-emits SessionRestored.
@@ -736,7 +736,7 @@ pub fn cmd_resume_session(seed: String) -> Result<(), String> {
 #[tauri::command]
 pub fn cmd_new_session() -> Result<String, String> {
     let seed = deepx_session::SessionManager::generate_seed();
-    log::info!("[REGISTRY] cmd_new_session seed={}", &seed[..seed.len().min(8)]);
+    log::info!("[REGISTRY] cmd_new_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     deepx_session::SessionManager::global().clear_active();
     {
         let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
@@ -882,7 +882,7 @@ pub fn cmd_set_active_session(seed: String) -> Result<(), String> {
 /// Delete a session by seed. Also kills the agent if running for that seed.
 #[tauri::command]
 pub fn cmd_delete_session(seed: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_delete_session seed={}", &seed[..seed.len().min(8)]);
+    log::info!("[REGISTRY] cmd_delete_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     // Kill the agent first so it doesn't resurrect the session on flush.
     // Extract instance under lock, then wait outside lock.
     let instance = {
@@ -905,7 +905,7 @@ pub fn cmd_undo_turn(seed: String, turn_id: String) -> Result<(), String> {
 /// Compact conversation history (summarize old turns).
 #[tauri::command]
 pub fn cmd_compact(seed: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_compact seed={}", &seed[..seed.len().min(8)]);
+    log::info!("[REGISTRY] cmd_compact seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     send_to_agent(&seed, Ui2Agent::Compact)
 }
 
@@ -998,7 +998,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// Kill the agent for a session (when tab is closed but session not deleted).
 #[tauri::command]
 pub fn cmd_close_session(seed: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_close_session seed={}", &seed[..seed.len().min(8)]);
+    log::info!("[REGISTRY] cmd_close_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     // Extract instance under lock, then wait outside lock.
     let instance = {
         if let Ok(mut registry) = AgentRegistry::get().lock() {

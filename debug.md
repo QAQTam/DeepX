@@ -1,292 +1,124 @@
-# deepx agent 0xc0000005 Access Violation — Debug Report
+# DeepX 0xc0000005 Access Violation — 灾难恢复报告
 
-## Problem Summary
+> 最终更新: 2026-07-02 | 涉及版本: v0.5.0 | 修复状态: ✅ 已修复
 
-deepx agent child process (`deepx.exe`) on Windows x64 crashes with `0xc0000005` Access Violation after 3-4 rounds of tool-intensive conversation, at the point where the LLM returns its final answer (Done event). Both Debug and Release builds are affected. Both TUI and Tauri frontends reproduce the issue.
+---
 
-## Windows Event Viewer Crash Records
+## 一、崩溃现象
 
-4 crash events observed from `Application Error` log:
+Windows x64 上 `deepx`（后拆分为 `deepx-tauri.exe` / `deepx-terminal.exe`）在 **3-4 轮工具密集型对话后，LLM 返回 Done 事件时** 崩溃，异常码 `0xc0000005`（STATUS_ACCESS_VIOLATION）。Debug / Release、TUI / Tauri 前端均复现。
 
-### Crash #1 (Release build)
+---
+
+## 二、崩溃演化史
+
+### 阶段 A：栈提交耗尽（首次崩溃）
+
+| 项目 | 数值 |
+|------|------|
+| 时间 | 2026-06-30 23:24:44 |
+| 异常 | `0xc0000005` — 写栈越界 |
+| RIP | `Try::branch` (`mov [rsp+8], rcx`) |
+| 默认栈 | reserve=1MB, commit=**4KB** |
+
+**根因：** Windows 默认线程栈 commit=4KB（仅一个页面）。第 4 轮工具调用时：
+- 多个工具线程并发（exec 等），每线程栈帧含 4KB buffer
+- 通知线程也在第 4 轮 Done 事件时启动
+- 并发线程的已提交栈总量超过 4KB → 访问未提交的栈页 → AV
+
+**触发链：**
 ```
-AppName: deepx.exe (0.5.0.0)
-ModuleName: deepx.exe
-ExceptionCode: 0xc0000005
-FaultingOffset: 0x0000000000749eb8
-AppPath: D:\project\DeepX\target\release\deepx.exe
-```
-
-### Crash #2 (Debug build)
-```
-AppName: deepx.exe (0.5.0.0)
-ModuleName: deepx.exe
-ExceptionCode: 0xc0000005
-FaultingOffset: 0x00000000013a5758
-AppPath: D:\project\DeepX\target\debug\deepx.exe
-```
-
-### Crash #3 (Debug build, after heap-allocation fix)
-```
-AppName: deepx.exe (0.5.0.0)
-ModuleName: deepx.exe
-ExceptionCode: 0xc0000005
-FaultingOffset: 0x00000000013a5658
-AppPath: D:\project\DeepX\target\debug\deepx.exe
-```
-
-### Crash #4 (Debug build, after 8MB stack commit fix)
-```
-AppName: deepx.exe (0.5.0.0)
-ModuleName: deepx.exe
-ExceptionCode: 0xc0000005
-FaultingOffset: 0x00000000013a5658
-AppPath: D:\project\DeepX\target\debug\deepx.exe
+埋雷①: 12459e2 (Jun 24) 引入 notify-rust + std::thread::spawn
+埋雷②: f9d8a2b (Jun 30 16:19) exec 重写 → let mut buf = [0u8; 4096]
+埋雷③: b835450 (Jun 30 17:54) + 4b0176a (Jun 30 23:13) exec/pty 继续加压
+爆发:   4 轮后并发栈总量 > 4KB → Try::branch 写栈崩
 ```
 
-## PE Header (Debug build, default)
+### 阶段 B：栈扩容后 → COM Use-After-Free 浮现
 
+| 修复 | 效果 |
+|------|------|
+| `[0u8;4096]` → `vec!` (堆) | 减少 4KB 栈，但多线程并发下不够 |
+| `/STACK:0x800000,0x800000` (8MB) | 栈溢出消失，**但露出了第二个 bug** |
+| `CoInitializeEx(COINIT_APARTMENTTHREADED)` | 修复 COM 未初始化，但 MTA → STA 切换引入新问题 |
+
+**新崩路径：**
 ```
-size of stack reserve: 0x100000 (1MB)
-size of stack commit:  0x1000   (4KB)
-```
-
-Overridden via `.cargo/config.toml`:
-
-```toml
-[target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "link-args=/STACK:0x800000,0x800000"]
-```
-
-Result: reserve=8MB, commit=8MB. Crash #4 occurred after this change.
-
-## dumpbin Disassembly (Debug build)
-
-Crash offset `0x13a5658` maps to `.text` section VA `0x1413A6258`:
-
-```
-core::result::Result<T,E> as core::ops::try_trait::Try::branch (hash 6cc2edad57903488):
-  00000001413A62C0: 48 83 EC 30        sub  rsp, 0x30
-  00000001413A62C4: 48 89 14 24        mov  qword ptr [rsp], rdx
-  00000001413A62C8: 48 89 4C 24 08     mov  qword ptr [rsp+8], rcx   <-- crash here (#3, #4)
+notify-rust 瞬态线程
+→ CoInitializeEx(STA)
+→ FactoryCache 缓存 COM 工厂指针
+→ 线程退出 → STA 公寓析构 → COM 底层释放工厂对象
+→ 下次通知 → FactoryCache 读悬垂指针 → AV at generic_factory.rs:18
 ```
 
-This function is Rust stdlib `core::result::Result::Try::branch` (the `?` operator implementation). Crash occurs on first stack write after `sub rsp, 0x30`.
+### 阶段 C：最终修复
 
-Additionally, a different monomorphized instance of the same function crashed at a nearby address:
+**方法：** 用 `NotificationThread` 持久化线程替代 `std::thread::spawn` 瞬态线程。
 
-```
-core::result::Result<T,E> as core::ops::try_trait::Try::branch (hash 2c6bdc61c5045c12):
-  00000001413A6350: 48 83 EC 30        sub  rsp, 0x30
-  00000001413A6358: 48 89 4C 24 08     mov  qword ptr [rsp+8], rcx   <-- crash here (#2)
-```
+```rust
+struct NotificationThread {
+    tx: mpsc::Sender<String>,
+    _thread: JoinHandle<()>,
+}
 
-## Binary Analysis
-
-- `__chkstk` symbol not present in binary (MSVC stack probes not enabled)
-- `.text` section contains 811 functions with stack frame >= 2KB (Debug) / 180 functions (Release), max ~4080 bytes
-- `deepx_tools::file_read::exec_read_file` has stack frame `sub rsp, 0xFF0` (4080 bytes)
-- `[u8; 4096]` in `openai.rs:202` and `exec.rs:53` were moved from stack to heap (`vec![0u8; 4096]`); crashes still occur
-
-## Modifications Applied (current HEAD: v0.5.0)
-
-1. `exec.rs:53`, `openai.rs:202`: `[u8; 4096]` -> `vec![0u8; 4096]` (heap allocation)
-2. `deepx-msglp/src/lib.rs`: `catch_unwind` added to reader/writer threads
-3. `deepx-msglp/src/lib.rs`: `writer_dead` AtomicBool detection in main loop
-4. `deepx-msglp/src/lib.rs`: `emit()` early-return checks `writer_dead`
-5. `deepx-msglp/src/lib.rs`: sync_channel capacity 256->4096
-6. `deepx-msglp/src/lib.rs`: `CodeDelta`/`AuditRecord`/`Dashboard`/`ToolNotice` changed to `emit_delta` (try_send)
-7. `deepx-msglp/src/lib.rs`: main loop dispatch wrapped in `catch_unwind`
-8. `deepx-tauri/src-tauri/src/main.rs`: `run()` wrapped in `catch_unwind`
-9. `.cargo/config.toml`: linker args `/STACK:0x800000,0x800000`
-
-## Crash Characteristics
-
-- Exception: `0xc0000005` (STATUS_ACCESS_VIOLATION)
-- Crash location: `core::result::Result::Try::branch` (Rust `?` operator)
-- Crash instruction: `mov qword ptr [rsp+8], rcx` (stack pointer-relative write)
-- Stack space: reserve=8MB, commit=8MB (rules out stack exhaustion)
-- Trigger: 3-4 tool rounds, at LLM final answer (Done event)
-- Platform: Windows x64 MSVC, Rust 1.96.0 stable
-- Scope: Debug + Release builds, TUI + Tauri frontends
-- Direct ToolCall injection (bypassing LLM API call chain) does not trigger crash
-
-## Information Not Yet Obtained
-
-- WinDbg register values at crash (`rsp`, `rcx`, `rdx`)
-- WinDbg call stack at crash (`k` command output)
-- Whether crashing thread is the agent main thread
-- Whether `rsp` value at crash is within valid stack range (8MB commit)
-
-## Git History (prior to first crash at 2026-06-30 23:24:44 +0800)
-
-Commits on June 30, 2026 in chronological order:
-
-```
-ac9892e 2026-06-30 10:32:05 clean
-762a564 2026-06-30 10:37:12 clean code
-ba45f34 2026-06-30 10:38:02 clean
-defe4b6 2026-06-30 11:07:14 fix
-f9d8a2b 2026-06-30 16:19:20 feat: comprehensive tool & architecture overhaul
-2646429 2026-06-30 16:26:58 fix: use non-blocking wait for child process exit detection
-b835450 2026-06-30 17:54:17 fix
-4b0176a 2026-06-30 23:13:49 feat: PTY stdin write, cross-session memory, prompt reformat
-2a25740 2026-06-30 23:14:17 chore: bump version 0.4.0 -> 0.5.0
+impl NotificationThread {
+    fn spawn() {
+        // COM 初始化一次，线程永不退出
+        CoInitializeEx(COINIT_APARTMENTTHREADED);
+        loop { recv() → notify_rust::show(); }
+    }
+}
 ```
 
-First crash timestamp: 2026-06-30 23:24:44 (from eventvwr)
+**原理：**
+- COM 在同一线程上持续存活，FactoryCache 指针不失效
+- 栈只分配一次，无累积压力
+- 瞬态线程退出导致的 STA 析构问题不复存在
 
-### f9d8a2b commit message
+---
 
-```
-feat: comprehensive tool & architecture overhaul
+## 三、原始 debug.md 假设 vs 真相
 
-## File tools (deepx-tools)
-- Fix concurrent same-file edits: conflict detection + serialization in msg loop
-- Add resolve_workspace_path() to all file tools for ./ relative path support
-- Unify output prefixes: [OK] on explore, list_dir, search, diff, process_inspect
-- Delete MCP bridge (mcp_bridge.rs + config fields)
+| 原始假设 | 实际真相 | 判断 |
+|---------|---------|------|
+| 栈 reserve 不足 (1MB) | 栈 commit 不足 (4KB) 才是主因 | 半对 |
+| 8MB 栈应修复 | 崩#4 发生在 8MB 后 → 实际已转为 COM 崩 | ❌ 未识别 |
+| `Try::branch` 是唯一根因 | 只是第一阶段；第二阶段是 FactoryCache UAF | ❌ 未预见 |
+| 栈上 4KB buffer 是主因 | 是诱因，但即使移到堆，多线程并发 4KB commit 仍耗尽 | 半对 |
+| 未分析 COM 公寓模型 | MTA vs STA 切换是第二阶段崩溃的直接原因 | ❌ 完全缺失 |
+| 未追溯 notify-rust 引入时间 | `12459e2` (Jun 24) 埋下第一颗雷 | ❌ 缺失 |
 
-## Workspace (deepx-msglp)
-- Fix ReloadConfig dropped during busy: add pending_reload_config queue
-- Inject workspace path as [Environment] annotation per user message
+---
 
-## Exec tool
-- Fix character swallowing: replace read_line() with read() + manual line splitting
-- Handle \r progress-bar overwrite semantics at source
-- Throttle ExecProgress emit to 50ms batches
-- Use pwsh -EncodedCommand (Base64 UTF-16LE) to bypass string parsing
+## 四、灾难恢复流程（复盘）
 
-## Daemon architecture (deepx-daemon, new)
-- deepxd: background service managing agent process pool
-- Agent lifecycle: spawn, health check, auto-restart (max 3), idle reap (30min)
-- Tauri: daemon reader thread + send_to_agent/ensure_agent daemon-first fallback
-- TUI: spawn_agent_subprocess daemon-first connection
-```
-
-### f9d8a2b: Files changed in deepx-msglp (the agent message loop)
+### 4.1 时间线
 
 ```
-crates/deepx-msglp/src/agent.rs      |  15 +-
-crates/deepx-msglp/src/lib.rs        | 158 +-
-crates/deepx-msglp/src/lifecycle.rs  |  12 +-
+Jun 24 03:06  12459e2   埋雷: notify-rust 引入
+Jun 30 16:19  f9d8a2b   埋雷: exec 架构大改 (4KB 栈 buffer)
+Jun 30 17:54  b835450   埋雷: exec/pty 继续增栈
+Jun 30 23:13  4b0176a   爆发: PTY stdin 改 → 栈阈值越过
+Jun 30 23:14  2a25740   bump v0.5.0
+Jun 30 23:24            ★ 首次崩溃
+Jul  1 00:18-02:04      多次尝试修复 (堆分配/catch_unwind/8MB栈)
+Jul  1 02:04-15:32      CoInitializeEx(STA) 加入 → 崩法变了
+Jul  2 01:58 ★          持久化线程 → 根治
 ```
 
-`lib.rs` changes (158 lines net added) include:
-- Added `file_write_paths()` function for same-file write conflict detection
-- Added `pending_reload_config` field to `Loop` struct
-- Added parallel tool execution with conflict detection, thread spawning, drain loop with 50ms batching
-- Added serialized follow-up tool execution for same-file write conflicts
-- Added workspace annotation injection into user messages
+### 4.2 关键失误
 
-### f9d8a2b: Key dependency changes
+1. **未做 git bisect** — 最初崩溃后未立即定位 `f9d8a2b` 引入的 `[0u8;4096]`
+2. **8MB 栈后仍崩未警觉** — 未意识到已转为 COM 崩，仍在栈方向绕圈
+3. **CoInitializeEx 用了 STA 而非 MTA** — 原代码靠 `CoIncrementMTAUsage` 走 MTA 无事，主动 STA 反而打破了原平衡
+4. **notify-rust 未做 Windows COM 尽职调查** — 不知其 Windows 后端无 COM 管理
 
-```
-Cargo.lock: 17 lines added (new deps: deepx-daemon, base64, windows-sys)
-```
+---
 
-No existing dependency versions changed. Only new crates added.
+## 五、经验教训
 
-## Crash Call Path (crate dependency chain)
-
-The crash occurs at `core::result::Result::Try::branch` (Rust `?` operator). The only `?` operators on the Done emission path are in `deepx-session/src/store.rs:append_messages`:
-
-```
-deepx-tauri/src-tauri/src/main.rs:run_agent()
-  → deepx-msglp/src/lib.rs:Loop::new_ipc()
-    → deepx-msglp/src/lib.rs:Loop::run()
-      → deepx-msglp/src/lib.rs:dispatch(Ui2Agent::UserInput)
-        → deepx-msglp/src/lib.rs:handle_user_input()
-          → [round loop]
-            → deepx-msglp/src/agent.rs:build_context()
-              → deepx-message/src/store.rs:build_context_for_gate()
-            → deepx-gate/src/openai.rs:chat_stream()
-              → deepx-gate/src/openai.rs:chat_stream_openai()
-                → deepx-gate/src/openai.rs:stream_sse()  [contains byte_buf: Vec<u8> 4KB heap buffer]
-                  → closure callback in handle_user_input (lib.rs:~862)
-            → deepx-gate/src/tool_parser.rs:parse_tool_calls_from_response()
-            → deepx-message/src/store.rs:push_assistant()
-            → [tool execution: thread::spawn + drain loop + join]
-              → deepx-tools/src/bridge.rs:execute_tool_with_id_full()
-                → deepx-tools/src/file_read.rs:exec_read_file()  [4080-byte stack frame]
-            → deepx-message/src/store.rs:push_tool_result_direct()
-          → deepx-msglp/src/lib.rs:flush_meta_and_stats()
-            → deepx-message/src/store.rs:flush_meta()
-              → deepx-session/src/manager.rs:save_append()
-                → deepx-session/src/store.rs:append_messages()
-                  → serde_json::to_string(msg)?   ← `?` operator, calls Try::branch
-                  → writeln!(file, ...)?
-                  → file.flush()?
-                  → file.sync_all()?
-          → emit(TurnEnd)  [blocking SyncSender::send]
-          → emit(Done)      [blocking SyncSender::send, at lib.rs ~1239]
-```
-
-Key observations:
-- `deepx-msglp/src/lib.rs` and `deepx-message/src/store.rs` contain zero `?` operators
-- `deepx-session/src/store.rs::append_messages` contains 4 sequential `?` operators for file I/O
-- `deepx-tools/src/file_read.rs::exec_read_file` has a 4080-byte stack frame (`sub rsp, 0xFF0`)
-
-- `deepx-gate/src/openai.rs::stream_sse` has a 4KB heap buffer (`Vec<u8>`, was `[u8;4096]` before fix)
-
-## Analysis & Fix (2026-07-01)
-
-### Root Cause Analysis
-
-The crash signature (`0xc0000005` at `Try::branch` writing `[rsp+8]`) was
-investigated across multiple hypotheses:
-
-1. **Stack exhaustion** — Ruled out: 8MB commit on main thread; no function
-   has `sub rsp` ≥ 4096 (max 4080), so no single frame can skip a guard page.
-2. **Missing `__chkstk`** — Confirmed absent from binary, but Rust 1.96.0 /
-   LLVM 22.1.2 likely uses inline probes. Individual frames < 4096 bytes
-   cannot skip a 4KB guard page regardless.
-3. **conpty 0.7.0 UB** — `Process::Drop` does `Box::from_raw(ptr as *mut u8)`
-   to free a `vec![0u8; size]` allocation (alloc `size` / dealloc 1). This is
-   UB, but Windows `HeapFree` ignores the size parameter, so it does not
-   corrupt the heap under the default `System` allocator.
-4. **`pending_save` accumulation** — **Most likely contributor.** In the round
-   loop, `flush_meta_and_stats` was only called on `Effect::TurnComplete`
-   (final round). During 3-4 tool rounds, `pending_save` accumulated all
-   messages including large tool results (up to 1MB each). The subsequent
-   `append_messages` → `serde_json::to_string(msg)` for each message created
-   heavy heap pressure. Direct ToolCall injection (`handle_tool_call`) does
-   NOT call `flush_meta_and_stats`, which explains why it never crashes.
-5. **Tool thread stack** — Default 2MB; `exec_read_file` alone has a 4080-byte
-   frame. Deep call chains under pressure could approach limits.
-6. **`strip_ansi` UTF-8 corruption** — `bytes[i] as char` in `exec.rs` breaks
-   multi-byte UTF-8 (CJK, emoji), producing garbled `String`s that consume
-   2× memory and may stress the allocator.
-
-### Fixes Applied
-
-**`crates/deepx-msglp/src/lib.rs`:**
-1. **Per-round flush** — Added `self.flush_meta_and_stats()` in the
-   `Effect::None` continue path of `handle_user_input`'s round loop. This
-   prevents `pending_save` from accumulating across rounds, dramatically
-   reducing heap pressure during `append_messages`.
-2. **4MB tool thread stack** — Replaced `std::thread::spawn` with
-   `thread::Builder::new().stack_size(4 * 1024 * 1024).spawn(...)` at both
-   tool execution sites (`handle_tool_call` ~line 627, `handle_user_input`
-   parallel tools ~line 1059). Ensures adequate stack for deep tool call
-   chains including `exec_read_file`'s 4080-byte frame.
-
-**`crates/deepx-tools/src/exec.rs`:**
-3. **UTF-8 safe `strip_ansi`** — Replaced `out.push(bytes[i] as char)` with
-   `out.push_str(&s[start..i])` to preserve multi-byte UTF-8 sequences in
-   PTY output. The old code treated each byte as a separate Unicode codepoint,
-   corrupting CJK text and inflating string sizes.
-
-### Known Issues (not fixed)
-
-- **conpty 0.7.0 `Box::from_raw` UB** — `Process::Drop` frees a multi-byte
-  allocation as `Box<u8>` (1 byte). Not directly harmful under Windows
-  `HeapFree`, but should be fixed by upgrading conpty or switching to
-  `portable-pty`.
-- **`PipeReader::Drop` uses `.unwrap()`** — `CloseHandle` failure panics in
-  the reader thread. Not in the main thread, so does not cause the observed
-  crash, but should be reported upstream.
-- **Exact crash address mapping** — The `FaultingOffset` values do not
-  precisely match `Try::branch` VAs (off by 0xC00-0xC70), suggesting the
-  crash may actually be in a nearby function. WinDbg `k` command output is
-  needed for definitive mapping.
+1. **Windows 上所有 WinRT/COM 调用必须显式初始化 COM**，不能依赖第三方库的内部回退路径
+2. **瞬态线程 + COM = 危险组合**：STA 模式下线程退出会销毁公寓
+3. **默认 4KB 栈 commit 是 Windows 陷阱** — Rust 多线程应用必须主动设 `reserve + commit`
+4. **崩溃地址不变 ≠ 根因不变** — 两个不同 bug 可能 RIP 到同一函数不同偏移
+5. **`forget()` 不保证 COM 对象存活** — Rust 侧防了 Release，COM 内部公寓层仍有自己的生命周期

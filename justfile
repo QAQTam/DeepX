@@ -14,7 +14,18 @@ dev:
 
 # Start TUI in dev mode
 tui:
-    cargo run --release -p deepx-tauri -- --tui
+    cargo run --release -p deepx-terminal
+
+# Build TUI binary only
+build-tui:
+    cargo build -p deepx-terminal
+    @echo "Binary: target/debug/deepx-terminal.exe"
+
+# Build Tauri binary only
+build-tauri: clean-fe
+    cd crates/deepx-tauri && pnpm build
+    cargo build -p deepx-tauri
+    @echo "Binary: target/debug/deepx-tauri.exe"
 
 # === Frontend ===
 
@@ -30,17 +41,17 @@ fe:
 
 # === Building ===
 
-# Debug build (clean dist first)
+# Debug build (Tauri + TUI)
 build: clean-fe
     cd crates/deepx-tauri && pnpm build
     cargo build
-    @echo "Binary: target/debug/deepx.exe"
+    @echo "Binaries: target/debug/deepx-tauri.exe, target/debug/deepx-terminal.exe"
 
 # Release build (clean dist + optimized)
 release: clean-fe
     cd crates/deepx-tauri && pnpm build
     cargo build --release
-    @echo "Binary: target/release/deepx.exe"
+    @echo "Binaries: target/release/deepx-tauri.exe, target/release/deepx-terminal.exe"
 
 # Build installer (MSI/NSIS)
 installer: clean-fe

@@ -1,8 +1,8 @@
-//! deepx-tauri — Tauri desktop application for DeepX.
-//! Always a console application; console window is hidden on GUI launch.
+//! deepx-terminal — TUI frontend for DeepX.
+//! Default mode is the interactive terminal UI.
+//! Also supports --agent / subagent / daemon / config modes.
 
 fn main() {
-    // Flush logs and write crash marker on panic, then abort.
     std::panic::set_hook(Box::new(|info| {
         let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
             s.to_string()
@@ -11,16 +11,24 @@ fn main() {
         } else {
             "unknown panic".to_string()
         };
-        let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let loc = info.location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
         eprintln!("[FATAL] panicked at {loc}: {msg}");
         log::error!("[FATAL] panicked at {loc}: {msg}");
         log::logger().flush();
     }));
 
-    // Capture full system PATH at process start, before Windows GUI subsystem
-    // strips it.
-    deepx_tauri_lib::agent_bridge::cache_system_path();
-    deepx_tauri_lib::agent_bridge::detect_os_info();
+    // Ensure UTF-8 code page for box-drawing and CJK
+    #[cfg(target_os = "windows")]
+    unsafe {
+        unsafe extern "system" {
+            fn SetConsoleOutputCP(codePage: u32) -> i32;
+            fn SetConsoleCP(codePage: u32) -> i32;
+        }
+        SetConsoleOutputCP(65001);
+        SetConsoleCP(65001);
+    }
 
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
@@ -33,24 +41,15 @@ fn main() {
             run_config();
         }
         _ => {
-            // Default: Tauri GUI — hide the console window.
-            #[cfg(target_os = "windows")]
-            unsafe {
-                unsafe extern "system" {
-                    fn GetConsoleWindow() -> isize;
-                    fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
-                }
-                let hwnd = GetConsoleWindow();
-                if hwnd != 0 {
-                    ShowWindow(hwnd, 0); // SW_HIDE
-                }
+            // Default: TUI mode
+            if let Err(e) = deepx_terminalui::run_tui() {
+                eprintln!("deepx-terminalui: {e}");
+                std::process::exit(1);
             }
-            deepx_tauri_lib::run();
         }
     }
 }
 
-/// Shared agent/subagent entry point.
 fn run_agent(is_subagent: bool) {
     let mut resume_seed: Option<String> = None;
     let mut new_seed: Option<String> = None;
@@ -62,7 +61,9 @@ fn run_agent(is_subagent: bool) {
     let mut max_tokens_override: Option<u32> = None;
 
     let subagent_defaults = if is_subagent {
-        deepx_config::Config::load().map(|c| c.subagent).unwrap_or_default()
+        deepx_config::Config::load()
+            .map(|c| c.subagent)
+            .unwrap_or_default()
     } else {
         Default::default()
     };
@@ -72,30 +73,51 @@ fn run_agent(is_subagent: bool) {
     while i < args.len() {
         match args[i].as_str() {
             "--resume-seed" => {
-                if i + 1 < args.len() { resume_seed = Some(args[i + 1].clone()); i += 1; }
-            }
-            "--seed" => {
-                if i + 1 < args.len() { new_seed = Some(args[i + 1].clone()); i += 1; }
-            }
-            "--tools" => {
                 if i + 1 < args.len() {
-                    if let Ok(list) = serde_json::from_str::<Vec<String>>(&args[i + 1]) { tools_allowlist = list; }
+                    resume_seed = Some(args[i + 1].clone());
                     i += 1;
                 }
             }
-            "--ephemeral" => { ephemeral = true; }
+            "--seed" => {
+                if i + 1 < args.len() {
+                    new_seed = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--tools" => {
+                if i + 1 < args.len() {
+                    if let Ok(list) = serde_json::from_str::<Vec<String>>(&args[i + 1]) {
+                        tools_allowlist = list;
+                    }
+                    i += 1;
+                }
+            }
+            "--ephemeral" => {
+                ephemeral = true;
+            }
             "--model" => {
-                if i + 1 < args.len() { model_override = Some(args[i + 1].clone()); i += 1; }
+                if i + 1 < args.len() {
+                    model_override = Some(args[i + 1].clone());
+                    i += 1;
+                }
             }
             "--base-url" => {
-                if i + 1 < args.len() { base_url_override = Some(args[i + 1].clone()); i += 1; }
+                if i + 1 < args.len() {
+                    base_url_override = Some(args[i + 1].clone());
+                    i += 1;
+                }
             }
             "--api-key" => {
-                if i + 1 < args.len() { api_key_override = Some(args[i + 1].clone()); i += 1; }
+                if i + 1 < args.len() {
+                    api_key_override = Some(args[i + 1].clone());
+                    i += 1;
+                }
             }
             "--max-tokens" => {
                 if i + 1 < args.len() {
-                    if let Ok(v) = args[i + 1].parse::<u32>() { max_tokens_override = Some(v); }
+                    if let Ok(v) = args[i + 1].parse::<u32>() {
+                        max_tokens_override = Some(v);
+                    }
                     i += 1;
                 }
             }
@@ -125,18 +147,32 @@ fn run_agent(is_subagent: bool) {
     deepx_session::SessionManager::init(deepx_types::platform::data_dir());
     let _ = deepx_msglp::logger::init_agent_logger(&deepx_types::platform::data_dir());
 
-    let mut agent = if tools_allowlist.is_empty() && model_override.is_none() && base_url_override.is_none() && !ephemeral {
+    let mut agent = if tools_allowlist.is_empty()
+        && model_override.is_none()
+        && base_url_override.is_none()
+        && !ephemeral
+    {
         deepx_msglp::agent::AgentState::init("cli")
     } else {
         deepx_msglp::agent::AgentState::init_subagent(&tools_allowlist, ephemeral)
     };
 
-    if let Some(m) = model_override { agent.config.model = m; }
-    if let Some(u) = base_url_override { agent.config.base_url = u; }
-    if let Some(k) = api_key_override { agent.config.api_key = k; }
-    if let Some(mt) = max_tokens_override { agent.config.max_tokens = mt; }
+    if let Some(m) = model_override {
+        agent.config.model = m;
+    }
+    if let Some(u) = base_url_override {
+        agent.config.base_url = u;
+    }
+    if let Some(k) = api_key_override {
+        agent.config.api_key = k;
+    }
+    if let Some(mt) = max_tokens_override {
+        agent.config.max_tokens = mt;
+    }
 
-    if let Some(seed) = resume_seed { agent.session.resume_seed = Some(seed); }
+    if let Some(seed) = resume_seed {
+        agent.session.resume_seed = Some(seed);
+    }
     if let Some(seed) = new_seed {
         agent.session.seed = seed;
         agent.session.created_at = deepx_session::SessionManager::now_epoch();
@@ -186,7 +222,14 @@ fn run_config() {
     println!();
 
     println!("[1/3] API Key");
-    print!("  API Key [{}]: ", if api_key.is_empty() { "(not set)" } else { "****" });
+    print!(
+        "  API Key [{}]: ",
+        if api_key.is_empty() {
+            "(not set)"
+        } else {
+            "****"
+        }
+    );
     std::io::stdout().flush().ok();
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).ok();
@@ -216,7 +259,10 @@ fn run_config() {
     if !trimmed.is_empty() {
         match trimmed.parse::<u32>() {
             Ok(v) => context_limit = v,
-            Err(_) => println!("  [ERROR] Invalid number '{}', using default {}", trimmed, context_limit),
+            Err(_) => println!(
+                "  [ERROR] Invalid number '{}', using default {}",
+                trimmed, context_limit
+            ),
         }
     }
 
@@ -230,8 +276,11 @@ fn run_config() {
 
     if store.save(&pc) {
         println!();
-        println!("Config saved to {}", deepx_types::platform::config_path().display());
-        println!("Run `deepx-tauri` to start.");
+        println!(
+            "Config saved to {}",
+            deepx_types::platform::config_path().display()
+        );
+        println!("Run `deepx-terminal` to start.");
     } else {
         eprintln!("Error saving config");
     }

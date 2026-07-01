@@ -39,7 +39,7 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
 
     // Register in process registry BEFORE starting (so it's findable on timeout)
     let registry_id = crate::process_registry::ProcessRegistry::register(
-        &format!("exec:{}", &command[..command.len().min(30)])
+        &format!("exec:{}", &command[..command.floor_char_boundary(command.len().min(30))])
     );
 
     let pt_out = progress_tx.clone();

@@ -170,7 +170,7 @@ fn spawn_agent_child(
     let debug_seed = if let Some(s) = resume_seed { s.to_string() } else { _seed.to_string() };
     std::thread::spawn(move || {
         let log_path = deepx_types::platform::data_dir()
-            .join(format!("agent_{}_debug.log", &debug_seed[..debug_seed.len().min(8)]));
+            .join(format!("agent_{}_debug.log", &debug_seed[..debug_seed.floor_char_boundary(debug_seed.len().min(8))]));
         let mut writer = std::fs::File::create(&log_path)
             .unwrap_or_else(|_| std::fs::File::create(deepx_types::platform::data_dir().join("agent_debug.log")).unwrap());
         use std::io::BufRead;

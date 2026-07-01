@@ -33,7 +33,6 @@ pub struct SessionMeta {
     #[serde(skip)]
     pub from_resume: bool,
 }
-
 impl Default for SessionMeta {
     fn default() -> Self {
         Self {

@@ -13,3 +13,7 @@ log = "0.4"
 
 [lints]
 workspace = true
+
+# Safe: only 2 string slices — one uses is_char_boundary, one is data eof check.
+[lints.clippy]
+string_slice = "allow"
