@@ -1274,12 +1274,27 @@ impl Loop {
             };
             // Spawn thread to avoid blocking — notification API may be slow
             std::thread::spawn(move || {
+                #[cfg(windows)]
+                unsafe {
+                    // WinRT (notify-rust's toast backend) needs COM init'd
+                    // on the calling thread. New OS threads aren't
+                    // initialized — this was the source of the 0xc0000005
+                    // in windows_core::assume_vtable.
+                    let _ = windows::Win32::System::Com::CoInitializeEx(
+                        None,
+                        windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+                    );
+                }
                 let _ = notify_rust::Notification::new()
                     .summary("DeepX")
                     .body(&body)
                     .appname("DeepX")
                     .timeout(notify_rust::Timeout::Milliseconds(8000))
                     .show();
+                #[cfg(windows)]
+                unsafe {
+                    windows::Win32::System::Com::CoUninitialize();
+                }
             });
         }
     }

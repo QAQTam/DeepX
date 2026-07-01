@@ -891,6 +891,7 @@ dependencies = [
  "log",
  "notify-rust",
  "serde_json",
+ "windows 0.61.3",
 ]
 
 [[package]]
