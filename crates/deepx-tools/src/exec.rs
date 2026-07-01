@@ -317,8 +317,15 @@ fn strip_ansi(s: &str) -> String {
                 }
             }
         } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            // Push a run of non-ESC bytes as a &str slice to preserve
+            // multi-byte UTF-8.  Using `bytes[i] as char` would corrupt
+            // CJK / emoji sequences by treating each byte as a separate
+            // Unicode codepoint.
+            let start = i;
+            while i < bytes.len() && bytes[i] != 0x1b {
+                i += 1;
+            }
+            out.push_str(&s[start..i]);
         }
     }
     out

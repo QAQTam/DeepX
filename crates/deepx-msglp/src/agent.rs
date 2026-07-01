@@ -72,7 +72,8 @@ impl AgentState {
 
     pub fn build_context(&mut self) -> Vec<deepx_types::Message> {
         let mut annotations: Vec<String> = Vec::new();
-        let ws = deepx_tools::CURRENT_WORKSPACE.read().unwrap();
+        let ws = deepx_tools::CURRENT_WORKSPACE.read()
+            .unwrap_or_else(|e| e.into_inner());
         if !ws.is_empty() && *ws != "." {
             annotations.push(format!(
                 "<workspace_path>{ws}</workspace_path>"

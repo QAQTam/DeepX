@@ -177,7 +177,17 @@ fn run_agent(is_subagent: bool) {
     let stdin = std::io::BufReader::new(std::io::stdin());
     let stdout = std::io::stdout();
     let mut loop_ = deepx_msglp::Loop::new_ipc(agent, stdin, stdout);
-    loop_.run();
+     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+         loop_.run();
+     }));
+     if let Err(e) = result {
+         let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+             else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+             else { "unknown panic".into() };
+         log::error!("[AGENT] run() panicked: {}", msg);
+         eprintln!("[DEEPX AGENT] run() panicked: {}", msg);
+         std::process::exit(1);
+     }
 }
 
 /// Interactive setup wizard: writes config.toml

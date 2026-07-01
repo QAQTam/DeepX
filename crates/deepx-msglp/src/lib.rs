@@ -98,6 +98,9 @@ pub struct Loop {
     pending_reload_config: bool,
     /// Accumulated code deltas (flushed on save_full/save_append).
     code_stats: Vec<deepx_proto::CodeDeltaRecord>,
+    /// Set to true when the writer thread dies (stdout pipe broken).
+    /// The main loop checks this and exits gracefully.
+    writer_dead: Arc<AtomicBool>,
 }
 
 /// Extract file paths that a tool writes to (mutates).
@@ -147,46 +150,71 @@ impl Loop {
         let cancel = CancelToken::new();
         let cancel_for_reader = cancel.clone();
 
-        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<Ui2Agent>(256);
-        let (event_tx, event_rx) = mpsc::sync_channel::<Agent2Ui>(256);
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<Ui2Agent>(4096);
+        let (event_tx, event_rx) = mpsc::sync_channel::<Agent2Ui>(4096);
+        let writer_dead = Arc::new(AtomicBool::new(false));
+        let writer_dead_for_thread = writer_dead.clone();
 
         // Reader thread: stdin → cmd_tx
         std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(input);
-            loop {
-                match deepx_proto::read_frame(&mut reader) {
-                    Ok(Some(frame)) => {
-                        let is_interrupt = matches!(frame,
-                            Ui2Agent::Cancel | Ui2Agent::ResumeSession { .. }
-                            | Ui2Agent::NewSession | Ui2Agent::Shutdown
-                        );
-                        if is_interrupt {
-                            // Set cancel token directly so busy loops see it immediately
-                            cancel_for_reader.set();
-                            deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut reader = std::io::BufReader::new(input);
+                loop {
+                    match deepx_proto::read_frame(&mut reader) {
+                        Ok(Some(frame)) => {
+                            let is_interrupt = matches!(frame,
+                                Ui2Agent::Cancel | Ui2Agent::ResumeSession { .. }
+                                | Ui2Agent::NewSession | Ui2Agent::Shutdown
+                            );
+                            if is_interrupt {
+                                // Set cancel token directly so busy loops see it immediately
+                                cancel_for_reader.set();
+                                deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                            }
+                            // Send through channel for the main loop to handle
+                            if cmd_tx.send(frame).is_err() {
+                                break; // Loop dropped
+                            }
                         }
-                        // Send through channel for the main loop to handle
-                        if cmd_tx.send(frame).is_err() {
-                            break; // Loop dropped
-                        }
-                    }
-                    Ok(None) | Err(_) => {
-                log::warn!("[AGENT] reader thread: stdin EOF or read error — exiting");
-                break;
-            }
+                        Ok(None) | Err(_) => {
+                    log::warn!("[AGENT] reader thread: stdin EOF or read error — exiting");
+                    break;
                 }
+                    }
+                }
+            }));
+            if let Err(e) = result {
+                let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+                    else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                    else { "unknown panic".into() };
+                log::error!("[AGENT] reader thread panicked: {}", msg);
+                eprintln!("[DEEPX AGENT] reader thread panicked: {}", msg);
             }
             log::info!("[AGENT] reader thread exiting");
         });
 
         // Writer thread: event_rx → stdout
         std::thread::spawn(move || {
-            let mut writer = std::io::BufWriter::new(output);
-            while let Ok(event) = event_rx.recv() {
-                if deepx_proto::write_frame(&mut writer, &event).is_err() {
-                    break;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut writer = std::io::BufWriter::new(output);
+                while let Ok(event) = event_rx.recv() {
+                    match deepx_proto::write_frame(&mut writer, &event) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            log::error!("[AGENT] writer thread: write_frame error: {e}");
+                            break;
+                        }
+                    }
                 }
+            }));
+            if let Err(e) = result {
+                let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+                    else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                    else { "unknown panic".into() };
+                log::error!("[AGENT] writer thread panicked: {}", msg);
+                eprintln!("[DEEPX AGENT] writer thread panicked: {}", msg);
             }
+            writer_dead_for_thread.store(true, Ordering::SeqCst);
             log::info!("[AGENT] writer thread exiting");
         });
 
@@ -201,12 +229,24 @@ impl Loop {
             pending_shutdown: false,
             pending_reload_config: false,
             code_stats: Vec::new(),
+            writer_dead,
         }
     }
 
     /// Send a critical event (blocking — must be delivered).
     fn emit(&self, event: Agent2Ui) {
-        let _ = self.event_tx.send(event);
+        if self.writer_dead.load(Ordering::SeqCst) {
+            // Writer thread already dead — this event and all future events
+            // will be silently dropped. The main loop will detect this on its
+            // next idle check and exit.
+            return;
+        }
+        if self.event_tx.send(event).is_err() {
+            // Receiver dropped — writer thread died.
+            log::error!("[AGENT] emit failed: writer thread dead (event_tx disconnected)");
+            // Don't set writer_dead here — the writer thread sets it when it exits.
+            // The event_tx.send() failure already means the receiver is gone.
+        }
     }
 
     /// Send a delta event (non-blocking — dropped if channel full).
@@ -393,6 +433,15 @@ impl Loop {
             // readiness. Only startup/reconnect need guaranteed delivery.
             self.emit_delta(Agent2Ui::Ready);
 
+            // Check if the writer thread has died (stdout pipe broken).
+            // This catches cases where the agent is still processing commands
+            // but can no longer communicate with the frontend.
+            if self.writer_dead.load(Ordering::SeqCst) {
+                log::error!("[AGENT] writer thread died — stdout pipe broken. Exiting main loop.");
+                eprintln!("[DEEPX AGENT] writer thread died — stdout pipe broken. Exiting.");
+                break;
+            }
+
             // Block waiting for next command
             let frame: Ui2Agent = match self.cmd_rx.recv() {
                 Ok(f) => {
@@ -408,7 +457,23 @@ impl Loop {
                 }
             };
 
-            self.dispatch(frame);
+            // Wrap dispatch in catch_unwind so a panic in any command handler
+            // (UserInput, Cancel, etc.) doesn't silently kill the agent process.
+            // The panic is logged and the main loop exits cleanly.
+             let dispatch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                 self.dispatch(frame);
+             }));
+             if let Err(e) = dispatch_result {
+                 let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+                     else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                     else { "unknown panic".into() };
+                 log::error!("[AGENT] main loop panic during dispatch: {}", msg);
+                 eprintln!("[DEEPX AGENT] main loop panic during dispatch: {}", msg);
+                 let _ = self.event_tx.try_send(Agent2Ui::Error {
+                     message: format!("Agent main loop panicked: {}", msg),
+                 });
+                 break;
+             }
         }
 
         deepx_tools::bridge::shutdown_tools();
@@ -559,10 +624,13 @@ impl Loop {
         let tool_id = id.to_string();
         let tool_id_for_result = tool_id.clone();
         let args_s = args.to_string();
-        let handle = std::thread::spawn(move || {
-            let result = deepx_tools::bridge::execute_tool_with_id_full(&tool_name, "", &args_s, &tool_id, Some(progress_tx));
-            (tool_id, result.content, result.success, result.code_delta)
-        });
+        let handle = std::thread::Builder::new()
+            .stack_size(4 * 1024 * 1024)
+            .spawn(move || {
+                let result = deepx_tools::bridge::execute_tool_with_id_full(&tool_name, "", &args_s, &tool_id, Some(progress_tx));
+                (tool_id, result.content, result.success, result.code_delta)
+            })
+            .expect("failed to spawn tool thread");
         // Drain progress while tool runs
         loop {
             match progress_rx.recv_timeout(std::time::Duration::from_millis(100)) {
@@ -579,7 +647,7 @@ impl Loop {
         let (tid, output, success, code_delta) = handle.join().unwrap_or_else(|_| (tool_id_for_result, "[ERROR] tool thread panicked".into(), false, None));
         if let Some(ref delta) = code_delta {
             self.code_stats.push(delta.clone());
-            self.emit(Agent2Ui::CodeDelta {
+            self.emit_delta(Agent2Ui::CodeDelta {
                 lines_added: delta.lines_added,
                 lines_removed: delta.lines_removed,
                 files_created: delta.files_created,
@@ -632,7 +700,7 @@ impl Loop {
         const KEEP: usize = 5;
         log::info!("[AGENT] handle_compact: {} turns", self.agent.msg.turn_count());
         if self.agent.msg.turn_count() <= KEEP {
-            self.emit(Agent2Ui::ToolNotice {
+            self.emit_delta(Agent2Ui::ToolNotice {
                 message: format!("Compact skipped: need >{} turns (have {})", KEEP, self.agent.msg.turn_count()),
                 level: "info".into(),
             });
@@ -695,7 +763,7 @@ impl Loop {
         self.emit(Agent2Ui::CompactEnd {
             summary_chars: chars, turns_compacted: compact_count as u32,
         });
-        self.emit(Agent2Ui::ToolNotice {
+        self.emit_delta(Agent2Ui::ToolNotice {
             message: format!("Compacted {} turns → {} chars summary", compact_count, chars),
             level: "info".into(),
         });
@@ -988,10 +1056,13 @@ impl Loop {
                             let args = tool.args.to_string();
                             tool_infos.push((id.clone(), name.clone()));
                             let id_for_handle = id.clone();
-                            let handle = std::thread::spawn(move || {
-                                let result = deepx_tools::bridge::execute_tool_with_id_full(&name, "", &args, &id, Some(tx));
-                                (id, result.content, result.success, result.code_delta)
-                            });
+                            let handle = std::thread::Builder::new()
+                                .stack_size(4 * 1024 * 1024)
+                                .spawn(move || {
+                                    let result = deepx_tools::bridge::execute_tool_with_id_full(&name, "", &args, &id, Some(tx));
+                                    (id, result.content, result.success, result.code_delta)
+                                })
+                                .expect("failed to spawn tool thread");
                             handles.push((id_for_handle, handle));
                         }
                         drop(progress_tx); // close sender when all threads drop their clones
@@ -1074,7 +1145,7 @@ impl Loop {
                                         self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n{content}"));
                                         if let Some(ref delta) = code_delta {
                                             self.code_stats.push(delta.clone());
-                                            self.emit(Agent2Ui::CodeDelta {
+                                            self.emit_delta(Agent2Ui::CodeDelta {
                                                 lines_added: delta.lines_added,
                                                 lines_removed: delta.lines_removed,
                                                 files_created: delta.files_created,
@@ -1109,7 +1180,7 @@ impl Loop {
                                     );
                                     if let Some(ref delta) = result.code_delta {
                                         self.code_stats.push(delta.clone());
-                                        self.emit(Agent2Ui::CodeDelta {
+                                        self.emit_delta(Agent2Ui::CodeDelta {
                                             lines_added: delta.lines_added,
                                             lines_removed: delta.lines_removed,
                                             files_created: delta.files_created,
@@ -1131,7 +1202,7 @@ impl Loop {
                             success: *success,
                             file: None,
                         });
-                        self.emit(Agent2Ui::AuditRecord {
+                        self.emit_delta(Agent2Ui::AuditRecord {
                             tool_name: tool_name.clone(),
                             result_summary: result_content.lines().next().unwrap_or("").chars().take(120).collect(),
                             success: *success,
@@ -1147,6 +1218,14 @@ impl Loop {
 
                     // Refresh status panel after tool execution
                     self.emit_dashboard();
+
+                    // Flush pending messages to disk each round so that
+                    // pending_save doesn't accumulate across rounds.  Large
+                    // pending_save vectors cause heavy heap pressure during
+                    // serde_json::to_string in append_messages, which has been
+                    // linked to intermittent 0xc0000005 crashes after 3-4
+                    // tool-intensive rounds.
+                    self.flush_meta_and_stats();
 
                     round_num += 1;
                     continue;
@@ -1208,7 +1287,7 @@ impl Loop {
     // ── Dashboard ──
 
     fn emit_dashboard(&self) {
-        self.emit(Agent2Ui::Dashboard {
+        self.emit_delta(Agent2Ui::Dashboard {
             hp_connected: true,
             session_seed: self.agent.session.seed.clone(),
             context_limit: self.agent.config.context_limit,

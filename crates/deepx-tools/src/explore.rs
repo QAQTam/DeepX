@@ -147,8 +147,6 @@ fn architecture_rust(root: &std::path::Path) -> String {
                 }
             }
             out.push_str(&format!("{entry}\n"));
-
-            if out.len() > 3000 { out.push_str("  ... truncated\n"); break; }
         }
     }
 
