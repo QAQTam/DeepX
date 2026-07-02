@@ -32,7 +32,7 @@ fn ten_parallel_reads_same_file() {
     // We need to create a Loop, but Loop::new_ipc uses stdin/stdout.
     // Instead, we construct the loop manually via the same channels.
     // Use a pipe pair for input/output.
-    let (mut input_writer, input_reader) = os_pipe::pipe().unwrap();
+    let (input_reader, mut input_writer) = os_pipe::pipe().unwrap();
     let (output_reader, output_writer) = os_pipe::pipe().unwrap();
 
     let mut loop_ = Loop::new_ipc(

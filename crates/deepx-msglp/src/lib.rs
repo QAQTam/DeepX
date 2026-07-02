@@ -24,6 +24,8 @@ use agent::AgentState;
 mod lifecycle;
 mod dashboard;
 pub mod logger;
+#[cfg(windows)]
+mod toast_com;
 use dashboard::{build_documents, build_recent_edits, build_tasks};
 use deepx_message::Effect;
 use deepx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
@@ -105,17 +107,28 @@ pub struct Loop {
     notify: NotificationThread,
 }
 
+/// Message sent to the dedicated notification thread.
+enum NotifyMessage {
+    /// Simple one-way toast.
+    Toast(String),
+    /// Toast with text input; response sent via the channel.
+    ToastWithInput {
+        body: String,
+        reply_tx: mpsc::Sender<Option<String>>,
+    },
+}
+
 /// Dedicated notification thread that keeps COM initialized across the
 /// process lifetime, avoiding FactoryCache use-after-free that occurs
 /// when transient threads initialize COM and exit, tearing down the STA.
 struct NotificationThread {
-    tx: mpsc::Sender<String>,
+    tx: mpsc::Sender<NotifyMessage>,
     _thread: std::thread::JoinHandle<()>,
 }
 
 impl NotificationThread {
     fn spawn() -> Self {
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::channel::<NotifyMessage>();
         let thread = std::thread::Builder::new()
             .name("deepx-notify".into())
             .spawn(move || {
@@ -127,13 +140,37 @@ impl NotificationThread {
                         windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
                     );
                 }
-                while let Ok(body) = rx.recv() {
-                    let _ = notify_rust::Notification::new()
-                        .summary("DeepX")
-                        .body(&body)
-                        .appname("DeepX")
-                        .timeout(notify_rust::Timeout::Milliseconds(8000))
-                        .show();
+                'outer: loop {
+                    // Drain all pending notification requests.
+                    let mut got_any = false;
+                    loop {
+                        match rx.try_recv() {
+                            Ok(NotifyMessage::Toast(body)) => {
+                                got_any = true;
+                                #[cfg(windows)]
+                                show_toast_windows(&body);
+                                #[cfg(not(windows))]
+                                let _ = &body;
+                            }
+                            Ok(NotifyMessage::ToastWithInput { body, reply_tx }) => {
+                                got_any = true;
+                                #[cfg(windows)]
+                                show_toast_with_input_windows(&body, reply_tx);
+                                #[cfg(not(windows))]
+                                {
+                                    let _ = &body;
+                                    let _ = reply_tx.send(None);
+                                }
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => break 'outer,
+                        }
+                    }
+                    #[cfg(windows)]
+                    pump_com_messages();
+                    if !got_any {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
                 #[cfg(windows)]
                 unsafe {
@@ -144,9 +181,175 @@ impl NotificationThread {
         Self { tx, _thread: thread }
     }
 
+    /// Send a simple one-way toast notification.
     fn notify(&self, body: String) {
-        let _ = self.tx.send(body);
+        let _ = self.tx.send(NotifyMessage::Toast(body));
     }
+
+    /// Send an interactive toast with a text input box.
+    /// Returns a receiver that yields `Some(text)` when the user replies,
+    /// or `None` on timeout / dismiss.
+    fn notify_input(&self, body: String) -> mpsc::Receiver<Option<String>> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let _ = self.tx.send(NotifyMessage::ToastWithInput { body, reply_tx });
+        reply_rx
+    }
+}
+
+#[cfg(windows)]
+fn ensure_aumid() -> &'static str {
+    use std::sync::OnceLock;
+    static AUMID: OnceLock<String> = OnceLock::new();
+    AUMID.get_or_init(|| {
+        // Set the AppUserModelID for this process (no shortcut needed).
+        // Works for toast notifications on Windows 7+.
+        let our_id = "DeepX";
+        unsafe {
+            let hr = windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
+                &windows::core::HSTRING::from(our_id),
+            );
+            log::info!("SetCurrentProcessExplicitAppUserModelID({our_id}) → {hr:?}");
+        }
+        // --- Revert to PowerShell fallback ---
+        // Creating a Start Menu shortcut requires IShellLinkW::SetAppUserModelID,
+        // which is not exposed by the windows crate (any version).
+        // The vtable-hack approach crashes (wrong slot offset / OS-dependent).
+        // TODO: create shortcut via alternative means.
+        let ps_id = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
+        log::info!("Using PowerShell AUMID for toast");
+        ps_id.to_string()
+    })
+}
+
+#[cfg(windows)]
+fn pump_com_messages() {
+    unsafe {
+        let mut msg: windows::Win32::UI::WindowsAndMessaging::MSG = std::mem::zeroed();
+        loop {
+            let has_msg = windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
+                &mut msg,
+                None,
+                0,
+                0,
+                windows::Win32::UI::WindowsAndMessaging::PM_REMOVE,
+            );
+            if !has_msg.as_bool() {
+                break;
+            }
+            windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
+            windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn show_toast_with_input_windows(body: &str, reply_tx: mpsc::Sender<Option<String>>) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TOAST_ID: AtomicU64 = AtomicU64::new(1);
+
+    // Register COM activator on first toast call.
+    toast_com::init();
+
+    // Generate a unique id for this toast activation.
+    let id = format!("deepx:{}", TOAST_ID.fetch_add(1, Ordering::Relaxed));
+
+    // Store reply channel so the COM callback can find it.
+    toast_com::push_pending(id.clone(), reply_tx);
+
+    let escaped = escape_xml(body);
+    let xml = format!(
+        "<toast duration=\"long\">\
+            <visual>\
+                <binding template=\"ToastGeneric\">\
+                    <text>DeepX</text>\
+                    <text>{}</text>\
+                </binding>\
+            </visual>\
+            <actions>\
+                <input id=\"reply\" type=\"text\" placeHolderContent=\"Type a reply...\" title=\"Reply\"/>\
+                <action content=\"Send\" arguments=\"{}\" hint-inputId=\"reply\" activationType=\"foreground\"/>\
+            </actions>\
+        </toast>",
+        escaped, id
+    );
+
+    let doc = match windows::Data::Xml::Dom::XmlDocument::new() {
+        Ok(d) => d,
+        Err(e) => { let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("XmlDocument::new failed: {e:?}"); return; }
+    };
+    if let Err(e) = doc.LoadXml(&windows::core::HSTRING::from(xml.as_str())) {
+        let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+        log::error!("LoadXml failed: {e:?}");
+        return;
+    }
+    let toast = match windows::UI::Notifications::ToastNotification::CreateToastNotification(&doc) {
+        Ok(t) => t,
+        Err(e) => { let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("CreateToastNotification failed: {e:?}"); return; }
+    };
+
+    let notifier = match windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
+        &windows::core::HSTRING::from(ensure_aumid()),
+    ) {
+        Ok(n) => n,
+        Err(e) => { let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("CreateToastNotifierWithId failed: {e:?}"); return; }
+    };
+    if let Err(e) = notifier.Show(&toast) {
+        let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+        log::error!("notifier.Show failed: {e:?}");
+        return;
+    }
+
+    // Toast shown.  reply_tx now lives in the COM callback's pending map.
+    // The caller's Receiver will get the reply (or timeout) independently.
+}
+
+#[cfg(windows)]
+fn show_toast_windows(body: &str) {
+    let aumid = ensure_aumid();
+    log::info!("show_toast: body_len={} aumid={aumid}", body.len());
+
+    let escaped = escape_xml(body);
+    let xml = format!(
+        "<toast duration=\"short\"><visual><binding template=\"ToastGeneric\"><text>DeepX</text><text>{}</text></binding></visual></toast>",
+        escaped
+    );
+
+    let doc = match windows::Data::Xml::Dom::XmlDocument::new() {
+        Ok(d) => d,
+        Err(e) => { log::error!("show_toast: XmlDocument::new failed: {e:?}"); return; }
+    };
+    if let Err(e) = doc.LoadXml(&windows::core::HSTRING::from(xml.as_str())) {
+        log::error!("show_toast: LoadXml failed: {e:?}");
+        return;
+    }
+    let toast = match windows::UI::Notifications::ToastNotification::CreateToastNotification(&doc) {
+        Ok(t) => t,
+        Err(e) => { log::error!("show_toast: CreateToastNotification failed: {e:?}"); return; }
+    };
+
+    // Always use CreateToastNotifierWithId — the parameterless variant
+    // may fail even when the AUMID was set successfully via SetCurrentProcessExplicitAppUserModelID.
+    let notifier = match windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
+        &windows::core::HSTRING::from(aumid),
+    ) {
+        Ok(n) => n,
+        Err(e) => { log::error!("show_toast: CreateToastNotifierWithId({aumid}) failed: {e:?}"); return; }
+    };
+
+    if let Err(e) = notifier.Show(&toast) {
+        log::error!("show_toast: Show failed: {e:?}");
+        return;
+    }
+    // Small delay helps the toast appear before the COM thread yields.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    log::info!("show_toast: success");
+}
+
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Extract file paths that a tool writes to (mutates).
