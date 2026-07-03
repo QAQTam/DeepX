@@ -1,11 +1,6 @@
 import { createStore, produce } from "solid-js/store";
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import AnsiUp from "ansi-to-html";
-
-// escapeXML: true — escape <, >, & in text content so that tool output
-// containing HTML/CSS/code is displayed as text, not rendered as DOM.
-const ansiUp = new AnsiUp({ escapeXML: true });
 
 export interface ToolCallDef { id: string; name: string; args_display: string; args_json: string; }
 export interface ToolResultDef { tool_call_id: string; output: string; success: boolean; }
@@ -138,32 +133,32 @@ export function createChatStore(seed: string) {
   }
 
   function handleExecProgress(toolCallId: string, chunk: string) {
-    console.log("[ExecProgress]", toolCallId, chunk.slice(0, 40));
-    // Convert ANSI escape codes to HTML for PTY output rendering
-    const html = ansiUp.toHtml(chunk);
-    const streamKey = toolCallId + "_stream";
+    // Guard: ignore if the last turn is already complete (prevents bleed into next round)
+    const lastTurn = turns[turns.length - 1];
+    if (!lastTurn || lastTurn.status !== "streaming") return;
+
+    const streamKey = toolCallId;
     setTurns(produce((ts) => {
       const turn = ts[ts.length - 1];
-      if (!turn) { console.log("[ExecProgress] no turn"); return; }
+      if (!turn || turn.status !== "streaming") return;
       const round = turn.rounds[turn.rounds.length - 1];
-      if (!round) { console.log("[ExecProgress] no round"); return; }
-      console.log("[ExecProgress] round found, toolCalls:", round.toolCalls.length, "toolResults:", round.toolResults.length);
+      if (!round) return;
       const existing = round.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
       if (existing >= 0) {
-        round.toolResults[existing].output += html;
+        // Append raw chunk — ANSI conversion is deferred to ToolCallCard render
+        round.toolResults[existing].output += chunk;
       } else {
-        round.toolResults.push({ tool_call_id: streamKey, output: html, success: true });
+        round.toolResults.push({ tool_call_id: streamKey, output: chunk, success: true });
       }
-      console.log("[ExecProgress] updated toolResults, count:", round.toolResults.length);
     }));
   }
 
   function handleToolResults(turnId: string, roundNum: number, results: ToolResultDef[]) {
     ensureRound(turnId, roundNum);
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
-      // Remove streaming placeholders for the same tool call IDs
-      const streamKeys = new Set(results.map(r => r.tool_call_id + "_stream"));
-      round.toolResults = round.toolResults.filter(tr => !streamKeys.has(tr.tool_call_id));
+      // Remove streaming placeholders matching the final result IDs
+      const resultIds = new Set(results.map(r => r.tool_call_id));
+      round.toolResults = round.toolResults.filter(tr => !resultIds.has(tr.tool_call_id));
       // Push final results (ANSI rendering handled by ToolCallCard)
       round.toolResults.push(...results);
     }));

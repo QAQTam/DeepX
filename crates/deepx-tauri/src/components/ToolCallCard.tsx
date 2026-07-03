@@ -3,9 +3,11 @@ import type { ToolCallDef, ToolResultDef } from "../store/chat";
 import { useI18n } from "../i18n";
 import AnsiUp from "ansi-to-html";
 
-// escapeXML: true — escape <, >, & in text content so that tool output
-// containing HTML/CSS/code is displayed as text, not rendered as DOM.
-const ansiUp = new AnsiUp({ escapeXML: true });
+// Per-component AnsiUp: avoids state pollution from split ANSI sequences across chunks
+// A fresh instance is created for each ToolCallCard mount.
+function createAnsiRenderer() {
+  return new AnsiUp({ escapeXML: true });
+}
 
 const isUnifiedDiff = (text: string): boolean =>
   /^(--- (a\/|\/)|@@ -\d+)/m.test(text);
@@ -75,12 +77,11 @@ function renderDiff(text: string): string {
   return html;
 }
 
-function renderOutput(text: string): string {
+function renderOutput(text: string, ansi: AnsiUp): string {
   if (isUnifiedDiff(text)) {
     return renderDiff(text);
   }
-  // ANSI-to-HTML: preserve terminal colors in PTY output
-  const html = ansiUp.toHtml(text);
+  const html = ansi.toHtml(text);
   return `<pre class="diff-plain">${html}</pre>`;
 }
 
@@ -118,6 +119,9 @@ export default function ToolCallCard(props: {
     hasResult
       ? props.result!.success ? "tool-success" : "tool-error"
       : "tool-running";
+
+  // Per-component ANSI renderer — avoids cross-chunk state pollution
+  const ansi = createAnsiRenderer();
 
   // Auto-expand when streaming output arrives (redundant with default but safe)
   createEffect(on(() => props.streamingOutput, (v) => {
@@ -159,8 +163,8 @@ export default function ToolCallCard(props: {
       }>
         <div class="tool-card-body" ref={bodyRef} innerHTML={
           hasResult
-            ? renderOutput(props.result!.output)
-            : (props.streamingOutput || "")
+            ? renderOutput(props.result!.output, ansi)
+            : (props.streamingOutput ? renderOutput(props.streamingOutput, ansi) : "")
         } />
       </Show>
     </div>
