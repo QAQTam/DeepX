@@ -1,77 +1,73 @@
-# DeepX 代码规范化审计 — 执行计划
+# DeepX — Task & User Back Message Enhancement
 
-**目标**：消除两个月多人开发累积的技术债，减行数、提稳定性、统一抽象层次。
-**范围**：10 crate，86 文件，~23,600 行。
-**原则**：改动越小越先做，低风险优于高风险，改完即编译验证。
+## 背景
 
----
+`ask_user` 工具通过 `[USER_QUERY] {...}` 标记实现 agent → 前端 → 用户 → agent 的闭环：
+- 工具返回 `[USER_QUERY] {"question":"...", "options":[...]}`
+- 前端 `handleToolResults` 截获 → AskDialog
+- 用户回答 → `cmd_send_message` → UserInput 帧发回 agent
 
-## 阶段一：低风险清理（先行，建立信心）
-
-### T1: 删除死文件 mcp_bridge.rs.1782801159
-- 备份残留文件，lib.rs 未声明，完全无用
-- 风险：无
-
-### T2: 提取 msglp 辅助函数 → util.rs
-- `format_tool_args_display`、`build_turns_from_context`、`build_compact_prompt`、
-  `chrono_*`、`civil_from_days` 等纯函数移到 `util.rs`
-- 文件：`crates/deepx-msglp/src/lib.rs:1556-1806`，约 250 行
-- 风险：低（纯函数，无状态依赖）
-
-### T3: 提取 msglp 通知系统 → notification.rs
-- `NotificationThread`、Windows Toast 函数、`escape_xml`
-- 文件：`crates/deepx-msglp/src/lib.rs:110-353`，约 250 行
-- 风险：低（已有 `toast_com.rs` 在外面，耦合松）
-
-### T4: 合并微工具文件（9 → 3）
-- `file_write + file_edit + file_edit_diff + file_delete` → `file_mutate.rs`
-- `file_read + file_list_dir + file_search + file_diff` → `file_query.rs`
-- `file_move` → 并入 `file_mutate.rs`
-- 风险：低（接口不变，仅移动代码）
+现扩展三个 task 交互功能。
 
 ---
 
-## 阶段二：结构优化（去重复，减维护成本）
+## Feature A: 用户取消 Task
 
-### T5: 消除文件工具内重复逻辑
-- 统一 `file_write` 和 `file_edit` 的 diff 输出格式
-- 统一二进制文件检测（一处引用）
-- 合并 `exec_move_file` / `exec_copy_file`
-- 风险：中（需验证所有工具仍正常工作）
+**触发**：StatusPanel 中 pending/in_progress task 旁出现 "✕" 按钮
 
-### T6: Provider 数据从函数改为声明式
-- `registry.rs` 中 8 个 `fn *_provider() → ProviderSpec` 改为 const 数组或 TOML
-- 减 ~150 行
-- 风险：中（需保证 `all_providers()` 返回值不变）
+**流程**：
+1. 前端调用新 Tauri 命令 `cmd_task_action(seed, "cancel", taskId: u32)`
+2. Rust 后端直接修改 `sessions/{seed}/tasks-mem.md`（更新状态行）
+3. 同时向 agent 发送 `Ui2Agent::ToolCall { name:"task", action:"update", args:{id, status:"cancelled"} }`
+4. Agent 处理 tool call → 更新内存 → emit Dashboard → 前端刷新
 
----
-
-## 阶段三：跨 Crate 去重（影响最大，需设计）
-
-### T7: 统一 daemon 连接抽象 → deepx_daemon::Client
-- TUI (`terminalui/lib.rs`) 和 Tauri (`agent_bridge.rs`) 各自实现了 daemon 连接+自动启动
-- 在 `deepx-daemon` 中提供 `Client::connect_with_auto_start(timeout)` 
-- 两处调用方改为使用同一接口
-- 风险：高（涉及两个入口的进程管理）
-
-### T8: 统一 Agent 子进程 spawn 逻辑
-- TUI 和 Tauri 各自实现了 agent child process spawn + stderr 日志线程
-- 提取到 `deepx-daemon` 或共享模块
-- 风险：高
-
-### T9: 消除 `civil_from_days` 三份重复
-- `msglp/lib.rs`、`agent_bridge.rs`×2 → 一处定义（`deepx-types` 或 `deepx-session`）
-- 风险：低（纯算法函数）
-
-### T10: `cmd_save_config` 16 参数改为 struct 解析
-- `agent_bridge.rs:762` — 用 `#[derive(Deserialize)]` struct 替代 16 个 `if !value.is_empty()`
-- 风险：低（Tauri 前端需配合变更 JSON key）
+**风险**：低。工具调用在 agent 命令通道排队，busy 状态也不丢帧。
 
 ---
 
-## 阶段四：收尾
+## Feature B: 用户删除 Task
 
-### T11: 最终编译 + 回归验证
-- `cargo check --workspace`
-- `cargo test --workspace`
-- 确认 TUI 和 Tauri 均能启动
+**触发**：StatusPanel 中已完成/已取消 task 旁出现 "🗑" 按钮
+
+**流程**：
+1. `cmd_task_action(seed, "delete", taskId)`
+2. 从 `tasks-mem.md` 删除对应行
+3. 向 agent 发 `Ui2Agent::ToolCall { name:"task", action:"delete", args:{id} }`
+
+**风险**：低。
+
+---
+
+## Feature C: 询问 Task
+
+**触发**：StatusPanel 中每个 task 旁出现 "?" 按钮
+
+**流程**：
+1. 前端直接 `cmd_send_message { seed, text: "Task T{id}: {subject}. 请详细说明实现方案和当前进度。" }`
+2. Agent 作为普通 UserInput 处理 → LLM 读取 task 上下文 → 生成回答
+
+**风险**：无（纯前端便利函数，不需新后端）。
+
+---
+
+## 需新增/修改
+
+### Rust 后端（`agent_bridge.rs`）
+- 新增 `cmd_task_action(seed, action, taskId)` — 读/写 tasks-mem.md + 发送 ToolCall 到 agent
+
+### 前端 TSX
+- `StatusPanel.tsx` — 每个 task row 加 3 个按钮（cancel / delete / ask）
+- `chat.ts` — 暴露 `submitTaskAction` 方法
+
+### 前端 CSS
+- `status-panel.css` — task 按钮样式
+
+---
+
+## 执行顺序
+
+1. `cmd_task_action` Rust 实现
+2. 注册 Tauri 命令
+3. StatusPanel 按钮 + 样式
+4. chat store 集成
+5. 测试 agent busy 时 task 更新是否排队正确

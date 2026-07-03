@@ -8,7 +8,9 @@ import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
 import InfoBar from "./components/InfoBar";
 import StatusPanel from "./components/StatusPanel";
+import GitDiffPanel from "./components/GitDiffPanel";
 import TokenChart from "./components/TokenChart";
+import "./styles/git-diff-panel.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
@@ -119,6 +121,7 @@ export default function App() {
           setActiveSeed(evtSeed);
         }
         refreshSessions();
+        loadDashboardFromDisk(evtSeed, chat);
         break;
       }
       case "session_restored": if (p.seed) {
@@ -136,6 +139,8 @@ export default function App() {
         }
         chat.setHasMore(!!p.has_more);
         refreshSessions();
+        // Load dashboard data directly from disk (no agent dependency)
+        loadDashboardFromDisk(evtSeed, chat);
       } break;
       case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); chat.setHasMore(!!p.has_more); } break;
       case "dashboard": chat.handleDashboard(p); break;
@@ -201,6 +206,17 @@ export default function App() {
       list.sort((a, b) => b.updated_at - a.updated_at);
       setSessions(list);
     } catch (e) { console.error(e); }
+  }
+
+  /** Load tasks + recent edits from disk, bypassing agent. */
+  async function loadDashboardFromDisk(seed: string, chat: ChatStore) {
+    try {
+      const raw = await invoke<string>("cmd_get_dashboard_data", { seed });
+      const data = JSON.parse(raw);
+      if (data.tasks && data.tasks.length > 0) {
+        chat.handleDashboard({ tasks: data.tasks, recent_edits: data.recent_edits });
+      }
+    } catch (e) { console.error("loadDashboardFromDisk:", e); }
   }
 
   async function resumeSession(seed: string) {
@@ -503,10 +519,13 @@ export default function App() {
             <Match when={view() === "chat"}>
               <Show when={hasChosenSession() && activeSeed() && activeChat()} fallback={<StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} />}>
                 {activeChat() && (
-                  <div class="chat-area">
-                    <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} />
-                    <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} />
-                  </div>
+                  <>
+                    <div class="chat-area">
+                      <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} />
+                      <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
+                    </div>
+                    <GitDiffPanel seed={activeSeed()} />
+                  </>
                 )}
               </Show>
             </Match>

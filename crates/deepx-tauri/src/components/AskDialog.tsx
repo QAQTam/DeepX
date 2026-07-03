@@ -31,7 +31,7 @@ export default function AskDialog(props: AskDialogProps) {
 
   const s = () => props.state();
   const hasOptions = () => s().options.length > 0;
-  const showCustom = () => s().options.length === 0;
+  const showCustomInput = () => s().options.length === 0 || s().allow_custom;
 
   return (
     <Show when={s().show}>
@@ -56,7 +56,7 @@ export default function AskDialog(props: AskDialogProps) {
               ))}
             </div>
           </Show>
-          <Show when={showCustom()}>
+          <Show when={showCustomInput()}>
             <form class="ask-custom" onSubmit={handleCustomSubmit}>
               <input
                 ref={inputRef}

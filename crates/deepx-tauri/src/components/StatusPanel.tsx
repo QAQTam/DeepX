@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, createSignal, onCleanup } from "solid-js";
 import type { TaskInfo, ActivityEntry } from "../store/chat";
 import { useI18n } from "../i18n";
 
@@ -16,9 +16,14 @@ export default function StatusPanel(props: {
   tasks: () => TaskInfo[];
   recentEdits: () => string[];
   activityLog: () => ActivityEntry[];
+  onTaskAction?: (action: "cancel" | "delete" | "ask", taskId: string, subject: string, description: string) => void;
 }) {
   const { t } = useI18n();
+  const [nowTick, setNowTick] = createSignal(Date.now());
+  const timer = setInterval(() => setNowTick(Date.now()), 1000);
+  onCleanup(() => clearInterval(timer));
   const elapsed = (ts: number) => {
+    const _ = nowTick(); // drive reactive re-render
     const s = Math.floor((Date.now() - ts) / 1000);
     if (s < 60) return s + "s";
     if (s < 3600) return Math.floor(s / 60) + "m";
@@ -48,6 +53,17 @@ export default function StatusPanel(props: {
                     <span class="status-row-title">{task.id}: {task.subject}</span>
                     <span class="status-row-desc">{task.description}</span>
                   </div>
+                  <Show when={props.onTaskAction}>
+                    <div class="status-row-actions">
+                      <Show when={task.status === "pending" || task.status === "in_progress"}>
+                        <button class="task-btn task-btn-cancel" onClick={() => props.onTaskAction!("cancel", task.id, task.subject, task.description)} title="Cancel">✕</button>
+                      </Show>
+                      <Show when={task.status === "completed" || task.status === "cancelled"}>
+                        <button class="task-btn task-btn-delete" onClick={() => props.onTaskAction!("delete", task.id, task.subject, task.description)} title="Delete">🗑</button>
+                      </Show>
+                      <button class="task-btn task-btn-ask" onClick={() => props.onTaskAction!("ask", task.id, task.subject, task.description)} title="Ask about this task">?</button>
+                    </div>
+                  </Show>
                 </div>
               )}
             </For>

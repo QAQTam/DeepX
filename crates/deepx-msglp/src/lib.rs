@@ -1224,6 +1224,13 @@ impl Loop {
                     // tool-intensive rounds.
                     self.flush_meta_and_stats();
 
+                    // ── ask_user: stop loop, wait for user response ──
+                    let has_user_query = results.iter().any(|(_, _, content, _)| content.starts_with("[USER_QUERY]"));
+                    if has_user_query {
+                        log::info!("[AGENT] ask_user detected — breaking loop to wait for user input");
+                        break;
+                    }
+
                     round_num += 1;
                     continue;
                 }

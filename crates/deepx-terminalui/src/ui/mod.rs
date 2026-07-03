@@ -688,13 +688,16 @@ pub fn render_ask(frame: &mut Frame, app: &App) {
         let style = if selected { Style::new().fg(ACCENT).bold() } else { Style::new().fg(DIM) };
         rlines.push(Line::from(vec![Span::raw(format!("  {mark}  ")), Span::styled(opt.clone(), style)]));
     }
-    let other_label = if ask.selected == ask.options.len() {
-        if ask.custom_input.is_empty() { l.t_ask_other_placeholder() } else { &ask.custom_input }
-    } else { l.t_ask_other() };
-    rlines.push(Line::from(vec![
-        Span::raw(format!("  {}  ", if ask.selected == ask.options.len() { "●" } else { "○" })),
-        Span::styled(other_label.to_string(), if ask.selected == ask.options.len() { Style::new().fg(ACCENT).bold() } else { Style::new().fg(DIM) }),
-    ]));
+    // "Other..." row — only when allow_custom is true
+    if ask.allow_custom {
+        let other_label = if ask.selected == ask.options.len() {
+            if ask.custom_input.is_empty() { l.t_ask_other_placeholder() } else { &ask.custom_input }
+        } else { l.t_ask_other() };
+        rlines.push(Line::from(vec![
+            Span::raw(format!("  {}  ", if ask.selected == ask.options.len() { "●" } else { "○" })),
+            Span::styled(other_label.to_string(), if ask.selected == ask.options.len() { Style::new().fg(ACCENT).bold() } else { Style::new().fg(DIM) }),
+        ]));
+    }
     rlines.push(Line::from(""));
     rlines.push(Line::from(Span::styled(l.t_ask_help(), Style::new().fg(DIM))));
     frame.render_widget(Paragraph::new(rlines), inner);

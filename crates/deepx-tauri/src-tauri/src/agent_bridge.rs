@@ -999,6 +999,203 @@ pub fn cmd_close_session(seed: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Get git status for the current workspace: lists modified/new/deleted files with diff stats.
+/// Runs independently of the agent process — reads git repo directly.
+#[tauri::command]
+pub fn cmd_get_git_diff(seed: String) -> Result<String, String> {
+    let workspace = {
+        let dir = deepx_types::platform::sessions_dir().join(&seed);
+        let ws_path = dir.join("workspace.txt");
+        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+    };
+    if workspace.is_empty() { return Ok("[]".into()); }
+
+    let repo = match git2::Repository::open(&workspace) {
+        Ok(r) => r,
+        Err(_) => return Ok("[]".into()),
+    };
+
+    let mut files: Vec<serde_json::Value> = Vec::new();
+    if let Ok(statuses) = repo.statuses(None) {
+        for entry in statuses.iter() {
+            let path = entry.path().unwrap_or("").to_string();
+            let status = entry.status();
+            let change = if status.is_index_new() || status.is_wt_new() {
+                "added"
+            } else if status.is_index_deleted() || status.is_wt_deleted() {
+                "deleted"
+            } else if status.is_index_modified() || status.is_wt_modified() {
+                "modified"
+            } else if status.is_index_renamed() || status.is_wt_renamed() {
+                "renamed"
+            } else {
+                continue;
+            };
+
+            let mut lines_added = 0u32;
+            let mut lines_removed = 0u32;
+            if change == "modified" || change == "added" {
+                if let Ok(head) = repo.head().and_then(|h| h.peel_to_tree()) {
+                    if let Ok(diff) = repo.diff_tree_to_workdir(Some(&head), None) {
+                        if let Ok(stats) = diff.stats() {
+                            lines_added = stats.insertions() as u32;
+                            lines_removed = stats.deletions() as u32;
+                        }
+                    }
+                }
+            }
+
+            files.push(serde_json::json!({
+                "path": path,
+                "change": change,
+                "lines_added": lines_added,
+                "lines_removed": lines_removed,
+            }));
+        }
+    }
+    serde_json::to_string(&files).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Get the diff for a single file in the workspace git repo.
+#[tauri::command]
+pub fn cmd_get_git_file_diff(seed: String, filePath: String) -> Result<String, String> {
+    let workspace = {
+        let dir = deepx_types::platform::sessions_dir().join(&seed);
+        let ws_path = dir.join("workspace.txt");
+        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+    };
+    if workspace.is_empty() { return Ok("".into()); }
+
+    let repo = git2::Repository::open(&workspace).map_err(|e| format!("open repo: {e}"))?;
+    let head = repo.head().map_err(|e| format!("head: {e}"))?;
+    let head_tree = head.peel_to_tree().map_err(|e| format!("tree: {e}"))?;
+
+    let mut diff_opts = git2::DiffOptions::new();
+    diff_opts.pathspec(&filePath);
+
+    let diff = repo.diff_tree_to_workdir(Some(&head_tree), Some(&mut diff_opts))
+        .map_err(|e| format!("diff: {e}"))?;
+
+    let mut patch_text = String::new();
+    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        let origin = line.origin();
+        let content = std::str::from_utf8(line.content()).unwrap_or("");
+        patch_text.push(origin);
+        patch_text.push_str(content);
+        true
+    }).map_err(|e| format!("print diff: {e}"))?;
+
+    Ok(patch_text)
+}
+
+/// Get dashboard data (tasks, recent edits) directly from session files.
+/// Does NOT go through the agent process — reads disk directly.
+#[tauri::command]
+pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
+    use std::io::BufRead;
+
+    // Tasks from sessions/{seed}/tasks-mem.md
+    let tasks: Vec<serde_json::Value> = {
+        let path = deepx_types::platform::sessions_dir().join(&seed).join("tasks-mem.md");
+        if let Ok(file) = std::fs::File::open(&path) {
+            std::io::BufReader::new(file).lines()
+                .filter_map(|l| l.ok())
+                .filter(|l| l.starts_with("- ["))
+                .filter_map(|line| {
+                    let trimmed = line.trim_start();
+                    let status = &trimmed[3..trimmed.find(']')?];
+                    let after = trimmed.split_once("] ")?.1;
+                    let (id_part, rest) = after.split_once(": ")?;
+                    let (subject, description) = rest.split_once(" — ").unwrap_or((rest, ""));
+                    Some(serde_json::json!({
+                        "id": id_part.trim(),
+                        "subject": subject.trim(),
+                        "description": description.trim(),
+                        "status": status,
+                    }))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+
+    // Recent edits from code_stats.jsonl (last 10 unique files)
+    let recent_edits: Vec<String> = {
+        let path = deepx_types::platform::sessions_dir().join(&seed).join("code_stats.jsonl");
+        if let Ok(file) = std::fs::File::open(&path) {
+            let mut files: Vec<String> = std::io::BufReader::new(file).lines()
+                .filter_map(|l| l.ok())
+                .filter_map(|line| {
+                    serde_json::from_str::<serde_json::Value>(&line).ok()
+                        .and_then(|v| v.get("file").and_then(|f| f.as_str()).map(String::from))
+                })
+                .collect();
+            files.reverse();
+            files.dedup();
+            files.truncate(10);
+            files
+        } else {
+            Vec::new()
+        }
+    };
+
+    serde_json::to_string(&serde_json::json!({
+        "tasks": tasks,
+        "recent_edits": recent_edits,
+    })).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Modify or delete a task directly from the frontend.
+/// Writes to tasks-mem.md on disk, then sends a ToolCall frame to the agent
+/// so its in-memory state stays in sync.
+#[tauri::command]
+pub fn cmd_task_action(seed: String, action: String, taskId: u32) -> Result<(), String> {
+    let dir = deepx_types::platform::sessions_dir().join(&seed);
+    let path = dir.join("tasks-mem.md");
+    let _guard = std::sync::Mutex::new(()); // serialize access
+
+    let mut lines: Vec<String> = if path.exists() {
+        std::fs::read_to_string(&path).unwrap_or_default()
+            .lines().map(String::from).collect()
+    } else {
+        Vec::new()
+    };
+
+    let prefix = format!("T{}:", taskId);
+    let idx = lines.iter().position(|l| l.contains(&prefix));
+
+    match action.as_str() {
+        "cancel" => {
+            let idx = idx.ok_or_else(|| format!("Task T{} not found", taskId))?;
+            for marker in &["[pending]", "[in_progress]", "[completed]", "[cancelled]"] {
+                if lines[idx].contains(marker) {
+                    lines[idx] = lines[idx].replace(marker, "[cancelled]");
+                    break;
+                }
+            }
+        }
+        "delete" => {
+            if let Some(idx) = idx {
+                lines.remove(idx);
+            }
+        }
+        _ => return Err(format!("Unknown action: {action}")),
+    }
+
+    std::fs::write(&path, lines.join("\n")).map_err(|e| format!("write tasks: {e}"))?;
+
+    // Notify agent if running
+    let args = serde_json::json!({"id": taskId, "status": if action == "cancel" { "cancelled" } else { "deleted" }});
+    let frame = if action == "cancel" {
+        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", taskId), name: "task".into(), action: "update".into(), args }
+    } else {
+        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", taskId), name: "task".into(), action: "delete".into(), args }
+    };
+    let _ = send_to_agent(&seed, frame);
+    Ok(())
+}
+
 /// Get aggregated token usage stats for the last N days.
 /// Returns JSON: { daily: [{date, prompt_tokens, completion_tokens, cache_hit, cache_miss, calls}], totals: {...} }
 #[tauri::command]

@@ -788,6 +788,7 @@ dependencies = [
  "deepx-session",
  "deepx-tools",
  "deepx-types",
+ "git2",
  "log",
  "serde",
  "serde_json",

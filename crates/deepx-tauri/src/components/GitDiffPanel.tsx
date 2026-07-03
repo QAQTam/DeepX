@@ -1,0 +1,136 @@
+import { createSignal, For, Show, onCleanup } from "solid-js";
+import { invoke } from "@tauri-apps/api/core";
+
+export interface GitFileEntry {
+  path: string;
+  change: "added" | "deleted" | "modified" | "renamed";
+  lines_added: number;
+  lines_removed: number;
+  diff?: string; // populated on expand
+}
+
+const CHANGE_COLORS: Record<string, string> = {
+  added: "var(--green)",
+  modified: "var(--yellow)",
+  deleted: "var(--red)",
+  renamed: "var(--purple)",
+};
+
+const CHANGE_ICONS: Record<string, string> = {
+  added: "+",
+  modified: "~",
+  deleted: "\u2212",
+  renamed: "\u2192",
+};
+
+export default function GitDiffPanel(props: { seed: string }) {
+  const [files, setFiles] = createSignal<GitFileEntry[]>([]);
+  const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
+  const [loading, setLoading] = createSignal(false);
+
+  async function refresh() {
+    if (!props.seed) return;
+    setLoading(true);
+    try {
+      const raw: GitFileEntry[] = JSON.parse(await invoke("cmd_get_git_diff", { seed: props.seed }));
+      // merge with existing diffs if expanded
+      const prev = files();
+      const prevMap = new Map(prev.map(f => [f.path, f]));
+      const merged = raw.map(f => {
+        const old = prevMap.get(f.path);
+        if (old?.diff) return { ...f, diff: old.diff };
+        return f;
+      });
+      setFiles(merged);
+    } catch (e) { console.error("git_diff error:", e); }
+    setLoading(false);
+  }
+
+  function toggle(path: string) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) { next.delete(path); return next; }
+      next.add(path);
+      // Fetch diff if not cached
+      const f = files().find(x => x.path === path);
+      if (f && !f.diff && (f.change === "modified" || f.change === "added")) {
+        loadDiff(path);
+      }
+      return next;
+    });
+  }
+
+  async function loadDiff(path: string) {
+    try {
+      const diffText: string = await invoke("cmd_get_git_file_diff", { seed: props.seed, filePath: path });
+      setFiles(prev => prev.map(f => f.path === path ? { ...f, diff: diffText } : f));
+    } catch (e) { console.error("git_file_diff error:", e); }
+  }
+
+  // Auto-refresh every 3 seconds
+  const timer = setInterval(refresh, 3000);
+  onCleanup(() => clearInterval(timer));
+
+  // Initial load
+  refresh();
+
+  const countByChange = () => {
+    const c: Record<string, number> = {};
+    for (const f of files()) { c[f.change] = (c[f.change] || 0) + 1; }
+    return c;
+  };
+
+  return (
+    <div class="git-diff-panel">
+      <div class="git-diff-header" onClick={refresh}>
+        <span class="git-diff-title">Git Changes</span>
+        <Show when={loading()}>
+          <span class="git-diff-spinner">⟳</span>
+        </Show>
+        <span class="git-diff-summary">
+          <For each={Object.entries(countByChange())}>
+            {([change, count]) => (
+              <span class="git-diff-badge" style={`color: ${CHANGE_COLORS[change] || "var(--text-muted)"}`}>
+                {CHANGE_ICONS[change] || "?"}{count}
+              </span>
+            )}
+          </For>
+        </span>
+      </div>
+      <Show when={files().length > 0} fallback={
+        <div class="git-diff-empty">No changes (not a git repo or clean working tree)</div>
+      }>
+        <div class="git-diff-list">
+          <For each={files()}>
+            {(file) => (
+              <div class={`git-diff-card ${expanded().has(file.path) ? "expanded" : ""}`}>
+                <div class="git-diff-card-hd" onClick={() => toggle(file.path)}>
+                  <span class="git-diff-change-icon" style={`color: ${CHANGE_COLORS[file.change] || "var(--text-muted)"}`}>
+                    {CHANGE_ICONS[file.change] || "?"}
+                  </span>
+                  <span class="git-diff-card-path">{file.path}</span>
+                  <span class="git-diff-card-stats">
+                    <Show when={file.lines_added > 0 || file.lines_removed > 0}>
+                      <span class="git-diff-stat-add">+{file.lines_added}</span>
+                      <span class="git-diff-stat-del">-{file.lines_removed}</span>
+                    </Show>
+                  </span>
+                  <span class="git-diff-card-arrow">{expanded().has(file.path) ? "▼" : "▶"}</span>
+                </div>
+                <Show when={expanded().has(file.path)}>
+                  <div class="git-diff-card-body">
+                    <Show when={file.diff} fallback={
+                      <div class="git-diff-loading">Loading diff...</div>
+                    }>
+                      <pre class="git-diff-content">{file.diff}</pre>
+                    </Show>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+}

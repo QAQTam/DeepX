@@ -75,6 +75,14 @@
 .status-row-desc { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-row-time { font-size: 10px; color: var(--text-muted); flex-shrink: 0; font-family: var(--font-mono); margin-top: 2px; }
 .status-row-desc.mono { font-family: var(--font-mono); font-size: 10px; }
+.status-row-actions { display: flex; gap: 2px; flex-shrink: 0; margin-top: 1px; }
+.task-btn { padding: 1px 5px; border: none; border-radius: 3px; font-size: 11px; cursor: pointer; transition: background var(--transition), color var(--transition); line-height: 1.3; }
+.task-btn-cancel { background: transparent; color: var(--text-muted); }
+.task-btn-cancel:hover { background: var(--red); color: #fff; }
+.task-btn-delete { background: transparent; color: var(--text-muted); }
+.task-btn-delete:hover { background: var(--red); color: #fff; }
+.task-btn-ask { background: transparent; color: var(--text-muted); }
+.task-btn-ask:hover { background: var(--accent); color: #fff; }
 
 @media (max-width: 1000px) {
   .main-content { --panel-foot: 296px; }

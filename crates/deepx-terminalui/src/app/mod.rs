@@ -137,6 +137,7 @@ pub enum ChatRole {
 pub struct AskState {
     pub question: String,
     pub options: Vec<String>,
+    pub allow_custom: bool,
     pub selected: usize,
     pub custom_input: String,
 }
@@ -1073,6 +1074,7 @@ impl App {
                                 self.ask = Some(AskState {
                                     question,
                                     options,
+                                    allow_custom: payload.get("allow_custom").and_then(|v| v.as_bool()).unwrap_or(true),
                                     selected: 0,
                                     custom_input: String::new(),
                                 });

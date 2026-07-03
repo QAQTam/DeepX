@@ -16,7 +16,7 @@ export interface SessionInfo { seed: string; model: string; contextTokens: numbe
 export interface SessionMeta { seed: string; model: string; created_at: number; updated_at: number; message_count: number; last_summary: string; }
 export interface TaskInfo { id: string; subject: string; description: string; status: string; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
-export interface AskState { question: string; options: string[]; show: boolean; }
+export interface AskState { question: string; options: string[]; allow_custom: boolean; show: boolean; }
 export interface CodeDelta {
  lines_added: number;
  lines_removed: number;
@@ -54,7 +54,7 @@ export function createChatStore(seed: string) {
   const [tasks, setTasks] = createSignal<TaskInfo[]>([]);
   const [recentEdits, setRecentEdits] = createSignal<string[]>([]);
   const [activityLog, setActivityLog] = createSignal<ActivityEntry[]>([]);
-  const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], show: false });
+  const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], allow_custom: true, show: false });
   const [isCompacting, setIsCompacting] = createSignal(false);
 
   const [compactResult, setCompactResult] = createSignal<string | null>(null);
@@ -171,7 +171,7 @@ export function createChatStore(seed: string) {
       if (r.success && r.output.startsWith("[USER_QUERY] ")) {
         try {
           const json = JSON.parse(r.output.slice(13));
-          setAskState({ question: json.question || "", options: json.options || [], show: true });
+          setAskState({ question: json.question || "", options: json.options || [], allow_custom: json.allow_custom !== false, show: true });
         } catch {}
       }
     }
@@ -376,7 +376,7 @@ export function createChatStore(seed: string) {
   }
 
   async function submitAskAnswer(answer: string) {
-    setAskState({ question: "", options: [], show: false });
+    setAskState({ question: "", options: [], allow_custom: true, show: false });
     try {
       await invoke("cmd_send_message", { seed, text: answer });
     } catch (e) { console.error(e); }
@@ -384,5 +384,19 @@ export function createChatStore(seed: string) {
 
   function dismissAsk() { setAskState({ question: "", options: [], show: false }); }
 
- return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  async function submitTaskAction(action: "cancel" | "delete" | "ask", taskId: string, subject: string, _description: string) {
+    if (action === "ask") {
+      try {
+        await invoke("cmd_send_message", { seed, text: `Look at ${taskId}: ${subject}. Explain the implementation plan and current status in detail.` });
+      } catch (e) { console.error(e); }
+    } else {
+      const num = parseInt(taskId.replace("T", ""), 10);
+      if (isNaN(num)) return;
+      try {
+        await invoke("cmd_task_action", { seed, action, taskId: num });
+      } catch (e) { console.error(e); }
+    }
+  }
+
+ return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }
