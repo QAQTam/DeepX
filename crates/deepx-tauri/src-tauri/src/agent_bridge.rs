@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use tauri::{AppHandle, Emitter};
@@ -103,6 +104,7 @@ pub struct AgentInstance {
     seed: String,
     stdin: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Option<std::process::Child>>>,
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 /// Global registry of all running agent subprocesses, keyed by session seed.
@@ -465,11 +467,15 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
         let _ = app_handle.emit("agent-event", payload);
     });
 
-    Ok(AgentInstance {
+    let inst = AgentInstance {
         seed: seed.to_string(),
         stdin: Arc::new(Mutex::new(Box::new(stdin))),
         child: child_for_check,
-    })
+        shutdown_flag: Arc::new(AtomicBool::new(false)),
+    };
+    // Start heartbeat to auto-recover if agent dies
+    inst.spawn_heartbeat();
+    Ok(inst)
 }
 
 impl AgentRegistry {
@@ -592,6 +598,33 @@ impl AgentRegistry {
 }
 
 impl AgentInstance {
+    /// Spawn a background heartbeat thread that checks agent liveness every 10s.
+    /// If the agent process dies unexpectedly, triggers auto-respawn.
+    fn spawn_heartbeat(&self) {
+        let seed = self.seed.clone();
+        let child = self.child.clone();
+        let shutdown = self.shutdown_flag.clone();
+        std::thread::Builder::new()
+            .name(format!("hb-{}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                if shutdown.load(Ordering::Relaxed) { break; }
+                let is_dead = child.lock().ok()
+                    .and_then(|mut c| c.as_mut().and_then(|c| c.try_wait().ok()).flatten())
+                    .is_some();
+                if is_dead {
+                    log::warn!("[HEARTBEAT] agent {} died, auto-respawning",
+                        &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+                    let _ = ensure_agent(&seed);
+                }
+            })
+            .expect("failed to spawn heartbeat");
+    }
+
+    fn mark_shutdown(&self) {
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+    }
+
     fn send_shutdown(&self) -> Result<(), String> {
         let frame = Ui2Agent::Shutdown;
         let json = serde_json::to_string(&frame).map_err(|e| format!("serialize: {e}"))?;
@@ -604,6 +637,7 @@ impl AgentInstance {
     /// Send shutdown, kill the child process, and wait for it to exit.
     /// Designed to be called **outside** the registry lock.
     pub fn shutdown_and_wait(self) {
+        self.mark_shutdown();
         let seed = &self.seed[..self.seed.floor_char_boundary(self.seed.len().min(8))];
         let _ = self.send_shutdown();
         if let Ok(mut guard) = self.child.lock() {

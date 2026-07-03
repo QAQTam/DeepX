@@ -161,20 +161,19 @@ export default function App() {
       case "error": {
         const errMsg = (p.message ?? "Unknown error") as string;
         chat.handleError(errMsg);
-        // Show toast for agent disconnection
-        if (errMsg.includes("exited unexpectedly") || errMsg.includes("Agent process")) {
+        // Detect agent death: any message indicating the agent process is gone
+        const isAgentDead = /(exited|died|broken.pipe|killed|connection.*lost|agent.*(dead|gone|stopped))/i.test(errMsg);
+        if (isAgentDead) {
           toastCtrl.push(i18n.t().toast.agentLost, "error", true);
-        } else {
-          toastCtrl.push(errMsg, "error");
-        }
-        // If the error is about agent death, also trigger reconnect
-        if (errMsg.includes("exited unexpectedly")) {
+          // Auto-reconnect after agent death
           const seed = activeSeed();
           if (seed) {
             resumeSession(seed).then(() => {
               toastCtrl.push(i18n.t().toast.agentReconnected, "info");
             }).catch(() => {});
           }
+        } else {
+          toastCtrl.push(errMsg, "error");
         }
         break;
       }

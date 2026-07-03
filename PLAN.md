@@ -1,73 +1,59 @@
-# DeepX — Task & User Back Message Enhancement
+# DeepX — 子进程加固计划
 
-## 背景
+## 目标
 
-`ask_user` 工具通过 `[USER_QUERY] {...}` 标记实现 agent → 前端 → 用户 → agent 的闭环：
-- 工具返回 `[USER_QUERY] {"question":"...", "options":[...]}`
-- 前端 `handleToolResults` 截获 → AskDialog
-- 用户回答 → `cmd_send_message` → UserInput 帧发回 agent
+确保 Tauri 前端无论如何不崩溃。Agent 崩了可自动拉起，前端崩了用户看到死窗口。
 
-现扩展三个 task 交互功能。
+## 现状
 
----
-
-## Feature A: 用户取消 Task
-
-**触发**：StatusPanel 中 pending/in_progress task 旁出现 "✕" 按钮
-
-**流程**：
-1. 前端调用新 Tauri 命令 `cmd_task_action(seed, "cancel", taskId: u32)`
-2. Rust 后端直接修改 `sessions/{seed}/tasks-mem.md`（更新状态行）
-3. 同时向 agent 发送 `Ui2Agent::ToolCall { name:"task", action:"update", args:{id, status:"cancelled"} }`
-4. Agent 处理 tool call → 更新内存 → emit Dashboard → 前端刷新
-
-**风险**：低。工具调用在 agent 命令通道排队，busy 状态也不丢帧。
+| 已有 | 缺失 |
+|------|------|
+| panic hook 日志+flush | panic 后不 abort，进程可能僵死 |
+| agent 意外退出检测 + 自动重 spawn | **无 agent 心跳检测**，只能等写入失败才发现 |
+| 前端 Error 事件自动重连 | 重连仅匹配 "exited unexpectedly" 字符串，其他错误不触发 |
+| daemon 重启上限 | **subagent 僵尸进程不回收** |
+| agent loop catch_unwind | **Tauri 自身无 watchdog** |
 
 ---
 
-## Feature B: 用户删除 Task
+## Phase 1: 最小加固（不改架构）
 
-**触发**：StatusPanel 中已完成/已取消 task 旁出现 "🗑" 按钮
+### T1: panic hook 加 abort
+- 文件：`crates/deepx-tauri/src-tauri/src/main.rs`
+- 改动：在 panic hook 末尾加 `std::process::abort()`
+- 风险：无（崩了立刻死，好过僵死白屏）
 
-**流程**：
-1. `cmd_task_action(seed, "delete", taskId)`
-2. 从 `tasks-mem.md` 删除对应行
-3. 向 agent 发 `Ui2Agent::ToolCall { name:"task", action:"delete", args:{id} }`
+### T2: agent 心跳检测
+- 文件：`crates/deepx-tauri/src-tauri/src/agent_bridge.rs`
+- 改动：AgentInstance 加心跳线程，每 10s `try_wait` 检查 agent 存活，死了自动 `ensure_agent` 拉起
+- 风险：低（只读检查，不写）
 
-**风险**：低。
-
----
-
-## Feature C: 询问 Task
-
-**触发**：StatusPanel 中每个 task 旁出现 "?" 按钮
-
-**流程**：
-1. 前端直接 `cmd_send_message { seed, text: "Task T{id}: {subject}. 请详细说明实现方案和当前进度。" }`
-2. Agent 作为普通 UserInput 处理 → LLM 读取 task 上下文 → 生成回答
-
-**风险**：无（纯前端便利函数，不需新后端）。
+### T3: Error 事件泛化
+- 文件：`crates/deepx-tauri/src/App.tsx`
+- 改动：所有包含 "exit"/"broken pipe"/"died" 的 Error 都触发重连，不靠精确匹配
+- 风险：低
 
 ---
 
-## 需新增/修改
+## Phase 2: 深度加固
 
-### Rust 后端（`agent_bridge.rs`）
-- 新增 `cmd_task_action(seed, action, taskId)` — 读/写 tasks-mem.md + 发送 ToolCall 到 agent
+### T4: subagent 僵尸回收
+- 文件：`crates/deepx-tools/src/process_registry.rs`
+- 改动：ProcessRegistry 加容量上限（最多 50 个），超限时自动 kill 最老的
+- 风险：中（影响子代理并发上限）
 
-### 前端 TSX
-- `StatusPanel.tsx` — 每个 task row 加 3 个按钮（cancel / delete / ask）
-- `chat.ts` — 暴露 `submitTaskAction` 方法
+### T5: 崩溃 dump 捕获
+- 文件：`crates/deepx-tauri/src-tauri/src/main.rs`
+- 改动：panic hook 写 crash.json 到 data_dir（含 timestamp、panic 消息、调用栈）
+- 风险：低
 
-### 前端 CSS
-- `status-panel.css` — task 按钮样式
+### T6: Tauri window 关闭兜底
+- 文件：`crates/deepx-tauri/src-tauri/src/lib.rs`
+- 改动：已有 `WindowEvent::Destroyed → shutdown_all_agents()`，加超时保护：5s 内必须完成，否则 force-exit
+- 风险：低
 
 ---
 
 ## 执行顺序
 
-1. `cmd_task_action` Rust 实现
-2. 注册 Tauri 命令
-3. StatusPanel 按钮 + 样式
-4. chat store 集成
-5. 测试 agent busy 时 task 更新是否排队正确
+T1 → T2 → T3 → 编译验证 → commit

@@ -15,6 +15,8 @@ fn main() {
         eprintln!("[FATAL] panicked at {loc}: {msg}");
         log::error!("[FATAL] panicked at {loc}: {msg}");
         log::logger().flush();
+        // Abort immediately so the OS can restart us. A hung process is worse than a crash.
+        std::process::abort();
     }));
 
     // Capture full system PATH at process start, before Windows GUI subsystem
