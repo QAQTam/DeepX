@@ -382,7 +382,7 @@ export function createChatStore(seed: string) {
     } catch (e) { console.error(e); }
   }
 
-  function dismissAsk() { setAskState({ question: "", options: [], show: false }); }
+  function dismissAsk() { setAskState({ question: "", options: [], allow_custom: true, show: false }); }
 
   async function submitTaskAction(action: "cancel" | "delete" | "ask", taskId: string, subject: string, _description: string) {
     if (action === "ask") {
