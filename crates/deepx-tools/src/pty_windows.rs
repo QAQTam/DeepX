@@ -1,13 +1,12 @@
 //! Windows PTY backend via `conpty`.
 //!
-//! Uses `pwsh -Command` (stdin pipe) to avoid `-EncodedCommand` (Base64)
-//! which triggers Windows Defender false positives (Trojan:Win32/ClickFix).
-//! Variables and special characters are preserved via PTY stdin input.
+//! Uses `-EncodedCommand` (Base64 UTF-16LE) to bypass pwsh string parsing:
+//! variables ($HOME), special chars ({}/() etc.) are passed verbatim.
 
 use std::io;
-use std::io::Write as _;
 use std::process::Command;
 
+use base64::Engine as _;
 use super::ExitStatus;
 
 pub struct Imp {
@@ -63,11 +62,26 @@ impl Drop for Imp {
     }
 }
 
+/// Encode a command string for `pwsh -EncodedCommand`.
+/// PowerShell expects UTF-16LE bytes, then Base64.
+fn encode_pwsh_command(command: &str) -> String {
+    let utf16: Vec<u16> = command.encode_utf16().collect();
+    let bytes: Vec<u8> = utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
+    base64::engine::general_purpose::STANDARD.encode(&bytes)
+}
+
 pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> {
     let mut cmd = Command::new("pwsh");
-    // -Command - : read commands from stdin (avoids -EncodedCommand Defender FP).
-    cmd.args(["-NoLogo", "-NoProfile", "-Command", "-"]);
-    // Suppress console window flash.
+    // Prepend env-var overrides to the command: conpty discards the parent
+    // environment if ANY explicit env vars are set via Command::env().
+    // See conpty-0.7.0 src/process.rs:302-312 (environment_block_unicode).
+    let full_command = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $env:GIT_PAGER='cat'; $env:PAGER='cat'; $env:SYSTEMD_PAGER='cat'; {}",
+        command
+    );
+    let encoded = encode_pwsh_command(&full_command);
+    cmd.args(["-NoLogo", "-NoProfile", "-EncodedCommand", &encoded]);
+    // Suppress console window flash
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -81,30 +95,19 @@ pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> 
     let mut proc = conpty::Process::spawn(cmd)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    // Write the command to pwsh via PTY stdin.
-    // Prepend env-var overrides so pager calls don't block.
-    let full_command = format!(
-        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $env:GIT_PAGER='cat'; $env:PAGER='cat'; $env:SYSTEMD_PAGER='cat'; {}\n",
-        command
-    );
-    {
-        let mut stdin = proc.input()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        stdin.write_all(full_command.as_bytes())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        stdin.flush()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    }
-
     let output: Box<dyn io::Read + Send> = Box::new(
         proc.output()
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
     );
 
-    // No further stdin needed — command already written.
+    let input: Option<Box<dyn io::Write + Send>> = Some(Box::new(
+        proc.input()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+    ));
+
     Ok(super::PtyProcess {
         inner: Imp { proc, exit_cached: None, detached: false },
         output: Some(output),
-        input: None,
+        input,
     })
 }
