@@ -1230,6 +1230,61 @@ pub fn cmd_task_action(seed: String, action: String, taskId: u32) -> Result<(), 
     Ok(())
 }
 
+/// Get context composition stats from the last API request dump.
+/// Returns JSON breakdown: chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt (in chars).
+#[tauri::command]
+pub fn cmd_get_context_stats(seed: String) -> Result<String, String> {
+    let path = deepx_types::platform::data_dir().join("logs").join(format!("{}_api.json", seed));
+    let data: Vec<serde_json::Value> = if path.exists() {
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default()).unwrap_or_default()
+    } else {
+        return Ok(serde_json::json!({"messages":0,"chat_text":0,"thinking":0,"tool_calls":0,"tool_results":0,"tools_schema":0,"system_prompt":0}).to_string());
+    };
+    let last = match data.last() { Some(v) => v, None => return Ok("{}".into()) };
+    let req = match last.get("req") { Some(r) => r, None => return Ok("{}".into()) };
+    let msgs = req.get("messages").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+
+    let mut chat_text = 0u64;
+    let mut thinking = 0u64;
+    let mut tool_calls = 0u64;
+    let mut tool_results = 0u64;
+    let mut system_prompt = 0u64;
+    let mut thinking_blocks = 0u64;
+    let mut tool_call_blocks = 0u64;
+
+    for m in &msgs {
+        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        let content = m.get("content");
+        if role == "system" {
+            system_prompt += serde_json::to_string(m).unwrap_or_default().len() as u64;
+            continue;
+        }
+        if let Some(arr) = content.and_then(|c| c.as_array()) {
+            for c in arr {
+                if c.get("reasoning").is_some() { thinking_blocks += 1; thinking += serde_json::to_string(c).unwrap_or_default().len() as u64; }
+                if c.get("name").is_some() || c.get("type").and_then(|t| t.as_str()) == Some("tool_use") { tool_call_blocks += 1; tool_calls += serde_json::to_string(c).unwrap_or_default().len() as u64; }
+                if c.get("text").is_some() { chat_text += serde_json::to_string(c).unwrap_or_default().len() as u64; }
+            }
+        }
+        if role == "tool" {
+            tool_results += serde_json::to_string(m).unwrap_or_default().len() as u64;
+        }
+    }
+    let tools_schema = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null)).unwrap_or_default().len() as u64;
+
+    serde_json::to_string(&serde_json::json!({
+        "messages": msgs.len(),
+        "chat_text": chat_text,
+        "thinking": thinking,
+        "tool_calls": tool_calls,
+        "tool_results": tool_results,
+        "tools_schema": tools_schema,
+        "system_prompt": system_prompt,
+        "thinking_blocks": thinking_blocks,
+        "tool_call_blocks": tool_call_blocks,
+    })).map_err(|e| format!("serialize: {e}"))
+}
+
 /// Get aggregated token usage stats for the last N days.
 /// Returns JSON: { daily: [{date, prompt_tokens, completion_tokens, cache_hit, cache_miss, calls}], totals: {...} }
 #[tauri::command]

@@ -36,6 +36,7 @@ pub fn run() {
             agent_bridge::cmd_get_git_file_diff,
             agent_bridge::cmd_get_dashboard_data,
             agent_bridge::cmd_task_action,
+            agent_bridge::cmd_get_context_stats,
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {

@@ -799,27 +799,46 @@ impl Loop {
             turns_keeping: KEEP as u32,
         });
 
-        let contexts: Vec<String> = {
-            let all = self.agent.msg.build_context_for_gate("", &[]);
-            all.iter()
-                .filter(|m| m.role != "system")
-                .take(compact_count * 3) // rough: ~3 msgs per turn
-                .map(|m| {
-                    let text: String = m.content.iter().filter_map(|b| match b {
-                        deepx_types::ContentBlock::Text { text } => Some(text.clone()),
-                        deepx_types::ContentBlock::ToolUse { name, input, .. } =>
-                            Some(format!("[ToolCall {} args={}]", name, input)),
-                        deepx_types::ContentBlock::ToolResult { content, .. } =>
-                            Some(format!("[ToolResult {}]", &content[..content.floor_char_boundary(content.len().min(300))])),
-                        _ => None,
-                    }).collect::<Vec<_>>().join("\n");
-                    format!("[{}]: {}", m.role, &text[..text.floor_char_boundary(text.len().min(1000))])
-                })
-                .collect()
-        };
+        // Build stripped context: thinking removed, tool calls → one-liner, tool results → first line
+        let all = self.agent.msg.build_context_for_gate("", &[]);
+        let contexts: Vec<String> = all.iter()
+            .filter(|m| m.role != "system")
+            .take(compact_count * 3)
+            .map(|m| {
+                let text: String = m.content.iter().filter_map(|b| match b {
+                    deepx_types::ContentBlock::Text { text } => Some(text.clone()),
+                    deepx_types::ContentBlock::Reasoning { .. } => None,
+                    deepx_types::ContentBlock::ToolUse { name, input, .. } =>
+                        Some(format!("[Tool: {} {}]", name,
+                            serde_json::to_string(input).unwrap_or_default().chars().take(80).collect::<String>())),
+                    deepx_types::ContentBlock::ToolResult { content, .. } =>
+                        Some(format!("[Result: {}]",
+                            &content.lines().next().unwrap_or("").chars().take(100).collect::<String>())),
+                    _ => None,
+                }).collect::<Vec<_>>().join("\n");
+                format!("[{}]: {}", m.role, &text[..text.floor_char_boundary(text.len().min(800))])
+            })
+            .collect();
         if contexts.is_empty() { return; }
 
-        let prompt = util::build_compact_prompt(&contexts);
+        let prompt = format!(
+            "[COMPACT]\n\
+             Below is a stripped-down history of earlier conversation turns.\n\
+             Tool calls reduced to one-line summaries, thinking chains removed,\n\
+             tool outputs truncated to first line.\n\n\
+             Produce a concise summary preserving:\n\
+             - User's original goals and intents\n\
+             - Key decisions made\n\
+             - Which FILES were created/modified/deleted (with paths)\n\
+             - ERRORS encountered and resolutions\n\
+             - Unfinished TASKS still pending\n\
+             - Important facts learned (project structure, APIs, etc.)\n\n\
+             DO NOT include: verbatim code, full tool outputs, thinking chains.\n\
+             Format: bullet points, each <=120 chars, total <=2000 chars.\n\n\
+             --- HISTORY ---\n{}\n--- END HISTORY ---\n\nSummary:",
+            contexts.join("\n")
+        );
+
         let provider = deepx_gate::ProviderConfig::openai(
             &self.agent.config.base_url, &self.agent.config.api_key,
             &self.agent.config.model, None, None, None,
@@ -850,7 +869,7 @@ impl Loop {
             summary_chars: chars, turns_compacted: compact_count as u32,
         });
         self.emit_delta(Agent2Ui::ToolNotice {
-            message: format!("Compacted {} turns → {} chars summary", compact_count, chars),
+            message: format!("Compacted {} turns -> {} chars summary", compact_count, chars),
             level: "info".into(),
         });
         self.emit_dashboard();

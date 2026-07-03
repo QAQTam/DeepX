@@ -673,17 +673,37 @@ impl MessageStore {
     }
 
     /// Compact: keep `keep` recent turns in LLM context, skip older ones.
-    /// Replaces any prior compact messages with a single consolidated summary.
+    /// Inserts the summary as a user message with [Compacted] / [UserInput] markers
+    /// so the LLM treats it as past conversation context, not system instructions.
     pub fn apply_compact(&mut self, summary: &str, keep: usize) {
         let skip = self.turns.len().saturating_sub(keep);
         if skip == 0 { return; }
         self.compact_skip = skip;
+
+        // Capture the first user message from the compacted range
+        let first_user = self.turns.iter()
+            .take(skip)
+            .find_map(|t| t.user.content.iter().find_map(|b| {
+                if let deepx_types::ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
+            }))
+            .unwrap_or_default();
+
+        // Remove old compact markers
         self.system_messages.retain(|m| {
             !m.content.iter().any(|b| matches!(b, deepx_types::ContentBlock::Text { text } if text.starts_with("[COMPACT")))
         });
-        self.system_messages.push(Message::system(
-            &format!("[COMPACT {} turns] Summary of earlier conversation:\n{summary}", skip)
-        ));
+
+        // Insert as user message: summary first, then marker with first user input
+        let compact_text = format!(
+            "[Compacted {} turns]\n{}\n\n[UserInput]\n{}",
+            skip, summary.trim(), first_user
+        );
+        // Insert before the compacted turns (at position skip in the turns list)
+        // Actually, insert as system message that appears before the compacted turns.
+        // The build_context_for_gate skips turns[0..compact_skip], so we need the
+        // compact message to appear before the first kept turn.
+        // Inserting into system_messages achieves this — they come before all turns.
+        self.system_messages.push(Message::user(&compact_text));
     }
 }
 

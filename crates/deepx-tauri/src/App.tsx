@@ -11,6 +11,7 @@ import StatusPanel from "./components/StatusPanel";
 import GitDiffPanel from "./components/GitDiffPanel";
 import TokenChart from "./components/TokenChart";
 import "./styles/git-diff-panel.css";
+import "./styles/context-panel.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
