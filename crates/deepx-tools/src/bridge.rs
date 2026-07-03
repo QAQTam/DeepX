@@ -55,12 +55,10 @@ pub fn all_tools() -> Vec<ToolDef> {
 
 // ── Execute ──
 
+/// Execute a tool and return the result string (no progress streaming).
+/// Convenience wrapper around execute_tool_with_id_full.
 pub fn execute_tool(name: &str, action: &str, args: &str) -> String {
-    execute_tool_with_id(name, action, args, "")
-}
-
-pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: &str) -> String {
-    execute_tool_with_id_full(name, action, args, tool_call_id, None).content
+    execute_tool_with_id_full(name, action, args, "", None).content
 }
 
 /// Execute a tool and return the full result including any interrupt request.

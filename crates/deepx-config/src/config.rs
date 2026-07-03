@@ -1,6 +1,6 @@
 
 
-use deepx_types::{ConfigStore, PersistentConfig};
+use deepx_types::{ConfigStore, PersistentConfig, PersistentSubagentConfig};
 use std::collections::HashMap; // still used by profiles
 
 /// Subagent default configuration.
@@ -147,12 +147,14 @@ impl Config {
             if let Some(ref k) = pc.context7_api_key && !k.is_empty() { cfg.context7_api_key = Some(k.clone()); }
             if let Some(ref l) = pc.lang && !l.is_empty() { cfg.lang = Some(l.clone()); }
             // ── Subagent defaults ──
-            if let Some(ref m) = pc.subagent_model && !m.is_empty() { cfg.subagent.model = m.clone(); }
-            if let Some(ref u) = pc.subagent_base_url && !u.is_empty() { cfg.subagent.base_url = u.clone(); }
-            if let Some(ref k) = pc.subagent_api_key && !k.is_empty() { cfg.subagent.api_key = k.clone(); }
-            if let Some(mt) = pc.subagent_max_tokens { cfg.subagent.max_tokens = mt; }
-            if let Some(ts) = pc.subagent_timeout_secs { cfg.subagent.timeout_secs = ts; }
-            if let Some(ref tools) = pc.subagent_default_tools { cfg.subagent.default_tools = tools.clone(); }
+            if let Some(ref s) = pc.subagent {
+                if let Some(ref m) = s.model && !m.is_empty() { cfg.subagent.model = m.clone(); }
+                if let Some(ref u) = s.base_url && !u.is_empty() { cfg.subagent.base_url = u.clone(); }
+                if let Some(ref k) = s.api_key && !k.is_empty() { cfg.subagent.api_key = k.clone(); }
+                if let Some(mt) = s.max_tokens { cfg.subagent.max_tokens = mt; }
+                if let Some(ts) = s.timeout_secs { cfg.subagent.timeout_secs = ts; }
+                if let Some(ref tools) = s.default_tools { cfg.subagent.default_tools = tools.clone(); }
+            }
         }
 
         if !cfg.profiles.contains_key("default") {
@@ -189,12 +191,14 @@ impl Config {
             active_profile: Some(self.active_profile.clone()),
             lang: self.lang.clone(),
             context7_api_key: self.context7_api_key.clone(),
-            subagent_model: if self.subagent.model.is_empty() { None } else { Some(self.subagent.model.clone()) },
-            subagent_base_url: if self.subagent.base_url.is_empty() { None } else { Some(self.subagent.base_url.clone()) },
-            subagent_api_key: if self.subagent.api_key.is_empty() { None } else { Some(self.subagent.api_key.clone()) },
-            subagent_max_tokens: Some(self.subagent.max_tokens),
-            subagent_timeout_secs: Some(self.subagent.timeout_secs),
-            subagent_default_tools: if self.subagent.default_tools.is_empty() { None } else { Some(self.subagent.default_tools.clone()) },
+            subagent: Some(PersistentSubagentConfig {
+                model: if self.subagent.model.is_empty() { None } else { Some(self.subagent.model.clone()) },
+                base_url: if self.subagent.base_url.is_empty() { None } else { Some(self.subagent.base_url.clone()) },
+                api_key: if self.subagent.api_key.is_empty() { None } else { Some(self.subagent.api_key.clone()) },
+                max_tokens: Some(self.subagent.max_tokens),
+                timeout_secs: Some(self.subagent.timeout_secs),
+                default_tools: if self.subagent.default_tools.is_empty() { None } else { Some(self.subagent.default_tools.clone()) },
+            }),
         };
         if !store.save(&pc) {
             Err(format!("Failed to save config to {}", deepx_types::platform::config_path().display()))

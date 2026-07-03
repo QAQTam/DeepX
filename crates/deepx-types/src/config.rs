@@ -37,17 +37,24 @@ pub struct PersistentConfig {
 
     // ── Subagent defaults ──
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subagent_model: Option<String>,
+    pub subagent: Option<PersistentSubagentConfig>,
+}
+
+/// Persistence-friendly subagent config with all-Option fields.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PersistentSubagentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subagent_base_url: Option<String>,
+    pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subagent_api_key: Option<String>,
+    pub base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subagent_max_tokens: Option<u32>,
+    pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subagent_timeout_secs: Option<u64>,
+    pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subagent_default_tools: Option<Vec<String>>,
+    pub timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_tools: Option<Vec<String>>,
 }
 
 // ── Profile / Preferences ──

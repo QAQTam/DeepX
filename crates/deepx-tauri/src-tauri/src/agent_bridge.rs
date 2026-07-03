@@ -179,7 +179,6 @@ fn windows_reg_path() -> String {
         const HKEY_LOCAL_MACHINE: isize = -2147483646i64 as isize; // 0x80000002
         const HKEY_CURRENT_USER: isize = -2147483647i64 as isize;   // 0x80000001
         const KEY_READ: u32 = 0x20019;
-        const REG_EXPAND_SZ: u32 = 2;
         
         let mut result = String::new();
         
@@ -778,22 +777,26 @@ pub fn cmd_save_config(
     subagent_default_tools: Vec<String>,
 ) -> Result<(), String> {
     let mut cfg = deepx_config::Config::load().unwrap_or_default();
-    if !api_key.is_empty() { cfg.api_key = api_key; }
-    if !model.is_empty() { cfg.model = model; }
-    if !base_url.is_empty() { cfg.base_url = base_url; }
-    if !provider_id.is_empty() { cfg.provider_id = provider_id; }
-    if !endpoint.is_empty() { cfg.endpoint = endpoint; }
-    if max_tokens > 0 { cfg.max_tokens = max_tokens; }
-    if context_limit > 0 { cfg.context_limit = context_limit; }
-    if !reasoning_effort.is_empty() { cfg.reasoning_effort = reasoning_effort; }
+    let set_str = |dest: &mut String, src: &str| { if !src.is_empty() { *dest = src.to_string(); } };
+    let set_u32 = |dest: &mut u32, src: u32| { if src > 0 { *dest = src; } };
+    let set_u64 = |dest: &mut u64, src: u64| { if src > 0 { *dest = src; } };
+
+    set_str(&mut cfg.api_key, &api_key);
+    set_str(&mut cfg.model, &model);
+    set_str(&mut cfg.base_url, &base_url);
+    set_str(&mut cfg.provider_id, &provider_id);
+    set_str(&mut cfg.endpoint, &endpoint);
+    set_u32(&mut cfg.max_tokens, max_tokens);
+    set_u32(&mut cfg.context_limit, context_limit);
+    set_str(&mut cfg.reasoning_effort, &reasoning_effort);
     if !lang.is_empty() { cfg.lang = Some(lang); }
     if !context7_api_key.is_empty() { cfg.context7_api_key = Some(context7_api_key); }
-    // ── Subagent config ──
-    if !subagent_model.is_empty() { cfg.subagent.model = subagent_model; }
-    if !subagent_base_url.is_empty() { cfg.subagent.base_url = subagent_base_url; }
-    if !subagent_api_key.is_empty() { cfg.subagent.api_key = subagent_api_key; }
-    if subagent_max_tokens > 0 { cfg.subagent.max_tokens = subagent_max_tokens; }
-    if subagent_timeout_secs > 0 { cfg.subagent.timeout_secs = subagent_timeout_secs; }
+
+    set_str(&mut cfg.subagent.model, &subagent_model);
+    set_str(&mut cfg.subagent.base_url, &subagent_base_url);
+    set_str(&mut cfg.subagent.api_key, &subagent_api_key);
+    set_u32(&mut cfg.subagent.max_tokens, subagent_max_tokens);
+    set_u64(&mut cfg.subagent.timeout_secs, subagent_timeout_secs);
     if !subagent_default_tools.is_empty() { cfg.subagent.default_tools = subagent_default_tools; }
     cfg.save()?;
     // Broadcast reload to all running agents
@@ -976,23 +979,8 @@ pub fn cmd_get_code_stats(seed: String, days: u32) -> Result<String, String> {
 /// Convert epoch seconds to "YYYY-MM-DD" UTC.
 fn chrono_local_date_from_epoch(epoch_secs: u64) -> String {
     let total_days = (epoch_secs / 86400) as i64;
-    let (y, m, d) = civil_from_days(total_days);
+    let (y, m, d) = deepx_types::platform::civil_from_days(total_days);
     format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Convert days since Unix epoch to (year, month, day).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
 }
 
 /// Kill the agent for a session (when tab is closed but session not deleted).
@@ -1143,23 +1131,8 @@ fn days_before_today(days: u32) -> String {
         .unwrap_or_default();
     let total_secs = dur.as_secs().saturating_sub((days as u64) * 86400);
     let epoch_days = total_secs / 86400;
-    // Use same civil_from_days algorithm as in deepx-msglp
-    let (y, m, d) = civil_from_days_tauri(epoch_days as i64 + 719468);
+    let (y, m, d) = deepx_types::platform::civil_from_days(epoch_days as i64);
     format!("{y:04}-{m:02}-{d:02}")
-}
-
-fn civil_from_days_tauri(days: i64) -> (i64, u32, u32) {
-    let z = days;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
 }
 
 // ── Helpers ──

@@ -18,7 +18,6 @@ const MAX_RESTART_COUNT: u32 = 3;
 const IDLE_TIMEOUT_SECS: u64 = 1800;
 
 type Seed = String;
-type FrontendId = usize;
 
 /// An event from an agent process, tagged with its seed.
 #[derive(Debug, Clone)]
@@ -32,8 +31,6 @@ struct AgentHandle {
     process: Child,
     /// Stdin writer (daemon writes Ui2Agent frames here).
     stdin: Arc<Mutex<Box<dyn Write + Send>>>,
-    /// Channel receiver for Agent2Ui events from the reader thread.
-    event_rx: mpsc::Receiver<Agent2Ui>,
     last_activity: Instant,
     restart_count: u32,
 }
@@ -75,7 +72,7 @@ impl AgentPool {
                     if handle.restart_count > MAX_RESTART_COUNT {
                         return Err(format!("Agent {} exceeded max restart count", seed));
                     }
-                    drop(handle); // release borrow
+                    // release borrow
                     self.agents.remove(seed);
                     // Fall through to spawn
                 }
@@ -143,7 +140,6 @@ impl AgentPool {
         let handle = AgentHandle {
             process: child,
             stdin: Arc::new(Mutex::new(Box::new(stdin))),
-            event_rx: mpsc::channel().1, // dummy, unused
             last_activity: Instant::now(),
             restart_count: 0,
         };

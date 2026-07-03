@@ -256,12 +256,6 @@ impl Lang {
     pub fn t_menu_back(&self) -> &str {
         match self { Lang::En => "Esc back", Lang::Zh => "Esc 返回" }
     }
-    pub fn t_menu_close(&self) -> &str {
-        match self { Lang::En => " close  ", Lang::Zh => " 关闭  " }
-    }
-    pub fn t_menu_back_label(&self) -> &str {
-        match self { Lang::En => " back", Lang::Zh => " 返回" }
-    }
     pub fn t_menu_saved(&self) -> &str {
         match self {
             Lang::En => "Config saved.",
@@ -405,9 +399,6 @@ impl Lang {
 
     // ── General status ──
 
-    pub fn t_failed_agent(&self) -> &str {
-        match self { Lang::En => "Failed to start agent", Lang::Zh => "启动 Agent 失败" }
-    }
     pub fn t_config_saved(&self) -> &str {
         match self { Lang::En => "Config saved to", Lang::Zh => "配置已保存到" }
     }

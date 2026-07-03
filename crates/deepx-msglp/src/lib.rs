@@ -24,12 +24,13 @@ use agent::AgentState;
 mod lifecycle;
 mod dashboard;
 pub mod logger;
+pub mod util;
 #[cfg(windows)]
 mod toast_com;
+mod notification;
 use dashboard::{build_documents, build_recent_edits, build_tasks};
 use deepx_message::Effect;
 use deepx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
-use deepx_types::platform;
 
 /// Number of recent turns sent on session restore for incremental loading.
 const INITIAL_LOAD_COUNT: usize = 20;
@@ -104,254 +105,8 @@ pub struct Loop {
     /// The main loop checks this and exits gracefully.
     writer_dead: Arc<AtomicBool>,
     /// Dedicated notification thread to keep COM alive across notifications.
-    notify: NotificationThread,
+    notify: notification::NotificationThread,
 }
-
-/// Message sent to the dedicated notification thread.
-enum NotifyMessage {
-    /// Simple one-way toast.
-    Toast(String),
-    /// Toast with text input; response sent via the channel.
-    ToastWithInput {
-        body: String,
-        reply_tx: mpsc::Sender<Option<String>>,
-    },
-}
-
-/// Dedicated notification thread that keeps COM initialized across the
-/// process lifetime, avoiding FactoryCache use-after-free that occurs
-/// when transient threads initialize COM and exit, tearing down the STA.
-struct NotificationThread {
-    tx: mpsc::Sender<NotifyMessage>,
-    _thread: std::thread::JoinHandle<()>,
-}
-
-impl NotificationThread {
-    fn spawn() -> Self {
-        let (tx, rx) = mpsc::channel::<NotifyMessage>();
-        let thread = std::thread::Builder::new()
-            .name("deepx-notify".into())
-            .spawn(move || {
-                #[cfg(windows)]
-                unsafe {
-                    // COM initialized once on this persistent thread.
-                    let _ = windows::Win32::System::Com::CoInitializeEx(
-                        None,
-                        windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
-                    );
-                }
-                'outer: loop {
-                    // Drain all pending notification requests.
-                    let mut got_any = false;
-                    loop {
-                        match rx.try_recv() {
-                            Ok(NotifyMessage::Toast(body)) => {
-                                got_any = true;
-                                #[cfg(windows)]
-                                show_toast_windows(&body);
-                                #[cfg(not(windows))]
-                                let _ = &body;
-                            }
-                            Ok(NotifyMessage::ToastWithInput { body, reply_tx }) => {
-                                got_any = true;
-                                #[cfg(windows)]
-                                show_toast_with_input_windows(&body, reply_tx);
-                                #[cfg(not(windows))]
-                                {
-                                    let _ = &body;
-                                    let _ = reply_tx.send(None);
-                                }
-                            }
-                            Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                            Err(std::sync::mpsc::TryRecvError::Disconnected) => break 'outer,
-                        }
-                    }
-                    #[cfg(windows)]
-                    pump_com_messages();
-                    if !got_any {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
-                #[cfg(windows)]
-                unsafe {
-                    windows::Win32::System::Com::CoUninitialize();
-                }
-            })
-            .expect("failed to spawn notification thread");
-        Self { tx, _thread: thread }
-    }
-
-    /// Send a simple one-way toast notification.
-    fn notify(&self, body: String) {
-        let _ = self.tx.send(NotifyMessage::Toast(body));
-    }
-
-    /// Send an interactive toast with a text input box.
-    /// Returns a receiver that yields `Some(text)` when the user replies,
-    /// or `None` on timeout / dismiss.
-    fn notify_input(&self, body: String) -> mpsc::Receiver<Option<String>> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        let _ = self.tx.send(NotifyMessage::ToastWithInput { body, reply_tx });
-        reply_rx
-    }
-}
-
-#[cfg(windows)]
-fn ensure_aumid() -> &'static str {
-    use std::sync::OnceLock;
-    static AUMID: OnceLock<String> = OnceLock::new();
-    AUMID.get_or_init(|| {
-        // Set the AppUserModelID for this process (no shortcut needed).
-        // Works for toast notifications on Windows 7+.
-        let our_id = "DeepX";
-        unsafe {
-            let hr = windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
-                &windows::core::HSTRING::from(our_id),
-            );
-            log::info!("SetCurrentProcessExplicitAppUserModelID({our_id}) → {hr:?}");
-        }
-        // --- Revert to PowerShell fallback ---
-        // Creating a Start Menu shortcut requires IShellLinkW::SetAppUserModelID,
-        // which is not exposed by the windows crate (any version).
-        // The vtable-hack approach crashes (wrong slot offset / OS-dependent).
-        // TODO: create shortcut via alternative means.
-        let ps_id = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
-        log::info!("Using PowerShell AUMID for toast");
-        ps_id.to_string()
-    })
-}
-
-#[cfg(windows)]
-fn pump_com_messages() {
-    unsafe {
-        let mut msg: windows::Win32::UI::WindowsAndMessaging::MSG = std::mem::zeroed();
-        loop {
-            let has_msg = windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
-                &mut msg,
-                None,
-                0,
-                0,
-                windows::Win32::UI::WindowsAndMessaging::PM_REMOVE,
-            );
-            if !has_msg.as_bool() {
-                break;
-            }
-            windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
-            windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
-        }
-    }
-}
-
-#[cfg(windows)]
-fn show_toast_with_input_windows(body: &str, reply_tx: mpsc::Sender<Option<String>>) {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static TOAST_ID: AtomicU64 = AtomicU64::new(1);
-
-    // Register COM activator on first toast call.
-    toast_com::init();
-
-    // Generate a unique id for this toast activation.
-    let id = format!("deepx:{}", TOAST_ID.fetch_add(1, Ordering::Relaxed));
-
-    // Store reply channel so the COM callback can find it.
-    toast_com::push_pending(id.clone(), reply_tx);
-
-    let escaped = escape_xml(body);
-    let xml = format!(
-        "<toast duration=\"long\">\
-            <visual>\
-                <binding template=\"ToastGeneric\">\
-                    <text>DeepX</text>\
-                    <text>{}</text>\
-                </binding>\
-            </visual>\
-            <actions>\
-                <input id=\"reply\" type=\"text\" placeHolderContent=\"Type a reply...\" title=\"Reply\"/>\
-                <action content=\"Send\" arguments=\"{}\" hint-inputId=\"reply\" activationType=\"foreground\"/>\
-            </actions>\
-        </toast>",
-        escaped, id
-    );
-
-    let doc = match windows::Data::Xml::Dom::XmlDocument::new() {
-        Ok(d) => d,
-        Err(e) => { let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("XmlDocument::new failed: {e:?}"); return; }
-    };
-    if let Err(e) = doc.LoadXml(&windows::core::HSTRING::from(xml.as_str())) {
-        let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
-        log::error!("LoadXml failed: {e:?}");
-        return;
-    }
-    let toast = match windows::UI::Notifications::ToastNotification::CreateToastNotification(&doc) {
-        Ok(t) => t,
-        Err(e) => { let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("CreateToastNotification failed: {e:?}"); return; }
-    };
-
-    let notifier = match windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
-        &windows::core::HSTRING::from(ensure_aumid()),
-    ) {
-        Ok(n) => n,
-        Err(e) => { let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("CreateToastNotifierWithId failed: {e:?}"); return; }
-    };
-    if let Err(e) = notifier.Show(&toast) {
-        let _ = toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
-        log::error!("notifier.Show failed: {e:?}");
-        return;
-    }
-
-    // Toast shown.  reply_tx now lives in the COM callback's pending map.
-    // The caller's Receiver will get the reply (or timeout) independently.
-}
-
-#[cfg(windows)]
-fn show_toast_windows(body: &str) {
-    let aumid = ensure_aumid();
-    log::info!("show_toast: body_len={} aumid={aumid}", body.len());
-
-    let escaped = escape_xml(body);
-    let xml = format!(
-        "<toast duration=\"short\"><visual><binding template=\"ToastGeneric\"><text>DeepX</text><text>{}</text></binding></visual></toast>",
-        escaped
-    );
-
-    let doc = match windows::Data::Xml::Dom::XmlDocument::new() {
-        Ok(d) => d,
-        Err(e) => { log::error!("show_toast: XmlDocument::new failed: {e:?}"); return; }
-    };
-    if let Err(e) = doc.LoadXml(&windows::core::HSTRING::from(xml.as_str())) {
-        log::error!("show_toast: LoadXml failed: {e:?}");
-        return;
-    }
-    let toast = match windows::UI::Notifications::ToastNotification::CreateToastNotification(&doc) {
-        Ok(t) => t,
-        Err(e) => { log::error!("show_toast: CreateToastNotification failed: {e:?}"); return; }
-    };
-
-    // Always use CreateToastNotifierWithId — the parameterless variant
-    // may fail even when the AUMID was set successfully via SetCurrentProcessExplicitAppUserModelID.
-    let notifier = match windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
-        &windows::core::HSTRING::from(aumid),
-    ) {
-        Ok(n) => n,
-        Err(e) => { log::error!("show_toast: CreateToastNotifierWithId({aumid}) failed: {e:?}"); return; }
-    };
-
-    if let Err(e) = notifier.Show(&toast) {
-        log::error!("show_toast: Show failed: {e:?}");
-        return;
-    }
-    // Small delay helps the toast appear before the COM thread yields.
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    log::info!("show_toast: success");
-}
-
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 /// Extract file paths that a tool writes to (mutates).
 /// Returns empty vec for read-only and non-file tools.
 fn file_write_paths(tool_name: &str, args: &serde_json::Value) -> Vec<String> {
@@ -380,6 +135,47 @@ fn file_write_paths(tool_name: &str, args: &serde_json::Value) -> Vec<String> {
         _ => {}
     }
     paths
+}
+
+/// Detect same-file write conflicts among pending tools and group them
+/// into serial execution sets. Returns (serial_groups, serial_after_indices).
+fn resolve_write_conflicts(pending: &[deepx_message::PendingTool]) -> (Vec<Vec<usize>>, HashSet<usize>) {
+    let mut file_writers: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, tool) in pending.iter().enumerate() {
+        for path in file_write_paths(&tool.name, &tool.args) {
+            file_writers.entry(path).or_default().push(i);
+        }
+    }
+    let mut serial_groups: Vec<Vec<usize>> = Vec::new();
+    {
+        let mut visited = vec![false; pending.len()];
+        for indices in file_writers.values() {
+            if indices.is_empty() { continue; }
+            let rep = indices[0];
+            if visited[rep] { continue; }
+            let mut group_set: HashSet<usize> = HashSet::new();
+            let mut stack: Vec<usize> = indices.clone();
+            while let Some(idx) = stack.pop() {
+                if !group_set.insert(idx) { continue; }
+                visited[idx] = true;
+                for other in file_writers.values() {
+                    if other.contains(&idx) {
+                        for &oi in other {
+                            if !group_set.contains(&oi) { stack.push(oi); }
+                        }
+                    }
+                }
+            }
+            let mut group: Vec<usize> = group_set.into_iter().collect();
+            group.sort();
+            if group.len() > 1 { serial_groups.push(group); }
+        }
+    }
+    let mut serial_after: HashSet<usize> = HashSet::new();
+    for group in &serial_groups {
+        for &idx in &group[1..] { serial_after.insert(idx); }
+    }
+    (serial_groups, serial_after)
 }
 
 impl Loop {
@@ -479,7 +275,7 @@ impl Loop {
             pending_reload_config: false,
             code_stats: Vec::new(),
             writer_dead,
-            notify: NotificationThread::spawn(),
+            notify: notification::NotificationThread::spawn(),
         }
     }
 
@@ -606,7 +402,7 @@ impl Loop {
             Ui2Agent::CreateSession => { self.handle_create_session(); }
             Ui2Agent::ResumeSession { ref seed } => { self.handle_resume_session(seed); }
             Ui2Agent::LoadMoreTurns { ref before_turn_id, count } => {
-                let all_turns = build_turns_from_context(&self.agent);
+                let all_turns = util::build_turns_from_context(&self.agent);
                 let idx = all_turns.iter().position(|t| t.turn_id == *before_turn_id);
                 let end = idx.unwrap_or(all_turns.len());
                 let start = end.saturating_sub(count as usize);
@@ -753,6 +549,46 @@ impl Loop {
         self.flush_code_stats();
     }
 
+    /// Drain tool progress channel with batched emission (at most every 50ms).
+    /// Returns true if cancelled during drain.
+    fn drain_tool_progress(&mut self, progress_rx: std::sync::mpsc::Receiver<(String, String)>) -> bool {
+        log::info!("[AGENT] drain loop start");
+        let mut batches: HashMap<String, String> = HashMap::new();
+        let batch_interval = std::time::Duration::from_millis(50);
+        loop {
+            if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
+                log::info!("[AGENT] drain loop cancel");
+                return true;
+            }
+            match progress_rx.recv_timeout(batch_interval) {
+                Ok((tc_id, chunk)) => {
+                    batches.entry(tc_id).or_default().push_str(&chunk);
+                    while let Ok((tid, c)) = progress_rx.try_recv() {
+                        batches.entry(tid).or_default().push_str(&c);
+                    }
+                    for (tid, merged) in batches.drain() {
+                        log::info!("[AGENT] ExecProgress batch: {} {} chars", tid, merged.len());
+                        self.emit_delta(Agent2Ui::ExecProgress { tool_call_id: tid, chunk: merged });
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if !batches.is_empty() {
+                        for (tid, merged) in batches.drain() {
+                            self.emit_delta(Agent2Ui::ExecProgress { tool_call_id: tid, chunk: merged });
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    log::info!("[AGENT] drain loop disconnected");
+                    for (tid, merged) in batches.drain() {
+                        self.emit_delta(Agent2Ui::ExecProgress { tool_call_id: tid, chunk: merged });
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+
     fn handle_cancel(&mut self) {
         self.cancel.set();
         deepx_tools::CANCEL.store(true, Ordering::SeqCst);
@@ -781,7 +617,7 @@ impl Loop {
             self.agent.rebind_store();
             let current_seed = self.agent.session.seed.clone();
             if current_seed == seed {
-                let all_turns = build_turns_from_context(&self.agent);
+                let all_turns = util::build_turns_from_context(&self.agent);
                 let total = all_turns.len() as u32;
                 let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
                 let recent: Vec<_> = all_turns[start..].to_vec();
@@ -928,7 +764,7 @@ impl Loop {
             log::info!("[AGENT] UndoTurn — truncated, turns after: {}", self.agent.msg.turn_count());
             // Full rewrite needed — the JSONL on disk still has the truncated messages.
             self.agent.msg.snapshot_full(&self.agent.config.model, &self.agent.config.reasoning_effort);
-            let all_turns = build_turns_from_context(&self.agent);
+            let all_turns = util::build_turns_from_context(&self.agent);
             let total = all_turns.len() as u32;
             let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
             let recent: Vec<_> = all_turns[start..].to_vec();
@@ -983,7 +819,7 @@ impl Loop {
         };
         if contexts.is_empty() { return; }
 
-        let prompt = build_compact_prompt(&contexts);
+        let prompt = util::build_compact_prompt(&contexts);
         let provider = deepx_gate::ProviderConfig::openai(
             &self.agent.config.base_url, &self.agent.config.api_key,
             &self.agent.config.model, None, None, None,
@@ -1240,11 +1076,11 @@ impl Loop {
                 break;
             }
 
-            let parsed = parse_tool_calls_from_response(&content, &reasoning, &tool_calls_raw, &self.agent);
-            let assistant_msg = build_assistant_message(&content, &reasoning, &parsed);
+            let parsed = util::parse_tool_calls_from_response(&content, &reasoning, &tool_calls_raw, &self.agent);
+            let assistant_msg = util::build_assistant_message(&content, &reasoning, &parsed);
             let effect = self.agent.msg.push_assistant(assistant_msg.clone());
 
-            emit_round_complete(&self.event_tx, &turn_id, round_num, &assistant_msg, &content, &reasoning, &parsed);
+            util::emit_round_complete(&self.event_tx, &turn_id, round_num, &assistant_msg, &content, &reasoning, &parsed);
 
             match effect {
                 Effect::None => {
@@ -1253,45 +1089,7 @@ impl Loop {
                     // Threaded tool execution with real-time progress streaming
                     let pending = self.agent.msg.get_last_step_pending();
                     if !pending.is_empty() {
-                        // ── Conflict detection: same-file writes must be serialized ──
-                        // Build a map: file_path → tool indices that write to it
-                        let mut file_writers: HashMap<String, Vec<usize>> = HashMap::new();
-                        for (i, tool) in pending.iter().enumerate() {
-                            for path in file_write_paths(&tool.name, &tool.args) {
-                                file_writers.entry(path).or_default().push(i);
-                            }
-                        }
-                        // Merge overlapping groups via union-find over tool indices
-                        let mut serial_groups: Vec<Vec<usize>> = Vec::new();
-                        {
-                            let mut visited = vec![false; pending.len()];
-                            for indices in file_writers.values() {
-                                if indices.is_empty() { continue; }
-                                let rep = indices[0];
-                                if visited[rep] { continue; }
-                                let mut group_set: HashSet<usize> = HashSet::new();
-                                let mut stack: Vec<usize> = indices.clone();
-                                while let Some(idx) = stack.pop() {
-                                    if !group_set.insert(idx) { continue; }
-                                    visited[idx] = true;
-                                    for other in file_writers.values() {
-                                        if other.contains(&idx) {
-                                            for &oi in other {
-                                                if !group_set.contains(&oi) { stack.push(oi); }
-                                            }
-                                        }
-                                    }
-                                }
-                                let mut group: Vec<usize> = group_set.into_iter().collect();
-                                group.sort();
-                                if group.len() > 1 { serial_groups.push(group); }
-                            }
-                        }
-                        // Tools that must run after their group's first tool
-                        let mut serial_after: HashSet<usize> = HashSet::new();
-                        for group in &serial_groups {
-                            for &idx in &group[1..] { serial_after.insert(idx); }
-                        }
+                        let (serial_groups, serial_after) = resolve_write_conflicts(&pending);
 
                         let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(String, String)>();
                         // Track (tc_id, JoinHandle) so we can identify panicked threads.
@@ -1317,62 +1115,11 @@ impl Loop {
                         }
                         drop(progress_tx); // close sender when all threads drop their clones
 
-                        // Drain progress while tools run (with cancel check)
-                        // Batch chunks per tool_call_id, emit at most every 50ms
-                        // to avoid flooding the frontend with per-line re-renders.
-                        log::info!("[AGENT] drain loop start");
-                        let mut batches: HashMap<String, String> = HashMap::new();
-                        let batch_interval = std::time::Duration::from_millis(50);
-                        let cancelled = loop {
-                            if self.cancel.is_set() || deepx_tools::CANCEL.load(Ordering::SeqCst) {
-                                log::info!("[AGENT] drain loop cancel");
-                                break true;
-                            }
-                            match progress_rx.recv_timeout(batch_interval) {
-                                Ok((tc_id, chunk)) => {
-                                    batches.entry(tc_id).or_default().push_str(&chunk);
-                                    // Keep draining any additional ready chunks without blocking
-                                    while let Ok((tid, c)) = progress_rx.try_recv() {
-                                        batches.entry(tid).or_default().push_str(&c);
-                                    }
-                                    // Flush all accumulated batches
-                                    for (tid, merged) in batches.drain() {
-                                        log::info!("[AGENT] ExecProgress batch: {} {} chars", tid, merged.len());
-                                self.emit_delta(Agent2Ui::ExecProgress {
-                                            tool_call_id: tid,
-                                            chunk: merged,
-                                        });
-                                    }
-                                }
-                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                    // No new data in 50ms — flush any pending batches
-                                    if !batches.is_empty() {
-                                        for (tid, merged) in batches.drain() {
-                                    self.emit_delta(Agent2Ui::ExecProgress {
-                                                tool_call_id: tid,
-                                                chunk: merged,
-                                            });
-                                        }
-                                    }
-                                    continue;
-                                }
-                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                    log::info!("[AGENT] drain loop disconnected");
-                                    // Flush final batches
-                                    for (tid, merged) in batches.drain() {
-                                self.emit_delta(Agent2Ui::ExecProgress {
-                                            tool_call_id: tid,
-                                            chunk: merged,
-                                        });
-                                    }
-                                    break false;
-                                }
-                            }
-                        };
+                        let cancelled = self.drain_tool_progress(progress_rx);
 
                         if cancelled {
                             log::info!("[AGENT] cancelled, pushing placeholder results + background reaper");
-                            let ts = chrono_local_datetime();
+                            let ts = util::chrono_local_datetime();
                             // Push placeholder results so the store doesn't get stuck
                             for (tc_id, _tool_name) in &tool_infos {
                                 self.agent.msg.push_tool_result_direct(tc_id, &format!("[timeis: {ts}]\n[CANCELLED]"));
@@ -1388,7 +1135,7 @@ impl Loop {
                                 }
                             });
                         } else {
-                            let ts = chrono_local_datetime();
+                            let ts = util::chrono_local_datetime();
                             for (tc_id, h) in handles {
                                 match h.join() {
                                     Ok((_id, content, _success, code_delta)) => {
@@ -1417,7 +1164,7 @@ impl Loop {
 
                         // ── Execute serialized follow-up tools (same-file write conflicts) ──
                         if !serial_groups.is_empty() {
-                            let ts = chrono_local_datetime();
+                            let ts = util::chrono_local_datetime();
                             for group in &serial_groups {
                                 for &idx in &group[1..] {
                                     let tool = &pending[idx];
@@ -1488,7 +1235,7 @@ impl Loop {
 
             // Persist per-turn token usage for dashboard statistics
             if let Some(ref usage) = last_usage {
-                record_token_usage(usage, &self.agent.config.model);
+                util::record_token_usage(usage, &self.agent.config.model);
             }
 
             self.emit(Agent2Ui::TurnEnd {
@@ -1549,258 +1296,3 @@ impl Loop {
     }
 }
 
-// ═══════════════════════════════════════════════════════
-// Helper functions
-// ═══════════════════════════════════════════════════════
-
-fn parse_tool_calls_from_response(
-    content: &str, _reasoning: &str, tool_calls_raw: &serde_json::Value,
-    agent: &AgentState,
-) -> Vec<deepx_types::ToolCall> {
-    let mut parsed = deepx_gate::tool_parser::parse_tool_calls(tool_calls_raw);
-    if parsed.is_empty() {
-        let stripped = deepx_gate::tool_parser::strip_fenced_code(content);
-        if deepx_gate::tool_parser::has_dsml(&stripped) {
-            let (_, dsml) = deepx_gate::tool_parser::parse_dsml_tool_calls(&stripped, &agent.tool_defs);
-            if !dsml.is_empty() { parsed = dsml; }
-        }
-        if parsed.is_empty() && has_xml(content) {
-            let names: Vec<String> = agent.tool_defs.iter().map(|t| t.function.name.clone()).collect();
-            let stripped2 = deepx_gate::tool_parser::strip_fenced_code(content);
-            let (_, xml) = deepx_gate::tool_parser::parse_xml_tool_calls(&stripped2, &names);
-            if !xml.is_empty() { parsed = xml; }
-        }
-    }
-    parsed
-}
-
-fn has_xml(s: &str) -> bool {
-    s.contains("<tool_use>") || s.contains("<invoke ") || s.contains("<tool_calls>")
-}
-
-fn build_assistant_message(
-    content: &str, reasoning: &str, parsed: &[deepx_types::ToolCall],
-) -> deepx_types::Message {
-    use deepx_types::{ContentBlock, Message};
-    let mut blocks = Vec::new();
-    if !reasoning.is_empty() {
-        blocks.push(ContentBlock::Reasoning { reasoning: reasoning.to_string() });
-    }
-    if !content.is_empty() {
-        blocks.push(ContentBlock::Text { text: content.to_string() });
-    }
-    for tc in parsed {
-        let input: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-        blocks.push(ContentBlock::ToolUse { id: tc.id.clone(), name: tc.function.name.clone(), input });
-    }
-    Message { msg_id: None, role: "assistant".into(), name: None, content: blocks }
-}
-
-/// Extract a short human-readable display string from a tool call's arguments.
-fn format_tool_args_display(name: &str, input: &serde_json::Value) -> String {
-    // Try action field first (for namespace-style tools)
-    let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    let display_name = if action.is_empty() { name.to_string() } else { format!("{}/{}", name, action) };
-
-    match name {
-        "exec" => input.get("command")
-            .and_then(|v| v.as_str())
-            .map(|c| c.chars().take(80).collect())
-            .unwrap_or(display_name),
-        "file" => {
-            // Show path/pattern based on action
-            let primary = match action {
-                "search" => input.get("pattern"),
-                _ => input.get("path"),
-            };
-            primary.and_then(|v| v.as_str())
-                .map(|p| format!("{} {}", action, p.chars().take(60).collect::<String>()))
-                .unwrap_or(display_name)
-        }
-        "task" => input.get("subject")
-            .or_else(|| input.get("status"))
-            .and_then(|v| v.as_str())
-            .map(|s| format!("{}/{}", action, s.chars().take(60).collect::<String>()))
-            .unwrap_or(display_name),
-        "web" => input.get("url")
-            .or_else(|| input.get("query"))
-            .or_else(|| input.get("name"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.chars().take(80).collect())
-            .unwrap_or(display_name),
-        "process" => input.get("id")
-            .and_then(|v| v.as_u64())
-            .map(|id| format!("{}/{}", action, id))
-            .unwrap_or(display_name),
-        "explore" => input.get("path")
-            .and_then(|v| v.as_str())
-            .map(|p| p.to_string())
-            .unwrap_or(display_name),
-        "ask_user" => input.get("question")
-            .and_then(|v| v.as_str())
-            .map(|q| q.chars().take(60).collect())
-            .unwrap_or(display_name),
-        _ => display_name,
-    }
-}
-
-fn emit_round_complete(
-    event_tx: &mpsc::SyncSender<Agent2Ui>,
-    turn_id: &str, round_num: u32, assistant_msg: &deepx_types::Message,
-    _content: &str, _reasoning: &str, _parsed: &[deepx_types::ToolCall],
-) {
-    use deepx_types::ContentBlock;
-    let mut blocks = Vec::new();
-    let mut tool_calls = Vec::new();
-    for cb in &assistant_msg.content {
-        match cb {
-            ContentBlock::Reasoning { reasoning } if !reasoning.is_empty() => {
-                blocks.push(deepx_proto::RoundBlock::Reasoning { content: reasoning.clone() });
-            }
-            ContentBlock::Text { text } if !text.is_empty() => {
-                blocks.push(deepx_proto::RoundBlock::Text { content: text.clone() });
-            }
-            ContentBlock::ToolUse { id, name, input } => {
-                let display = format_tool_args_display(name, input);
-                tool_calls.push(deepx_proto::ToolCallDef {
-                    id: id.clone(), name: name.clone(),
-                    args_display: display.clone(), args_json: input.to_string(),
-                });
-                blocks.push(deepx_proto::RoundBlock::Tool {
-                    card: deepx_proto::ToolCallDef {
-                        id: id.clone(), name: name.clone(),
-                        args_display: display, args_json: input.to_string(),
-                    },
-                });
-            }
-            _ => {}
-        }
-    }
-    let _ = event_tx.send(Agent2Ui::RoundComplete {
-        turn_id: turn_id.into(),
-        round_num,
-        thinking: if _reasoning.is_empty() { None } else { Some(_reasoning.into()) },
-        answer: if _content.is_empty() { None } else { Some(_content.into()) },
-        tool_calls: tool_calls.clone(),
-        blocks,
-        is_final: tool_calls.is_empty(),
-    });
-}
-
-fn build_turns_from_context(agent: &AgentState) -> Vec<deepx_proto::TurnData> {
-    use deepx_types::ContentBlock;
-    let mut turns = Vec::new();
-    for (ti, turn) in agent.msg.turns().iter().enumerate() {
-        let mut rounds = Vec::new();
-        for (ri, step) in turn.steps.iter().enumerate() {
-            let thinking = step.assistant.content.iter().find_map(|b| {
-                if let ContentBlock::Reasoning { reasoning } = b { Some(reasoning.clone()) } else { None }
-            });
-            let answer = step.assistant.content.iter().find_map(|b| {
-                if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
-            });
-            let tcs: Vec<deepx_proto::ToolCallDef> = step.assistant.content.iter().filter_map(|b| {
-                if let ContentBlock::ToolUse { id, name, input } = b {
-                    Some(deepx_proto::ToolCallDef {
-                        id: id.clone(), name: name.clone(),
-                        args_display: name.clone(), args_json: input.to_string(),
-                    })
-                } else { None }
-            }).collect();
-            let trs: Vec<deepx_proto::ToolResultDef> = step.tool_results.iter().flat_map(|msg| {
-                msg.content.iter().filter_map(|b| {
-                    if let ContentBlock::ToolResult { tool_use_id, content } = b {
-                        Some(deepx_proto::ToolResultDef {
-                            tool_call_id: tool_use_id.clone(),
-                            output: content.clone(), success: true, file: None,
-                        })
-                    } else { None }
-                })
-            }).collect();
-            rounds.push(deepx_proto::RoundData {
-                round_num: ri as u32, thinking, answer, tool_calls: tcs, tool_results: trs,
-            });
-        }
-        let user_text = turn.user.content.iter().find_map(|b| {
-            if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
-        }).unwrap_or_default();
-        turns.push(deepx_proto::TurnData {
-            turn_id: format!("t{}", ti + 1), user_text, rounds,
-        });
-    }
-    turns
-}
-
-fn build_compact_prompt(contexts: &[String]) -> String {
-    let conv = contexts.join("\n");
-    format!(
-        "Summarize this conversation history into a compact summary.\n\
-        Keep: user intents, operations performed (tool calls + results), files changed, unfinished tasks.\n\
-        Drop: verbatim code, full tool outputs, thinking details.\n\
-        Use concise bullet points under 1500 characters.\n\n\
-        {}\n\nSummary:", conv
-    )
-}
-
-/// Append per-turn token usage to `token_stats.jsonl` for dashboard aggregation.
-fn record_token_usage(usage: &deepx_types::UsageInfo, model: &str) {
-    use std::io::Write;
-    let dir = platform::data_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("token_stats.jsonl");
-    let today = chrono_local_date();
-    let line = serde_json::json!({
-        "date": today,
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-        "cache_hit": usage.prompt_cache_hit_tokens,
-        "cache_miss": usage.prompt_cache_miss_tokens,
-        "model": model,
-    });
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "{}", serde_json::to_string(&line).unwrap_or_default());
-    }
-}
-
-/// Return today's date as "YYYY-MM-DD" (UTC+8).
-pub(crate) fn chrono_local_date() -> String {
-    let dur = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    // UTC+8 offset
-    let secs = dur.as_secs() + 8 * 3600;
-    let days = secs / 86400;
-    let (y, m, d) = civil_from_days(days as i64);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Return current time as "UTC+8 YYYY-MM-DD HH:MM".
-pub(crate) fn chrono_local_datetime() -> String {
-    let dur = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    // UTC+8 offset
-    let secs = dur.as_secs() + 8 * 3600;
-    let days = secs / 86400;
-    let day_secs = secs % 86400;
-    let hours = day_secs / 3600;
-    let minutes = (day_secs % 3600) / 60;
-    let (y, m, d) = civil_from_days(days as i64);
-    format!("UTC+8 {y:04}-{m:02}-{d:02} {hours:02}:{minutes:02}")
-}
-
-/// Convert days since epoch 0000-01-01 to (year, month, day).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    // Algorithm from Howard Hinnant
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}

@@ -570,11 +570,11 @@ fn run_chat(
                     while text.contains("  ") { text = text.replace("  ", " "); }
                     let text = text.trim();
                     const MAX_INPUT: usize = 10_000;
-                    let available = MAX_INPUT.saturating_sub(app.input.len());
+                    let available = MAX_INPUT.saturating_sub(app.input_state.input.len());
                     if available == 0 { continue; }
                     let text = if text.len() > available { &text[..available] } else { text };
-                    app.input.insert_str(app.cursor, text);
-                    app.cursor += text.len();
+                    app.input_state.input.insert_str(app.input_state.cursor, text);
+                    app.input_state.cursor += text.len();
                     had_input = true;
                 }
                 Event::Key(key) => {
@@ -608,21 +608,21 @@ fn run_chat(
                     (_, KeyCode::Char(c)) => { ask.custom_input.push(c); }
                     _ => {}
                 }
-            } else if app.show_help {
+            } else if app.visibility.show_help {
                 // Help overlay
                 match (key.modifiers, key.code) {
-                    (_, KeyCode::Char('?')) | (_, KeyCode::Esc) => { app.show_help = false; }
+                    (_, KeyCode::Char('?')) | (_, KeyCode::Esc) => { app.visibility.show_help = false; }
                     _ => {}
                 }
             } else {
                 // Normal chat keys
                 match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Char('?')) => {
-                    app.show_help = !app.show_help;
+                    app.visibility.show_help = !app.visibility.show_help;
                     app.scroll_offset = 0;
                 }
                 (KeyModifiers::NONE, KeyCode::F(6)) => {
-                    app.show_thinking = !app.show_thinking;
+                    app.visibility.show_thinking = !app.visibility.show_thinking;
                     app.scroll_offset = 0;
                 }
                 (_, KeyCode::F(10)) => {
@@ -632,10 +632,10 @@ fn run_chat(
                     send(tui_tx, &deepx_proto::Ui2Agent::ReloadConfig);
                 }
                 (KeyModifiers::NONE, KeyCode::F(12)) => {
-                    app.show_debug = !app.show_debug;
+                    app.visibility.show_debug = !app.visibility.show_debug;
                 }
                 (KeyModifiers::NONE, KeyCode::F(9)) => {
-                    app.show_tasks = !app.show_tasks;
+                    app.visibility.show_tasks = !app.visibility.show_tasks;
                 }
                 (KeyModifiers::NONE, KeyCode::F(11)) => {
                     // Toggle detail pane
@@ -643,7 +643,7 @@ fn run_chat(
                     app.message_version = app.message_version.wrapping_add(1);
                 }
                 (KeyModifiers::NONE, KeyCode::F(8)) => {
-                    app.show_context = !app.show_context;
+                    app.visibility.show_context = !app.visibility.show_context;
                 }
                 (KeyModifiers::CONTROL, KeyCode::Char('c'))
                 | (_, KeyCode::F(3)) => return Ok(()),
@@ -654,23 +654,23 @@ fn run_chat(
                     app.status = app.setup.lang.t_chat_cancelled().to_string();
                 }
                 (KeyModifiers::CONTROL, KeyCode::Enter) => {
-                    app.input.insert(app.cursor, '\n');
-                    app.cursor += 1;
+                    app.input_state.input.insert(app.input_state.cursor, '\n');
+                    app.input_state.cursor += 1;
                 }
                 (_, KeyCode::Enter) => {
                     if agent_dead || app.busy { continue; }
-                    let text = app.input.drain(..).collect::<String>();
-                    app.cursor = 0;
-                    app.history_idx = None;
-                    app.draft_input.clear();
+                    let text = app.input_state.input.drain(..).collect::<String>();
+                    app.input_state.cursor = 0;
+                    app.input_state.history_idx = None;
+                    app.input_state.draft_input.clear();
                     if !text.trim().is_empty() {
                         // Dedup: don't push identical consecutive entries
-                        if app.input_history.last().map_or(true, |last| last != &text) {
-                            app.input_history.push(text.clone());
+                        if app.input_state.input_history.last().map_or(true, |last| last != &text) {
+                            app.input_state.input_history.push(text.clone());
                         }
                         // Cap history to 200 entries
-                        if app.input_history.len() > 200 {
-                            app.input_history.remove(0);
+                        if app.input_state.input_history.len() > 200 {
+                            app.input_state.input_history.remove(0);
                         }
                         app.status = app.setup.lang.t_chat_thinking().to_string();
                         app.busy = true;
@@ -678,50 +678,50 @@ fn run_chat(
                     }
                 }
                 (_, KeyCode::Backspace) => {
-                    if app.cursor > 0 {
-                        if let Some((idx, _)) = app.input[..app.cursor].char_indices().rev().next() {
-                            app.input.remove(idx);
-                            app.cursor = idx;
+                    if app.input_state.cursor > 0 {
+                        if let Some((idx, _)) = app.input_state.input[..app.input_state.cursor].char_indices().rev().next() {
+                            app.input_state.input.remove(idx);
+                            app.input_state.cursor = idx;
                         }
                     }
                 }
                 (_, KeyCode::Delete) => {
-                    if app.cursor < app.input.len() {
-                        if let Some((_, _)) = app.input[app.cursor..].char_indices().next() {
-                            app.input.remove(app.cursor);
+                    if app.input_state.cursor < app.input_state.input.len() {
+                        if let Some((_, _)) = app.input_state.input[app.input_state.cursor..].char_indices().next() {
+                            app.input_state.input.remove(app.input_state.cursor);
                         }
                     }
                 }
                 (_, KeyCode::Left) => {
-                    if app.cursor > 0 {
-                        if let Some((idx, _)) = app.input[..app.cursor].char_indices().rev().next() {
-                            app.cursor = idx;
+                    if app.input_state.cursor > 0 {
+                        if let Some((idx, _)) = app.input_state.input[..app.input_state.cursor].char_indices().rev().next() {
+                            app.input_state.cursor = idx;
                         } else {
-                            app.cursor = 0;
+                            app.input_state.cursor = 0;
                         }
                     }
                 }
                 (_, KeyCode::Right) => {
-                    if app.cursor < app.input.len() {
-                        if let Some((idx, _)) = app.input[app.cursor..].char_indices().nth(1) {
-                            app.cursor = app.cursor + idx;
+                    if app.input_state.cursor < app.input_state.input.len() {
+                        if let Some((idx, _)) = app.input_state.input[app.input_state.cursor..].char_indices().nth(1) {
+                            app.input_state.cursor = app.input_state.cursor + idx;
                         } else {
-                            app.cursor = app.input.len();
+                            app.input_state.cursor = app.input_state.input.len();
                         }
                     }
                 }
-                (_, KeyCode::Home) => { app.cursor = 0; }
-                (_, KeyCode::End) => { app.cursor = app.input.len(); }
+                (_, KeyCode::Home) => { app.input_state.cursor = 0; }
+                (_, KeyCode::End) => { app.input_state.cursor = app.input_state.input.len(); }
                 (_, KeyCode::Char(c)) => {
                     const MAX_INPUT: usize = 10_000;
-                    if app.input.len() >= MAX_INPUT { continue; }
+                    if app.input_state.input.len() >= MAX_INPUT { continue; }
                     // Typing exits history browse mode
-                    if app.history_idx.is_some() {
-                        app.history_idx = None;
-                        app.draft_input.clear();
+                    if app.input_state.history_idx.is_some() {
+                        app.input_state.history_idx = None;
+                        app.input_state.draft_input.clear();
                     }
-                    app.input.insert(app.cursor, c);
-                    app.cursor += c.len_utf8();
+                    app.input_state.input.insert(app.input_state.cursor, c);
+                    app.input_state.cursor += c.len_utf8();
                 }
                 (KeyModifiers::SHIFT, KeyCode::Up) => {
                     if let Some(ref mut pane) = app.detail_pane {
@@ -749,17 +749,17 @@ fn run_chat(
                 }
                 (_, KeyCode::Up) => {
                     // If cursor is on the first line of input, browse history
-                    let cursor_line = app.input[..app.cursor].chars().filter(|&c| c == '\n').count();
-                    if cursor_line == 0 && !app.input_history.is_empty() {
-                        if app.history_idx.is_none() {
-                            app.draft_input = app.input.clone();
-                            app.history_idx = Some(app.input_history.len() - 1);
-                        } else if let Some(idx) = app.history_idx {
-                            if idx > 0 { app.history_idx = Some(idx - 1); }
+                    let cursor_line = app.input_state.input[..app.input_state.cursor].chars().filter(|&c| c == '\n').count();
+                    if cursor_line == 0 && !app.input_state.input_history.is_empty() {
+                        if app.input_state.history_idx.is_none() {
+                            app.input_state.draft_input = app.input_state.input.clone();
+                            app.input_state.history_idx = Some(app.input_state.input_history.len() - 1);
+                        } else if let Some(idx) = app.input_state.history_idx {
+                            if idx > 0 { app.input_state.history_idx = Some(idx - 1); }
                         }
-                        if let Some(idx) = app.history_idx {
-                            app.input = app.input_history[idx].clone();
-                            app.cursor = app.input.len();
+                        if let Some(idx) = app.input_state.history_idx {
+                            app.input_state.input = app.input_state.input_history[idx].clone();
+                            app.input_state.cursor = app.input_state.input.len();
                             app.cached_input_len = 0; // invalidate cache
                         }
                     } else {
@@ -770,18 +770,18 @@ fn run_chat(
                     app.scroll_offset = app.scroll_offset.saturating_add(10);
                 }
                 (_, KeyCode::Down) => {
-                    if app.history_idx.is_some() {
-                        if let Some(idx) = app.history_idx {
-                            if idx + 1 < app.input_history.len() {
-                                app.history_idx = Some(idx + 1);
-                                app.input = app.input_history[idx + 1].clone();
+                    if app.input_state.history_idx.is_some() {
+                        if let Some(idx) = app.input_state.history_idx {
+                            if idx + 1 < app.input_state.input_history.len() {
+                                app.input_state.history_idx = Some(idx + 1);
+                                app.input_state.input = app.input_state.input_history[idx + 1].clone();
                             } else {
                                 // Past the last history entry — restore draft
-                                app.history_idx = None;
-                                app.input = app.draft_input.clone();
-                                app.draft_input.clear();
+                                app.input_state.history_idx = None;
+                                app.input_state.input = app.input_state.draft_input.clone();
+                                app.input_state.draft_input.clear();
                             }
-                            app.cursor = app.input.len();
+                            app.input_state.cursor = app.input_state.input.len();
                             app.cached_input_len = 0;
                         }
                     } else {
@@ -833,7 +833,7 @@ fn run_chat(
             terminal.draw(|frame| {
                 ui::render_chat(frame, app);
                 if app.ask.is_some() { ui::render_ask(frame, app); }
-                if app.show_help { ui::render_help(frame, app); }
+                if app.visibility.show_help { ui::render_help(frame, app); }
             })?;
             app.last_render = now;
         }

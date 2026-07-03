@@ -56,8 +56,7 @@ pub struct PreparedCall {
     pub name: String,
     pub handler_fn: fn(crate::ToolCallCtx) -> crate::ToolResult,
     pub ctx: crate::ToolCallCtx,
-    pub(crate) cancel_flag: Arc<AtomicBool>,
-    pub(crate) audit_args: serde_json::Value,
+    pub audit_args: serde_json::Value,
 }
 
 impl ToolManager {
@@ -237,7 +236,6 @@ impl ToolManager {
             name: name.to_string(),
             handler_fn: handler.handler,
             ctx,
-            cancel_flag,
             audit_args,
         })
     }

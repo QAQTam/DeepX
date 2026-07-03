@@ -6,15 +6,8 @@ use super::ToolManager;
 use super::exec;
 use super::explore;
 use super::web;
-use super::file_read;
-use super::file_write;
-use super::file_edit;
-use super::file_edit_diff;
-use super::file_list_dir;
-use super::file_search;
-use super::file_delete;
-use super::file_move;
-use super::file_diff;
+use super::file_mutate;
+use super::file_query;
 
 use super::task;
 use super::ask_user;
@@ -36,15 +29,8 @@ pub fn build_tool_manager(extra_registrars: &[ToolRegistrar]) -> ToolManager {
     web::register(&mut mgr);
 
     // ── 文件操作 ──
-    file_read::register(&mut mgr);
-    file_write::register(&mut mgr);
-    file_edit::register(&mut mgr);
-    file_edit_diff::register(&mut mgr);
-    file_list_dir::register(&mut mgr);
-    file_search::register(&mut mgr);
-    file_delete::register(&mut mgr);
-    file_move::register(&mut mgr);
-    file_diff::register(&mut mgr);
+    file_mutate::register(&mut mgr);
+    file_query::register(&mut mgr);
 
     // ── 任务 ──
     task::register(&mut mgr);

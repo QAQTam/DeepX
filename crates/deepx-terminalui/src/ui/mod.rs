@@ -216,7 +216,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(msg).centered().style(Style::new().fg(Color::Red).bg(BG)), area);
         return;
     }
-    let input_lines = app.input.chars().filter(|&c| c == '\n').count() + 1;
+    let input_lines = app.input_state.input.chars().filter(|&c| c == '\n').count() + 1;
     let input_height = (input_lines as u16 + 2).min(12).max(3);
     let detail_height: u16 = if app.detail_pane.is_some() {
         10u16.min(area.height.saturating_sub(6 + input_height))
@@ -471,34 +471,34 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    let line_count = app.input.chars().filter(|&c| c == '\n').count() + 1;
-    let char_count = app.input.chars().count();
+    let line_count = app.input_state.input.chars().filter(|&c| c == '\n').count() + 1;
+    let char_count = app.input_state.input.chars().count();
     let mut input_title = l.t_chat_input_title().to_string();
     if char_count > 0 {
         let counter = if app.setup.lang.as_str() == "zh" { format!(" {}行 {}字 |", line_count, char_count) } else { format!(" {}L {}C |", line_count, char_count) };
         input_title = format!("{}{}", counter, input_title);
     }
-    let border_color = if line_count > 1 || app.history_idx.is_some() { Color::Rgb(80, 130, 180) } else { Color::Rgb(60, 60, 60) };
+    let border_color = if line_count > 1 || app.input_state.history_idx.is_some() { Color::Rgb(80, 130, 180) } else { Color::Rgb(60, 60, 60) };
     let input_block = Block::new().borders(Borders::ALL).border_style(Style::new().fg(border_color)).title(input_title);
-    let input_text: Vec<Line> = if app.input.is_empty() { vec![Line::from(Span::styled(l.t_chat_input_placeholder(), Style::new().fg(Color::DarkGray)))] }
-    else if app.cached_input_len != app.input.len() { let ls: Vec<Line> = app.input.lines().map(|l| Line::from(Span::raw(l.to_string()))).collect(); app.cached_input_lines = ls.clone(); app.cached_input_len = app.input.len(); ls }
+    let input_text: Vec<Line> = if app.input_state.input.is_empty() { vec![Line::from(Span::styled(l.t_chat_input_placeholder(), Style::new().fg(Color::DarkGray)))] }
+    else if app.cached_input_len != app.input_state.input.len() { let ls: Vec<Line> = app.input_state.input.lines().map(|l| Line::from(Span::raw(l.to_string()))).collect(); app.cached_input_lines = ls.clone(); app.cached_input_len = app.input_state.input.len(); ls }
     else { app.cached_input_lines.clone() };
-    if app.history_idx.is_some() && !app.input_history.is_empty() {
-        let hint = if app.setup.lang.as_str() == "zh" { format!("  ↑ 历史记录 ({}/{})", app.history_idx.unwrap_or(0)+1, app.input_history.len()) }
-        else { format!("  ↑ history ({}/{})", app.history_idx.unwrap_or(0)+1, app.input_history.len()) };
+    if app.input_state.history_idx.is_some() && !app.input_state.input_history.is_empty() {
+        let hint = if app.setup.lang.as_str() == "zh" { format!("  ↑ 历史记录 ({}/{})", app.input_state.history_idx.unwrap_or(0)+1, app.input_state.input_history.len()) }
+        else { format!("  ↑ history ({}/{})", app.input_state.history_idx.unwrap_or(0)+1, app.input_state.input_history.len()) };
         let mut ls = vec![Line::from(Span::styled(hint, Style::new().fg(Color::Rgb(120, 140, 160)).italic()))];
         ls.extend(input_text); frame.render_widget(Paragraph::new(ls).block(input_block), input_area);
     } else { frame.render_widget(Paragraph::new(input_text).block(input_block), input_area); }
-    let cursor_byte = app.cursor.min(app.input.len());
-    let pre_cursor = &app.input[..cursor_byte];
+    let cursor_byte = app.input_state.cursor.min(app.input_state.input.len());
+    let pre_cursor = &app.input_state.input[..cursor_byte];
     let cursor_line = pre_cursor.chars().filter(|&c| c == '\n').count();
     let last_line_start = pre_cursor.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let cursor_col = cjk_width(&app.input[last_line_start..cursor_byte]).min(input_area.width.saturating_sub(3)) as u16;
+    let cursor_col = cjk_width(&app.input_state.input[last_line_start..cursor_byte]).min(input_area.width.saturating_sub(3)) as u16;
     let input_top = input_area.y + 1;
     let cursor_row = input_top + cursor_line.min(input_area.height.saturating_sub(3) as usize) as u16;
     frame.set_cursor_position(((input_area.x + 1 + cursor_col).min(area.width.saturating_sub(1)), cursor_row));
 
-    if app.show_debug {
+    if app.visibility.show_debug {
         let d = &app.debug; let dbg_w = 40u16; let dbg_h = 10u16;
         let dbg_rect = Rect::new(area.width.saturating_sub(dbg_w + 2), area.y + 1, dbg_w, dbg_h);
         frame.render_widget(Clear, dbg_rect);
@@ -517,7 +517,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
         ];
         frame.render_widget(Paragraph::new(dlines), inner);
     }
-    if app.show_tasks {
+    if app.visibility.show_tasks {
         let tasks = app.tasks();
         let recent = &app.debug.recent_edits;
         let activity = &app.activity_log;
@@ -620,7 +620,7 @@ pub fn render_chat(frame: &mut Frame, app: &mut App) {
 
         frame.render_widget(Paragraph::new(lines), inner);
     }
-    if app.show_context {
+    if app.visibility.show_context {
         let ctx_w = 50u16; let ctx_h = 4u16;
         let ctx_y = (body.y + 2).min(area.y.saturating_add(area.height.saturating_sub(ctx_h)));
         let ctx_rect = Rect::new(area.width.saturating_sub(ctx_w + 2), ctx_y, ctx_w, ctx_h);

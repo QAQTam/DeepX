@@ -50,7 +50,7 @@ pub fn build_chat_lines(app: &App, body: Rect) -> Vec<Line<'static>> {
             }
             ChatRole::Thinking => {
                 let dim = dim_color;
-                if !app.show_thinking {
+                if !app.visibility.show_thinking {
                     let char_count = msg.content.chars().count();
                     let summary: String = msg.content
                         .lines()

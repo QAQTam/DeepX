@@ -84,7 +84,7 @@ impl AgentState {
 
     pub fn rebind_store(&mut self) {
         self.msg.set_tool_executor(Box::new(|req: ToolExecRequest| {
-            let result = deepx_tools::bridge::execute_tool_with_id(&req.name, "", &req.args.to_string(), &req.id);
+            let result = deepx_tools::bridge::execute_tool_with_id_full(&req.name, "", &req.args.to_string(), &req.id, None).content;
             let success = !result.starts_with("[ERROR]") && !result.starts_with("[FAIL]");
             ToolExecReport { content: result, success, files_affected: Vec::new() }
         }));
