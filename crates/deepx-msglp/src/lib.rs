@@ -865,6 +865,29 @@ impl Loop {
         self.agent.msg.apply_compact(&summary, KEEP);
         // Full rewrite needed — compact changes system_messages, not just new messages.
         self.agent.msg.snapshot_full(&self.agent.config.model, &self.agent.config.reasoning_effort);
+
+        // Write post-compact context stats for the frontend pie chart.
+        // API dump lags behind — this ensures the panel shows real-time state.
+        {
+            let (chat_text, thinking, tool_calls, tool_results, _, system_prompt, thinking_blocks, tool_call_blocks) =
+                self.agent.msg.compute_context_stats();
+            let stats = serde_json::json!({
+                "messages": self.agent.msg.turn_count(),
+                "chat_text": chat_text,
+                "thinking": thinking,
+                "tool_calls": tool_calls,
+                "tool_results": tool_results,
+                "tools_schema": 0, // not stored in message tree; frontend uses API dump value
+                "system_prompt": system_prompt,
+                "thinking_blocks": thinking_blocks,
+                "tool_call_blocks": tool_call_blocks,
+            });
+            let stats_path = deepx_types::platform::sessions_dir()
+                .join(&self.agent.session.seed)
+                .join("context_stats.json");
+            let _ = std::fs::write(&stats_path, stats.to_string());
+        }
+
         self.emit(Agent2Ui::CompactEnd {
             summary_chars: chars, turns_compacted: compact_count as u32,
         });

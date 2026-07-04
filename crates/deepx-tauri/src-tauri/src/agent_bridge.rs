@@ -1232,9 +1232,47 @@ pub fn cmd_task_action(seed: String, action: String, taskId: u32) -> Result<(), 
 
 /// Get context composition stats from the last API request dump.
 /// Returns JSON breakdown: chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt (in chars).
+/// After compaction, reads from context_stats.json (written by the agent) which reflects
+/// the compacted state immediately, bypassing the stale API dump.
 #[tauri::command]
 pub fn cmd_get_context_stats(seed: String) -> Result<String, String> {
-    let path = deepx_types::platform::data_dir().join("logs").join(format!("{}_api.json", seed));
+    // Prefer post-compact stats file (always up-to-date after compaction)
+    let stats_path = deepx_types::platform::sessions_dir().join(&seed).join("context_stats.json");
+    let api_path = deepx_types::platform::data_dir().join("logs").join(format!("{}_api.json", seed));
+
+    // Use compact stats if they're newer than the API dump (or API dump doesn't exist)
+    let use_compact = if stats_path.exists() {
+        let stats_time = stats_path.metadata().ok().and_then(|m| m.modified().ok());
+        let api_time = api_path.metadata().ok().and_then(|m| m.modified().ok());
+        match (stats_time, api_time) {
+            (Some(s), Some(a)) => s > a,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    } else { false };
+
+    if use_compact {
+        let raw = std::fs::read_to_string(&stats_path).unwrap_or_default();
+        // Merge tools_schema from API dump if available (not tracked in message tree)
+        let mut val: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        if val.get("tools_schema").and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+            if let Ok(api_data) = std::fs::read_to_string(&api_path) {
+                if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&api_data) {
+                    if let Some(last) = entries.last() {
+                        if let Some(req) = last.get("req") {
+                            let tools_len = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null))
+                                .unwrap_or_default().len() as u64;
+                            val["tools_schema"] = serde_json::json!(tools_len);
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(val.to_string());
+    }
+
+    // Fallback: parse from API dump
+    let path = api_path;
     let data: Vec<serde_json::Value> = if path.exists() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default()).unwrap_or_default()
     } else {

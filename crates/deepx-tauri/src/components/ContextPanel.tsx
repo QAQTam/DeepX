@@ -1,4 +1,4 @@
-import { createSignal, Show, onCleanup } from "solid-js";
+import { createSignal, Show, onCleanup, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 
 interface ContextStats {
@@ -59,6 +59,15 @@ export default function ContextPanel(props: { seed: string }) {
       setStats(JSON.parse(raw));
     } catch (e) { console.error("context_stats:", e); }
   }
+
+  // Refresh every 5 seconds when open, and poll when closed (for badge updates)
+  let timer: ReturnType<typeof setInterval>;
+  createEffect(() => {
+    clearInterval(timer);
+    timer = setInterval(refresh, open() ? 3000 : 8000);
+  });
+  onCleanup(() => clearInterval(timer));
+  refresh();
 
   const piePaths = () => stats() ? buildPiePaths(stats()!) : "";
 

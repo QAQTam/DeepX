@@ -680,9 +680,12 @@ impl MessageStore {
         if skip == 0 { return; }
         self.compact_skip = skip;
 
-        // Capture the first user message from the compacted range
-        let first_user = self.turns.iter()
+        // Capture the LAST user message from the compacted range —
+        // the most recent user instruction carries the current intent.
+        // (First user message is typically a simple greeting, not useful.)
+        let last_user = self.turns.iter()
             .take(skip)
+            .rev()
             .find_map(|t| t.user.content.iter().find_map(|b| {
                 if let deepx_types::ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
             }))
@@ -696,7 +699,7 @@ impl MessageStore {
         // Insert as user message: summary first, then marker with first user input
         let compact_text = format!(
             "[Compacted {} turns]\n{}\n\n[UserInput]\n{}",
-            skip, summary.trim(), first_user
+            skip, summary.trim(), last_user
         );
         // Insert before the compacted turns (at position skip in the turns list)
         // Actually, insert as system message that appears before the compacted turns.
@@ -704,6 +707,74 @@ impl MessageStore {
         // compact message to appear before the first kept turn.
         // Inserting into system_messages achieves this — they come before all turns.
         self.system_messages.push(Message::user(&compact_text));
+    }
+
+    /// Compute context composition stats from the current message store.
+    /// This reflects the actual state (post-compact), unlike the API dump which lags.
+    /// Returns (chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt, thinking_blocks, tool_call_blocks).
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_context_stats(&self) -> (u64, u64, u64, u64, u64, u64, u64, u64) {
+        let mut chat_text = 0u64;
+        let mut thinking = 0u64;
+        let mut tool_calls = 0u64;
+        let mut tool_results = 0u64;
+        let mut system_prompt = 0u64;
+        let mut thinking_blocks = 0u64;
+        let mut tool_call_blocks = 0u64;
+
+        for m in &self.system_messages {
+            system_prompt += serde_json::to_string(m).unwrap_or_default().len() as u64;
+        }
+        for (i, turn) in self.turns.iter().enumerate() {
+            if i < self.compact_skip { continue; }
+            for m in [&turn.user] {
+                for b in &m.content {
+                    match b {
+                        deepx_types::ContentBlock::Text { text } => {
+                            chat_text += text.len() as u64;
+                        }
+                        deepx_types::ContentBlock::Reasoning { reasoning } => {
+                            thinking += reasoning.len() as u64;
+                            thinking_blocks += 1;
+                        }
+                        deepx_types::ContentBlock::ToolUse { .. } => {
+                            tool_calls += serde_json::to_string(b).unwrap_or_default().len() as u64;
+                            tool_call_blocks += 1;
+                        }
+                        deepx_types::ContentBlock::ToolResult { content, .. } => {
+                            tool_results += content.len() as u64;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            for step in &turn.steps {
+                for b in &step.assistant.content {
+                    match b {
+                        deepx_types::ContentBlock::Text { text } => {
+                            chat_text += text.len() as u64;
+                        }
+                        deepx_types::ContentBlock::Reasoning { reasoning } => {
+                            thinking += reasoning.len() as u64;
+                            thinking_blocks += 1;
+                        }
+                        deepx_types::ContentBlock::ToolUse { .. } => {
+                            tool_calls += serde_json::to_string(b).unwrap_or_default().len() as u64;
+                            tool_call_blocks += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                for tr in &step.tool_results {
+                    for b in &tr.content {
+                        if let deepx_types::ContentBlock::ToolResult { content, .. } = b {
+                            tool_results += content.len() as u64;
+                        }
+                    }
+                }
+            }
+        }
+        (chat_text, thinking, tool_calls, tool_results, 0, system_prompt, thinking_blocks, tool_call_blocks)
     }
 }
 
