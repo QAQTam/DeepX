@@ -1254,20 +1254,30 @@ pub fn cmd_get_context_stats(seed: String) -> Result<String, String> {
 
     for m in &msgs {
         let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
-        let content = m.get("content");
         if role == "system" {
             system_prompt += serde_json::to_string(m).unwrap_or_default().len() as u64;
             continue;
         }
-        if let Some(arr) = content.and_then(|c| c.as_array()) {
-            for c in arr {
-                if c.get("reasoning").is_some() { thinking_blocks += 1; thinking += serde_json::to_string(c).unwrap_or_default().len() as u64; }
-                if c.get("name").is_some() || c.get("type").and_then(|t| t.as_str()) == Some("tool_use") { tool_call_blocks += 1; tool_calls += serde_json::to_string(c).unwrap_or_default().len() as u64; }
-                if c.get("text").is_some() { chat_text += serde_json::to_string(c).unwrap_or_default().len() as u64; }
+        // Content can be a string (user/system/tool) or absent (assistant with tool_calls only)
+        if let Some(text) = m.get("content").and_then(|c| c.as_str()) {
+            let len = text.len() as u64;
+            if role == "tool" {
+                tool_results += len;
+            } else {
+                chat_text += len;
             }
         }
-        if role == "tool" {
-            tool_results += serde_json::to_string(m).unwrap_or_default().len() as u64;
+        // Assistant messages may have thinking/reasoning_content at top level
+        if let Some(reasoning) = m.get("reasoning_content").and_then(|r| r.as_str()) {
+            thinking_blocks += 1;
+            thinking += reasoning.len() as u64;
+        }
+        // Tool calls are at top level as "tool_calls" array
+        if let Some(arr) = m.get("tool_calls").and_then(|t| t.as_array()) {
+            for tc in arr {
+                tool_call_blocks += 1;
+                tool_calls += serde_json::to_string(tc).unwrap_or_default().len() as u64;
+            }
         }
     }
     let tools_schema = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null)).unwrap_or_default().len() as u64;
