@@ -31,9 +31,44 @@ mod notification;
 use dashboard::{build_documents, build_recent_edits, build_tasks};
 use deepx_message::Effect;
 use deepx_proto::{Agent2Ui, Ui2Agent, RoundDeltaKind};
+use deepx_session::SessionManager;
 
 /// Number of recent turns sent on session restore for incremental loading.
 const INITIAL_LOAD_COUNT: usize = 20;
+
+/// Structured template for compaction summary output.
+/// Forces the LLM to produce sections that preserve file paths, errors, and next actions.
+const COMPACT_TEMPLATE: &str = "\
+Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. \
+Do not include the <template> tags in your response.\n\
+<template>\n\
+## Objective\n\
+- [one or two brief sentences describing what the user is trying to accomplish]\n\n\
+## Important Details\n\
+- [constraints/preferences, decisions and why, important facts/assumptions, \
+exact context needed to continue, or \"(none)\"]\n\n\
+## Work State\n\
+- Completed: [finished work, verified facts, or FILES created/modified/deleted with paths; otherwise \"(none)\"]\n\
+- Active: [current work, partial changes, or investigation state; otherwise \"(none)\"]\n\
+- Blocked: [blockers, errors encountered and resolutions, or unknowns; otherwise \"(none)\"]\n\n\
+## Next Move\n\
+1. [immediate concrete action, or \"(none)\"]\n\
+2. [next action if known, or \"(none)\"]\n\
+</template>\n\n\
+Rules:\n\
+- Keep every section, even when empty.\n\
+- Use terse bullets, not prose paragraphs.\n\
+- Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers when known.\n\
+- Put relevant files and symbols inside the section where they matter; do not add extra sections.\n\
+- Do not mention the summary process or that context was compacted.";
+
+/// Convert epoch seconds to human-readable UTC date.
+fn epoch_to_date(epoch_secs: u64) -> String {
+    use deepx_types::platform::civil_from_days;
+    let total_days = (epoch_secs / 86400) as i64;
+    let (y, m, d) = civil_from_days(total_days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
 
 // ═══════════════════════════════════════════════════════
 // CancelToken — shared abort flag
@@ -783,69 +818,136 @@ impl Loop {
     }
 
     fn handle_compact(&mut self) {
-        const KEEP: usize = 5;
-        log::info!("[AGENT] handle_compact: {} turns", self.agent.msg.turn_count());
-        if self.agent.msg.turn_count() <= KEEP {
+        const KEEP_TOKENS: usize = 4_000; // token budget for recent context to keep intact
+        let turns_total = self.agent.msg.turn_count();
+        log::info!("[AGENT] handle_compact: {} turns", turns_total);
+
+        // Build full message list (excluding system messages) for token-driven split.
+        let all = self.agent.msg.build_context_for_gate("", &[]);
+        let msgs: Vec<&deepx_types::Message> = all.iter().filter(|m| m.role != "system").collect();
+        if msgs.is_empty() { return; }
+
+        // Token-driven split: scan from end, accumulate estimated tokens
+        let estimate = |s: &str| -> usize { s.chars().count() / 4 };
+        let mut kept_idx = msgs.len();
+        let mut kept_tokens = 0usize;
+        for (i, m) in msgs.iter().enumerate().rev() {
+            let t = estimate(&serde_json::to_string(m).unwrap_or_default());
+            if kept_tokens + t > KEEP_TOKENS {
+                kept_idx = i + 1;
+                break;
+            }
+            kept_tokens += t;
+            kept_idx = i;
+        }
+        let head_msgs = &msgs[..kept_idx]; // messages to summarize
+        if head_msgs.is_empty() {
             self.emit_delta(Agent2Ui::ToolNotice {
-                message: format!("Compact skipped: need >{} turns (have {})", KEEP, self.agent.msg.turn_count()),
+                message: "Compact skipped: nothing to compact (all within token budget)".into(),
                 level: "info".into(),
             });
             return;
         }
 
-        let compact_count = self.agent.msg.turn_count() - KEEP;
+        // Count how many turns are in the head (being compacted)
+        let head_user_count = head_msgs.iter().filter(|m| m.role == "user").count();
+        // Count kept turns
+        let kept_user_count = msgs[kept_idx..].iter().filter(|m| m.role == "user").count();
+
         self.emit(Agent2Ui::CompactStart {
-            turns_total: self.agent.msg.turn_count() as u32,
-            turns_keeping: KEEP as u32,
+            turns_total: turns_total as u32,
+            turns_keeping: kept_user_count as u32,
         });
 
-        // Build stripped context: thinking removed, tool calls → one-liner, tool results → first line
-        let all = self.agent.msg.build_context_for_gate("", &[]);
-        let contexts: Vec<String> = all.iter()
-            .filter(|m| m.role != "system")
-            .take(compact_count * 3)
-            .map(|m| {
-                let text: String = m.content.iter().filter_map(|b| match b {
-                    deepx_types::ContentBlock::Text { text } => Some(text.clone()),
-                    deepx_types::ContentBlock::Reasoning { .. } => None,
-                    deepx_types::ContentBlock::ToolUse { name, input, .. } =>
-                        Some(format!("[Tool: {} {}]", name,
-                            serde_json::to_string(input).unwrap_or_default().chars().take(80).collect::<String>())),
-                    deepx_types::ContentBlock::ToolResult { content, .. } =>
-                        Some(format!("[Result: {}]",
-                            &content.lines().next().unwrap_or("").chars().take(100).collect::<String>())),
-                    _ => None,
-                }).collect::<Vec<_>>().join("\n");
-                format!("[{}]: {}", m.role, &text[..text.floor_char_boundary(text.len().min(800))])
-            })
-            .collect();
-        if contexts.is_empty() { return; }
+        // ── Serialize head messages into a dense text format for the compactor LLM ──
+        let mut contexts = Vec::new();
+        for m in head_msgs {
+            let role = &m.role;
+            let serialized: Vec<String> = m.content.iter().filter_map(|b| match b {
+                deepx_types::ContentBlock::Text { text } =>
+                    Some(format!("[{}]: {}", role, text)),
+                deepx_types::ContentBlock::Reasoning { reasoning } =>
+                    Some(format!("[{} reasoning]: {}", role,
+                        &reasoning[..reasoning.floor_char_boundary(reasoning.len().min(500))])),
+                deepx_types::ContentBlock::ToolUse { name, input, .. } => {
+                    let args = serde_json::to_string(input).unwrap_or_default();
+                    Some(format!("[{} tool call]: {}({})", role, name,
+                        &args[..args.floor_char_boundary(args.len().min(120))]))
+                }
+                deepx_types::ContentBlock::ToolResult { content, .. } => {
+                    let compact: String = content.lines().take(5)
+                        .map(|l| l.chars().take(200).collect::<String>())
+                        .collect::<Vec<_>>().join(" | ");
+                    Some(format!("[Tool result]: {}", &compact[..compact.floor_char_boundary(compact.len().min(600))]))
+                }
+                _ => None,
+            }).collect();
+            if !serialized.is_empty() {
+                contexts.push(serialized.join("\n"));
+            }
+        }
+        // Also serialize the TOOL use/results from kept messages for context about what's happening right now
+        for m in &msgs[kept_idx..] {
+            let role = &m.role;
+            if role == "tool" {
+                if let Some(deepx_types::ContentBlock::ToolResult { content, .. }) = m.content.first() {
+                    let compact: String = content.lines().take(3)
+                        .map(|l| l.chars().take(200).collect::<String>())
+                        .collect::<Vec<_>>().join(" | ");
+                    contexts.push(format!("[Tool result (recent)]: {}",
+                        &compact[..compact.floor_char_boundary(compact.len().min(400))]));
+                }
+            }
+        }
 
-        let prompt = format!(
-            "[COMPACT]\n\
-             Below is a stripped-down history of earlier conversation turns.\n\
-             Tool calls reduced to one-line summaries, thinking chains removed,\n\
-             tool outputs truncated to first line.\n\n\
-             Produce a concise summary preserving:\n\
-             - User's original goals and intents\n\
-             - Key decisions made\n\
-             - Which FILES were created/modified/deleted (with paths)\n\
-             - ERRORS encountered and resolutions\n\
-             - Unfinished TASKS still pending\n\
-             - Important facts learned (project structure, APIs, etc.)\n\n\
-             DO NOT include: verbatim code, full tool outputs, thinking chains.\n\
-             Format: bullet points, each <=120 chars, total <=2000 chars.\n\n\
-             --- HISTORY ---\n{}\n--- END HISTORY ---\n\nSummary:",
-            contexts.join("\n")
-        );
+        // ── Timeline: session creation time + duration ──
+        let timeline = {
+            let created = self.agent.session.created_at;
+            let updated = self.agent.session.updated_at.max(SessionManager::now_epoch());
+            let start_str = epoch_to_date(created);
+            let dur = updated.saturating_sub(created);
+            let dur_hours = dur / 3600;
+            let dur_min = (dur % 3600) / 60;
+            format!("- Session started: {} (UTC)\n- Session duration: {}h {}m real-time",
+                start_str, dur_hours, dur_min)
+        };
+
+        // ── Incremental summary: detect previous compact for update mode ──
+        let previous_summary = self.agent.msg.previous_compact_summary();
+
+        // ── Build prompt ──
+        let prompt = if let Some(ref prev) = previous_summary {
+            format!(
+                "[COMPACT — UPDATE MODE]\n\n\
+                 Update the anchored summary below using the stripped conversation history.\n\
+                 Preserve still-true details, remove stale details, merge in new facts.\n\n\
+                 <previous-summary>\n{}\n</previous-summary>\n\n\
+                 --- HISTORY (newer context to merge) ---\n{}\n--- END HISTORY ---\n\n\
+                 {}",
+                prev,
+                contexts.join("\n\n"),
+                COMPACT_TEMPLATE,
+            )
+        } else {
+            format!(
+                "[COMPACT]\n\n\
+                 Create a new anchored summary from the stripped conversation history.\n\n\
+                 --- HISTORY ---\n{}\n--- END HISTORY ---\n\n\
+                 {}\n\n\
+                 {}",
+                contexts.join("\n\n"),
+                timeline,
+                COMPACT_TEMPLATE,
+            )
+        };
 
         let provider = deepx_gate::ProviderConfig::openai(
             &self.agent.config.base_url, &self.agent.config.api_key,
             &self.agent.config.model, None, None, None,
             Default::default(), Default::default(), false, false,
         );
-        let msgs = vec![deepx_types::Message::user(&prompt)];
-        let summary = match deepx_gate::chat_sync(&provider, msgs, 2048) {
+        let msgs_vec = vec![deepx_types::Message::user(&prompt)];
+        let summary = match deepx_gate::chat_sync(&provider, msgs_vec, 4096) {
             Ok(s) if !s.trim().is_empty() => s,
             Ok(_) => {
                 self.emit(Agent2Ui::Error {
@@ -862,12 +964,11 @@ impl Loop {
         };
 
         let chars = summary.chars().count();
-        self.agent.msg.apply_compact(&summary, KEEP);
-        // Full rewrite needed — compact changes system_messages, not just new messages.
+        let keep_turns = kept_user_count;
+        self.agent.msg.apply_compact(&summary, keep_turns);
         self.agent.msg.snapshot_full(&self.agent.config.model, &self.agent.config.reasoning_effort);
 
-        // Write post-compact context stats for the frontend pie chart.
-        // API dump lags behind — this ensures the panel shows real-time state.
+        // Write post-compact context stats
         {
             let (chat_text, thinking, tool_calls, tool_results, _, system_prompt, thinking_blocks, tool_call_blocks) =
                 self.agent.msg.compute_context_stats();
@@ -877,7 +978,7 @@ impl Loop {
                 "thinking": thinking,
                 "tool_calls": tool_calls,
                 "tool_results": tool_results,
-                "tools_schema": 0, // not stored in message tree; frontend uses API dump value
+                "tools_schema": 0,
                 "system_prompt": system_prompt,
                 "thinking_blocks": thinking_blocks,
                 "tool_call_blocks": tool_call_blocks,
@@ -889,10 +990,11 @@ impl Loop {
         }
 
         self.emit(Agent2Ui::CompactEnd {
-            summary_chars: chars, turns_compacted: compact_count as u32,
+            summary_chars: chars, turns_compacted: head_user_count as u32,
         });
         self.emit_delta(Agent2Ui::ToolNotice {
-            message: format!("Compacted {} turns -> {} chars summary", compact_count, chars),
+            message: format!("Compacted {} turns -> {} chars, keeping {} turns",
+                head_user_count, chars, keep_turns),
             level: "info".into(),
         });
         self.emit_dashboard();

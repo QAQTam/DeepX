@@ -709,6 +709,23 @@ impl MessageStore {
         self.system_messages.push(Message::user(&compact_text));
     }
 
+    /// Get the text of any previous compaction summary (for incremental update mode).
+    /// Returns the summary portion (between header and [UserInput] marker).
+    pub fn previous_compact_summary(&self) -> Option<String> {
+        self.system_messages.iter().find_map(|m| {
+            m.content.iter().find_map(|b| {
+                if let deepx_types::ContentBlock::Text { text } = b {
+                    if text.starts_with("[Compacted") {
+                        let after_header = text.find('\n').map(|n| n + 1).unwrap_or(0);
+                        let before_input = text.find("[UserInput]").unwrap_or(text.len());
+                        let summary = &text[after_header..before_input].trim();
+                        if summary.len() > 20 { Some(summary.to_string()) } else { None }
+                    } else { None }
+                } else { None }
+            })
+        })
+    }
+
     /// Compute context composition stats from the current message store.
     /// This reflects the actual state (post-compact), unlike the API dump which lags.
     /// Returns (chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt, thinking_blocks, tool_call_blocks).
