@@ -1,12 +1,13 @@
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { renderDiffHtml } from "../lib/diff";
 
 export interface GitFileEntry {
   path: string;
   change: "added" | "deleted" | "modified" | "renamed";
   lines_added: number;
   lines_removed: number;
-  diff?: string; // populated on expand
+  diffHtml?: string;
 }
 
 const CHANGE_COLORS: Record<string, string> = {
@@ -33,12 +34,11 @@ export default function GitDiffPanel(props: { seed: string }) {
     setLoading(true);
     try {
       const raw: GitFileEntry[] = JSON.parse(await invoke("cmd_get_git_diff", { seed: props.seed }));
-      // merge with existing diffs if expanded
       const prev = files();
       const prevMap = new Map(prev.map(f => [f.path, f]));
       const merged = raw.map(f => {
         const old = prevMap.get(f.path);
-        if (old?.diff) return { ...f, diff: old.diff };
+        if (old?.diffHtml) return { ...f, diffHtml: old.diffHtml };
         return f;
       });
       setFiles(merged);
@@ -51,9 +51,8 @@ export default function GitDiffPanel(props: { seed: string }) {
       const next = new Set(prev);
       if (next.has(path)) { next.delete(path); return next; }
       next.add(path);
-      // Fetch diff if not cached
       const f = files().find(x => x.path === path);
-      if (f && !f.diff && (f.change === "modified" || f.change === "added")) {
+      if (f && !f.diffHtml && (f.change === "modified" || f.change === "added")) {
         loadDiff(path);
       }
       return next;
@@ -62,16 +61,15 @@ export default function GitDiffPanel(props: { seed: string }) {
 
   async function loadDiff(path: string) {
     try {
-      const diffText: string = await invoke("cmd_get_git_file_diff", { seed: props.seed, filePath: path });
-      setFiles(prev => prev.map(f => f.path === path ? { ...f, diff: diffText } : f));
+      const rawDiff: string = await invoke("cmd_get_git_file_diff", { seed: props.seed, filePath: path });
+      const html = renderDiffHtml(rawDiff);
+      setFiles(prev => prev.map(f => f.path === path ? { ...f, diffHtml: html } : f));
     } catch (e) { console.error("git_file_diff error:", e); }
   }
 
   // Auto-refresh every 3 seconds
   const timer = setInterval(refresh, 3000);
   onCleanup(() => clearInterval(timer));
-
-  // Initial load
   refresh();
 
   const countByChange = () => {
@@ -84,9 +82,7 @@ export default function GitDiffPanel(props: { seed: string }) {
     <div class="git-diff-panel">
       <div class="git-diff-header" onClick={refresh}>
         <span class="git-diff-title">Git Changes</span>
-        <Show when={loading()}>
-          <span class="git-diff-spinner">⟳</span>
-        </Show>
+        <Show when={loading()}><span class="git-diff-spinner">⟳</span></Show>
         <span class="git-diff-summary">
           <For each={Object.entries(countByChange())}>
             {([change, count]) => (
@@ -98,7 +94,7 @@ export default function GitDiffPanel(props: { seed: string }) {
         </span>
       </div>
       <Show when={files().length > 0} fallback={
-        <div class="git-diff-empty">No changes (not a git repo or clean working tree)</div>
+        <div class="git-diff-empty">No changes</div>
       }>
         <div class="git-diff-list">
           <For each={files()}>
@@ -119,10 +115,8 @@ export default function GitDiffPanel(props: { seed: string }) {
                 </div>
                 <Show when={expanded().has(file.path)}>
                   <div class="git-diff-card-body">
-                    <Show when={file.diff} fallback={
-                      <div class="git-diff-loading">Loading diff...</div>
-                    }>
-                      <pre class="git-diff-content">{file.diff}</pre>
+                    <Show when={file.diffHtml} fallback={<div class="git-diff-loading">Loading...</div>}>
+                      <div class="git-diff-content" innerHTML={file.diffHtml || ""} />
                     </Show>
                   </div>
                 </Show>

@@ -1,6 +1,7 @@
 import { For, Show, createSignal, onCleanup } from "solid-js";
 import type { TaskInfo, ActivityEntry } from "../store/chat";
 import { useI18n } from "../i18n";
+import GitDiffPanel from "./GitDiffPanel";
 
 const STATUS_ICON: Record<string, string> = {
   pending: "\u25cb", in_progress: "\u25cf", completed: "\u2713", cancelled: "\u2717",
@@ -16,6 +17,7 @@ export default function StatusPanel(props: {
   tasks: () => TaskInfo[];
   recentEdits: () => string[];
   activityLog: () => ActivityEntry[];
+  seed: string;
   onTaskAction?: (action: "cancel" | "delete" | "ask", taskId: string, subject: string, description: string) => void;
 }) {
   const { t } = useI18n();
@@ -97,34 +99,8 @@ export default function StatusPanel(props: {
           </Show>
         </div>
 
-        {/* ── Files ── */}
-        <div class="status-section">
-          <div class="status-section-hd">
-            {t().status.files}
-            <Show when={props.recentEdits().length > 0}>
-              <span class="status-section-badge">{props.recentEdits().length}</span>
-            </Show>
-          </div>
-          <Show when={props.recentEdits().length > 0} fallback={<div class="status-empty">{t().status.noFiles}</div>}>
-            <div class="status-section-body">
-            <For each={props.recentEdits()}>
-              {(edit) => {
-                const [tool, ...pathParts] = edit.split(": ");
-                const path = pathParts.join(": ");
-                return (
-                  <div class="status-row">
-                    <span class="status-row-icon file-icon">{tool === "write_file" ? "W" : tool === "edit_file" ? "E" : "D"}</span>
-                    <div class="status-row-info">
-                      <span class="status-row-title">{tool}</span>
-                      <span class="status-row-desc mono">{path}</span>
-                    </div>
-                  </div>
-                );
-              }}
-            </For>
-            </div>
-          </Show>
-        </div>
+        {/* ── Git Changes ── */}
+        <GitDiffPanel seed={props.seed} />
 
       </div>
     </div>

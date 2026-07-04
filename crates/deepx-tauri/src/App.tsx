@@ -8,7 +8,6 @@ import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
 import InfoBar from "./components/InfoBar";
 import StatusPanel from "./components/StatusPanel";
-import GitDiffPanel from "./components/GitDiffPanel";
 import TokenChart from "./components/TokenChart";
 import "./styles/git-diff-panel.css";
 import "./styles/context-panel.css";
@@ -519,13 +518,10 @@ export default function App() {
             <Match when={view() === "chat"}>
               <Show when={hasChosenSession() && activeSeed() && activeChat()} fallback={<StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} />}>
                 {activeChat() && (
-                  <>
-                    <div class="chat-area">
-                      <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} />
-                      <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
-                    </div>
-                    <GitDiffPanel seed={activeSeed()} />
-                  </>
+                  <div class="chat-area">
+                    <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} />
+                    <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
+                  </div>
                 )}
               </Show>
             </Match>
