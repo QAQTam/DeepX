@@ -5,14 +5,16 @@
 //! Frontend appends blocks in order — no state machine required.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // UI → Agent (unchanged from v4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type")]
 #[non_exhaustive]
+#[ts(export)]
 pub enum Ui2Agent {
     #[serde(rename = "user_input")]
     UserInput { text: String },
@@ -22,6 +24,7 @@ pub enum Ui2Agent {
         id: String,
         name: String,
         action: String,
+        #[ts(type = "any")]
         args: serde_json::Value,
     },
 
@@ -67,7 +70,8 @@ pub enum Ui2Agent {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Tool call definition sent in RoundComplete.tool_calls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ToolCallDef {
     pub id: String,
     pub name: String,
@@ -78,7 +82,8 @@ pub struct ToolCallDef {
 }
 
 /// Tool execution result sent in ToolResults.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ToolResultDef {
     pub tool_call_id: String,
     pub output: String,
@@ -88,7 +93,8 @@ pub struct ToolResultDef {
 }
 
 /// File metadata snapshot for rich rendering.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct FileSnapshotInfo {
     pub path: String,
     pub lines: u32,
@@ -102,7 +108,8 @@ pub struct FileSnapshotInfo {
 }
 
 /// Document tracking entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DocInfo {
     pub tag: String,
     pub path: String,
@@ -110,7 +117,8 @@ pub struct DocInfo {
     pub is_stale: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct TaskInfo {
     pub id: String,
     pub subject: String,
@@ -119,7 +127,8 @@ pub struct TaskInfo {
 }
 
 /// One round of a turn (one API call).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RoundData {
     pub round_num: u32,
     pub thinking: Option<String>,
@@ -129,7 +138,8 @@ pub struct RoundData {
 }
 
 /// One full turn (user message + all rounds).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct TurnData {
     pub turn_id: String,
     pub user_text: String,
@@ -137,8 +147,9 @@ pub struct TurnData {
 }
 
 /// One block in a round, preserving the LLM's output order.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
 pub enum RoundBlock {
     Reasoning { content: String },
     Text { content: String },
@@ -149,9 +160,10 @@ pub enum RoundBlock {
 // Agent → UI (v5 — round-based)
 // ═══════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type")]
 #[non_exhaustive]
+#[ts(export)]
 pub enum Agent2Ui {
     // ── Turn lifecycle ──
 
@@ -359,8 +371,9 @@ pub enum Agent2Ui {
 fn default_load_count() -> u32 { 20 }
 
 /// Streaming block kind for RoundDelta.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum RoundDeltaKind {
     /// Model is reasoning (thinking phase).
     Thinking,
@@ -371,7 +384,8 @@ pub enum RoundDeltaKind {
 }
 
 /// A single code delta record for persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CodeDeltaRecord {
     pub timestamp: u64,
     pub lines_added: usize,
@@ -383,7 +397,8 @@ pub struct CodeDeltaRecord {
 }
 
 /// Daily aggregated code stats.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CodeDaily {
     pub date: String,
     pub lines_added: usize,

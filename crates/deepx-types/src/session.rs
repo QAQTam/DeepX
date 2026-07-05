@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Session metadata — unified persistence + runtime state.
 ///
 /// Fields marked `#[serde(skip)]` are runtime-only and not persisted to meta.json.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SessionMeta {
     // ── Persisted fields ──
     pub seed: String,
@@ -25,15 +27,19 @@ pub struct SessionMeta {
     // ── Runtime fields (not persisted) ──
     /// If set, this seed is passed as a CLI argument to the agent subprocess for auto-restore on startup.
     #[serde(skip)]
+    #[ts(skip)]
     pub resume_seed: Option<String>,
     /// Cumulative tokens consumed across all turns.
     #[serde(skip)]
+    #[ts(skip)]
     pub tokens: u64,
     /// Display title extracted from first user message.
     #[serde(skip)]
+    #[ts(skip)]
     pub title: Option<String>,
     /// True if session was restored from disk — system prompt preserved.
     #[serde(skip)]
+    #[ts(skip)]
     pub from_resume: bool,
 }
 impl Default for SessionMeta {
