@@ -1,0 +1,150 @@
+    Checking deepx-session v0.6.0 (D:\project\DeepX\crates\deepx-session)
+error[E0277]: `TursoBackend` doesn't implement `std::fmt::Debug`
+  --> crates\deepx-session\src\manager.rs:27:5
+   |
+22 | #[derive(Debug)]
+   |          ----- in this derive macro expansion
+...
+27 |     db: Option<TursoBackend>,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Debug` is not implemented for `TursoBackend`
+   |
+   = note: add `#[derive(Debug)]` to `TursoBackend` or manually `impl std::fmt::Debug for TursoBackend`
+help: the trait `std::fmt::Debug` is implemented for `std::option::Option<T>`
+  --> /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library\core\src\option.rs:594:15
+help: consider annotating `TursoBackend` with `#[derive(Debug)]`
+  --> crates\deepx-session\src\store\turso_backend.rs:14:1
+   |
+14 + #[derive(Debug)]
+15 | pub struct TursoBackend {
+   |
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+   --> crates\deepx-session\src\manager.rs:178:24
+    |
+178 |             let _ = db.upsert_meta(&meta);
+    |                        ^^^^^^^^^^^ ----- argument #1 of type `&str` is missing
+    |
+note: method defined here
+   --> crates\deepx-session\src\store\turso_backend.rs:55:12
+    |
+ 55 |     pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<(), String> {
+    |            ^^^^^^^^^^^        ----------
+help: provide the argument
+    |
+178 |             let _ = db.upsert_meta(/* &str */, &meta);
+    |                                    +++++++++++
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+   --> crates\deepx-session\src\manager.rs:228:24
+    |
+228 |             let _ = db.upsert_meta(&meta);
+    |                        ^^^^^^^^^^^ ----- argument #1 of type `&str` is missing
+    |
+note: method defined here
+   --> crates\deepx-session\src\store\turso_backend.rs:55:12
+    |
+ 55 |     pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<(), String> {
+    |            ^^^^^^^^^^^        ----------
+help: provide the argument
+    |
+228 |             let _ = db.upsert_meta(/* &str */, &meta);
+    |                                    +++++++++++
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+   --> crates\deepx-session\src\manager.rs:289:24
+    |
+289 |             let _ = db.upsert_meta(&meta);
+    |                        ^^^^^^^^^^^ ----- argument #1 of type `&str` is missing
+    |
+note: method defined here
+   --> crates\deepx-session\src\store\turso_backend.rs:55:12
+    |
+ 55 |     pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<(), String> {
+    |            ^^^^^^^^^^^        ----------
+help: provide the argument
+    |
+289 |             let _ = db.upsert_meta(/* &str */, &meta);
+    |                                    +++++++++++
+
+error[E0599]: no associated function or constant named `new` found for struct `Runtime` in the current scope
+  --> crates\deepx-session\src\store\turso_backend.rs:12:47
+   |
+12 |     LazyLock::new(|| tokio::runtime::Runtime::new().expect("turso tokio runtime"));
+   |                                               ^^^ associated function or constant not found in `Runtime`
+
+error[E0308]: mismatched types
+   --> crates\deepx-session\src\store\turso_backend.rs:22:49
+    |
+ 22 |             .block_on(turso::Builder::new_local(path.as_ref()).build())
+    |                       ------------------------- ^^^^^^^^^^^^^ expected `&str`, found `&Path`
+    |                       |
+    |                       arguments to this function are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&Path`
+note: associated function defined here
+   --> C:\Users\tsy3m\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\turso-0.7.0-pre.17\src\lib.rs:158:12
+    |
+158 |     pub fn new_local(path: &str) -> Self {
+    |            ^^^^^^^^^
+
+error[E0283]: type annotations needed
+   --> crates\deepx-session\src\store\turso_backend.rs:100:18
+    |
+100 |                 .query("SELECT meta_json FROM sessions ORDER BY updated_at DESC", [])
+    |                  ^^^^^ cannot infer type for array `[_; 0]`
+    |
+    = note: multiple `impl`s satisfying `[_; 0]: IntoParams` found in the `turso` crate:
+            - impl<T, N> IntoParams for [(&'static str, T); N]
+              where the constant `N` has type `usize`, T: turso::params::IntoValue;
+            - impl<T, N> IntoParams for [T; N]
+              where the constant `N` has type `usize`, T: turso::params::IntoValue;
+note: required by a bound in `turso::Connection::query`
+   --> C:\Users\tsy3m\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\turso-0.7.0-pre.17\src\connection.rs:108:66
+    |
+108 |     pub async fn query(&self, sql: impl AsRef<str>, params: impl IntoParams) -> Result<Rows> {
+    |                                                                  ^^^^^^^^^^ required by this bound in `Connection::query`
+
+error[E0283]: type annotations needed
+   --> crates\deepx-session\src\store\turso_backend.rs:98:28
+    |
+ 98 |               let mut rows = self
+    |  ____________________________^
+ 99 | |                 .conn
+100 | |                 .query("SELECT meta_json FROM sessions ORDER BY updated_at DESC", [])
+    | |_____________________________________________________________________________________^ cannot infer type for array `[_; 0]`
+    |
+    = note: multiple `impl`s satisfying `[_; 0]: IntoParams` found in the `turso` crate:
+            - impl<T, N> IntoParams for [(&'static str, T); N]
+              where the constant `N` has type `usize`, T: turso::params::IntoValue;
+            - impl<T, N> IntoParams for [T; N]
+              where the constant `N` has type `usize`, T: turso::params::IntoValue;
+note: required by a bound in `turso::Connection::query`
+   --> C:\Users\tsy3m\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\turso-0.7.0-pre.17\src\connection.rs:108:66
+    |
+108 |     pub async fn query(&self, sql: impl AsRef<str>, params: impl IntoParams) -> Result<Rows> {
+    |                                                                  ^^^^^^^^^^ required by this bound in `Connection::query`
+
+error[E0382]: use of moved value: `seed`
+   --> crates\deepx-session\src\store\turso_backend.rs:181:36
+    |
+174 |                     turso::params![seed],
+    |                     -------------------- `seed` moved due to this method call
+...
+181 |                     turso::params![seed],
+    |                                    ^^^^ value used here after move
+    |
+note: `turso::params::IntoValue::into_value` takes ownership of the receiver `self`, which moves `seed`
+   --> C:\Users\tsy3m\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\turso-0.7.0-pre.17\src\params.rs:264:19
+    |
+264 |     fn into_value(self) -> Result<Value>;
+    |                   ^^^^
+    = note: move occurs because `seed` has type `std::string::String`, which does not implement the `Copy` trait
+help: you can `clone` the value and consume it, but this might not be your desired behavior
+    |
+174 |                     turso::params![seed.clone()],
+    |                                        ++++++++
+
+Some errors have detailed explanations: E0061, E0277, E0283, E0308, E0382, E0599.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `deepx-session` (lib) due to 9 previous errors

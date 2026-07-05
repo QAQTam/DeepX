@@ -24,11 +24,11 @@ git2 = { version = "0.21", features = ["vendored-libgit2"] }
 chrono = { version = "0.4", features = ["clock"] }
 sha2 = "0.10"
 hex = "0.4"
-agentfs-sdk = { version = "0.6", optional = true }
-tokio = { version = "1", features = ["rt"], optional = true }
+# agentfs-sdk = { version = "0.6", optional = true }  # deferred — needs turso v0.4, conflicts with v0.7
+# tokio = { version = "1", features = ["rt"], optional = true }
 
-[features]
-agentfs = ["dep:agentfs-sdk", "dep:tokio"]
+# [features]
+# agentfs = ["dep:agentfs-sdk", "dep:tokio"]
 
 [target.'cfg(windows)'.dependencies]
 conpty = "0.7"

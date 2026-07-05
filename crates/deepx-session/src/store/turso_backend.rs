@@ -1,96 +1,73 @@
 //! Turso local database backend for session dual-write.
 //!
-//! Mirrors JSONL session data to a local Turso (.db) file for fast
-//! queries without cloud sync.
-//!
-//! All code is gated by `#[cfg(feature = "turso-backend")]` —
-//! the module declaration in `store/mod.rs` already carries the gate.
+//! Mirrors JSONL session data to a local Turso (.db) file.
+//! All code gated by `#[cfg(feature = "turso-backend")]`.
 
 use std::path::Path;
+use std::sync::LazyLock;
 
 use deepx_types::{Message, SessionMeta};
 
-/// Turso-backed session store mirroring JSONL data.
-#[derive(Debug)]
+static RT: LazyLock<tokio::runtime::Runtime> =
+    LazyLock::new(|| tokio::runtime::Builder::new_current_thread().enable_all().build().expect("turso tokio runtime"));
+
 pub struct TursoBackend {
-    db: turso::Database,
+    _db: turso::Database,
+    conn: turso::Connection,
+}
+
+impl std::fmt::Debug for TursoBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TursoBackend").finish_non_exhaustive()
+    }
 }
 
 impl TursoBackend {
-    /// Open or create a local Turso database at the given path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime: {e}"))?;
-        let db = rt
-            .block_on(turso::Builder::new_local(path.as_ref()).build())
-            .map_err(|e| format!("open turso db: {e}"))?;
-        Ok(Self { db })
+        let path_str = path.as_ref().to_str().ok_or("invalid path")?;
+        let db = RT
+            .block_on(turso::Builder::new_local(path_str).build())
+            .map_err(|e| format!("open turso: {e}"))?;
+        let conn = db.connect().map_err(|e| format!("connect turso: {e}"))?;
+        Ok(Self { _db: db, conn })
     }
 
-    /// Create tables if they don't exist.
     pub fn init_tables(&self) -> Result<(), String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime: {e}"))?;
-        rt.block_on(async {
-            self.db
-                .execute(
+        RT.block_on(async {
+            self.conn
+                .execute_batch(
                     "CREATE TABLE IF NOT EXISTS sessions (
                         seed TEXT PRIMARY KEY,
-                        created_at INTEGER NOT NULL,
-                        updated_at INTEGER NOT NULL,
-                        model TEXT NOT NULL,
-                        effort TEXT,
-                        message_count INTEGER NOT NULL DEFAULT 0,
-                        turn_count INTEGER NOT NULL DEFAULT 0,
-                        last_summary TEXT NOT NULL DEFAULT '',
-                        compact_skip INTEGER NOT NULL DEFAULT 0
-                    )",
-                    [],
-                )
-                .await
-                .map_err(|e| format!("create sessions table: {e}"))?;
-
-            self.db
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS messages (
+                        meta_json TEXT NOT NULL DEFAULT '{}',
+                        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                    );
+                    CREATE TABLE IF NOT EXISTS messages (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        seed TEXT NOT NULL,
+                        session_seed TEXT NOT NULL,
                         msg_id INTEGER,
-                        role TEXT NOT NULL,
-                        name TEXT,
-                        content TEXT NOT NULL,
-                        created_at INTEGER NOT NULL DEFAULT (unixepoch())
-                    )",
-                    [],
+                        role TEXT NOT NULL DEFAULT '',
+                        content_json TEXT NOT NULL DEFAULT '{}',
+                        FOREIGN KEY (session_seed) REFERENCES sessions(seed) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_msgs ON messages(session_seed, msg_id);",
                 )
                 .await
-                .map_err(|e| format!("create messages table: {e}"))?;
-
-            Ok(())
+                .map_err(|e| format!("init tables: {e}"))
         })
     }
 
-    /// Upsert session metadata.
-    pub fn upsert_meta(&self, meta: &SessionMeta) -> Result<(), String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime: {e}"))?;
-        rt.block_on(async {
-            self.db
+    // ── meta ──────────────────────────────────────────────────────────
+
+    pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<(), String> {
+        let json = serde_json::to_string(meta).unwrap_or_default();
+        let seed = seed.to_string();
+        RT.block_on(async {
+            self.conn
                 .execute(
-                    "INSERT OR REPLACE INTO sessions
-                        (seed, created_at, updated_at, model, effort, message_count, turn_count, last_summary, compact_skip)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    turso::params![
-                        meta.seed,
-                        meta.created_at as i64,
-                        meta.updated_at as i64,
-                        meta.model,
-                        meta.effort,
-                        meta.message_count as i64,
-                        meta.turn_count as i64,
-                        meta.last_summary,
-                        meta.compact_skip as i64
-                    ],
+                    "INSERT OR REPLACE INTO sessions (seed, meta_json, updated_at)
+                     VALUES (?1, ?2, unixepoch())",
+                    turso::params![seed, json],
                 )
                 .await
                 .map_err(|e| format!("upsert meta: {e}"))?;
@@ -98,135 +75,120 @@ impl TursoBackend {
         })
     }
 
-    /// Insert a message into the messages table.
-    pub fn insert_message(&self, seed: &str, msg: &Message) -> Result<(), String> {
-        let content = serde_json::to_string(msg)
-            .map_err(|e| format!("serialize message: {e}"))?;
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime: {e}"))?;
-        rt.block_on(async {
-            self.db
-                .execute(
-                    "INSERT INTO messages (seed, msg_id, role, name, content)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    turso::params![seed, msg.msg_id, msg.role, msg.name, content],
+    pub fn load_meta(&self, seed: &str) -> Result<Option<SessionMeta>, String> {
+        let seed = seed.to_string();
+        RT.block_on(async {
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT meta_json FROM sessions WHERE seed = ?1",
+                    turso::params![seed.clone()],
                 )
                 .await
-                .map_err(|e| format!("insert message: {e}"))?;
+                .map_err(|e| format!("load meta: {e}"))?;
+            if let Some(row) = rows.next().await.map_err(|e| format!("rows: {e}"))? {
+                let s: String = row
+                    .get_value(0)
+                    .map_err(|e| format!("get: {e}"))?
+                    .as_text()
+                    .unwrap_or(&String::new())
+                    .clone();
+                Ok(serde_json::from_str(&s).ok())
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    pub fn list_sessions(&self) -> Result<Vec<SessionMeta>, String> {
+        RT.block_on(async {
+            let mut rows = self
+                .conn
+                .query("SELECT meta_json FROM sessions ORDER BY updated_at DESC", [0i32; 0])
+                .await
+                .map_err(|e| format!("list: {e}"))?;
+            let mut v = Vec::new();
+            while let Some(row) = rows.next().await.map_err(|e| format!("rows: {e}"))? {
+                let s: String = row
+                    .get_value(0)
+                    .map_err(|e| format!("get: {e}"))?
+                    .as_text()
+                    .unwrap_or(&String::new())
+                    .clone();
+                if let Ok(m) = serde_json::from_str(&s) {
+                    v.push(m);
+                }
+            }
+            Ok(v)
+        })
+    }
+
+    // ── messages ──────────────────────────────────────────────────────
+
+    pub fn insert_message(&self, seed: &str, msg: &Message) -> Result<(), String> {
+        let json = serde_json::to_string(msg).unwrap_or_default();
+        let seed = seed.to_string();
+        let mid = msg.msg_id.map(|v| v as i64);
+        let role = msg.role.clone();
+        RT.block_on(async {
+            self.conn
+                .execute(
+                    "INSERT INTO messages (session_seed, msg_id, role, content_json)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    turso::params![seed, mid, role, json],
+                )
+                .await
+                .map_err(|e| format!("insert msg: {e}"))?;
             Ok(())
         })
     }
 
-    /// Load all messages for a session, ordered by insertion.
     pub fn load_messages(&self, seed: &str) -> Result<Vec<Message>, String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime: {e}"))?;
-        rt.block_on(async {
+        let seed = seed.to_string();
+        RT.block_on(async {
             let mut rows = self
-                .db
+                .conn
                 .query(
-                    "SELECT content FROM messages WHERE seed = ?1 ORDER BY id",
+                    "SELECT content_json FROM messages WHERE session_seed = ?1 ORDER BY msg_id",
                     turso::params![seed],
                 )
                 .await
-                .map_err(|e| format!("query messages: {e}"))?;
-
-            let mut msgs = Vec::new();
-            while let Some(row) = rows.next().await {
-                let row = row.map_err(|e| format!("read row: {e}"))?;
-                let content: String = row
-                    .get("content")
-                    .map_err(|e| format!("get content: {e}"))?;
-                let msg: Message = serde_json::from_str(&content)
-                    .map_err(|e| format!("deserialize message: {e}"))?;
-                msgs.push(msg);
+                .map_err(|e| format!("load msgs: {e}"))?;
+            let mut v = Vec::new();
+            while let Some(row) = rows.next().await.map_err(|e| format!("rows: {e}"))? {
+                let s: String = row
+                    .get_value(0)
+                    .map_err(|e| format!("get: {e}"))?
+                    .as_text()
+                    .unwrap_or(&String::new())
+                    .clone();
+                if let Ok(m) = serde_json::from_str(&s) {
+                    v.push(m);
+                }
             }
-            Ok(msgs)
+            Ok(v)
         })
     }
 
-    /// Load session metadata, if it exists.
-    pub fn load_meta(&self, seed: &str) -> Result<Option<SessionMeta>, String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime: {e}"))?;
-        rt.block_on(async {
-            let mut rows = self
-                .db
-                .query(
-                    "SELECT seed, created_at, updated_at, model, effort, message_count, turn_count, last_summary, compact_skip
-                     FROM sessions WHERE seed = ?1",
-                    turso::params![seed],
-                )
-                .await
-                .map_err(|e| format!("query meta: {e}"))?;
+    // ── delete ────────────────────────────────────────────────────────
 
-            let Some(row) = rows.next().await else {
-                return Ok(None);
-            };
-            let row = row.map_err(|e| format!("read row: {e}"))?;
-            Ok(Some(SessionMeta {
-                seed: row.get("seed").map_err(|e| format!("get seed: {e}"))?,
-                created_at: row.get::<i64>("created_at").map_err(|e| format!("get created_at: {e}"))? as u64,
-                updated_at: row.get::<i64>("updated_at").map_err(|e| format!("get updated_at: {e}"))? as u64,
-                model: row.get("model").map_err(|e| format!("get model: {e}"))?,
-                effort: row.get("effort").ok(),
-                message_count: row.get::<i64>("message_count").map_err(|e| format!("get message_count: {e}"))? as usize,
-                turn_count: row.get::<i64>("turn_count").map_err(|e| format!("get turn_count: {e}"))? as usize,
-                last_summary: row.get("last_summary").map_err(|e| format!("get last_summary: {e}"))?,
-                compact_skip: row.get::<i64>("compact_skip").map_err(|e| format!("get compact_skip: {e}"))? as usize,
-                ..Default::default()
-            }))
-        })
-    }
-
-    /// List all sessions ordered by updated_at descending.
-    pub fn list_sessions(&self) -> Result<Vec<SessionMeta>, String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime: {e}"))?;
-        rt.block_on(async {
-            let mut rows = self
-                .db
-                .query(
-                    "SELECT seed, created_at, updated_at, model, effort, message_count, turn_count, last_summary, compact_skip
-                     FROM sessions ORDER BY updated_at DESC",
-                    [],
-                )
-                .await
-                .map_err(|e| format!("query all sessions: {e}"))?;
-
-            let mut metas = Vec::new();
-            while let Some(row) = rows.next().await {
-                let row = row.map_err(|e| format!("read row: {e}"))?;
-                metas.push(SessionMeta {
-                    seed: row.get("seed").map_err(|e| format!("get seed: {e}"))?,
-                    created_at: row.get::<i64>("created_at").map_err(|e| format!("get created_at: {e}"))? as u64,
-                    updated_at: row.get::<i64>("updated_at").map_err(|e| format!("get updated_at: {e}"))? as u64,
-                    model: row.get("model").map_err(|e| format!("get model: {e}"))?,
-                    effort: row.get("effort").ok(),
-                    message_count: row.get::<i64>("message_count").map_err(|e| format!("get message_count: {e}"))? as usize,
-                    turn_count: row.get::<i64>("turn_count").map_err(|e| format!("get turn_count: {e}"))? as usize,
-                    last_summary: row.get("last_summary").map_err(|e| format!("get last_summary: {e}"))?,
-                    compact_skip: row.get::<i64>("compact_skip").map_err(|e| format!("get compact_skip: {e}"))? as usize,
-                    ..Default::default()
-                });
-            }
-            Ok(metas)
-        })
-    }
-
-    /// Delete a session and its messages.
     pub fn delete_session(&self, seed: &str) -> Result<(), String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime: {e}"))?;
-        rt.block_on(async {
-            self.db
-                .execute("DELETE FROM messages WHERE seed = ?1", turso::params![seed])
+        let seed = seed.to_string();
+        RT.block_on(async {
+            self.conn
+                .execute(
+                    "DELETE FROM messages WHERE session_seed = ?1",
+                    turso::params![seed.clone()],
+                )
                 .await
-                .map_err(|e| format!("delete messages: {e}"))?;
-            self.db
-                .execute("DELETE FROM sessions WHERE seed = ?1", turso::params![seed])
+                .map_err(|e| format!("del msgs: {e}"))?;
+            self.conn
+                .execute(
+                    "DELETE FROM sessions WHERE seed = ?1",
+                    turso::params![seed],
+                )
                 .await
-                .map_err(|e| format!("delete session: {e}"))?;
+                .map_err(|e| format!("del session: {e}"))?;
             Ok(())
         })
     }

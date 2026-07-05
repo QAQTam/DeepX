@@ -175,7 +175,7 @@ impl SessionManager {
 
         #[cfg(feature = "turso-backend")]
         if let Some(ref db) = self.db {
-            let _ = db.upsert_meta(&meta);
+            let _ = db.upsert_meta(seed, &meta);
         }
     }
 
@@ -225,7 +225,7 @@ impl SessionManager {
 
         #[cfg(feature = "turso-backend")]
         if let Some(ref db) = self.db {
-            let _ = db.upsert_meta(&meta);
+            let _ = db.upsert_meta(seed, &meta);
             for msg in messages {
                 let _ = db.insert_message(seed, msg);
             }
@@ -286,7 +286,7 @@ impl SessionManager {
 
         #[cfg(feature = "turso-backend")]
         if let Some(ref db) = self.db {
-            let _ = db.upsert_meta(&meta);
+            let _ = db.upsert_meta(seed, &meta);
             for msg in new_messages {
                 let _ = db.insert_message(seed, msg);
             }
