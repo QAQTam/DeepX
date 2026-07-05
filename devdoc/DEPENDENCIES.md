@@ -4,6 +4,139 @@
 
 ---
 
+---
+
+## 0. `agentfs` — AgentFS Rust SDK (Turso)
+
+**用途:** Phase 7.6 文件沙箱 + 审计（替换自建 audit.jsonl）
+**添加位置:** `crates/deepx-tools/Cargo.toml`
+**版本目标:** 0.1
+
+```toml
+[dependencies]
+agentfs = "0.1"
+tokio = { version = "1", features = ["rt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+```
+
+### 核心 API
+
+```rust
+use agentfs::{AgentFS, AgentFSOptions};
+
+// 持久化存储（.agentfs/{id}.db 单个 SQLite 文件）
+let agent = AgentFS::open(AgentFSOptions::with_id("deepx-session")).await?;
+
+// 临时内存数据库
+let agent = AgentFS::open(AgentFSOptions::ephemeral()).await?;
+```
+
+### 三大子系统
+
+#### 1. 键值存储 (`agent.kv`)
+
+```rust
+agent.kv.set("key", "value").await?;
+let val: Option<String> = agent.kv.get("key").await?;
+agent.kv.delete("key").await?;
+
+// 结构化数据
+#[derive(Serialize, Deserialize)]
+struct UserPrefs { theme: String, language: String }
+agent.kv.set("user:prefs", UserPrefs { ... }).await?;
+
+// 列表（前缀过滤 + 分页）
+let keys = agent.kv.list(ListOptions { prefix: Some("user:".into()), ..Default::default() }).await?;
+agent.kv.clear().await?;
+```
+
+#### 2. 文件系统 (`agent.fs`) — POSIX-like, CoW 隔离
+
+```rust
+// 读写
+agent.fs.write_file("/report.md", b"# Report\n...").await?;
+let data = agent.fs.read_file("/report.md").await?;
+let text = String::from_utf8(data)?;
+
+// 目录操作
+agent.fs.mkdir("/reports").await?;
+let entries = agent.fs.readdir("/reports").await?;
+
+// 元数据
+let stat = agent.fs.stat("/report.md").await?;
+let exists = agent.fs.exists("/report.md").await?;
+
+// 删除 / 重命名 / 复制
+agent.fs.rm("/old.txt").await?;
+agent.fs.rename("/a.txt", "/b.txt").await?;
+agent.fs.copy_file("/src.txt", "/dest.txt").await?;
+```
+
+#### 3. 工具调用追踪 (`agent.tools`)
+
+```rust
+agent.tools.record(tool_call).await?;
+let calls = agent.tools.list(ToolListOptions::default()).await?;
+let call = agent.tools.get("tool-id").await?;
+agent.tools.delete("tool-id").await?;
+```
+
+### 审计能力
+
+AgentFS 自动记录每个文件操作和工具调用到内部 SQLite，提供：
+
+| 命令 | 作用 |
+|------|------|
+| `agentfs timeline <session>` | 时间线（所有操作） |
+| `agentfs timeline --status error` | 只看失败 |
+| `agentfs fs ls <session>` | 文件列表 |
+| `agentfs fs cat <session> /path` | 读文件 |
+| `agentfs diff <session>` | 差异对比（相对原文件系统） |
+| SQL 查询 `.agentfs/*.db` | 自定义审计 |
+
+### DeepX 集成方案
+
+DeepX 当前的文件操作（`file_mutate.rs`, `file_query.rs`）通过 `std::fs` 直接操作。
+AgentFS 替代方案：
+
+```rust
+// 替换前 (file_mutate.rs)
+std::fs::write(path, content)?;
+
+// 替换后 (AgentFS)
+let agent = AgentFS::open(AgentFSOptions::with_id(&ctx.session_id)).await?;
+agent.fs.write_file(path, content.as_bytes()).await?;
+// ↑ 自动写入审计日志到 .agentfs/{session_id}.db
+```
+
+**优势：**
+- 文件沙箱（CoW 隔离）— 误删/误写不污染原文件系统
+- 自动审计 — 不再需要自建 `audit.jsonl`
+- 单文件存储 — `.agentfs/{id}.db` 可复制/分享/快照
+
+**代价：**
+- 异步 API — 需 `tokio::Runtime::block_on` 桥接
+- 新增依赖 — `agentfs` + `tokio` + `serde` + `serde_json`（大部分已有）
+- DeepX 的部分 `std::fs` 操作（如 `file_search` 的 `grep`）不适合 AgentFS，仍需原生文件系统
+
+**推荐策略：Phase 7.6 中 `agent.kv` 替代 `memory` 工具，`agent.tools` 替代 `audit.jsonl`，文件操作保留 `std::fs`（AgentFS 作为可选沙箱模式）。**
+
+### async → sync 桥接
+
+```rust
+use std::sync::LazyLock;
+use tokio::runtime::Runtime;
+
+static RT: LazyLock<Runtime> = LazyLock::new(|| Runtime::new().unwrap());
+
+// 打开 AgentFS（sync 封装）
+pub fn open_sync(id: &str) -> Result<agentfs::AgentFS, anyhow::Error> {
+    RT.block_on(AgentFS::open(AgentFSOptions::with_id(id)))
+}
+```
+
 ## 1. `turso` — Turso Database 引擎 Rust crate
 
 **用途:** Phase 7.10 Session 双库（本地 .db 后端）
@@ -245,8 +378,9 @@ pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
 
 | Crate | Phase | 已有? | 需添加? |
 |-------|-------|-------|---------|
+| `agentfs` | 7.6 | ❌ | ✅ deepx-tools |
 | `turso` | 7.10 | ❌ | ✅ deepx-session (optional) |
-| `tokio` | 7.10 | 传递 | ✅ deepx-session (optional) |
+| `tokio` | 7.6, 7.10 | 传递 | ✅ deepx-tools + deepx-session (optional) |
 | `sha2` | 7.1, 7.9 | 传递 | ✅ deepx-tools |
 | `hex` | 7.1 | 传递 | ⚠️ 可选（可用 `format!("{:x}")` 替代） |
 | `windows` | 7.2 | ❌ | ✅ deepx-tools (cfg(windows)) |

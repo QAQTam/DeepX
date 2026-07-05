@@ -40,7 +40,7 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 | **7.3** | 合规内容过滤（system prompt + gate 关键词） | 中 | +100 |
 | **7.4** | PLAN Review 工具（Tauri 审批面板） | 中 | +200 |
 | **7.5** | Safety 分级（ToolRisk 四级 + 两层决策） | 中 | +120 |
-| **7.6** | AgentFS 集成（沙箱 + SQL 审计查询） | 中 | +150 |
+| **7.6** | AgentFS 集成（`agentfs` crate：kv + tools 替代 memory + audit） | 中 | +150 |
 | **7.7** | 工具 Schema 修复（多 action 独立暴露） | 低 | +30 |
 | **7.8** | Daemon 心跳（Ping/Pong 健康检查） | 低 | +30 |
 | **7.9** | exec 命令审计（完整命令写入 audit.jsonl） | 低 | +20 |
