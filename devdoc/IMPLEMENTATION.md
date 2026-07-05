@@ -14,9 +14,12 @@
   └── 7.3 guard.rs ──────┼──── (独立)
                           │
   7.8 main_loop.rs ──────┘──── (独立, daemon 层)
+
+  7.10 sql_backend.rs ───┐──── (独立, deepx-session 层)
+                         └──── 需 7.6 config 扩展
 ```
 
-**推荐实施顺序:** 7.7 → 7.1 → 7.9 → 7.5 → 7.2 → 7.3 → 7.8 → 7.6 → 7.4
+**推荐实施顺序:** 7.7 → 7.1 → 7.9 → 7.5 → 7.2 → 7.3 → 7.8 → 7.6 → 7.10 → 7.4
 
 ---
 
@@ -276,3 +279,148 @@ let _ = crate::audit::maybe_log_exec(&command);
 | 7.8 heartbeat | 低 | +30 | 无 | **7** |
 | 7.6 AgentFS | 中 | +150 | 7.1 | **8** |
 | 7.4 Plan Review | 中 | +200 | 前端 | **9** |
+
+---
+
+## Phase 7.10 — Session 双库：JSONL + libSQL/Turso (P2, +100 lines)
+
+### 策略
+
+JSONL 为主，SQL 为镜像。每条 session 写入先过 JSONL（已有逻辑不变），成功后异步 mirror 到 SQL。JSONL 始终是权威数据源。
+
+### 新增文件: `crates/deepx-session/src/store/sql_backend.rs` (+60 lines)
+
+```rust
+use libsql::Connection;
+use deepx_types::session::SessionMeta;
+use deepx_types::message::Message;
+
+pub struct SqlBackend {
+    conn: Connection,
+}
+
+impl SqlBackend {
+    pub fn open(path: &str) -> Result<Self, libsql::Error> {
+        let db = libsql::Builder::new_local(path).build()?;
+        let conn = db.connect()?;
+        Ok(Self { conn })
+    }
+
+    pub fn init_tables(&self) -> Result<(), libsql::Error> {
+        self.conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS sessions (
+                seed TEXT PRIMARY KEY,
+                meta_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_seed TEXT NOT NULL,
+                msg_id INTEGER,
+                role TEXT NOT NULL,
+                name TEXT,
+                content_json TEXT NOT NULL,
+                FOREIGN KEY (session_seed) REFERENCES sessions(seed) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_seed, msg_id);
+        ")?;
+        Ok(())
+    }
+
+    pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<(), libsql::Error> { ... }
+    pub fn insert_message(&self, seed: &str, msg: &Message) -> Result<(), libsql::Error> { ... }
+    pub fn load_messages(&self, seed: &str) -> Result<Vec<Message>, libsql::Error> { ... }
+    pub fn load_meta(&self, seed: &str) -> Result<Option<SessionMeta>, libsql::Error> { ... }
+    pub fn list_sessions(&self) -> Result<Vec<SessionMeta>, libsql::Error> { ... }
+    pub fn delete_session(&self, seed: &str) -> Result<(), libsql::Error> { ... }
+}
+```
+
+### 修改: `crates/deepx-session/Cargo.toml` (+5 lines)
+
+```toml
+[features]
+default = []
+sql-backend = ["dep:libsql"]
+
+[dependencies]
+libsql = { version = "0.6", features = ["native"], optional = true }
+```
+
+### 修改: `crates/deepx-session/src/manager.rs` (+20 lines)
+
+`SessionManager` 结构体增加 `db: Option<SqlBackend>`:
+
+```rust
+pub struct SessionManager {
+    data_dir: PathBuf,
+    db: Option<SqlBackend>,  // NEW
+}
+
+impl SessionManager {
+    pub fn init(data_dir: &Path, db_url: Option<&str>) -> &'static Self {
+        let db = match db_url {
+            Some(url) => SqlBackend::open(url).ok(),
+            None => None,
+        };
+        // ... existing JSONL init
+    }
+}
+```
+
+每个写方法追加 mirror 调用（best-effort，不阻断 JSONL）:
+
+```rust
+// save_append, save_full, update_meta, delete 中追加:
+if let Some(db) = &self.db {
+    let _ = db.upsert_meta(seed, meta);  // 失败不影响主流程
+    for msg in messages {
+        let _ = db.insert_message(seed, msg);
+    }
+}
+```
+
+### 修改: `crates/deepx-config/src/config.rs` (+15 lines)
+
+```rust
+pub struct Config {
+    // ... existing fields ...
+    #[serde(default)]
+    pub database: DatabaseConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DatabaseConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub url: Option<String>,  // "libsql://data/sessions.db"
+}
+```
+
+### 调用点更新
+
+各处 `SessionManager::init()` 传递 config:
+
+```rust
+// deepx-terminal/src/main.rs:147
+let db_url = config.database.enabled.then(|| config.database.url.as_deref()).flatten();
+SessionManager::init(&data_dir, db_url);
+```
+
+### 迁移路径
+
+```
+v0.7.0:  JSONL (primary) + SQL (mirror), 双写, feature-gate 默认 off
+v0.7.x:  验证 SQL 数据完整性, 修复不一致
+v0.8.0:  feature-gate 默认 on, 读取优先 SQL, JSONL 降级为 backup
+v0.9.0:  移除 JSONL, SQL 唯一存储, 删除 store 模块 JSONL 逻辑
+```
+
+### 边界情况
+
+- **SQL 写入失败**: 静默跳过 (`let _ = ...`)，不影响 JSONL 主链路
+- **libSQL 不可用**: `cfg(feature = "sql-backend")` 编译期隔离，未启用时零成本
+- **Schema 变更**: `init_tables()` 确保幂等（`IF NOT EXISTS`），ALM 迁移留到 v0.8.0
+- **并发**: SQLite WAL 模式支持并发读，写仍需单线程（与 JSONL 一致）

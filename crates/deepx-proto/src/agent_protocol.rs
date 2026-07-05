@@ -40,9 +40,6 @@ pub enum Ui2Agent {
     #[serde(rename = "reload_config")]
     ReloadConfig,
 
-    #[serde(rename = "debug_cmd")]
-    DebugCommand { cmd: String },
-
     #[serde(rename = "undo_turn")]
     UndoTurn { turn_id: String },
 

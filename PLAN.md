@@ -44,7 +44,8 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 | **7.7** | 工具 Schema 修复（多 action 独立暴露） | 低 | +30 |
 | **7.8** | Daemon 心跳（Ping/Pong 健康检查） | 低 | +30 |
 | **7.9** | exec 命令审计（完整命令写入 audit.jsonl） | 低 | +20 |
-| **合计** | **9 项，v0.7.0 原型；v0.7.1+ 只修 bug** | — | **+850** |
+| **7.10** | Session 双库（JSONL + libSQL/Turso 并行写入） | 中 | +100 |
+| **合计** | **10 项，v0.7.0 原型；v0.7.1+ 只修 bug** | — | **+950** |
 
 ---
 
@@ -204,6 +205,82 @@ frontend 每 10 秒 → Ui2Agent::Ping → daemon → Agent2Ui::Pong
 
 `exec.rs` 入口处追加 `append_audit()` 写入完整命令字符串。
 
+### 7.10 Session 双库（P2，中难度，~100 行）
+
+**目标：** `deepx-session` 增加 libSQL（Turso）后端，与 JSONL 并行写入，逐步迁移。
+
+**策略：JSONL 为主，SQL 为镜像。** 每条写入先过 JSONL（已有逻辑不变），成功后异步 mirror 到 SQL。JSONL 始终是权威数据源；SQL 出问题时 JSONL 不受影响。
+
+**A. 依赖：**
+
+```toml
+# crates/deepx-session/Cargo.toml
+[features]
+sql-backend = ["libsql"]
+
+[target.'cfg(feature = "sql-backend")'.dependencies]
+libsql = { version = "0.6", features = ["native"] }
+```
+
+**B. 新增 `store/sql_backend.rs`：**
+
+```rust
+pub struct SqlBackend {
+    conn: libsql::Connection,
+}
+
+impl SqlBackend {
+    pub fn open(path: &str) -> Result<Self>;
+    pub fn init_tables(&self) -> Result<()>;
+    pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<()>;
+    pub fn insert_message(&self, seed: &str, msg: &Message) -> Result<()>;
+    pub fn load_messages(&self, seed: &str) -> Result<Vec<Message>>;
+    pub fn load_meta(&self, seed: &str) -> Result<Option<SessionMeta>>;
+    pub fn list_sessions(&self) -> Result<Vec<SessionMeta>>;
+    pub fn delete_session(&self, seed: &str) -> Result<()>;
+}
+```
+
+**C. SessionManager 修改：**
+
+```rust
+pub struct SessionManager {
+    data_dir: PathBuf,
+    db: Option<SqlBackend>,  // NEW: optional SQL backend
+}
+```
+
+`init()` 签名增加 `db_url: Option<&str>`，`save_append` / `save_full` / `update_meta` / `delete` 在每个 JSONL 写入后追加：
+
+```rust
+if let Some(db) = &self.db {
+    let _ = db.upsert_meta(seed, meta);  // best-effort, never fail JSONL
+}
+```
+
+**D. Config 扩展：**
+
+```toml
+# config.toml
+[database]
+url = "libsql://data/sessions.db"   # 本地文件；生产填 Turso URL
+enabled = true
+```
+
+**E. 迁移路径：**
+
+```
+v0.7.0:  JSONL (primary) + SQL (mirror), 双写
+v0.8.0:  SQL 达到同等完整性 → JSONL 降级为 backup
+v0.9.0:  移除 JSONL, SQL 唯一存储
+```
+
+改动点：
+- `deepx-session/Cargo.toml`: +5 行 (features + dependency)
+- `deepx-session/src/store/sql_backend.rs`: +60 行 (新建)
+- `deepx-session/src/manager.rs`: +20 行 (Option<SqlBackend> 整合)
+- `deepx-config/src/config.rs`: +15 行 (database section)
+
 ## 工作量
 
 | Phase | 难度 | 行数 | 文件 |
@@ -217,7 +294,8 @@ frontend 每 10 秒 → Ui2Agent::Ping → daemon → Agent2Ui::Pong
 | 7.7 工具 Schema | 低 | +30 | `manager.rs` |
 | 7.8 Daemon 心跳 | 低 | +30 | `agent_protocol.rs`, `main_loop.rs` |
 | 7.9 exec 命令审计 | 低 | +20 | `exec.rs` |
-| **合计** | — | **+850** | **12** |
+| 7.10 Session 双库 | 中 | +100 | `deepx-session/Cargo.toml`, `store/sql_backend.rs`(新), `manager.rs`, `config.rs` |
+| **合计** | — | **+950** | **14** |
 
 ## Risk
 

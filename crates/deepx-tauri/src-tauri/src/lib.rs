@@ -15,12 +15,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             agent_bridge::cmd_send_message,
             agent_bridge::cmd_cancel,
-            agent_bridge::cmd_get_debug_snapshot,
             agent_bridge::cmd_save_config,
             agent_bridge::cmd_load_config,
             agent_bridge::cmd_list_sessions,
-            agent_bridge::cmd_load_session,
-            agent_bridge::cmd_set_active_session,
             agent_bridge::cmd_delete_session,
             agent_bridge::cmd_undo_turn,
             agent_bridge::cmd_compact,

@@ -892,12 +892,6 @@ pub fn cmd_cancel(seed: String) -> Result<(), String> {
     send_to_agent(&seed, Ui2Agent::Cancel)
 }
 
-/// Request a debug snapshot from the agent.
-#[tauri::command]
-pub fn cmd_get_debug_snapshot(seed: String) -> Result<(), String> {
-    send_to_agent(&seed, Ui2Agent::DebugCommand { cmd: "snapshot".into() })
-}
-
 /// Save configuration and reload all agents.
 #[tauri::command]
 pub fn cmd_save_config(
@@ -1003,25 +997,6 @@ pub fn cmd_load_config() -> Result<String, String> {
 pub fn cmd_list_sessions() -> Result<String, String> {
     let metas = deepx_session::SessionManager::global().list();
     serde_json::to_string(&metas).map_err(|e| format!("serialize: {e}"))
-}
-
-/// Load full session data (metadata only) by seed.
-#[tauri::command]
-pub fn cmd_load_session(seed: String) -> Result<String, String> {
-    let meta = deepx_session::SessionManager::global().load_meta(&seed)
-        .ok_or_else(|| format!("Session not found: {seed}"))?;
-    serde_json::to_string(&meta).map_err(|e| format!("serialize: {e}"))
-}
-
-/// Set the active session seed for next app restart.
-#[tauri::command]
-pub fn cmd_set_active_session(seed: String) -> Result<(), String> {
-    if seed.is_empty() {
-        deepx_session::SessionManager::global().clear_active();
-    } else {
-        deepx_session::SessionManager::global().set_active_seed(&seed);
-    }
-    Ok(())
 }
 
 /// Delete a session by seed. Also kills the agent if running for that seed.
@@ -1538,7 +1513,6 @@ fn agent2ui_event_name_for_ui(event: &Ui2Agent) -> &'static str {
         Ui2Agent::Cancel => "cancel",
         Ui2Agent::Shutdown => "shutdown",
         Ui2Agent::ReloadConfig => "reload_config",
-        Ui2Agent::DebugCommand { .. } => "debug_cmd",
         Ui2Agent::UndoTurn { .. } => "undo_turn",
         Ui2Agent::Compact => "compact",
         Ui2Agent::ResumeSession { .. } => "resume_session",
