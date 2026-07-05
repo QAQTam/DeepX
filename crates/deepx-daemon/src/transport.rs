@@ -64,30 +64,32 @@ pub mod unix {
     }
 }
 
-// ── Windows named pipe (TODO: full impl) ──
+// ── Windows named pipe (TODO: needs `windows` crate) ──
+// windows-sys does not expose CreateFileW / CreateNamedPipeW / PIPE_ACCESS_DUPLEX.
+// The full `windows` crate is required. Defer until: interprocess crate or raw FFI.
 
 #[cfg(windows)]
 pub mod win {
     use std::io;
     use std::path::Path;
 
-    /// TODO: Implement using CreateNamedPipeW + ConnectNamedPipe
-    /// with windows-sys crate. See Codex app-server-daemon for reference.
+    /// TODO: needs `windows` crate for CreateFileW / CreateNamedPipeW.
+    /// windows-sys does not expose these. Evaluate interprocess crate or raw FFI.
     pub fn bind(_path: &Path) -> io::Result<std::fs::File> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "Windows named pipe not yet implemented — use direct child process fallback",
+            "Windows named pipe: needs `windows` crate (not windows-sys). Use direct child process fallback.",
         ))
     }
 
     pub fn accept(_pipe: std::fs::File) -> io::Result<std::fs::File> {
-        Ok(_pipe) // unreachable because bind always fails
+        Ok(_pipe) // unreachable
     }
 
     pub fn connect(_path: &Path) -> io::Result<std::fs::File> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "Windows named pipe not yet implemented",
+            "Windows named pipe: needs `windows` crate",
         ))
     }
 }
