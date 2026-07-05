@@ -1,105 +1,130 @@
-# PLAN: Daemon → Message Broker Server
+# PLAN: Daemon → Message Gateway Server
 
 ## Goal
 
-Upgrade `deepx-daemon` from a process manager to a full message broker.
+Upgrade `deepx-daemon` from a process manager to a full message gateway.
 Frontend reconnects after crash/hot-reload without losing agent state.
+Cross-platform transport (Unix + Windows) via TCP loopback.
 
-## Current State vs Target
+Reference architectures: Codex `app-server` + OpenClaw `gateway`.
+
+## Status (2026-07-05)
 
 ```
-BEFORE (进程管理器)                          AFTER (消息代理)
-┌──────────┐  ┌──────────┐                 ┌──────────┐  ┌──────────┐
-│  Tauri   │  │   TUI    │                 │  Tauri   │  │   TUI    │
-│ stdin ───┼──┼── stdout │                 │ socket ──┼──┼─ socket  │
-└────┬─────┘  └────┬─────┘                 └────┬─────┘  └────┬─────┘
-     │              │                           │              │
-     │  agent子进程   │                           │  deepxd 消息代理 │
-     │  (独占stdin)  │                           │  ┌──────────┐  │
-     │              │                           │  │ ring buf │  │
-     ▼              ▼                           │  │ per seed │  │
-  agent子进程      agent子进程                    │  └────┬─────┘  │
-  (断连=丢会话)    (断连=丢会话)                   │       │        │
-                                                  │  agent子进程   │
-                                                  │  (server持有   │
-                                                  │   stdin/stdout)│
-                                                  └───────────────┘
+✅ Phase 1: frontend reader threads     ✅ Phase 3: ring buffer
+✅ Phase 2: Tauri + TUI reconnect       ✅ Protocol: SessionState + BufferedEvents
+⏸️ Windows named pipe (windows-sys 不暴露 API)
+⏳ Phase 4: TCP loopback transport
+⏳ Phase 5: Snapshot unification
+⏳ Phase 6: Frame type layering (optional)
 ```
 
-## 缺口（已完成 80% 的骨架）
+## Phase 4: TCP Loopback Transport
 
-| # | 缺口 | 文件 | 状态 |
-|---|------|------|------|
-| 1 | 前端 reader 线程 | `daemon/main_loop.rs` | `FrontendManager::handle_frame` 已写好，无线程调用 |
-| 2 | Windows 命名管道 | `daemon/transport.rs` | 仅有 Unix socket，Win 报 `not yet supported` |
-| 3 | 事件缓冲 ring buffer | `daemon/frontend.rs` | broadcast 直写 socket，断连丢事件 |
-| 4 | Session 恢复协议 | `deepx-proto/agent_protocol.rs` | 无序列号/恢复机制 |
-| 5 | Tauri 重连逻辑 | `agent_bridge.rs` | daemon 不可用时 fallback 子进程 |
-| 6 | TUI 重连逻辑 | `terminalui/lib.rs` | 同上 |
+Replace Unix socket + Windows named pipe stub with `std::net::TcpListener`/`TcpStream`
+on `127.0.0.1`. Zero new dependencies — `std::net` is cross-platform.
 
-## Phase 1: 补全 Server 核心（gap 1+2+3）
+### 4.1 Transport rewrite (`daemon/transport.rs`)
 
-### 1.1 前端→Server 读取线程 (`daemon/main_loop.rs`)
+```
+删: #[cfg(unix)] pub mod unix { UnixListener, UnixStream }
+删: #[cfg(windows)] pub mod win { stub }
+加: TcpListener::bind("127.0.0.1:0")?  // random port
+加: 端口号写入 data_dir/deepxd.port 文件
+加: TcpStream::connect(port) 客户端连接
+加: 4-byte LE length prefix + JSON frame 格式不变
+```
 
-每个前端连接 spawn reader 线程，读 `FrontendToDaemon` 帧，调 `frontends.handle_frame()` 路由到 agent。
-帧格式沿用现有 4 字节 LE 长度前缀 + JSON。
+### 4.2 Path → Port (`daemon/lib.rs`)
 
-### 1.2 Windows 命名管道 (`daemon/transport/windows.rs`)
+```rust
+// Before
+pub fn socket_path() -> PathBuf { data_dir().join("deepxd.sock") }
+// After
+pub fn port_path() -> PathBuf { data_dir().join("deepxd.port") }
+pub fn read_port() -> Option<u16> { ... }
+pub fn write_port(port: u16) { ... }
+```
 
-参考 Unix socket 的 `bind/accept/connect` API，用 Windows Named Pipe (`\\.\pipe\deepxd`) 实现等价功能。
-`socket_path()` 已返回 `deepxd.pipe`，直接使用。
+### 4.3 Client adapters
 
-### 1.3 事件缓冲 (`daemon/frontend.rs`)
+- `agent_bridge.rs`: `UnixStream::connect(socket_path)` → `TcpStream::connect(addr)`
+- `terminalui/lib.rs`: same change
+- `main_loop.rs`: remove `#[cfg(unix)]` / `#[cfg(windows)]` branches — single code path
 
-每 seed 维护 ring buffer（容量 256），`broadcast()` 先写 buffer 再写 socket。
-前端断连标记 `disconnected`，重连时先发送缓冲事件（带 `seq_id`），再切换到实时流。
+### 4.4 Benefits
 
-### 1.4 Session 恢复协议 (`deepx-proto/agent_protocol.rs`)
+- Windows daemon works immediately (no `windows` crate needed)
+- Same binary, same protocol, same port file on all platforms
+- Future: swap `TcpStream` → WebSocket for browser access (no protocol change needed)
 
-新增 Agent2Ui 变体：
-- `SessionState { seed, turns, context_limit, seq_id }` — 重连时发送完整状态
-- `BufferedEvents { events: Vec<Agent2Ui>, seq_id }` — 追赶缓冲事件
-- 每个事件加 `seq_id: u64` 单调递增序列号
+## Phase 5: Snapshot Unification
 
-## Phase 2: 前端适配（gap 5+6）
+Merge `SessionState` + `BufferedEvents` into a single `Snapshot` message,
+following OpenClaw's pattern. On reconnect, frontend receives one snapshot
+containing full state + missed events + version counter.
 
-### 2.1 Tauri agent_bridge 适配
+### 5.1 Protocol (`agent_protocol.rs`)
 
-- 移除 `cmd_resume_session` 的 "always send ResumeSession" hack
-- Reader thread 改为读 daemon 帧（已有，需确认 seq_id 处理）
-- Writer 通过 daemon 发送（已有 `try_send_via_daemon`）
-- 重连时优先 daemon→fallback 子进程→fallback error
+```rust
+// Before (two separate variants)
+Agent2Ui::SessionState { seed, turns, tokens_used, context_limit, seq_id }
+Agent2Ui::BufferedEvents { events, from_seq, to_seq }
 
-### 2.2 TUI spawn_agent_subprocess 适配
+// After (unified)
+Agent2Ui::Snapshot {
+    seed: String,
+    turns: Vec<TurnData>,
+    tokens_used: u32,
+    context_limit: u32,
+    buffered_events: Vec<Agent2Ui>,  // events missed during disconnect
+    seq_id: u64,                      // current monotonic sequence
+    has_more: bool,                   // ring buffer wrapped (some events lost)
+}
+```
 
-- 移除 fallback 子进程路径（或保留为 daemon 不可用时的后备）
-- Reader/writer 走 daemon socket
-- 重连时接收 SessionState 恢复 turns
+### 5.2 Daemon adaptation (`frontend.rs`)
 
-## Phase 3: 清理 fallback 路径
+`replay_buffered()` → `build_snapshot()`: construct snapshot from current state + ring buffer.
 
-- 子进程 spawn 路径标记为 deprecated
-- Windows 上 daemon 可用后，移除 `CREATE_NO_WINDOW` 子进程 spawn
-- `AgentRegistry` 在 Tauri 侧仅作为 daemon 不可用时的后备
+### 5.3 Frontend adaptation
 
-## 风险
+Single handler for `Snapshot` replaces separate `SessionState` + `BufferedEvents` handlers.
 
-| 风险 | 缓解 |
-|------|------|
-| Windows 命名管道权限问题 | 仅允许当前用户连接（`PIPE_ACCESS_INBOUND` + `FILE_FLAG_FIRST_PIPE_INSTANCE`） |
-| ring buffer 内存占用 | 256 事件 × ~2KB ≈ 512KB/seed，可接受 |
-| 旧前端与新版 daemon 协议不兼容 | 前端先检查 `SessionState` 变体是否存在，不存在则 fallback 旧行为 |
-| daemon 崩溃后所有 session 丢失 | daemon 启动时扫描 sessions_dir，重新 spawn 上次活跃的 agent |
+## Phase 6: Frame Type Layering (Optional)
 
-## 估算
+Separate `Agent2Ui` into three frame types, following OpenClaw's pattern:
 
-| Phase | 文件 | 行数 |
-|-------|------|------|
-| 1.1 前端 reader | 1 | +30 |
-| 1.2 Windows 管道 | 2 | +60 |
-| 1.3 事件缓冲 | 1 | +40 |
-| 1.4 恢复协议 | 1 | +25 |
-| 2.1 Tauri 适配 | 1 | +15 / -10 |
-| 2.2 TUI 适配 | 1 | +15 / -10 |
-| 3 清理 | 2 | -20 |
-| **合计** | **9** | **~+185 / -40** |
+```rust
+// Current: all in one enum
+Agent2Ui { TurnStart, RoundDelta, ..., SessionState, Done, Error, ... }
+
+// Proposed: layered
+RequestFrame  { id, method, params }     // → expects ResponseFrame
+ResponseFrame { id, result, error }      // ← reply to RequestFrame
+EventFrame    { type, payload }          // unidirectional broadcast
+```
+
+Benefit: enables request/response correlation (e.g., `cmd_send_message` → `TurnEnd`),
+simpler frontend dispatch, future extensibility.
+
+Defer unless needed — current flat enum works fine for local use.
+
+## Risk
+
+| Risk | Mitigation |
+|------|------------|
+| TCP port collision | Use port 0 (OS assigns random free port), persist in `.port` file |
+| Port file stale after crash | Daemon deletes `.port` on startup; client retries with timeout |
+| Other localhost processes | Bind 127.0.0.1 (loopback only, not 0.0.0.0) |
+
+## Estimated Effort
+
+| Phase | Files | Lines |
+|-------|-------|-------|
+| 4.1 Transport rewrite | `transport.rs` | +40 / -90 |
+| 4.2 Path→Port | `lib.rs` | +20 / -5 |
+| 4.3 Client adapters | `agent_bridge.rs`, `lib.rs`(TUI), `main_loop.rs` | +30 / -50 |
+| 5 Snapshot unification | `agent_protocol.rs`, `frontend.rs`, client adapters | +25 / -30 |
+| 6 Frame layering | deferred | — |
+| **Total** | **6** | **+115 / -175** |
