@@ -3,4 +3,4 @@
 /**
  * A single code delta record for persistence.
  */
-export type CodeDeltaRecord = { timestamp: bigint, lines_added: number, lines_removed: number, files_created: number, files_deleted: number, file: string | null, };
+export type CodeDeltaRecord = { timestamp: bigint, lines_added: number, lines_removed: number, files_created: number, files_deleted: number, file?: string, };

@@ -3,4 +3,4 @@
 /**
  * File metadata snapshot for rich rendering.
  */
-export type FileSnapshotInfo = { path: string, lines: number, size_bytes: bigint, start_line: number | null, end_line: number | null, tag: string | null, };
+export type FileSnapshotInfo = { path: string, lines: number, size_bytes: bigint, start_line?: number, end_line?: number, tag?: string, };

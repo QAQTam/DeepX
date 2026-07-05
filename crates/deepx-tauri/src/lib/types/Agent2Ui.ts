@@ -8,11 +8,11 @@ import type { ToolResultDef } from "./ToolResultDef";
 import type { TurnData } from "./TurnData";
 import type { UsageInfo } from "./UsageInfo";
 
-export type Agent2Ui = { "type": "turn_start", turn_id: string, user_text: string, } | { "type": "turn_end", turn_id: string, stop_reason: string | null, usage: UsageInfo | null, } | { "type": "round_delta", turn_id: string, round_num: number, kind: RoundDeltaKind, delta: string, } | { "type": "round_complete", turn_id: string, round_num: number, thinking: string | null, answer: string | null, tool_calls: Array<ToolCallDef>, 
+export type Agent2Ui = { "type": "turn_start", turn_id: string, user_text: string, } | { "type": "turn_end", turn_id: string, stop_reason?: string, usage?: UsageInfo, } | { "type": "round_delta", turn_id: string, round_num: number, kind: RoundDeltaKind, delta: string, } | { "type": "round_complete", turn_id: string, round_num: number, thinking?: string, answer?: string, tool_calls?: Array<ToolCallDef>, 
 /**
  * Ordered blocks matching LLM output sequence (preferred).
  */
-blocks: Array<RoundBlock>, 
+blocks?: Array<RoundBlock>, 
 /**
  * true = this is the final round of the turn
  */
@@ -32,4 +32,4 @@ has_more: boolean, } | { "type": "session_created", seed: string, } | { "type": 
 /**
  * "warn" or "error"
  */
-level: string, } | { "type": "balance", is_available: boolean, total_balance: string, currency: string, } | { "type": "dashboard", hp_connected: boolean, session_seed: string, tool_calls_total: number, tool_failures: number, current_phase: string, streaming: boolean, dsml_compat_count: number, documents: Array<DocInfo>, recent_edits: Array<string>, tasks: Array<TaskInfo>, session_title: string | null, usage: UsageInfo | null, context_limit: number, model: string | null, } | { "type": "done" } | { "type": "compact_start", turns_total: number, turns_keeping: number, } | { "type": "compact_end", summary_chars: number, turns_compacted: number, } | { "type": "cancelled" } | { "type": "shutdown_ack" } | { "type": "ready" } | { "type": "audit_record", tool_name: string, result_summary: string, success: boolean, } | { "type": "exec_progress", tool_call_id: string, chunk: string, } | { "type": "tool_call_preview", turn_id: string, round_num: number, index: number, id: string, name: string, args_so_far: string, } | { "type": "code_delta", lines_added: number, lines_removed: number, files_created: number, files_deleted: number, file: string | null, };
+level: string, } | { "type": "balance", is_available: boolean, total_balance: string, currency: string, } | { "type": "dashboard", hp_connected: boolean, session_seed: string, tool_calls_total: number, tool_failures: number, current_phase: string, streaming: boolean, dsml_compat_count: number, documents?: Array<DocInfo>, recent_edits?: Array<string>, tasks: Array<TaskInfo>, session_title?: string, usage?: UsageInfo, context_limit: number, model?: string, } | { "type": "done" } | { "type": "compact_start", turns_total: number, turns_keeping: number, } | { "type": "compact_end", summary_chars: number, turns_compacted: number, } | { "type": "cancelled" } | { "type": "shutdown_ack" } | { "type": "ready" } | { "type": "audit_record", tool_name: string, result_summary: string, success: boolean, } | { "type": "exec_progress", tool_call_id: string, chunk: string, } | { "type": "tool_call_preview", turn_id: string, round_num: number, index: number, id: string, name: string, args_so_far: string, } | { "type": "code_delta", lines_added: number, lines_removed: number, files_created: number, files_deleted: number, file?: string, };

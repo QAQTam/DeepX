@@ -89,6 +89,7 @@ pub struct ToolResultDef {
     pub output: String,
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub file: Option<FileSnapshotInfo>,
 }
 
@@ -100,10 +101,13 @@ pub struct FileSnapshotInfo {
     pub lines: u32,
     pub size_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub start_line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub end_line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub tag: Option<String>,
 }
 
@@ -179,8 +183,10 @@ pub enum Agent2Ui {
     TurnEnd {
         turn_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         stop_reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         usage: Option<deepx_types::UsageInfo>,
     },
 
@@ -205,8 +211,10 @@ pub enum Agent2Ui {
         turn_id: String,
         round_num: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         thinking: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         answer: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ToolCallDef>,
@@ -304,12 +312,15 @@ pub enum Agent2Ui {
         #[serde(default)]
         tasks: Vec<TaskInfo>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         session_title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         usage: Option<deepx_types::UsageInfo>,
         #[serde(default)]
         context_limit: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         model: Option<String>,
     },
 
@@ -364,6 +375,7 @@ pub enum Agent2Ui {
         files_created: usize,
         files_deleted: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         file: Option<String>,
     },
 }
@@ -393,6 +405,7 @@ pub struct CodeDeltaRecord {
     pub files_created: usize,
     pub files_deleted: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub file: Option<String>,
 }
 

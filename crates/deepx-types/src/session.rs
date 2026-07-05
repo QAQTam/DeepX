@@ -13,6 +13,7 @@ pub struct SessionMeta {
     pub updated_at: u64,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub effort: Option<String>,
     pub message_count: usize,
     /// Number of conversation turns (one user query + its assistant/tool chain).

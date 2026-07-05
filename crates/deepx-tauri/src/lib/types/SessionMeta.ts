@@ -5,7 +5,7 @@
  *
  * Fields marked `#[serde(skip)]` are runtime-only and not persisted to meta.json.
  */
-export type SessionMeta = { seed: string, created_at: bigint, updated_at: bigint, model: string, effort: string | null, message_count: number, 
+export type SessionMeta = { seed: string, created_at: bigint, updated_at: bigint, model: string, effort?: string, message_count: number, 
 /**
  * Number of conversation turns (one user query + its assistant/tool chain).
  */

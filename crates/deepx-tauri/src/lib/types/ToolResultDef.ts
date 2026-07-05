@@ -4,4 +4,4 @@ import type { FileSnapshotInfo } from "./FileSnapshotInfo";
 /**
  * Tool execution result sent in ToolResults.
  */
-export type ToolResultDef = { tool_call_id: string, output: string, success: boolean, file: FileSnapshotInfo | null, };
+export type ToolResultDef = { tool_call_id: string, output: string, success: boolean, file?: FileSnapshotInfo, };
