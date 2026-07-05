@@ -2,6 +2,7 @@ import { Show, createSignal, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
 import StockChart from "./StockChart";
+import ContextPanel from "./ContextPanel";
 import type { CodeDelta } from "../store/chat";
 
 const FMT = (n: number) => n.toLocaleString();
@@ -100,6 +101,7 @@ export default function InfoBar(props: {
         </Show>
       </div>
       <div class="info-item">
+        <ContextPanel seed={props.seed} />
         <Show when={props.isCompacting() || compactPct() > 0}
           fallback={
             <button class="info-compact-btn" onClick={handleCompact} title="Compact history">

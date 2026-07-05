@@ -1,7 +1,7 @@
 //! Session lifecycle: initialization, health status.
 
 use crate::agent::AgentState;
-use crate::chrono_local_date;
+use crate::util::chrono_local_date;
 use deepx_tools;
 use deepx_session::SessionManager;
 
@@ -30,7 +30,7 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 agent.session = meta;
                 agent.session.from_resume = true;
                 agent.session.tokens = 0;
-                let (msg, repairs) = deepx_message::MessageStore::from_messages(&agent.session.seed, &messages);
+                let (msg, repairs) = deepx_message::MessageStore::from_messages(&agent.session.seed, &messages, agent.session.compact_skip);
                 log::info!("[LIFECYCLE] from_messages done, {} turns, {} repairs", msg.turn_count(), repairs.len());
                 agent.msg = msg;
 

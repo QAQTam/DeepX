@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use tauri::{AppHandle, Emitter};
@@ -103,6 +104,7 @@ pub struct AgentInstance {
     seed: String,
     stdin: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Option<std::process::Child>>>,
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 /// Global registry of all running agent subprocesses, keyed by session seed.
@@ -179,7 +181,6 @@ fn windows_reg_path() -> String {
         const HKEY_LOCAL_MACHINE: isize = -2147483646i64 as isize; // 0x80000002
         const HKEY_CURRENT_USER: isize = -2147483647i64 as isize;   // 0x80000001
         const KEY_READ: u32 = 0x20019;
-        const REG_EXPAND_SZ: u32 = 2;
         
         let mut result = String::new();
         
@@ -466,11 +467,15 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
         let _ = app_handle.emit("agent-event", payload);
     });
 
-    Ok(AgentInstance {
+    let inst = AgentInstance {
         seed: seed.to_string(),
         stdin: Arc::new(Mutex::new(Box::new(stdin))),
         child: child_for_check,
-    })
+        shutdown_flag: Arc::new(AtomicBool::new(false)),
+    };
+    // Start heartbeat to auto-recover if agent dies
+    inst.spawn_heartbeat();
+    Ok(inst)
 }
 
 impl AgentRegistry {
@@ -593,6 +598,33 @@ impl AgentRegistry {
 }
 
 impl AgentInstance {
+    /// Spawn a background heartbeat thread that checks agent liveness every 10s.
+    /// If the agent process dies unexpectedly, triggers auto-respawn.
+    fn spawn_heartbeat(&self) {
+        let seed = self.seed.clone();
+        let child = self.child.clone();
+        let shutdown = self.shutdown_flag.clone();
+        std::thread::Builder::new()
+            .name(format!("hb-{}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                if shutdown.load(Ordering::Relaxed) { break; }
+                let is_dead = child.lock().ok()
+                    .and_then(|mut c| c.as_mut().and_then(|c| c.try_wait().ok()).flatten())
+                    .is_some();
+                if is_dead {
+                    log::warn!("[HEARTBEAT] agent {} died, auto-respawning",
+                        &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+                    let _ = ensure_agent(&seed);
+                }
+            })
+            .expect("failed to spawn heartbeat");
+    }
+
+    fn mark_shutdown(&self) {
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+    }
+
     fn send_shutdown(&self) -> Result<(), String> {
         let frame = Ui2Agent::Shutdown;
         let json = serde_json::to_string(&frame).map_err(|e| format!("serialize: {e}"))?;
@@ -605,6 +637,7 @@ impl AgentInstance {
     /// Send shutdown, kill the child process, and wait for it to exit.
     /// Designed to be called **outside** the registry lock.
     pub fn shutdown_and_wait(self) {
+        self.mark_shutdown();
         let seed = &self.seed[..self.seed.floor_char_boundary(self.seed.len().min(8))];
         let _ = self.send_shutdown();
         if let Ok(mut guard) = self.child.lock() {
@@ -778,22 +811,26 @@ pub fn cmd_save_config(
     subagent_default_tools: Vec<String>,
 ) -> Result<(), String> {
     let mut cfg = deepx_config::Config::load().unwrap_or_default();
-    if !api_key.is_empty() { cfg.api_key = api_key; }
-    if !model.is_empty() { cfg.model = model; }
-    if !base_url.is_empty() { cfg.base_url = base_url; }
-    if !provider_id.is_empty() { cfg.provider_id = provider_id; }
-    if !endpoint.is_empty() { cfg.endpoint = endpoint; }
-    if max_tokens > 0 { cfg.max_tokens = max_tokens; }
-    if context_limit > 0 { cfg.context_limit = context_limit; }
-    if !reasoning_effort.is_empty() { cfg.reasoning_effort = reasoning_effort; }
+    let set_str = |dest: &mut String, src: &str| { if !src.is_empty() { *dest = src.to_string(); } };
+    let set_u32 = |dest: &mut u32, src: u32| { if src > 0 { *dest = src; } };
+    let set_u64 = |dest: &mut u64, src: u64| { if src > 0 { *dest = src; } };
+
+    set_str(&mut cfg.api_key, &api_key);
+    set_str(&mut cfg.model, &model);
+    set_str(&mut cfg.base_url, &base_url);
+    set_str(&mut cfg.provider_id, &provider_id);
+    set_str(&mut cfg.endpoint, &endpoint);
+    set_u32(&mut cfg.max_tokens, max_tokens);
+    set_u32(&mut cfg.context_limit, context_limit);
+    set_str(&mut cfg.reasoning_effort, &reasoning_effort);
     if !lang.is_empty() { cfg.lang = Some(lang); }
     if !context7_api_key.is_empty() { cfg.context7_api_key = Some(context7_api_key); }
-    // ── Subagent config ──
-    if !subagent_model.is_empty() { cfg.subagent.model = subagent_model; }
-    if !subagent_base_url.is_empty() { cfg.subagent.base_url = subagent_base_url; }
-    if !subagent_api_key.is_empty() { cfg.subagent.api_key = subagent_api_key; }
-    if subagent_max_tokens > 0 { cfg.subagent.max_tokens = subagent_max_tokens; }
-    if subagent_timeout_secs > 0 { cfg.subagent.timeout_secs = subagent_timeout_secs; }
+
+    set_str(&mut cfg.subagent.model, &subagent_model);
+    set_str(&mut cfg.subagent.base_url, &subagent_base_url);
+    set_str(&mut cfg.subagent.api_key, &subagent_api_key);
+    set_u32(&mut cfg.subagent.max_tokens, subagent_max_tokens);
+    set_u64(&mut cfg.subagent.timeout_secs, subagent_timeout_secs);
     if !subagent_default_tools.is_empty() { cfg.subagent.default_tools = subagent_default_tools; }
     cfg.save()?;
     // Broadcast reload to all running agents
@@ -976,23 +1013,8 @@ pub fn cmd_get_code_stats(seed: String, days: u32) -> Result<String, String> {
 /// Convert epoch seconds to "YYYY-MM-DD" UTC.
 fn chrono_local_date_from_epoch(epoch_secs: u64) -> String {
     let total_days = (epoch_secs / 86400) as i64;
-    let (y, m, d) = civil_from_days(total_days);
+    let (y, m, d) = deepx_types::platform::civil_from_days(total_days);
     format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Convert days since Unix epoch to (year, month, day).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
 }
 
 /// Kill the agent for a session (when tab is closed but session not deleted).
@@ -1009,6 +1031,312 @@ pub fn cmd_close_session(seed: String) -> Result<(), String> {
         inst.shutdown_and_wait();
     }
     Ok(())
+}
+
+/// Get git status for the current workspace: lists modified/new/deleted files with diff stats.
+/// Runs independently of the agent process — reads git repo directly.
+#[tauri::command]
+pub fn cmd_get_git_diff(seed: String) -> Result<String, String> {
+    let workspace = {
+        let dir = deepx_types::platform::sessions_dir().join(&seed);
+        let ws_path = dir.join("workspace.txt");
+        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+    };
+    if workspace.is_empty() { return Ok("[]".into()); }
+
+    let repo = match git2::Repository::open(&workspace) {
+        Ok(r) => r,
+        Err(_) => return Ok("[]".into()),
+    };
+
+    let mut files: Vec<serde_json::Value> = Vec::new();
+
+    if let Ok(statuses) = repo.statuses(None) {
+        for entry in statuses.iter() {
+            let path = entry.path().unwrap_or("").to_string();
+            let status = entry.status();
+            let change = if status.is_index_new() || status.is_wt_new() {
+                "added"
+            } else if status.is_index_deleted() || status.is_wt_deleted() {
+                "deleted"
+            } else if status.is_index_modified() || status.is_wt_modified() {
+                "modified"
+            } else if status.is_index_renamed() || status.is_wt_renamed() {
+                "renamed"
+            } else {
+                continue;
+            };
+
+            // Per-file line stats: diff just this file against HEAD.
+            let (lines_added, lines_removed) = if matches!(change, "modified" | "added") {
+                let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+                let mut opts = git2::DiffOptions::new();
+                opts.pathspec(&path);
+                head_tree
+                    .and_then(|tree| repo.diff_tree_to_workdir(Some(&tree), Some(&mut opts)).ok())
+                    .and_then(|d| d.stats().ok())
+                    .map(|s| (s.insertions() as u32, s.deletions() as u32))
+                    .unwrap_or((0, 0))
+            } else {
+                (0, 0)
+            };
+
+            files.push(serde_json::json!({
+                "path": path,
+                "change": change,
+                "lines_added": lines_added,
+                "lines_removed": lines_removed,
+            }));
+        }
+    }
+    serde_json::to_string(&files).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Get the diff for a single file in the workspace git repo.
+#[tauri::command]
+pub fn cmd_get_git_file_diff(seed: String, filePath: String) -> Result<String, String> {
+    let workspace = {
+        let dir = deepx_types::platform::sessions_dir().join(&seed);
+        let ws_path = dir.join("workspace.txt");
+        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+    };
+    if workspace.is_empty() { return Ok("".into()); }
+
+    let repo = git2::Repository::open(&workspace).map_err(|e| format!("open repo: {e}"))?;
+    let head = repo.head().map_err(|e| format!("head: {e}"))?;
+    let head_tree = head.peel_to_tree().map_err(|e| format!("tree: {e}"))?;
+
+    let mut diff_opts = git2::DiffOptions::new();
+    diff_opts.pathspec(&filePath);
+
+    let diff = repo.diff_tree_to_workdir(Some(&head_tree), Some(&mut diff_opts))
+        .map_err(|e| format!("diff: {e}"))?;
+
+    let mut patch_text = String::new();
+    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        let origin = line.origin();
+        let content = std::str::from_utf8(line.content()).unwrap_or("");
+        patch_text.push(origin);
+        patch_text.push_str(content);
+        true
+    }).map_err(|e| format!("print diff: {e}"))?;
+
+    Ok(patch_text)
+}
+
+/// Get dashboard data (tasks, recent edits) directly from session files.
+/// Does NOT go through the agent process — reads disk directly.
+#[tauri::command]
+pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
+    use std::io::BufRead;
+
+    // Tasks from sessions/{seed}/tasks-mem.md
+    let tasks: Vec<serde_json::Value> = {
+        let path = deepx_types::platform::sessions_dir().join(&seed).join("tasks-mem.md");
+        if let Ok(file) = std::fs::File::open(&path) {
+            std::io::BufReader::new(file).lines()
+                .filter_map(|l| l.ok())
+                .filter(|l| l.starts_with("- ["))
+                .filter_map(|line| {
+                    let trimmed = line.trim_start();
+                    let status = &trimmed[3..trimmed.find(']')?];
+                    let after = trimmed.split_once("] ")?.1;
+                    let (id_part, rest) = after.split_once(": ")?;
+                    let (subject, description) = rest.split_once(" — ").unwrap_or((rest, ""));
+                    Some(serde_json::json!({
+                        "id": id_part.trim(),
+                        "subject": subject.trim(),
+                        "description": description.trim(),
+                        "status": status,
+                    }))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+
+    // Recent edits from code_stats.jsonl (last 10 unique files)
+    let recent_edits: Vec<String> = {
+        let path = deepx_types::platform::sessions_dir().join(&seed).join("code_stats.jsonl");
+        if let Ok(file) = std::fs::File::open(&path) {
+            let mut files: Vec<String> = std::io::BufReader::new(file).lines()
+                .filter_map(|l| l.ok())
+                .filter_map(|line| {
+                    serde_json::from_str::<serde_json::Value>(&line).ok()
+                        .and_then(|v| v.get("file").and_then(|f| f.as_str()).map(String::from))
+                })
+                .collect();
+            files.reverse();
+            files.dedup();
+            files.truncate(10);
+            files
+        } else {
+            Vec::new()
+        }
+    };
+
+    serde_json::to_string(&serde_json::json!({
+        "tasks": tasks,
+        "recent_edits": recent_edits,
+    })).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Modify or delete a task directly from the frontend.
+/// Writes to tasks-mem.md on disk, then sends a ToolCall frame to the agent
+/// so its in-memory state stays in sync.
+#[tauri::command]
+pub fn cmd_task_action(seed: String, action: String, taskId: u32) -> Result<(), String> {
+    let dir = deepx_types::platform::sessions_dir().join(&seed);
+    let path = dir.join("tasks-mem.md");
+    let _guard = std::sync::Mutex::new(()); // serialize access
+
+    let mut lines: Vec<String> = if path.exists() {
+        std::fs::read_to_string(&path).unwrap_or_default()
+            .lines().map(String::from).collect()
+    } else {
+        Vec::new()
+    };
+
+    let prefix = format!("T{}:", taskId);
+    let idx = lines.iter().position(|l| l.contains(&prefix));
+
+    match action.as_str() {
+        "cancel" => {
+            let idx = idx.ok_or_else(|| format!("Task T{} not found", taskId))?;
+            for marker in &["[pending]", "[in_progress]", "[completed]", "[cancelled]"] {
+                if lines[idx].contains(marker) {
+                    lines[idx] = lines[idx].replace(marker, "[cancelled]");
+                    break;
+                }
+            }
+        }
+        "delete" => {
+            if let Some(idx) = idx {
+                lines.remove(idx);
+            }
+        }
+        _ => return Err(format!("Unknown action: {action}")),
+    }
+
+    std::fs::write(&path, lines.join("\n")).map_err(|e| format!("write tasks: {e}"))?;
+
+    // Notify agent if running
+    let args = serde_json::json!({"id": taskId, "status": if action == "cancel" { "cancelled" } else { "deleted" }});
+    let frame = if action == "cancel" {
+        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", taskId), name: "task".into(), action: "update".into(), args }
+    } else {
+        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", taskId), name: "task".into(), action: "delete".into(), args }
+    };
+    let _ = send_to_agent(&seed, frame);
+    Ok(())
+}
+
+/// Get context composition stats from the last API request dump.
+/// Returns JSON breakdown: chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt (in chars).
+/// After compaction, reads from context_stats.json (written by the agent) which reflects
+/// the compacted state immediately, bypassing the stale API dump.
+#[tauri::command]
+pub fn cmd_get_context_stats(seed: String) -> Result<String, String> {
+    // Prefer post-compact stats file (always up-to-date after compaction)
+    let stats_path = deepx_types::platform::sessions_dir().join(&seed).join("context_stats.json");
+    let api_path = deepx_types::platform::data_dir().join("logs").join(format!("{}_api.json", seed));
+
+    // Use compact stats if they're newer than the API dump (or API dump doesn't exist)
+    let use_compact = if stats_path.exists() {
+        let stats_time = stats_path.metadata().ok().and_then(|m| m.modified().ok());
+        let api_time = api_path.metadata().ok().and_then(|m| m.modified().ok());
+        match (stats_time, api_time) {
+            (Some(s), Some(a)) => s > a,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    } else { false };
+
+    if use_compact {
+        let raw = std::fs::read_to_string(&stats_path).unwrap_or_default();
+        // Merge tools_schema from API dump if available (not tracked in message tree)
+        let mut val: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        if val.get("tools_schema").and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+            if let Ok(api_data) = std::fs::read_to_string(&api_path) {
+                if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&api_data) {
+                    if let Some(last) = entries.last() {
+                        if let Some(req) = last.get("req") {
+                            let tools_len = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null))
+                                .unwrap_or_default().len() as u64;
+                            val["tools_schema"] = serde_json::json!(tools_len);
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(val.to_string());
+    }
+
+    // Fallback: parse from API dump
+    let path = api_path;
+    let data: Vec<serde_json::Value> = if path.exists() {
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default()).unwrap_or_default()
+    } else {
+        return Ok(serde_json::json!({"messages":0,"chat_text":0,"thinking":0,"tool_calls":0,"tool_results":0,"tools_schema":0,"system_prompt":0}).to_string());
+    };
+    let last = match data.last() { Some(v) => v, None => return Ok("{}".into()) };
+    let req = match last.get("req") { Some(r) => r, None => return Ok("{}".into()) };
+    let msgs = req.get("messages").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+
+    let mut chat_text = 0u64;
+    let mut thinking = 0u64;
+    let mut tool_calls = 0u64;
+    let mut tool_results = 0u64;
+    let mut system_prompt = 0u64;
+    let mut thinking_blocks = 0u64;
+    let mut tool_call_blocks = 0u64;
+
+    for m in &msgs {
+        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role == "system" {
+            if let Some(text) = m.get("content").and_then(|c| c.as_str()) {
+                system_prompt += deepx_types::count_tokens(text) as u64;
+            }
+            continue;
+        }
+        // Content can be a string (user/system/tool) or absent (assistant with tool_calls only)
+        if let Some(text) = m.get("content").and_then(|c| c.as_str()) {
+            let tok = deepx_types::count_tokens(text) as u64;
+            if role == "tool" {
+                tool_results += tok;
+            } else {
+                chat_text += tok;
+            }
+        }
+        // Assistant messages may have thinking/reasoning_content at top level
+        if let Some(reasoning) = m.get("reasoning_content").and_then(|r| r.as_str()) {
+            thinking_blocks += 1;
+            thinking += deepx_types::count_tokens(reasoning) as u64;
+        }
+        // Tool calls are at top level as "tool_calls" array
+        if let Some(arr) = m.get("tool_calls").and_then(|t| t.as_array()) {
+            for tc in arr {
+                tool_call_blocks += 1;
+                let json = serde_json::to_string(tc).unwrap_or_default();
+                tool_calls += deepx_types::count_tokens(&json) as u64;
+            }
+        }
+    }
+    let tools_json = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null)).unwrap_or_default();
+    let tools_schema = deepx_types::count_tokens(&tools_json) as u64;
+
+    serde_json::to_string(&serde_json::json!({
+        "messages": msgs.len(),
+        "chat_text": chat_text,
+        "thinking": thinking,
+        "tool_calls": tool_calls,
+        "tool_results": tool_results,
+        "tools_schema": tools_schema,
+        "system_prompt": system_prompt,
+        "thinking_blocks": thinking_blocks,
+        "tool_call_blocks": tool_call_blocks,
+    })).map_err(|e| format!("serialize: {e}"))
 }
 
 /// Get aggregated token usage stats for the last N days.
@@ -1143,23 +1471,8 @@ fn days_before_today(days: u32) -> String {
         .unwrap_or_default();
     let total_secs = dur.as_secs().saturating_sub((days as u64) * 86400);
     let epoch_days = total_secs / 86400;
-    // Use same civil_from_days algorithm as in deepx-msglp
-    let (y, m, d) = civil_from_days_tauri(epoch_days as i64 + 719468);
+    let (y, m, d) = deepx_types::platform::civil_from_days(epoch_days as i64);
     format!("{y:04}-{m:02}-{d:02}")
-}
-
-fn civil_from_days_tauri(days: i64) -> (i64, u32, u32) {
-    let z = days;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
 }
 
 // ── Helpers ──

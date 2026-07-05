@@ -1,5 +1,5 @@
 /* ── Sidebar ── */
-.sidebar { grid-row: 1 / -1; background: var(--bg-secondary); border-right: 0.5px solid var(--border-panel); display: flex; flex-direction: column; padding: 16px 12px; gap: 20px; }
+.sidebar { grid-row: 1 / -1; background: var(--bg-secondary); border-right: 0.5px solid var(--border-panel); display: flex; flex-direction: column; padding: 16px 12px; gap: 20px; overflow-x: hidden; overflow-y: auto; z-index: 1; }
 .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
 .sidebar-logo { font-size: 20px; color: var(--accent); font-weight: 700; font-family: var(--font-mono); }
 .sidebar-title { font-size: 16px; font-weight: 600; }

@@ -34,7 +34,6 @@ fn open_repo(path_arg: &str) -> Result<Repository, String> {
 fn fmt_time(t: i64) -> String {
     use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
     let secs = if t >= 0 { t as u64 } else { 0 };
-    let d = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
     let naive = NaiveDateTime::from_timestamp_opt(secs as i64, 0).unwrap_or_default();
     let dt: DateTime<Local> = Local.from_utc_datetime(&naive);
     dt.format("%Y-%m-%d %H:%M:%S").to_string()

@@ -75,6 +75,7 @@ const zh: I18nStrings = {
     noSessions: "未找到历史会话。",
     lastActive: "上次活跃",
     messages: "条消息",
+    turns: "轮对话",
     workspace: "工作区",
     workspaceHint: "项目根目录",
     workspaceBrowse: "浏览...",

@@ -2,85 +2,19 @@ import { createSignal, Show, createEffect, on, onMount, onCleanup } from "solid-
 import type { ToolCallDef, ToolResultDef } from "../store/chat";
 import { useI18n } from "../i18n";
 import AnsiUp from "ansi-to-html";
+import { renderDiffHtml, isUnifiedDiff } from "../lib/diff";
 
-// escapeXML: true — escape <, >, & in text content so that tool output
-// containing HTML/CSS/code is displayed as text, not rendered as DOM.
-const ansiUp = new AnsiUp({ escapeXML: true });
-
-const isUnifiedDiff = (text: string): boolean =>
-  /^(--- (a\/|\/)|@@ -\d+)/m.test(text);
-
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// Per-component AnsiUp: avoids state pollution from split ANSI sequences across chunks
+// A fresh instance is created for each ToolCallCard mount.
+function createAnsiRenderer() {
+  return new AnsiUp({ escapeXML: true });
 }
 
-function renderDiff(text: string): string {
-  const lines = text.split("\n");
-  const rows: Array<{ line: string; oldLn: string; newLn: string; cls: string }> = [];
-  let oldLn = 0, newLn = 0;
-  let fileHdr = "";
-  let summary = "";
-  let started = false;
-
-  for (const line of lines) {
-    if (!started && !line.startsWith("--- ") && !line.startsWith("@@")) {
-      if (line.trim()) summary += esc(line) + "\n";
-      continue;
-    }
-    if (line.startsWith("--- ")) {
-      fileHdr = esc(line.slice(4));
-      started = true;
-      continue;
-    }
-    if (line.startsWith("+++ ")) { continue; }
-    if (!started) continue;
-
-    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-    if (hunkMatch) {
-      if (oldLn === 0 && newLn === 0) {
-        oldLn = parseInt(hunkMatch[1]) - 1;
-        newLn = parseInt(hunkMatch[3]) - 1;
-      }
-      continue;
-    }
-
-    if (line.startsWith("-")) {
-      oldLn++;
-      rows.push({ line: esc(line.slice(1)), oldLn: String(oldLn), newLn: "", cls: "diff-row-del" });
-    } else if (line.startsWith("+")) {
-      newLn++;
-      rows.push({ line: esc(line.slice(1)), oldLn: "", newLn: String(newLn), cls: "diff-row-add" });
-    } else {
-      oldLn++; newLn++;
-      rows.push({ line: esc(line), oldLn: String(oldLn), newLn: String(newLn), cls: "diff-row-ctx" });
-    }
-  }
-
-  if (rows.length === 0) return "";
-
-  let html = '<div class="diff-block">';
-  if (summary) html += `<div class="diff-summary">${summary.trim()}</div>`;
-  if (fileHdr) html += `<div class="diff-file-hdr">${fileHdr}</div>`;
-  html += '<div class="diff-uni-wrap">';
-
-  for (const row of rows) {
-    html += `<div class="diff-uni-row ${row.cls}">`;
-    html += `<span class="diff-uni-ln diff-uni-old">${row.oldLn}</span>`;
-    html += `<span class="diff-uni-ln diff-uni-new">${row.newLn}</span>`;
-    html += `<span class="diff-uni-body">${row.line}</span>`;
-    html += '</div>';
-  }
-
-  html += '</div></div>';
-  return html;
-}
-
-function renderOutput(text: string): string {
+function renderOutput(text: string, ansi: AnsiUp): string {
   if (isUnifiedDiff(text)) {
-    return renderDiff(text);
+    return renderDiffHtml(text);
   }
-  // ANSI-to-HTML: preserve terminal colors in PTY output
-  const html = ansiUp.toHtml(text);
+  const html = ansi.toHtml(text);
   return `<pre class="diff-plain">${html}</pre>`;
 }
 
@@ -118,6 +52,9 @@ export default function ToolCallCard(props: {
     hasResult
       ? props.result!.success ? "tool-success" : "tool-error"
       : "tool-running";
+
+  // Per-component ANSI renderer — avoids cross-chunk state pollution
+  const ansi = createAnsiRenderer();
 
   // Auto-expand when streaming output arrives (redundant with default but safe)
   createEffect(on(() => props.streamingOutput, (v) => {
@@ -159,8 +96,8 @@ export default function ToolCallCard(props: {
       }>
         <div class="tool-card-body" ref={bodyRef} innerHTML={
           hasResult
-            ? renderOutput(props.result!.output)
-            : (props.streamingOutput || "")
+            ? renderOutput(props.result!.output, ansi)
+            : (props.streamingOutput ? renderOutput(props.streamingOutput, ansi) : "")
         } />
       </Show>
     </div>

@@ -216,14 +216,15 @@ impl MessageStore {
         if self.seed.is_empty() || self.ephemeral {
             return;
         }
+        let turn_count = self.turns.len();
         if !self.pending_save.is_empty() {
             SessionManager::global().save_append(
-                &self.seed, &self.pending_save, model, Some(effort), self.compact_skip,
+                &self.seed, &self.pending_save, model, Some(effort), self.compact_skip, turn_count,
             );
             self.pending_save.clear();
         } else {
             SessionManager::global().update_meta(
-                &self.seed, model, Some(effort), self.compact_skip,
+                &self.seed, model, Some(effort), self.compact_skip, turn_count,
             );
         }
     }
@@ -563,16 +564,18 @@ impl MessageStore {
             return;
         }
         let msgs = self.to_vec();
+        let turn_count = self.turns.len();
         SessionManager::global().save_full(
-            &self.seed, &msgs, model, Some(effort), self.compact_skip,
+            &self.seed, &msgs, model, Some(effort), self.compact_skip, turn_count,
         );
         self.pending_save.clear();
     }
 
     /// Reconstruct the internal turn/step structure by replaying saved messages
     /// through `push_user` / `push_assistant` / `push_tool_result`.
-    pub fn from_messages(seed: &str, msgs: &[Message]) -> (Self, Vec<String>) {
+    pub fn from_messages(seed: &str, msgs: &[Message], compact_skip: usize) -> (Self, Vec<String>) {
         let mut store = Self::new(seed);
+        store.compact_skip = compact_skip;
         store.replaying = true;
         let mut repairs = Vec::new();
         let mut i = 0;
@@ -673,17 +676,133 @@ impl MessageStore {
     }
 
     /// Compact: keep `keep` recent turns in LLM context, skip older ones.
-    /// Replaces any prior compact messages with a single consolidated summary.
+    /// Inserts the summary as a user message with [Compacted] / [UserInput] markers
+    /// so the LLM treats it as past conversation context, not system instructions.
     pub fn apply_compact(&mut self, summary: &str, keep: usize) {
         let skip = self.turns.len().saturating_sub(keep);
         if skip == 0 { return; }
         self.compact_skip = skip;
+
+        // Capture the LAST user message from the compacted range —
+        // the most recent user instruction carries the current intent.
+        // (First user message is typically a simple greeting, not useful.)
+        let last_user = self.turns.iter()
+            .take(skip)
+            .rev()
+            .find_map(|t| t.user.content.iter().find_map(|b| {
+                if let deepx_types::ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
+            }))
+            .unwrap_or_default();
+
+        // Remove old compact markers
         self.system_messages.retain(|m| {
             !m.content.iter().any(|b| matches!(b, deepx_types::ContentBlock::Text { text } if text.starts_with("[COMPACT")))
         });
-        self.system_messages.push(Message::system(
-            &format!("[COMPACT {} turns] Summary of earlier conversation:\n{summary}", skip)
-        ));
+
+        // Insert as user message: summary first, then marker with first user input
+        let compact_text = format!(
+            "[Compacted {} turns]\n{}\n\n[UserInput]\n{}",
+            skip, summary.trim(), last_user
+        );
+        // Insert before the compacted turns (at position skip in the turns list)
+        // Actually, insert as system message that appears before the compacted turns.
+        // The build_context_for_gate skips turns[0..compact_skip], so we need the
+        // compact message to appear before the first kept turn.
+        // Inserting into system_messages achieves this — they come before all turns.
+        self.system_messages.push(Message::user(&compact_text));
+    }
+
+    /// Get the text of any previous compaction summary (for incremental update mode).
+    /// Returns the summary portion (between header and [UserInput] marker).
+    pub fn previous_compact_summary(&self) -> Option<String> {
+        self.system_messages.iter().find_map(|m| {
+            m.content.iter().find_map(|b| {
+                if let deepx_types::ContentBlock::Text { text } = b {
+                    if text.starts_with("[Compacted") {
+                        let after_header = text.find('\n').map(|n| n + 1).unwrap_or(0);
+                        let before_input = text.find("[UserInput]").unwrap_or(text.len());
+                        let summary = &text[after_header..before_input].trim();
+                        if summary.len() > 20 { Some(summary.to_string()) } else { None }
+                    } else { None }
+                } else { None }
+            })
+        })
+    }
+
+    /// Compute context composition stats from the current message store.
+    /// This reflects the actual state (post-compact), unlike the API dump which lags.
+    /// Returns (chat_text_tok, thinking_tok, tool_calls_tok, tool_results_tok, tools_schema_tok, system_prompt_tok, thinking_blocks, tool_call_blocks).
+    /// All token fields use `deepx_types::count_tokens` (CJK-aware heuristic), NOT raw char length.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_context_stats(&self) -> (u64, u64, u64, u64, u64, u64, u64, u64) {
+        let mut chat_text = 0u64;
+        let mut thinking = 0u64;
+        let mut tool_calls = 0u64;
+        let mut tool_results = 0u64;
+        let mut system_prompt = 0u64;
+        let mut thinking_blocks = 0u64;
+        let mut tool_call_blocks = 0u64;
+
+        for m in &self.system_messages {
+            for b in &m.content {
+                if let deepx_types::ContentBlock::Text { text } = b {
+                    system_prompt += deepx_types::count_tokens(text) as u64;
+                }
+            }
+        }
+        for (i, turn) in self.turns.iter().enumerate() {
+            if i < self.compact_skip { continue; }
+            for m in [&turn.user] {
+                for b in &m.content {
+                    match b {
+                        deepx_types::ContentBlock::Text { text } => {
+                            chat_text += deepx_types::count_tokens(text) as u64;
+                        }
+                        deepx_types::ContentBlock::Reasoning { reasoning } => {
+                            thinking += deepx_types::count_tokens(reasoning) as u64;
+                            thinking_blocks += 1;
+                        }
+                        deepx_types::ContentBlock::ToolUse { .. } => {
+                            // Tool call JSON ≈ token count of serialized form
+                            let json = serde_json::to_string(b).unwrap_or_default();
+                            tool_calls += deepx_types::count_tokens(&json) as u64;
+                            tool_call_blocks += 1;
+                        }
+                        deepx_types::ContentBlock::ToolResult { content, .. } => {
+                            tool_results += deepx_types::count_tokens(content) as u64;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            for step in &turn.steps {
+                for b in &step.assistant.content {
+                    match b {
+                        deepx_types::ContentBlock::Text { text } => {
+                            chat_text += deepx_types::count_tokens(text) as u64;
+                        }
+                        deepx_types::ContentBlock::Reasoning { reasoning } => {
+                            thinking += deepx_types::count_tokens(reasoning) as u64;
+                            thinking_blocks += 1;
+                        }
+                        deepx_types::ContentBlock::ToolUse { .. } => {
+                            let json = serde_json::to_string(b).unwrap_or_default();
+                            tool_calls += deepx_types::count_tokens(&json) as u64;
+                            tool_call_blocks += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                for tr in &step.tool_results {
+                    for b in &tr.content {
+                        if let deepx_types::ContentBlock::ToolResult { content, .. } = b {
+                            tool_results += deepx_types::count_tokens(content) as u64;
+                        }
+                    }
+                }
+            }
+        }
+        (chat_text, thinking, tool_calls, tool_results, 0, system_prompt, thinking_blocks, tool_call_blocks)
     }
 }
 

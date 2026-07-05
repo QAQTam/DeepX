@@ -15,7 +15,6 @@ type ConnId = usize;
 
 /// A connected frontend.
 struct FrontendConn {
-    id: ConnId,
     stream: Box<dyn Write + Send>,
     /// Seeds this frontend is interested in.
     subscriptions: HashSet<String>,
@@ -43,7 +42,6 @@ impl FrontendManager {
         let id = self.next_id;
         self.next_id += 1;
         self.connections.insert(id, FrontendConn {
-            id,
             stream,
             subscriptions: HashSet::new(),
         });

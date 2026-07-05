@@ -1,11 +1,6 @@
 import { createStore, produce } from "solid-js/store";
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import AnsiUp from "ansi-to-html";
-
-// escapeXML: true — escape <, >, & in text content so that tool output
-// containing HTML/CSS/code is displayed as text, not rendered as DOM.
-const ansiUp = new AnsiUp({ escapeXML: true });
 
 export interface ToolCallDef { id: string; name: string; args_display: string; args_json: string; }
 export interface ToolResultDef { tool_call_id: string; output: string; success: boolean; }
@@ -13,10 +8,10 @@ export interface RoundBlock { type: "reasoning" | "text" | "tool"; content?: str
 export interface Round { roundNum: number; thinking?: string; answer?: string; blocks: RoundBlock[]; toolCalls: ToolCallDef[]; toolResults: ToolResultDef[]; }
 export interface Turn { turnId: string; userText: string; rounds: Round[]; status: "streaming" | "complete"; stopReason?: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; }
 export interface SessionInfo { seed: string; model: string; contextTokens: number; contextLimit: number; totalTokens: number; promptCacheHit: number; promptCacheMiss: number; }
-export interface SessionMeta { seed: string; model: string; created_at: number; updated_at: number; message_count: number; last_summary: string; }
+export interface SessionMeta { seed: string; model: string; created_at: number; updated_at: number; message_count: number; turn_count: number; last_summary: string; }
 export interface TaskInfo { id: string; subject: string; description: string; status: string; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
-export interface AskState { question: string; options: string[]; show: boolean; }
+export interface AskState { question: string; options: string[]; allow_custom: boolean; show: boolean; }
 export interface CodeDelta {
  lines_added: number;
  lines_removed: number;
@@ -54,7 +49,7 @@ export function createChatStore(seed: string) {
   const [tasks, setTasks] = createSignal<TaskInfo[]>([]);
   const [recentEdits, setRecentEdits] = createSignal<string[]>([]);
   const [activityLog, setActivityLog] = createSignal<ActivityEntry[]>([]);
-  const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], show: false });
+  const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], allow_custom: true, show: false });
   const [isCompacting, setIsCompacting] = createSignal(false);
 
   const [compactResult, setCompactResult] = createSignal<string | null>(null);
@@ -89,6 +84,23 @@ export function createChatStore(seed: string) {
 
   function resetStreamBuffer() { streamBuffer = { thinking: "", answer: "" }; }
 
+  // ── RAF batching: coalesce rapid delta updates into a single setTurns per frame ──
+  let rafPending = false;
+  let pendingTurnId = "";
+  let pendingRoundNum = 0;
+
+  function flushDeltas() {
+    if (!pendingTurnId) return;
+    const tid = pendingTurnId;
+    const rn = pendingRoundNum;
+    pendingTurnId = "";
+    pendingRoundNum = 0;
+    setTurns((t) => t.turnId === tid, "rounds", (r) => r.roundNum === rn, produce((round) => {
+      round.thinking = streamBuffer.thinking;
+      round.answer = streamBuffer.answer;
+    }));
+  }
+
   function ensureRound(turnId: string, roundNum: number) {
     const turn = turns.find((t) => t.turnId === turnId);
     if (!turn) return;
@@ -111,59 +123,106 @@ export function createChatStore(seed: string) {
     }
     if (kind === "thinking") streamBuffer.thinking += delta; else if (kind === "answering") streamBuffer.answer += delta;
     ensureRound(turnId, roundNum);
+    // RAF-batched: defer setTurns to next animation frame to coalesce rapid deltas
+    pendingTurnId = turnId;
+    pendingRoundNum = roundNum;
+    if (!rafPending) {
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        flushDeltas();
+      });
+    }
+  }
+
+  // ── RAF batching for tool call previews ──
+  let tcRafPending = false;
+  let pendingTcMap = new Map<string, { id: string; name: string; argsSoFar: string }>();
+
+  function flushToolCallPreviews(turnId: string, roundNum: number) {
+    const batch = [...pendingTcMap.values()];
+    pendingTcMap.clear();
+    if (batch.length === 0) return;
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
-      if (kind === "thinking") round.thinking = streamBuffer.thinking; if (kind === "answering") round.answer = streamBuffer.answer;
+      for (const u of batch) {
+        const existing = round.toolCalls.findIndex(tc => tc.id === u.id);
+        if (existing >= 0) {
+          round.toolCalls[existing].args_display = u.argsSoFar.slice(0, 100);
+          round.toolCalls[existing].args_json = u.argsSoFar;
+        } else {
+          round.toolCalls.push({ id: u.id, name: u.name, args_display: u.argsSoFar.slice(0, 100), args_json: u.argsSoFar });
+        }
+      }
     }));
   }
 
   function handleToolCallPreview(turnId: string, roundNum: number, index: number, id: string, name: string, argsSoFar: string) {
     ensureRound(turnId, roundNum);
-    // Update or insert tool call preview in the round's toolCalls
-    setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
-      const existing = round.toolCalls.findIndex(tc => tc.id === id);
-      if (existing >= 0) {
-        round.toolCalls[existing].args_display = argsSoFar.slice(0, 100);
-        round.toolCalls[existing].args_json = argsSoFar;
-      } else {
-        round.toolCalls.push({ id, name, args_display: argsSoFar.slice(0, 100), args_json: argsSoFar });
-      }
-    }));
+    pendingTcMap.set(id, { id, name, argsSoFar });
+    if (!tcRafPending) {
+      tcRafPending = true;
+      requestAnimationFrame(() => {
+        tcRafPending = false;
+        flushToolCallPreviews(turnId, roundNum);
+      });
+    }
   }
 
   function handleRoundComplete(turnId: string, roundNum: number, thinking?: string, answer?: string, toolCalls?: ToolCallDef[], blocks?: RoundBlock[]) {
+    flushDeltas(); // flush any pending streaming delta before replacing with final state
     ensureRound(turnId, roundNum);
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
       if (thinking) round.thinking = thinking; if (answer) round.answer = answer; if (toolCalls) round.toolCalls = toolCalls; if (blocks) round.blocks = blocks;
     }));
   }
 
-  function handleExecProgress(toolCallId: string, chunk: string) {
-    console.log("[ExecProgress]", toolCallId, chunk.slice(0, 40));
-    // Convert ANSI escape codes to HTML for PTY output rendering
-    const html = ansiUp.toHtml(chunk);
-    const streamKey = toolCallId + "_stream";
+  // ── RAF batching for exec progress (tool output streaming) ──
+  let execRafPending = false;
+  let pendingExecChunks = new Map<string, string>(); // toolCallId -> accumulated output
+
+  function flushExecProgress() {
+    const batch = [...pendingExecChunks.entries()];
+    pendingExecChunks.clear();
+    if (batch.length === 0) return;
     setTurns(produce((ts) => {
       const turn = ts[ts.length - 1];
-      if (!turn) { console.log("[ExecProgress] no turn"); return; }
+      if (!turn || turn.status !== "streaming") return;
       const round = turn.rounds[turn.rounds.length - 1];
-      if (!round) { console.log("[ExecProgress] no round"); return; }
-      console.log("[ExecProgress] round found, toolCalls:", round.toolCalls.length, "toolResults:", round.toolResults.length);
-      const existing = round.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
-      if (existing >= 0) {
-        round.toolResults[existing].output += html;
-      } else {
-        round.toolResults.push({ tool_call_id: streamKey, output: html, success: true });
+      if (!round) return;
+      for (const [streamKey, output] of batch) {
+        const existing = round.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
+        if (existing >= 0) {
+          round.toolResults[existing].output += output;
+        } else {
+          round.toolResults.push({ tool_call_id: streamKey, output, success: true });
+        }
       }
-      console.log("[ExecProgress] updated toolResults, count:", round.toolResults.length);
     }));
   }
 
+  function handleExecProgress(toolCallId: string, chunk: string) {
+    // Guard: ignore if the last turn is already complete (prevents bleed into next round)
+    const lastTurn = turns[turns.length - 1];
+    if (!lastTurn || lastTurn.status !== "streaming") return;
+
+    const prev = pendingExecChunks.get(toolCallId) || "";
+    pendingExecChunks.set(toolCallId, prev + chunk);
+    if (!execRafPending) {
+      execRafPending = true;
+      requestAnimationFrame(() => {
+        execRafPending = false;
+        flushExecProgress();
+      });
+    }
+  }
+
   function handleToolResults(turnId: string, roundNum: number, results: ToolResultDef[]) {
+    flushExecProgress(); // flush any pending exec progress before replacing with final results
     ensureRound(turnId, roundNum);
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
-      // Remove streaming placeholders for the same tool call IDs
-      const streamKeys = new Set(results.map(r => r.tool_call_id + "_stream"));
-      round.toolResults = round.toolResults.filter(tr => !streamKeys.has(tr.tool_call_id));
+      // Remove streaming placeholders matching the final result IDs
+      const resultIds = new Set(results.map(r => r.tool_call_id));
+      round.toolResults = round.toolResults.filter(tr => !resultIds.has(tr.tool_call_id));
       // Push final results (ANSI rendering handled by ToolCallCard)
       round.toolResults.push(...results);
     }));
@@ -171,13 +230,14 @@ export function createChatStore(seed: string) {
       if (r.success && r.output.startsWith("[USER_QUERY] ")) {
         try {
           const json = JSON.parse(r.output.slice(13));
-          setAskState({ question: json.question || "", options: json.options || [], show: true });
+          setAskState({ question: json.question || "", options: json.options || [], allow_custom: json.allow_custom !== false, show: true });
         } catch {}
       }
     }
   }
 
   function handleTurnEnd(turnId: string, data: Record<string, unknown>) {
+    flushDeltas(); flushToolCallPreviews(turnId, lastRoundNum); flushExecProgress(); // flush all pending state before marking complete
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
     setTurns((t) => t.turnId === turnId, produce((turn) => { turn.status = "complete"; turn.stopReason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
     const u = data.usage as Record<string, unknown> | undefined;
@@ -376,13 +436,27 @@ export function createChatStore(seed: string) {
   }
 
   async function submitAskAnswer(answer: string) {
-    setAskState({ question: "", options: [], show: false });
+    setAskState({ question: "", options: [], allow_custom: true, show: false });
     try {
       await invoke("cmd_send_message", { seed, text: answer });
     } catch (e) { console.error(e); }
   }
 
-  function dismissAsk() { setAskState({ question: "", options: [], show: false }); }
+  function dismissAsk() { setAskState({ question: "", options: [], allow_custom: true, show: false }); }
 
- return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  async function submitTaskAction(action: "cancel" | "delete" | "ask", taskId: string, subject: string, _description: string) {
+    if (action === "ask") {
+      try {
+        await invoke("cmd_send_message", { seed, text: `Look at ${taskId}: ${subject}. Explain the implementation plan and current status in detail.` });
+      } catch (e) { console.error(e); }
+    } else {
+      const num = parseInt(taskId.replace("T", ""), 10);
+      if (isNaN(num)) return;
+      try {
+        await invoke("cmd_task_action", { seed, action, taskId: num });
+      } catch (e) { console.error(e); }
+    }
+  }
+
+ return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

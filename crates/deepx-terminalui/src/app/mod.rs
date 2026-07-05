@@ -17,10 +17,9 @@ pub use setup::SetupState;
 
 // ── App state ──
 
-pub struct App {
-    pub screen: Screen,
-    pub setup: SetupState,
-    pub messages: Vec<ChatMessage>,
+/// Input line state (managed by UI input handler).
+#[derive(Default)]
+pub struct InputState {
     pub input: String,
     pub cursor: usize,
     /// Previously sent messages for ↑↓ recall.
@@ -29,6 +28,24 @@ pub struct App {
     pub history_idx: Option<usize>,
     /// Draft input saved when entering history browse mode.
     pub draft_input: String,
+}
+
+/// UI visibility toggles (managed by keybindings).
+#[derive(Default)]
+pub struct VisibilityFlags {
+    pub show_debug: bool,
+    pub show_tasks: bool,
+    pub show_context: bool,
+    pub show_help: bool,
+    pub show_thinking: bool,
+}
+
+pub struct App {
+    pub screen: Screen,
+    pub setup: SetupState,
+    pub messages: Vec<ChatMessage>,
+    pub input_state: InputState,
+    pub visibility: VisibilityFlags,
     pub status: String,
     pub last_error: String,
     pub context_tokens: u32,
@@ -46,11 +63,6 @@ pub struct App {
     pub sessions: Vec<SessionMeta>,
     pub session_index: usize,
     pub resume_seed: Option<String>,
-    pub show_debug: bool,
-    pub show_tasks: bool,
-    pub show_context: bool,
-    pub show_help: bool,
-    pub show_thinking: bool,
     /// When the current tool batch started (for elapsed-time animation).
     pub tool_batch_start: Option<std::time::Instant>,
     /// Total tools in the current batch being executed.
@@ -125,6 +137,7 @@ pub enum ChatRole {
 pub struct AskState {
     pub question: String,
     pub options: Vec<String>,
+    pub allow_custom: bool,
     pub selected: usize,
     pub custom_input: String,
 }
@@ -677,11 +690,8 @@ impl App {
             screen: Screen::Session,
             setup: SetupState::new(),
             messages: Vec::new(),
-            input: String::new(),
-            cursor: 0,
-            input_history: Vec::new(),
-            history_idx: None,
-            draft_input: String::new(),
+            input_state: InputState::default(),
+            visibility: VisibilityFlags { show_thinking: true, ..Default::default() },
             status: String::new(), // will be set after setup knows lang
             last_error: String::new(),
             context_tokens: 0,
@@ -712,11 +722,6 @@ impl App {
             sessions: Vec::new(),
             session_index: 0,
             resume_seed: None,
-            show_debug: false,
-            show_tasks: false,
-            show_context: false,
-            show_help: false,
-            show_thinking: true,
             tool_batch_start: None,
             tool_batch_total: 0,
             tool_batch_done: 0,
@@ -1069,6 +1074,7 @@ impl App {
                                 self.ask = Some(AskState {
                                     question,
                                     options,
+                                    allow_custom: payload.get("allow_custom").and_then(|v| v.as_bool()).unwrap_or(true),
                                     selected: 0,
                                     custom_input: String::new(),
                                 });

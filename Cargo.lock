@@ -677,10 +677,9 @@ dependencies = [
 
 [[package]]
 name = "deepx-config"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deepx-types",
- "log",
  "serde",
  "serde_json",
  "ureq 2.12.1",
@@ -688,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-daemon"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deepx-proto",
  "deepx-session",
@@ -702,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-gate"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "deepx-config",
@@ -715,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-message"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deepx-proto",
  "deepx-session",
@@ -727,7 +726,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-msglp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deepx-config",
  "deepx-gate",
@@ -746,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-proto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deepx-types",
  "serde",
@@ -755,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-session"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deepx-types",
  "log",
@@ -766,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-subagent"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deepx-session",
  "deepx-tools",
@@ -778,9 +777,8 @@ dependencies = [
 
 [[package]]
 name = "deepx-tauri"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
- "anyhow",
  "deepx-config",
  "deepx-daemon",
  "deepx-msglp",
@@ -788,19 +786,18 @@ dependencies = [
  "deepx-session",
  "deepx-tools",
  "deepx-types",
+ "git2",
  "log",
- "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
- "toml 0.8.2",
 ]
 
 [[package]]
 name = "deepx-terminal"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deepx-config",
  "deepx-daemon",
@@ -816,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-terminalui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -828,7 +825,6 @@ dependencies = [
  "deepx-types",
  "pulldown-cmark",
  "ratatui",
- "serde",
  "serde_json",
  "syntect",
  "toml 0.8.2",
@@ -838,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-tools"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -860,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-types"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",

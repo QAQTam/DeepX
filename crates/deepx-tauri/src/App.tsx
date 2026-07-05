@@ -9,6 +9,8 @@ import SettingsView from "./components/SettingsView";
 import InfoBar from "./components/InfoBar";
 import StatusPanel from "./components/StatusPanel";
 import TokenChart from "./components/TokenChart";
+import "./styles/git-diff-panel.css";
+import "./styles/context-panel.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
@@ -119,6 +121,7 @@ export default function App() {
           setActiveSeed(evtSeed);
         }
         refreshSessions();
+        loadDashboardFromDisk(evtSeed, chat);
         break;
       }
       case "session_restored": if (p.seed) {
@@ -136,6 +139,8 @@ export default function App() {
         }
         chat.setHasMore(!!p.has_more);
         refreshSessions();
+        // Load dashboard data directly from disk (no agent dependency)
+        loadDashboardFromDisk(evtSeed, chat);
       } break;
       case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); chat.setHasMore(!!p.has_more); } break;
       case "dashboard": chat.handleDashboard(p); break;
@@ -156,20 +161,19 @@ export default function App() {
       case "error": {
         const errMsg = (p.message ?? "Unknown error") as string;
         chat.handleError(errMsg);
-        // Show toast for agent disconnection
-        if (errMsg.includes("exited unexpectedly") || errMsg.includes("Agent process")) {
+        // Detect agent death: any message indicating the agent process is gone
+        const isAgentDead = /(exited|died|broken.pipe|killed|connection.*lost|agent.*(dead|gone|stopped))/i.test(errMsg);
+        if (isAgentDead) {
           toastCtrl.push(i18n.t().toast.agentLost, "error", true);
-        } else {
-          toastCtrl.push(errMsg, "error");
-        }
-        // If the error is about agent death, also trigger reconnect
-        if (errMsg.includes("exited unexpectedly")) {
+          // Auto-reconnect after agent death
           const seed = activeSeed();
           if (seed) {
             resumeSession(seed).then(() => {
               toastCtrl.push(i18n.t().toast.agentReconnected, "info");
             }).catch(() => {});
           }
+        } else {
+          toastCtrl.push(errMsg, "error");
         }
         break;
       }
@@ -201,6 +205,17 @@ export default function App() {
       list.sort((a, b) => b.updated_at - a.updated_at);
       setSessions(list);
     } catch (e) { console.error(e); }
+  }
+
+  /** Load tasks + recent edits from disk, bypassing agent. */
+  async function loadDashboardFromDisk(seed: string, chat: ChatStore) {
+    try {
+      const raw = await invoke<string>("cmd_get_dashboard_data", { seed });
+      const data = JSON.parse(raw);
+      if (data.tasks && data.tasks.length > 0) {
+        chat.handleDashboard({ tasks: data.tasks, recent_edits: data.recent_edits });
+      }
+    } catch (e) { console.error("loadDashboardFromDisk:", e); }
   }
 
   async function resumeSession(seed: string) {
@@ -427,7 +442,7 @@ export default function App() {
                   <span class="session-dot" />
                   <span class="session-info">
                     <span class="session-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
-                    <span class="session-meta">{formatDate(s.updated_at)} · {s.message_count} {t().session.messages}</span>
+                    <span class="session-meta">{formatDate(s.updated_at)} · {s.turn_count || s.message_count} {t().session.turns}</span>
                   </span>
                   <span
                     class="session-delete-btn"
@@ -505,7 +520,7 @@ export default function App() {
                 {activeChat() && (
                   <div class="chat-area">
                     <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} />
-                    <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} />
+                    <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
                   </div>
                 )}
               </Show>

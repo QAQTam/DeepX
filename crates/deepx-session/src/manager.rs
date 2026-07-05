@@ -115,6 +115,7 @@ impl SessionManager {
         model: &str,
         effort: Option<&str>,
         compact_skip: usize,
+        turn_count: usize,
     ) {
         let now = Self::now_epoch();
         let dir = self.session_path_dir(seed);
@@ -136,6 +137,7 @@ impl SessionManager {
             model: model.to_string(),
             effort: effort.map(String::from),
             message_count: total,
+            turn_count,
             last_summary,
             compact_skip,
             ..Default::default()
@@ -156,6 +158,7 @@ impl SessionManager {
         model: &str,
         effort: Option<&str>,
         compact_skip: usize,
+        turn_count: usize,
     ) {
         let now = Self::now_epoch();
         let dir = self.session_path_dir(seed);
@@ -174,6 +177,7 @@ impl SessionManager {
             model: model.to_string(),
             effort: effort.map(String::from),
             message_count: messages.len(),
+            turn_count,
             last_summary,
             compact_skip,
             ..Default::default()
@@ -199,6 +203,7 @@ impl SessionManager {
         model: &str,
         effort: Option<&str>,
         compact_skip: usize,
+        turn_count: usize,
     ) {
         if new_messages.is_empty() { return; }
 
@@ -229,6 +234,7 @@ impl SessionManager {
             model: model.to_string(),
             effort: effort.map(String::from),
             message_count: total,
+            turn_count,
             last_summary,
             compact_skip,
             ..Default::default()

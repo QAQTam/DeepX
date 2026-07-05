@@ -142,7 +142,7 @@ export default function StartupView(props: StartupViewProps) {
                 {(s) => (
                   <button class="startup-recent-item" onClick={() => props.onResume(s.seed)}>
                     <span class="startup-recent-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
-                    <span class="startup-recent-meta">{formatDate(s.updated_at)} · {s.message_count} {t().session.messages}</span>
+                    <span class="startup-recent-meta">{formatDate(s.updated_at)} · {s.turn_count || s.message_count} {t().session.turns}</span>
                   </button>
                 )}
               </For>

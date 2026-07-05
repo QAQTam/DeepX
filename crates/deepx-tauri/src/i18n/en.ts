@@ -73,6 +73,7 @@ const en = {
     noSessions: "No previous sessions found.",
     lastActive: "Last active",
     messages: "messages",
+    turns: "turns",
     workspace: "Workspace",
     workspaceHint: "Project root directory",
     workspaceBrowse: "Browse...",

@@ -55,12 +55,10 @@ pub fn all_tools() -> Vec<ToolDef> {
 
 // ── Execute ──
 
+/// Execute a tool and return the result string (no progress streaming).
+/// Convenience wrapper around execute_tool_with_id_full.
 pub fn execute_tool(name: &str, action: &str, args: &str) -> String {
-    execute_tool_with_id(name, action, args, "")
-}
-
-pub fn execute_tool_with_id(name: &str, action: &str, args: &str, tool_call_id: &str) -> String {
-    execute_tool_with_id_full(name, action, args, tool_call_id, None).content
+    execute_tool_with_id_full(name, action, args, "", None).content
 }
 
 /// Execute a tool and return the full result including any interrupt request.
@@ -160,60 +158,115 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
 }
 
 /// Compute code delta for file-operation tools.
+/// Uses git diff against HEAD for accurate per-file line counts when possible;
+/// falls back to argument-based estimates when git is unavailable.
 fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx_proto::CodeDeltaRecord> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or(tool_name);
+    let file_path = args.get("path").and_then(|v| v.as_str());
+
+    // Try git-based diff for accurate per-file line counts.
+    if let Some(fp) = file_path {
+        if let Some(delta) = git_code_delta(now, fp, action) {
+            return Some(delta);
+        }
+    }
+
+    // Fallback: argument-based estimates (no git repo or git failed).
     match (tool_name, action) {
         ("file", "write") => {
             let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
             Some(deepx_proto::CodeDeltaRecord {
                 timestamp: now,
                 lines_added: content.lines().count(),
                 lines_removed: 0,
                 files_created: 1,
                 files_deleted: 0,
-                file,
+                file: file_path.map(String::from),
             })
         }
         ("file", "edit") => {
             let old_s = args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
             let new_s = args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
-            let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
             Some(deepx_proto::CodeDeltaRecord {
                 timestamp: now,
                 lines_added: new_s.lines().count(),
                 lines_removed: old_s.lines().count(),
                 files_created: 0,
                 files_deleted: 0,
-                file,
+                file: file_path.map(String::from),
             })
         }
         ("file", "delete") => {
-            let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
             Some(deepx_proto::CodeDeltaRecord {
                 timestamp: now,
                 lines_added: 0,
                 lines_removed: 0,
                 files_created: 0,
                 files_deleted: 1,
-                file,
+                file: file_path.map(String::from),
             })
         }
         ("file", "edit_diff") => {
             let old_count = args.get("old_lines").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
             let new_count = args.get("new_lines").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-            let file = args.get("path").and_then(|v| v.as_str()).map(String::from);
             Some(deepx_proto::CodeDeltaRecord {
                 timestamp: now,
                 lines_added: new_count,
                 lines_removed: old_count,
                 files_created: 0,
                 files_deleted: 0,
-                file,
+                file: file_path.map(String::from),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Compute code delta using git diff HEAD→workdir for a single file.
+fn git_code_delta(now: u64, file_path: &str, action: &str) -> Option<deepx_proto::CodeDeltaRecord> {
+    // Resolve workspace path from current session.
+    let seed = crate::CURRENT_SESSION.lock().ok()?.clone()?;
+    let dir = deepx_types::platform::sessions_dir().join(&seed);
+    let ws = std::fs::read_to_string(dir.join("workspace.txt")).ok()?;
+    let ws = ws.trim();
+    if ws.is_empty() { return None; }
+
+    let repo = git2::Repository::open(ws).ok()?;
+
+    match action {
+        "write" | "edit" | "edit_diff" => {
+            let head_tree = repo.head().ok()?.peel_to_tree().ok()?;
+            let mut opts = git2::DiffOptions::new();
+            opts.pathspec(file_path);
+            let diff = repo.diff_tree_to_workdir(Some(&head_tree), Some(&mut opts)).ok()?;
+            let stats = diff.stats().ok()?;
+            let is_new = head_tree.get_path(std::path::Path::new(file_path)).is_err();
+            Some(deepx_proto::CodeDeltaRecord {
+                timestamp: now,
+                lines_added: stats.insertions(),
+                lines_removed: stats.deletions(),
+                files_created: if is_new { 1 } else { 0 },
+                files_deleted: 0,
+                file: Some(file_path.to_string()),
+            })
+        }
+        "delete" => {
+            // Count lines in HEAD version as "removed"
+            let head_tree = repo.head().ok()?.peel_to_tree().ok()?;
+            let entry = head_tree.get_path(std::path::Path::new(file_path)).ok()?;
+            let blob = repo.find_blob(entry.id()).ok()?;
+            let lines = String::from_utf8_lossy(blob.content()).lines().count();
+            Some(deepx_proto::CodeDeltaRecord {
+                timestamp: now,
+                lines_added: 0,
+                lines_removed: lines,
+                files_created: 0,
+                files_deleted: 1,
+                file: Some(file_path.to_string()),
             })
         }
         _ => None,

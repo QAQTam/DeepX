@@ -382,3 +382,9 @@ fn is_binary_file(path: &std::path::Path) -> bool {
         Err(_) => false,
     }
 }
+
+/// Check if a file read error indicates a binary (non-UTF-8) file.
+pub(super) fn is_binary_read_error(err: &str) -> bool {
+    err.contains("valid UTF-8") || err.contains("utf8") || err.contains("utf-8")
+        || err.contains("UTF-8")
+}

@@ -9,24 +9,8 @@ pub mod pty;
 pub mod explore;
 
 pub mod bridge;
-pub mod file_read;
-
-pub mod file_write;
-
-pub mod file_edit;
-
-pub mod file_edit_diff;
-
-pub mod file_list_dir;
-
-pub mod file_search;
-
-pub mod file_delete;
-
-pub mod file_move;
-
-pub mod file_diff;
-
+pub mod file_mutate;
+pub mod file_query;
 pub mod file_shared;
 pub mod git_tool;
 mod safety;
