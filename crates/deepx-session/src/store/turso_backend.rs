@@ -8,12 +8,21 @@ use std::sync::LazyLock;
 
 use deepx_types::{Message, SessionMeta};
 
-static RT: LazyLock<tokio::runtime::Runtime> =
-    LazyLock::new(|| tokio::runtime::Builder::new_current_thread().enable_all().build().expect("turso tokio runtime"));
+static RT: LazyLock<Option<tokio::runtime::Runtime>> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()
+});
 
 pub struct TursoBackend {
     _db: turso::Database,
     conn: turso::Connection,
+}
+
+/// Helper: get a reference to the shared runtime, or return an error.
+fn runtime() -> Result<&'static tokio::runtime::Runtime, String> {
+    RT.as_ref().ok_or_else(|| "turso: tokio runtime unavailable".to_string())
 }
 
 impl std::fmt::Debug for TursoBackend {
@@ -25,7 +34,7 @@ impl std::fmt::Debug for TursoBackend {
 impl TursoBackend {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let path_str = path.as_ref().to_str().ok_or("invalid path")?;
-        let db = RT
+        let db = runtime()?
             .block_on(turso::Builder::new_local(path_str).build())
             .map_err(|e| format!("open turso: {e}"))?;
         let conn = db.connect().map_err(|e| format!("connect turso: {e}"))?;
@@ -33,7 +42,7 @@ impl TursoBackend {
     }
 
     pub fn init_tables(&self) -> Result<(), String> {
-        RT.block_on(async {
+        runtime()?.block_on(async {
             self.conn
                 .execute_batch(
                     "CREATE TABLE IF NOT EXISTS sessions (
@@ -62,7 +71,7 @@ impl TursoBackend {
     pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<(), String> {
         let json = serde_json::to_string(meta).unwrap_or_default();
         let seed = seed.to_string();
-        RT.block_on(async {
+        runtime()?.block_on(async {
             self.conn
                 .execute(
                     "INSERT OR REPLACE INTO sessions (seed, meta_json, updated_at)
@@ -77,7 +86,7 @@ impl TursoBackend {
 
     pub fn load_meta(&self, seed: &str) -> Result<Option<SessionMeta>, String> {
         let seed = seed.to_string();
-        RT.block_on(async {
+        runtime()?.block_on(async {
             let mut rows = self
                 .conn
                 .query(
@@ -101,7 +110,7 @@ impl TursoBackend {
     }
 
     pub fn list_sessions(&self) -> Result<Vec<SessionMeta>, String> {
-        RT.block_on(async {
+        runtime()?.block_on(async {
             let mut rows = self
                 .conn
                 .query("SELECT meta_json FROM sessions ORDER BY updated_at DESC", [0i32; 0])
@@ -132,7 +141,7 @@ impl TursoBackend {
         }
         let seed = seed.to_string();
 
-        RT.block_on(async move {
+        runtime()?.block_on(async move {
             self.conn
                 .execute_batch("BEGIN IMMEDIATE")
                 .await
@@ -150,8 +159,10 @@ impl TursoBackend {
                     )
                     .await
                     .map_err(|e| {
-                        // Rollback on any error
-                        let _ = RT.block_on(self.conn.execute_batch("ROLLBACK"));
+                        // Rollback on any error (best-effort)
+                        if let Ok(rt) = runtime() {
+                            let _ = rt.block_on(self.conn.execute_batch("ROLLBACK"));
+                        }
                         format!("insert msg batch: {e}")
                     })?;
             }
@@ -170,7 +181,7 @@ impl TursoBackend {
         let seed = seed.to_string();
         let mid = msg.msg_id.map(|v| v as i64);
         let role = msg.role.clone();
-        RT.block_on(async {
+        runtime()?.block_on(async {
             self.conn
                 .execute(
                     "INSERT INTO messages (session_seed, msg_id, role, content_json)
@@ -185,7 +196,7 @@ impl TursoBackend {
 
     pub fn load_messages(&self, seed: &str) -> Result<Vec<Message>, String> {
         let seed = seed.to_string();
-        RT.block_on(async {
+        runtime()?.block_on(async {
             let mut rows = self
                 .conn
                 .query(
@@ -214,7 +225,7 @@ impl TursoBackend {
 
     pub fn delete_session(&self, seed: &str) -> Result<(), String> {
         let seed = seed.to_string();
-        RT.block_on(async {
+        runtime()?.block_on(async {
             self.conn
                 .execute(
                     "DELETE FROM messages WHERE session_seed = ?1",
