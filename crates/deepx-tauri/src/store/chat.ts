@@ -108,6 +108,7 @@ export function createChatStore(seed: string) {
   function handleTurnStart(turn_id: string, user_text: string) {
     lastRoundNum = 0;
     resetStreamBuffer();
+    setIsStreaming(true); setInputDisabled(true); setError(null);
     // Add new turn at end — but guard against duplicate re-emission (resume race)
     const already = turns[turns.length - 1];
     if (already && already.turn_id === turn_id) return;
@@ -225,6 +226,14 @@ export function createChatStore(seed: string) {
       // Append final results
       round.tool_results.push(...results);
     }));
+    for (const r of results) {
+      if (r.success && r.output.startsWith("[USER_QUERY] ")) {
+        try {
+          const json = JSON.parse(r.output.slice(13));
+          setAskState({ question: json.question || "", options: json.options || [], allow_custom: json.allow_custom !== false, show: true });
+        } catch {}
+      }
+    }
   }
 
   function handleTurnEnd(turn_id: string, data: Record<string, unknown>) {
@@ -260,7 +269,10 @@ export function createChatStore(seed: string) {
   }
 
   function handleAuditRecord(entry: ActivityEntry) {
-    setActivityLog((prev) => [...prev.slice(-99), entry]);
+    setActivityLog((prev) => {
+      const next = [entry, ...prev];
+      return next.length > 50 ? next.slice(0, 50) : next;
+    });
   }
 
   function handleCancelled() {
@@ -268,16 +280,21 @@ export function createChatStore(seed: string) {
   }
 
   function handleDone() {
-    // No-op: input re-enabled in handleTurnEnd
+    setIsStreaming(false);
+    setInputDisabled(false);
   }
 
-  function handleError(msg: string) { setError(msg); }
+  function handleError(msg: string) {
+    setError(msg); setIsStreaming(false); setInputDisabled(false);
+    const lastTurn = turns[turns.length - 1];
+    if (lastTurn && lastTurn.status === "streaming") setRestoreText(lastTurn.user_text);
+  }
   function clearError() { setError(null); }
 
   function clear() {
-    setTurns([]); resetStreamBuffer(); lastRoundNum = 0;
+    setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]);
+    resetStreamBuffer(); setIsStreaming(false); setInputDisabled(false); lastRoundNum = 0;
     setSessionInfo({ seed: "", model: "", context_tokens: 0, context_limit: 0, total_tokens: 0, prompt_cache_hit: 0, prompt_cache_miss: 0 });
-    setError(null); setIsStreaming(false);
   }
 
   function clearTurns() {
@@ -288,6 +305,7 @@ export function createChatStore(seed: string) {
 
   function handleCompactStart(data: Record<string, unknown>) {
     setIsCompacting(true);
+    setCompactResult(null);
   }
 
   function handleCompactEnd(data: Record<string, unknown>) {
@@ -299,12 +317,17 @@ export function createChatStore(seed: string) {
     // Tool notices are informational; just log for now
   }
 
-  function undoTurn(turn_id: string) {
+  async function undoTurn(turn_id: string) {
+    try {
+      await invoke("cmd_undo_turn", { seed, turnId: turn_id });
+    } catch (e) { console.error(e); }
     setTurns((prev) => prev.filter(t => t.turn_id !== turn_id));
   }
 
   function handleSessionCreated(evtSeed: string) {
+    cacheCurrentStatus();
     setSessionInfo(produce((s) => { s.seed = evtSeed; }));
+    loadCachedStatus(evtSeed);
   }
 
   async function submitTaskAction(action: "cancel" | "delete" | "ask", taskId: string, subject: string, _description: string) {

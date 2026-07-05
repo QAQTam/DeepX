@@ -145,7 +145,7 @@ export default function App() {
       } break;
       case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); chat.setHasMore(!!p.has_more); } break;
       case "dashboard": chat.handleDashboard(p); break;
-      case "done": // chat.setInputDisabled(false); // TODO: re-enable after store migration chat.handleDone(); break;
+      case "done": chat.handleDone(); chat.handleDone(); break;
       case "cancelled": chat.handleCancelled(); break;
       case "error": {
         const errMsg = (p.message ?? "Unknown error") as string;
