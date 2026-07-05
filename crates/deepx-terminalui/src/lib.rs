@@ -156,7 +156,9 @@ fn spawn_agent_subprocess(
         return Ok((tui_tx, agent_rx, dummy, true));
     }
 
-    // ── Fallback / Windows: spawn agent as direct child process ──
+    // ── Deprecated fallback / Windows: spawn agent as direct child process ──
+    // Will be removed once Windows named pipe support is implemented.
+    eprintln!("[deepx] daemon unavailable, falling back to deprecated direct child spawn");
     spawn_agent_child(&seed, &std::env::current_exe().map_err(|e| format!("exe path: {e}"))?, resume_seed)
         .map(|(tx, rx, child)| (tx, rx, child, false))
 }

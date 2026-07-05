@@ -1,8 +1,9 @@
 //! AgentRegistry — manages multiple agent child processes, one per session.
 //!
-//! Architecture (v7 — daemon + fallback):
-//! - On Unix: connects to `deepxd` daemon socket; all agent lifecycle managed by daemon.
-//! - On Windows / daemon unavailable: falls back to direct child process spawn (v6).
+//! Architecture (v8 — daemon-first with deprecated fallback):
+//! - Preferred: connects to `deepxd` daemon socket; all agent lifecycle managed by daemon.
+//! - Deprecated fallback (Windows / daemon unavailable): direct child process spawn (v6).
+//!   Will be removed once Windows named pipe support is implemented.
 //! - A single background reader thread dispatches Agent2Ui events from the daemon
 //!   to per-seed Tauri events (`agent-{seed}-event`).
 //! - Tauri commands write `FrontendToDaemon` frames to the daemon socket.
@@ -756,7 +757,9 @@ fn ensure_agent(seed: &str) -> Result<(), String> {
         // Daemon is connected — it manages agent spawn/restart
         return Ok(());
     }
-    // Fallback: direct spawn
+    // Deprecated fallback: direct child process spawn.
+    // Prefer daemon (ensure_daemon + send_to_agent) for reconnect support.
+    log::warn!("[REGISTRY] daemon unavailable, falling back to deprecated direct child spawn for seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
     registry.get_or_spawn(seed)
 }
