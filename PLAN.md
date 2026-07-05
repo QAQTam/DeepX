@@ -1,290 +1,105 @@
-# PLAN: Introduce `ts-rs` for TypeScript type generation
+# PLAN: Daemon → Message Broker Server
 
-## Motivation
+## Goal
 
-The Tauri frontend at `crates/deepx-tauri/src/` manually maintains ~12 TypeScript interfaces
-mirroring Rust structs from `deepx-proto` and `deepx-types`. The Tauri event bridge (`Agent2Ui`)
-dispatches 25+ event variants via `Record<string, unknown>` + unchecked `switch`, and all field
-access uses `as` casts. This causes:
+Upgrade `deepx-daemon` from a process manager to a full message broker.
+Frontend reconnects after crash/hot-reload without losing agent state.
 
-- **Type drift**: `ToolResultDef` in TS is missing `file?: FileSnapshotInfo` present in Rust
-- **Duplicate definitions**: `CodeDelta` is defined twice identically in `store/chat.ts`
-- **Naming mismatch**: TS types `Round`/`Turn`/`SessionInfo` use camelCase but the wire format is snake_case; `loadTurnsFromRestore()`/~30 lines of manual runtime remapping paper over the gap
-- **`invoke<string>` + `JSON.parse` as `any`**: 8+ Tauri commands return untyped JSON strings
-
-`ts-rs` replaces manual duplication with `#[derive(TS)]` → auto-generated `.ts` files,
-making the Rust struct the single source of truth.
-
----
-
-## Phase 1: Infrastructure (2 files, ~15 LOC)
-
-### 1.1 Add `ts-rs` to `deepx-proto/Cargo.toml`
-
-```toml
-[dependencies]
-ts-rs = { version = "10", features = ["serde-compat"] }
-```
-
-`serde-compat` enables `#[serde(tag = "type")]` → TS discriminated unions, `#[serde(rename)]`
-→ TS property renaming.
-
-### 1.2 Add `ts-rs` to `deepx-types/Cargo.toml`
-
-Same dependency — needed for `UsageInfo`, `SessionMeta` (persisted fields only), `ToolDef`.
-
-### 1.3 Add `ts-rs` to `src-tauri/Cargo.toml` (build-dependencies only)
-
-```toml
-[build-dependencies]
-ts-rs = { version = "10", features = ["serde-compat"] }
-```
-
-The build.rs needs `ts-rs` at build time to orchestrate the export.
-
-### 1.4 Update `src-tauri/build.rs`
-
-```rust
-fn main() {
-    println!("cargo:rerun-if-changed=../dist");
-    tauri_build::build();
-
-    // Invoke ts-rs export. deepx-proto's lib.rs will re-export `TS`
-    // and the build script triggers the export pass.
-    // This is a no-op on first build; the actual export is driven by
-    // `#[derive(TS)]` + `#[ts(export)]` annotations in the source crates.
-}
-```
-
-> **Note**: The exact mechanism depends on the `ts-rs` version. In v10, `#[ts(export)]`
-> on each type triggers file generation at compile time (via proc-macro). If using
-> `ts-rs` v8, we'd use a `TS::export_all()` call in the crate's own lib.rs. We'll
-> adopt whatever the latest stable API provides.
-
----
-
-## Phase 2: Annotate Rust types (3 files, ~35 `#[derive(TS)]`)
-
-### 2.1 `deepx-proto/src/agent_protocol.rs` — primary target
-
-All public types crossing the UI↔Agent boundary:
-
-| Type | Notes |
-|------|-------|
-| `Agent2Ui` | Tagged union, 25 variants — **highest value** |
-| `Ui2Agent` | Tagged union, 10 variants — frontend sends these too |
-| `RoundBlock` | Tagged union (reasoning/text/tool) |
-| `RoundDeltaKind` | Simple enum |
-| `ToolCallDef` | Struct — replaces manual TS `ToolCallDef` |
-| `ToolResultDef` | Struct — replaces manual TS `ToolResultDef` |
-| `FileSnapshotInfo` | Struct — currently missing from TS |
-| `DocInfo` | Struct — used in Dashboard |
-| `TaskInfo` | Struct — replaces manual TS `TaskInfo` |
-| `RoundData` | Struct — replaces manual `Round` |
-| `TurnData` | Struct — replaces manual `Turn` |
-| `CodeDeltaRecord` | Struct — used for persistence |
-| `CodeDaily` | Struct — used in StockChart |
-| `FrontendToDaemon` | Internal — **skip**, daemon-only |
-| `DaemonToFrontend` | Internal — **skip**, daemon-only |
-
-### 2.2 `deepx-types/src/api_types.rs`
-
-| Type | Notes |
-|------|-------|
-| `UsageInfo` | Used in `TurnEnd`, `Dashboard` — needed by frontend |
-
-### 2.3 `deepx-types/src/session.rs`
-
-| Type | Notes |
-|------|-------|
-| `SessionMeta` | **Partial export only**: persist fields (seed, model, created_at, updated_at, message_count, turn_count, last_summary, compact_skip). Skip runtime fields: `resume_seed`, `tokens`, `title`, `from_resume`. Use `#[ts(skip)]`. |
-
-> **Decision: Skip `ToolDef`/`ToolFunction`** — these are backend-internal (LLM tool definitions,
-> not surfaced to frontend). Frontend doesn't consume tool definitions directly.
-
-### 2.4 Naming strategy
-
-**Finding: the wire format is uniformly snake_case.** Rust struct fields use default serde
-behavior (no `rename_all` on any protocol type), so JSON keys are snake_case: `tool_call_id`,
-`round_num`, `user_text`, etc. Variant tags via `#[serde(rename = "...")]` are also snake_case:
-`"turn_start"`, `"round_complete"`.
-
-**Strategy: `ts-rs` generates snake_case TS by default.** No `rename_all` attribute needed.
-The generated TS types will match the wire format exactly:
-
-```typescript
-// Generated from Agent2Ui (snake_case, matches wire)
-export type Agent2Ui =
-  | { type: "turn_start"; turn_id: string; user_text: string }
-  | { type: "round_delta"; turn_id: string; round_num: number; kind: RoundDeltaKind; delta: string }
-  | { type: "round_complete"; turn_id: string; round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; blocks: RoundBlock[]; is_final: boolean }
-  // ... 22 more variants
-```
-
-**What gets fixed on the TS side:**
-- `Round` (`roundNum`, `toolCalls`, `toolResults`) → replace with generated `RoundData` (`round_num`, `tool_calls`, `tool_results`)
-- `Turn` (`turnId`, `userText`, `stopReason`) → replace with generated `TurnData` (`turn_id`, `user_text`, `stop_reason`)
-- `SessionInfo` → keep as UI-only composite (no Rust struct), but rename fields to snake_case for consistency
-- `loadTurnsFromRestore()` and `prependTurns()` become pass-through — **~30 lines deleted**
-
-**Zero wire-format risk.** The JSON on the wire does not change. Old session files remain compatible.
-The change is purely on the TS side: fix the types to match the wire, then delete the runtime conversion.
-
----
-
-## Phase 3: Frontend integration (1 file new, ~5 files delta)
-
-### 3.1 Generated output directory
+## Current State vs Target
 
 ```
-crates/deepx-tauri/src/lib/types/
-├── Agent2Ui.ts
-├── Ui2Agent.ts
-├── RoundBlock.ts
-├── ToolCallDef.ts
-├── ToolResultDef.ts
-├── FileSnapshotInfo.ts
-├── DocInfo.ts
-├── TaskInfo.ts
-├── RoundData.ts
-├── TurnData.ts
-├── CodeDeltaRecord.ts
-├── CodeDaily.ts
-├── UsageInfo.ts
-├── SessionMeta.ts
-└── index.ts            # barrel re-export
+BEFORE (进程管理器)                          AFTER (消息代理)
+┌──────────┐  ┌──────────┐                 ┌──────────┐  ┌──────────┐
+│  Tauri   │  │   TUI    │                 │  Tauri   │  │   TUI    │
+│ stdin ───┼──┼── stdout │                 │ socket ──┼──┼─ socket  │
+└────┬─────┘  └────┬─────┘                 └────┬─────┘  └────┬─────┘
+     │              │                           │              │
+     │  agent子进程   │                           │  deepxd 消息代理 │
+     │  (独占stdin)  │                           │  ┌──────────┐  │
+     │              │                           │  │ ring buf │  │
+     ▼              ▼                           │  │ per seed │  │
+  agent子进程      agent子进程                    │  └────┬─────┘  │
+  (断连=丢会话)    (断连=丢会话)                   │       │        │
+                                                  │  agent子进程   │
+                                                  │  (server持有   │
+                                                  │   stdin/stdout)│
+                                                  └───────────────┘
 ```
 
-The barrel file (`index.ts`) re-exports all types so consumers do `import { Agent2Ui, ... } from "@/lib/types"`.
+## 缺口（已完成 80% 的骨架）
 
-### 3.2 Replace manual types in `store/chat.ts`
+| # | 缺口 | 文件 | 状态 |
+|---|------|------|------|
+| 1 | 前端 reader 线程 | `daemon/main_loop.rs` | `FrontendManager::handle_frame` 已写好，无线程调用 |
+| 2 | Windows 命名管道 | `daemon/transport.rs` | 仅有 Unix socket，Win 报 `not yet supported` |
+| 3 | 事件缓冲 ring buffer | `daemon/frontend.rs` | broadcast 直写 socket，断连丢事件 |
+| 4 | Session 恢复协议 | `deepx-proto/agent_protocol.rs` | 无序列号/恢复机制 |
+| 5 | Tauri 重连逻辑 | `agent_bridge.rs` | daemon 不可用时 fallback 子进程 |
+| 6 | TUI 重连逻辑 | `terminalui/lib.rs` | 同上 |
 
-**Remove** L5-29 (all manual `export interface` definitions) and replace with:
+## Phase 1: 补全 Server 核心（gap 1+2+3）
 
-```typescript
-import type { ToolCallDef, ToolResultDef, RoundBlock, TaskInfo, CodeDeltaRecord, TurnData, RoundData } from "@/lib/types";
-```
+### 1.1 前端→Server 读取线程 (`daemon/main_loop.rs`)
 
-Keep `SessionInfo`, `ActivityEntry`, `AskState` — these are UI-only or composite types with no Rust counterpart.
+每个前端连接 spawn reader 线程，读 `FrontendToDaemon` 帧，调 `frontends.handle_frame()` 路由到 agent。
+帧格式沿用现有 4 字节 LE 长度前缀 + JSON。
 
-### 3.3 Update `App.tsx` event dispatch
+### 1.2 Windows 命名管道 (`daemon/transport/windows.rs`)
 
-Replace `Record<string, unknown>` with the generated `Agent2Ui` union:
+参考 Unix socket 的 `bind/accept/connect` API，用 Windows Named Pipe (`\\.\pipe\deepxd`) 实现等价功能。
+`socket_path()` 已返回 `deepxd.pipe`，直接使用。
 
-```typescript
-import type { Agent2Ui } from "@/lib/types";
+### 1.3 事件缓冲 (`daemon/frontend.rs`)
 
-function handleAgentEvent(chat: ChatStore, p: Agent2Ui, listenerSeed: string) {
-  switch (p.type) {
-    case "turn_start":  chat.handleTurnStart(p.turn_id, p.user_text); break;
-    case "round_delta": chat.handleRoundDelta(p.turn_id, p.round_num, p.kind, p.delta); break;
-    // ... all branches now type-safe, no `as` casts needed
-  }
-}
-```
+每 seed 维护 ring buffer（容量 256），`broadcast()` 先写 buffer 再写 socket。
+前端断连标记 `disconnected`，重连时先发送缓冲事件（带 `seq_id`），再切换到实时流。
 
-The `listen` call changes from `listen<Record<string, unknown>>` to `listen<Agent2Ui>`.
+### 1.4 Session 恢复协议 (`deepx-proto/agent_protocol.rs`)
 
-### 3.4 Update component imports
+新增 Agent2Ui 变体：
+- `SessionState { seed, turns, context_limit, seq_id }` — 重连时发送完整状态
+- `BufferedEvents { events: Vec<Agent2Ui>, seq_id }` — 追赶缓冲事件
+- 每个事件加 `seq_id: u64` 单调递增序列号
 
-- `StockChart.tsx` — `import type { CodeDaily } from "@/lib/types"` replaces manual interface
-- `GitDiffPanel.tsx` — `import type { CodeDaily } from "@/lib/types"`
-- `ContextPanel.tsx` — keep its `ContextStats` interface (computed on Rust side, no struct)
+## Phase 2: 前端适配（gap 5+6）
 
-### 3.5 Remove manual snake→camelCase conversion
+### 2.1 Tauri agent_bridge 适配
 
-`loadTurnsFromRestore()` (chat.ts:397-414) and `prependTurns()` (chat.ts:416-435)
-manually convert snake_case JSON to camelCase TS objects because `Round` and `Turn`
-use the wrong naming convention. After replacing these with the generated snake_case
-types (`RoundData`, `TurnData`), both functions simplify to a direct assignment:
+- 移除 `cmd_resume_session` 的 "always send ResumeSession" hack
+- Reader thread 改为读 daemon 帧（已有，需确认 seq_id 处理）
+- Writer 通过 daemon 发送（已有 `try_send_via_daemon`）
+- 重连时优先 daemon→fallback 子进程→fallback error
 
-```typescript
-// Before (30 lines of manual remapping)
-function loadTurnsFromRestore(turnsData: Array<{...}>) {
-  const loaded: Turn[] = turnsData.map((td) => {
-    const rounds: Round[] = td.rounds.map((rd) => ({
-      roundNum: rd.round_num,   // ← manual snake→camelCase
-      toolCalls: rd.tool_calls,  // ← manual rename
-      // ...
-    }));
-    return { turnId: td.turn_id, userText: td.user_text, ... };  // ← manual rename
-  });
-}
+### 2.2 TUI spawn_agent_subprocess 适配
 
-// After (3 lines, types match wire exactly)
-function loadTurnsFromRestore(turnsData: TurnData[]) {
-  setTurns(turnsData.map((td) => ({ ...td, status: "complete" as const })));
-}
-```
+- 移除 fallback 子进程路径（或保留为 daemon 不可用时的后备）
+- Reader/writer 走 daemon socket
+- 重连时接收 SessionState 恢复 turns
 
-> **Note**: The `status` field is UI-only (not on the wire). Added here; `TurnData` from
-> `ts-rs` won't include it. Alternative: use a separate `Turn` type that extends `TurnData`
-> with `status`, keeping the UI concern separate.
+## Phase 3: 清理 fallback 路径
 
----
+- 子进程 spawn 路径标记为 deprecated
+- Windows 上 daemon 可用后，移除 `CREATE_NO_WINDOW` 子进程 spawn
+- `AgentRegistry` 在 Tauri 侧仅作为 daemon 不可用时的后备
 
-## Phase 4: Validation & cleanup
+## 风险
 
-### 4.1 Verify build
+| 风险 | 缓解 |
+|------|------|
+| Windows 命名管道权限问题 | 仅允许当前用户连接（`PIPE_ACCESS_INBOUND` + `FILE_FLAG_FIRST_PIPE_INSTANCE`） |
+| ring buffer 内存占用 | 256 事件 × ~2KB ≈ 512KB/seed，可接受 |
+| 旧前端与新版 daemon 协议不兼容 | 前端先检查 `SessionState` 变体是否存在，不存在则 fallback 旧行为 |
+| daemon 崩溃后所有 session 丢失 | daemon 启动时扫描 sessions_dir，重新 spawn 上次活跃的 agent |
 
-```bash
-cd crates/deepx-tauri/src-tauri && cargo build  # ensures Rust compiles with TS derives
-cd crates/deepx-tauri && pnpm tsc --noEmit       # ensures TS types are consistent
-```
+## 估算
 
-### 4.2 Delete duplicate `CodeDelta` in `store/chat.ts`
-
-The second copy at L23-29 is removed by the import replacement.
-
-### 4.3 Add `@/lib/types/` to `.gitignore` (?)
-
-**Decision: Commit generated files.** Generated types are small (~2KB), checked-in types
-let contributors browse the protocol without building Rust. CI can verify they're up-to-date
-via `git diff --exit-code` after `cargo build`.
-
-### 4.4 Documentation
-
-Add a comment block at the top of `agent_protocol.rs`:
-```rust
-//! TypeScript types are auto-generated via ts-rs.
-//! After modifying any struct/enum in this file, run `cargo build` in
-//! `crates/deepx-tauri/src-tauri` to regenerate `../src/lib/types/`.
-```
-
----
-
-## Phase 5: Future improvements (out of scope for v0.6.1-alpha)
-
-1. **Typed Tauri commands**: Replace `Result<String, String>` return pattern with
-   `Result<SomeStruct, String>` and add `#[derive(TS)]` to the return structs.
-   This eliminates `JSON.parse(as any)` at 8+ call sites.
-
-2. **`specta` evaluation**: If all Tauri commands need full type safety (including
-   parameter types), `tauri-specta` would generate typed `invoke()` bindings.
-   This is a larger refactor but builds on the `ts-rs` foundation.
-
-3. **CI check**: Add `cargo build && git diff --exit-code` to CI to ensure
-   generated types stay in sync.
-
----
-
-## Risk assessment
-
-| Risk | Likelihood | Mitigation |
-|------|-----------|------------|
-| `serde_json::Value` fields map to `any` | Certain | `Ui2Agent::ToolCall.args` → `any`. Acceptable — these are user-typed arguments, inherently dynamic |
-| TS field rename (camelCase → snake_case) in `Round`/`Turn` | Medium | ~6 TS files reference `roundNum`/`toolCalls` etc. TypeScript compiler catches all mismatches at build time (`tsc --noEmit`) |
-| `ts-rs` version churn | Low | Pin to `"10"` in Cargo.toml. Upgrade later when stable |
-| Generated types go out of sync | Medium | Commit generated files to git; CI check enforces consistency |
-
----
-
-## Estimated effort
-
-| Phase | Files changed | Estimated LOC |
-|-------|--------------|---------------|
-| Phase 1: Infrastructure | 3 | +15 |
-| Phase 2: Annotate types | 2 | +45 |
-| Phase 3: Frontend integration | 5 | -80 / +25 |
-| Phase 4: Validation | 3 | +10 |
-| **Total** | **13** | **~+95 / -80** |
+| Phase | 文件 | 行数 |
+|-------|------|------|
+| 1.1 前端 reader | 1 | +30 |
+| 1.2 Windows 管道 | 2 | +60 |
+| 1.3 事件缓冲 | 1 | +40 |
+| 1.4 恢复协议 | 1 | +25 |
+| 2.1 Tauri 适配 | 1 | +15 / -10 |
+| 2.2 TUI 适配 | 1 | +15 / -10 |
+| 3 清理 | 2 | -20 |
+| **合计** | **9** | **~+185 / -40** |
