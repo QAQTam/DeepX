@@ -64,22 +64,30 @@ pub mod unix {
     }
 }
 
-// ── Windows named pipe (stub) ──
+// ── Windows named pipe (TODO: full impl) ──
 
 #[cfg(windows)]
 pub mod win {
     use std::io;
     use std::path::Path;
 
-    pub fn bind(_path: &Path) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "Windows named pipe not yet implemented"))
+    /// TODO: Implement using CreateNamedPipeW + ConnectNamedPipe
+    /// with windows-sys crate. See Codex app-server-daemon for reference.
+    pub fn bind(_path: &Path) -> io::Result<std::fs::File> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows named pipe not yet implemented — use direct child process fallback",
+        ))
     }
 
-    pub fn accept(_listener: &()) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "Windows named pipe not yet implemented"))
+    pub fn accept(_pipe: std::fs::File) -> io::Result<std::fs::File> {
+        Ok(_pipe) // unreachable because bind always fails
     }
 
-    pub fn connect(_path: &Path) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "Windows named pipe not yet implemented"))
+    pub fn connect(_path: &Path) -> io::Result<std::fs::File> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows named pipe not yet implemented",
+        ))
     }
 }

@@ -63,6 +63,12 @@ pub enum Ui2Agent {
         #[serde(default = "default_load_count")]
         count: u32,
     },
+
+    #[serde(rename = "subscribe")]
+    Subscribe { seed: String },
+
+    #[serde(rename = "reconnect")]
+    Reconnect { seed: String, last_seq: u64 },
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -274,6 +280,24 @@ pub enum Agent2Ui {
     #[serde(rename = "session_created")]
     SessionCreated {
         seed: String,
+    },
+
+    /// Full session state sent to a reconnecting frontend.
+    #[serde(rename = "session_state")]
+    SessionState {
+        seed: String,
+        turns: Vec<TurnData>,
+        tokens_used: u32,
+        context_limit: u32,
+        seq_id: u64,
+    },
+
+    /// Replay buffered events the frontend missed.
+    #[serde(rename = "buffered_events")]
+    BufferedEvents {
+        events: Vec<Agent2Ui>,
+        from_seq: u64,
+        to_seq: u64,
     },
 
     // ── System events ──
