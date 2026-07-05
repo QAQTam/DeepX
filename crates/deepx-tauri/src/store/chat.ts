@@ -230,24 +230,29 @@ export function createChatStore(seed: string) {
     const u = data.usage as Record<string, unknown> | undefined;
     if (u) {
       setSessionInfo(produce((s) => {
-        const pt = (u.prompt_tokens ?? s.prompt_cache_hit) as number;
-        const ct = (u.completion_tokens ?? s.prompt_cache_miss) as number;
-        s.total_tokens += (pt + ct);
+        if (u.prompt_tokens != null) s.context_tokens = u.prompt_tokens as number;
+        if (u.total_tokens != null) s.total_tokens = (u.total_tokens as number);
+        if (u.prompt_cache_hit_tokens != null) s.prompt_cache_hit = u.prompt_cache_hit_tokens as number;
+        if (u.prompt_cache_miss_tokens != null) s.prompt_cache_miss = u.prompt_cache_miss_tokens as number;
       }));
     }
   }
 
   function handleDashboard(data: Record<string, unknown>) {
     setSessionInfo(produce((s) => {
-      s.seed = (data.session_seed ?? s.seed) as string;
-      s.model = (data.model ?? s.model) as string;
-      s.context_tokens = (data.context_limit ?? s.context_tokens) as number;
-      // Use context_limit from dashboard as the threshold
-      s.context_limit = (data.context_limit ?? s.context_limit) as number;
+      if (data.session_seed) s.seed = data.session_seed as string;
+      if (data.model) s.model = data.model as string;
+      if (data.context_limit != null) s.context_limit = data.context_limit as number;
+      if (data.usage != null) {
+        const u = data.usage as Record<string, unknown>;
+        if (u.prompt_tokens != null) s.context_tokens = u.prompt_tokens as number;
+        if (u.total_tokens != null) s.total_tokens = u.total_tokens as number;
+        if (u.prompt_cache_hit_tokens != null) s.prompt_cache_hit = u.prompt_cache_hit_tokens as number;
+        if (u.prompt_cache_miss_tokens != null) s.prompt_cache_miss = u.prompt_cache_miss_tokens as number;
+      }
     }));
     if (data.tasks) setTasks(data.tasks as TaskInfo[]);
     if (data.recent_edits) setRecentEdits(data.recent_edits as string[]);
-    if (data.documents) { /* TODO */ }
   }
 
   function handleAuditRecord(entry: ActivityEntry) {
