@@ -20,7 +20,8 @@ use std::sync::mpsc;
 /// Falls back to direct child process spawn when daemon is unavailable.
 fn spawn_agent_subprocess(
     resume_seed: Option<&str>,
-) -> Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, std::process::Child), String> {
+    _last_seq: u64,
+) -> Result<(mpsc::Sender<Ui2Agent>, mpsc::Receiver<Agent2Ui>, std::process::Child, bool), String> {
     // ── Determine session seed ──
     let seed: String = match resume_seed {
         Some(s) => s.to_string(),
@@ -46,7 +47,7 @@ fn spawn_agent_subprocess(
         let socket_path = deepx_daemon::socket_path();
         let exe = std::env::current_exe().map_err(|e| format!("exe path: {e}"))?;
 
-        let stream = {
+        let mut stream = {
             let mut connected = false;
             for attempt in 0..3 {
                 match deepx_daemon::transport::unix::connect(&socket_path) {
@@ -68,12 +69,31 @@ fn spawn_agent_subprocess(
             }
             if !connected {
                 // Fall through to child process spawn below
-                return spawn_agent_child(&seed, &exe, resume_seed);
+                return spawn_agent_child(&seed, &exe, resume_seed)
+                    .map(|(tx, rx, child)| (tx, rx, child, false));
             }
         };
 
         let (tui_tx, tui_rx) = mpsc::channel::<Ui2Agent>();
         let (agent_tx, agent_rx) = mpsc::channel::<Agent2Ui>();
+
+        // ── Daemon reconnect handshake: send Subscribe + Reconnect before spawning threads ──
+        {
+            let sub = FrontendToDaemon {
+                seed: seed.clone(),
+                frame: Ui2Agent::Subscribe { seed: seed.clone() },
+            };
+            deepx_daemon::transport::write_frame(&mut stream, &sub)
+                .map_err(|e| format!("daemon subscribe: {e}"))?;
+
+            let recon = FrontendToDaemon {
+                seed: seed.clone(),
+                frame: Ui2Agent::Reconnect { seed: seed.clone(), last_seq: _last_seq },
+            };
+            deepx_daemon::transport::write_frame(&mut stream, &recon)
+                .map_err(|e| format!("daemon reconnect: {e}"))?;
+            // Responses (SessionState, BufferedEvents) are read by the reader thread below.
+        }
 
         let seed_w = seed.clone();
         let mut stream_w = stream.try_clone()
@@ -133,11 +153,12 @@ fn spawn_agent_subprocess(
             .spawn()
             .map_err(|e| format!("dummy child: {e}"))?;
 
-        return Ok((tui_tx, agent_rx, dummy));
+        return Ok((tui_tx, agent_rx, dummy, true));
     }
 
     // ── Fallback / Windows: spawn agent as direct child process ──
     spawn_agent_child(&seed, &std::env::current_exe().map_err(|e| format!("exe path: {e}"))?, resume_seed)
+        .map(|(tx, rx, child)| (tx, rx, child, false))
 }
 
 /// Spawn the agent as a child process communicating over stdin/stdout.
@@ -278,10 +299,42 @@ pub fn run_tui() -> anyhow::Result<()> {
         if app.should_quit { return Ok(()); }
         app.scroll_offset = 0;
         app.status = app.setup.lang.t_chat_ready().to_string();
-        match spawn_agent_subprocess(app.resume_seed.as_deref()) {
-            Ok((mut tui_tx, agent_rx, mut child_handle)) => {
-                if app.resume_seed.is_none() {
-                    // Wait for Ready frame before sending CreateSession (10s timeout)
+        match spawn_agent_subprocess(app.resume_seed.as_deref(), app.last_seq) {
+            Ok((mut tui_tx, agent_rx, mut child_handle, is_daemon)) => {
+                if is_daemon {
+                    // Daemon path: drain handshake events (SessionState, BufferedEvents) before chat.
+                    let mut saw_session = false;
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    loop {
+                        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                        if remaining.is_zero() {
+                            if saw_session { break; }
+                            app.status = "Daemon handshake timed out (10s)".into();
+                            return Ok(());
+                        }
+                        match agent_rx.recv_timeout(remaining) {
+                            Ok(frame) => {
+                                if matches!(&frame, Agent2Ui::SessionState { .. }) {
+                                    saw_session = true;
+                                }
+                                app.handle_frame(frame);
+                                if saw_session {
+                                    // Non-blocking drain of any remaining handshake events
+                                    while let Ok(f) = agent_rx.try_recv() {
+                                        app.handle_frame(f);
+                                    }
+                                    break;
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => break,
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                app.status = "Daemon disconnected during handshake".into();
+                                return Ok(());
+                            }
+                        }
+                    }
+                } else if app.resume_seed.is_none() {
+                    // Child path: new session — wait for Ready frame before sending CreateSession
                     match agent_rx.recv_timeout(std::time::Duration::from_secs(10)) {
                         Ok(Agent2Ui::Ready) => {},
                         Ok(_) => {
@@ -308,7 +361,7 @@ pub fn run_tui() -> anyhow::Result<()> {
                     }
                     let _ = tui_tx.send(Ui2Agent::CreateSession);
                 } else {
-                    // Wait for Ready frame before sending ResumeSession (10s timeout)
+                    // Child path: resume session — wait for Ready frame before sending ResumeSession
                     match agent_rx.recv_timeout(std::time::Duration::from_secs(10)) {
                         Ok(Agent2Ui::Ready) => {},
                         Ok(_) => {

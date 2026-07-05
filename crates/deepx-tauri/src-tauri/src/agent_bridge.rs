@@ -30,6 +30,15 @@ fn daemon_conn() -> &'static Mutex<Option<std::os::unix::net::UnixStream>> {
     DAEMON_CONN.get_or_init(|| Mutex::new(None))
 }
 
+/// Per-seed last known sequence number from daemon events.
+#[cfg(unix)]
+static LAST_SEQ: OnceLock<Arc<Mutex<HashMap<String, u64>>>> = OnceLock::new();
+
+#[cfg(unix)]
+fn last_seq_map() -> &'static Arc<Mutex<HashMap<String, u64>>> {
+    LAST_SEQ.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
 /// Try to connect to the daemon, auto-spawning it if not running.
 #[cfg(unix)]
 fn ensure_daemon() -> Result<(), String> {
@@ -496,6 +505,7 @@ impl AgentRegistry {
         // Start daemon reader thread (Unix) — dispatches daemon events to Tauri
         #[cfg(unix)]
         {
+            use deepx_proto::FrontendToDaemon;
             let app_handle = app.clone();
             std::thread::spawn(move || {
                 let path = deepx_daemon::socket_path();
@@ -504,15 +514,82 @@ impl AgentRegistry {
                     match deepx_daemon::transport::unix::connect(&path) {
                         Ok(mut stream) => {
                             log::info!("[DAEMON] reader thread connected");
+
+                            // Send Subscribe + Reconnect for all known seeds
+                            {
+                                if let Ok(seq_map) = last_seq_map().lock() {
+                                    for (seed, &seq) in seq_map.iter() {
+                                        let f2d_sub = FrontendToDaemon {
+                                            seed: seed.clone(),
+                                            frame: Ui2Agent::Subscribe { seed: seed.clone() },
+                                        };
+                                        if let Err(e) = deepx_daemon::transport::write_frame(&mut stream, &f2d_sub) {
+                                            log::warn!("[DAEMON] reader failed Subscribe for {seed}: {e}");
+                                            continue;
+                                        }
+                                        let f2d_rec = FrontendToDaemon {
+                                            seed: seed.clone(),
+                                            frame: Ui2Agent::Reconnect { seed: seed.clone(), last_seq: seq },
+                                        };
+                                        if let Err(e) = deepx_daemon::transport::write_frame(&mut stream, &f2d_rec) {
+                                            log::warn!("[DAEMON] reader failed Reconnect for {seed}: {e}");
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Read loop: dispatch events to Tauri frontend
                             loop {
                                 match deepx_daemon::transport::read_frame(&mut stream) {
                                     Ok(Some(frame)) => {
-                                        let payload = serde_json::to_value(&frame.event).unwrap_or_default();
-                                        let _ = app_handle.emit(
-                                            &format!("agent-{}-event", frame.seed),
-                                            payload.clone(),
-                                        );
-                                        let _ = app_handle.emit("agent-event", payload);
+                                        match &frame.event {
+                                            Agent2Ui::SessionState { seed: _ss_seed, turns, tokens_used, seq_id, .. } => {
+                                                // Update last_seq from SessionState
+                                                if let Ok(mut seq_map) = last_seq_map().lock() {
+                                                    seq_map.insert(frame.seed.clone(), *seq_id);
+                                                }
+                                                // Convert to SessionRestored so the frontend's
+                                                // existing loadTurnsFromRestore mechanism handles it
+                                                let restored = Agent2Ui::SessionRestored {
+                                                    seed: frame.seed.clone(),
+                                                    turns: turns.clone(),
+                                                    tokens_used: *tokens_used,
+                                                    cache_hit_pct: 0.0,
+                                                    total_turns: turns.len() as u32,
+                                                    has_more: false,
+                                                };
+                                                let payload = serde_json::to_value(&restored).unwrap_or_default();
+                                                let _ = app_handle.emit(
+                                                    &format!("agent-{}-event", frame.seed),
+                                                    payload.clone(),
+                                                );
+                                                let _ = app_handle.emit("agent-event", payload);
+                                            }
+                                            Agent2Ui::BufferedEvents { events, to_seq, .. } => {
+                                                // Update last_seq from BufferedEvents
+                                                if let Ok(mut seq_map) = last_seq_map().lock() {
+                                                    seq_map.insert(frame.seed.clone(), *to_seq);
+                                                }
+                                                // Replay each buffered event
+                                                for event in events {
+                                                    let payload = serde_json::to_value(event).unwrap_or_default();
+                                                    let _ = app_handle.emit(
+                                                        &format!("agent-{}-event", frame.seed),
+                                                        payload.clone(),
+                                                    );
+                                                    let _ = app_handle.emit("agent-event", payload);
+                                                }
+                                            }
+                                            _ => {
+                                                // Regular event — emit as-is
+                                                let payload = serde_json::to_value(&frame.event).unwrap_or_default();
+                                                let _ = app_handle.emit(
+                                                    &format!("agent-{}-event", frame.seed),
+                                                    payload.clone(),
+                                                );
+                                                let _ = app_handle.emit("agent-event", payload);
+                                            }
+                                        }
                                     }
                                     Ok(None) => break, // EOF
                                     Err(e) => {
@@ -753,16 +830,37 @@ pub fn cmd_send_message(
 
 /// Resume an existing session (spawn agent if not running). The agent auto-resumes
 /// on startup via --resume-seed, so this just ensures the agent is alive.
-/// After ensuring the agent exists, sends ResumeSession to trigger a full
-/// SessionRestored event — needed after WebView refresh when agent events were missed.
+/// Sends Subscribe + Reconnect via daemon (if available) so the agent re-emits
+/// SessionState and any buffered events — replaces the old ResumeSession hack.
 #[tauri::command]
 pub fn cmd_resume_session(seed: String) -> Result<(), String> {
     log::info!("[REGISTRY] cmd_resume_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     deepx_session::SessionManager::global().set_active_seed(&seed);
+
+    // Register seed for daemon reconnect tracking
+    #[cfg(unix)]
+    {
+        if let Ok(mut seq_map) = last_seq_map().lock() {
+            seq_map.entry(seed.clone()).or_insert(0);
+        }
+    }
+
     ensure_agent(&seed)?;
-    // Always send ResumeSession so the agent re-emits SessionRestored.
-    // This covers: WebView refresh, frontend reconnect, session switch.
-    send_to_agent(&seed, Ui2Agent::ResumeSession { seed: seed.clone() })
+
+    // Send Subscribe + Reconnect via daemon so the agent delivers
+    // SessionState + any buffered events the frontend may have missed.
+    #[cfg(unix)]
+    {
+        let seq = {
+            last_seq_map().lock()
+                .map(|m| m.get(&seed).copied().unwrap_or(0))
+                .unwrap_or(0)
+        };
+        let _ = try_send_via_daemon(&seed, &Ui2Agent::Subscribe { seed: seed.clone() });
+        let _ = try_send_via_daemon(&seed, &Ui2Agent::Reconnect { seed: seed.clone(), last_seq: seq });
+    }
+
+    Ok(())
 }
 
 /// Create a new session with a pre-generated seed.
@@ -771,10 +869,26 @@ pub fn cmd_new_session() -> Result<String, String> {
     let seed = deepx_session::SessionManager::generate_seed();
     log::info!("[REGISTRY] cmd_new_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     deepx_session::SessionManager::global().clear_active();
+
+    // Register seed for daemon reconnect tracking
+    #[cfg(unix)]
+    {
+        if let Ok(mut seq_map) = last_seq_map().lock() {
+            seq_map.insert(seed.clone(), 0);
+        }
+    }
+
     {
         let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
         registry.spawn_new(&seed)?;
     }
+
+    // For daemon path, send Subscribe so the daemon knows about this seed
+    #[cfg(unix)]
+    {
+        let _ = try_send_via_daemon(&seed, &Ui2Agent::Subscribe { seed: seed.clone() });
+    }
+
     Ok(seed)
 }
 
@@ -929,6 +1043,13 @@ pub fn cmd_delete_session(seed: String) -> Result<(), String> {
     };
     if let Some(inst) = instance {
         inst.shutdown_and_wait();
+    }
+    // Remove from daemon reconnect tracking
+    #[cfg(unix)]
+    {
+        if let Ok(mut seq_map) = last_seq_map().lock() {
+            seq_map.remove(&seed);
+        }
     }
     deepx_session::SessionManager::global().delete(&seed)
 }

@@ -103,6 +103,8 @@ pub struct App {
     // Input caching
     pub cached_input_lines: Vec<ratatui::text::Line<'static>>,
     pub cached_input_len: usize,
+    /// Last sequence number received from daemon (for reconnect).
+    pub last_seq: u64,
 }
 
 pub struct ChatMessage {
@@ -751,6 +753,7 @@ impl App {
             activity_log: Vec::new(),
             validating: false,
             busy: false,
+            last_seq: 0,
         }
     }
 
@@ -1116,6 +1119,22 @@ impl App {
                 self.session_tokens = tokens_used as u64;
                 self.scroll_offset = 0;
                 self.load_turns(&turns);
+            }
+            Agent2Ui::SessionState { seed, turns, tokens_used, context_limit, seq_id } => {
+                self.status = self.setup.lang.t_session_restored(&seed, turns.len() as u64, tokens_used);
+                self.debug.session_seed = seed.clone();
+                self.debug.context_tokens = tokens_used;
+                self.session_tokens = tokens_used as u64;
+                self.context_limit = context_limit;
+                self.last_seq = seq_id;
+                self.scroll_offset = 0;
+                self.load_turns(&turns);
+            }
+            Agent2Ui::BufferedEvents { events, to_seq, .. } => {
+                for event in events {
+                    self.handle_frame(event);
+                }
+                self.last_seq = to_seq;
             }
             Agent2Ui::Error { message } => {
                 self.streaming = false;
