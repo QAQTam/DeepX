@@ -327,17 +327,37 @@ export function createChatStore(seed: string) {
     setCodeDeltas(snapshot.codeDeltas);
   }
 
-  // Simplified: wire format is now snake_case, matching TS types exactly
+  // Simplified: wire format is now snake_case; blocks are derived UI-side
   function loadTurnsFromRestore(turnsData: TurnData[]) {
-    setTurns(turnsData.map((td) => ({ ...td, rounds: td.rounds as Round[], status: "complete" as const })));
+    setTurns(turnsData.map((td) => ({
+      turn_id: td.turn_id,
+      user_text: td.user_text,
+      rounds: td.rounds.map((rd) => {
+        const blocks: RoundBlock[] = [];
+        if (rd.thinking) blocks.push({ type: "reasoning", content: rd.thinking });
+        if (rd.answer) blocks.push({ type: "text", content: rd.answer });
+        for (const tc of rd.tool_calls) blocks.push({ type: "tool", card: tc });
+        return { ...rd, blocks } as Round;
+      }),
+      status: "complete" as const,
+    })));
   }
 
-  // Simplified: wire format is now snake_case, matching TS types exactly
+  // Simplified: wire format is now snake_case; blocks are derived UI-side
   function prependTurns(turnsData: TurnData[]) {
-    const loaded: Turn[] = turnsData.map((td) => ({ ...td, rounds: td.rounds as Round[], status: "complete" as const }));
-    setTurns(produce((prev) => {
-      prev.unshift(...loaded);
+    const loaded: Turn[] = turnsData.map((td) => ({
+      turn_id: td.turn_id,
+      user_text: td.user_text,
+      rounds: td.rounds.map((rd) => {
+        const blocks: RoundBlock[] = [];
+        if (rd.thinking) blocks.push({ type: "reasoning", content: rd.thinking });
+        if (rd.answer) blocks.push({ type: "text", content: rd.answer });
+        for (const tc of rd.tool_calls) blocks.push({ type: "tool", card: tc });
+        return { ...rd, blocks } as Round;
+      }),
+      status: "complete" as const,
     }));
+    setTurns(produce((prev) => { prev.unshift(...loaded); }));
   }
 
   return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
