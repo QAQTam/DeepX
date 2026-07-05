@@ -17,74 +17,76 @@ use std::sync::OnceLock;
 
 use tauri::{AppHandle, Emitter};
 
-use deepx_proto::{Agent2Ui, Ui2Agent};
-#[cfg(unix)]
-use deepx_proto::{FrontendToDaemon, DaemonToFrontend};
+use deepx_proto::{Agent2Ui, Ui2Agent, FrontendToDaemon};
 
-// ── Daemon connection (Unix) ──
+// ── Daemon connection (TCP loopback) ──
 
-#[cfg(unix)]
-static DAEMON_CONN: OnceLock<Mutex<Option<std::os::unix::net::UnixStream>>> = OnceLock::new();
+use std::net::TcpStream;
 
-#[cfg(unix)]
-fn daemon_conn() -> &'static Mutex<Option<std::os::unix::net::UnixStream>> {
+static DAEMON_CONN: OnceLock<Mutex<Option<TcpStream>>> = OnceLock::new();
+
+fn daemon_conn() -> &'static Mutex<Option<TcpStream>> {
     DAEMON_CONN.get_or_init(|| Mutex::new(None))
 }
 
 /// Per-seed last known sequence number from daemon events.
-#[cfg(unix)]
 static LAST_SEQ: OnceLock<Arc<Mutex<HashMap<String, u64>>>> = OnceLock::new();
 
-#[cfg(unix)]
 fn last_seq_map() -> &'static Arc<Mutex<HashMap<String, u64>>> {
     LAST_SEQ.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
 /// Try to connect to the daemon, auto-spawning it if not running.
-#[cfg(unix)]
 fn ensure_daemon() -> Result<(), String> {
     let mut guard = daemon_conn().lock().map_err(|e| format!("lock: {e}"))?;
     if guard.is_some() { return Ok(()); }
     
-    let path = deepx_daemon::socket_path();
-    match deepx_daemon::transport::unix::connect(&path) {
-        Ok(stream) => {
-            log::info!("[DAEMON] connected to daemon at {}", path.display());
-            *guard = Some(stream);
-            Ok(())
-        }
-        Err(_) => {
-            // Daemon not running — try to start it
-            log::info!("[DAEMON] daemon not running, attempting auto-start...");
-            let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-            let mut child = std::process::Command::new(&exe)
-                .arg("daemon")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .map_err(|e| format!("spawn daemon: {e}"))?;
-            // Wait for daemon to be ready
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            for _ in 0..5 {
-                match deepx_daemon::transport::unix::connect(&path) {
-                    Ok(stream) => {
-                        log::info!("[DAEMON] connected after auto-start");
-                        *guard = Some(stream);
-                        return Ok(());
-                    }
-                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(300)),
-                }
+    // Try existing daemon first
+    if let Some(port) = deepx_daemon::read_port() {
+        match deepx_daemon::transport::connect(port) {
+            Ok(stream) => {
+                log::info!("[DAEMON] connected to daemon on port {}", port);
+                *guard = Some(stream);
+                return Ok(());
             }
-            // Daemon failed to start — kill and fall back
-            let _ = child.kill();
-            Err("daemon did not become ready".into())
+            Err(_) => {
+                // Port file stale — daemon not running, will try auto-start
+            }
         }
     }
+
+    // Daemon not running — try to start it
+    log::info!("[DAEMON] daemon not running, attempting auto-start...");
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let mut child = std::process::Command::new(&exe)
+        .arg("daemon")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn daemon: {e}"))?;
+    // Wait for daemon to be ready
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    for _ in 0..5 {
+        if let Some(port) = deepx_daemon::read_port() {
+            match deepx_daemon::transport::connect(port) {
+                Ok(stream) => {
+                    log::info!("[DAEMON] connected after auto-start on port {}", port);
+                    *guard = Some(stream);
+                    return Ok(());
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(300)),
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
+    // Daemon failed to start — kill and fall back
+    let _ = child.kill();
+    Err("daemon did not become ready".into())
 }
 
 /// Send a frame to the daemon. Returns Ok(true) if sent via daemon, Ok(false) if daemon unavailable.
-#[cfg(unix)]
 fn try_send_via_daemon(seed: &str, frame: &Ui2Agent) -> Result<bool, String> {
     let mut guard = daemon_conn().lock().map_err(|e| format!("lock: {e}"))?;
     if let Some(ref mut stream) = *guard {
@@ -100,13 +102,6 @@ fn try_send_via_daemon(seed: &str, frame: &Ui2Agent) -> Result<bool, String> {
     }
     Ok(false)
 }
-
-// ── Windows / fallback: no daemon ──
-
-#[cfg(not(unix))]
-fn ensure_daemon() -> Result<(), String> { Err("daemon not supported on this platform".into()) }
-#[cfg(not(unix))]
-fn try_send_via_daemon(_seed: &str, _frame: &Ui2Agent) -> Result<bool, String> { Ok(false) }
 
 /// One agent child process — dedicated to a single session.
 pub struct AgentInstance {
@@ -503,16 +498,21 @@ impl AgentRegistry {
         REGISTRY.set(Mutex::new(registry))
             .expect("AgentRegistry already initialized");
         
-        // Start daemon reader thread (Unix) — dispatches daemon events to Tauri
-        #[cfg(unix)]
+        // Start daemon reader thread — dispatches daemon events to Tauri
         {
             use deepx_proto::FrontendToDaemon;
             let app_handle = app.clone();
             std::thread::spawn(move || {
-                let path = deepx_daemon::socket_path();
                 // Retry loop for daemon to become available
                 loop {
-                    match deepx_daemon::transport::unix::connect(&path) {
+                    let port = match deepx_daemon::read_port() {
+                        Some(p) => p,
+                        None => {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            continue;
+                        }
+                    };
+                    match deepx_daemon::transport::connect(port) {
                         Ok(mut stream) => {
                             log::info!("[DAEMON] reader thread connected");
 
@@ -544,8 +544,8 @@ impl AgentRegistry {
                                 match deepx_daemon::transport::read_frame(&mut stream) {
                                     Ok(Some(frame)) => {
                                         match &frame.event {
-                                            Agent2Ui::SessionState { seed: _ss_seed, turns, tokens_used, seq_id, .. } => {
-                                                // Update last_seq from SessionState
+                                            Agent2Ui::Snapshot { seed: _ss_seed, turns, tokens_used, context_limit: _, seq_id, buffered_events, has_more: _ } => {
+                                                // Update last_seq from Snapshot
                                                 if let Ok(mut seq_map) = last_seq_map().lock() {
                                                     seq_map.insert(frame.seed.clone(), *seq_id);
                                                 }
@@ -565,14 +565,9 @@ impl AgentRegistry {
                                                     payload.clone(),
                                                 );
                                                 let _ = app_handle.emit("agent-event", payload);
-                                            }
-                                            Agent2Ui::BufferedEvents { events, to_seq, .. } => {
-                                                // Update last_seq from BufferedEvents
-                                                if let Ok(mut seq_map) = last_seq_map().lock() {
-                                                    seq_map.insert(frame.seed.clone(), *to_seq);
-                                                }
+
                                                 // Replay each buffered event
-                                                for event in events {
+                                                for event in buffered_events {
                                                     let payload = serde_json::to_value(event).unwrap_or_default();
                                                     let _ = app_handle.emit(
                                                         &format!("agent-{}-event", frame.seed),
@@ -834,14 +829,13 @@ pub fn cmd_send_message(
 /// Resume an existing session (spawn agent if not running). The agent auto-resumes
 /// on startup via --resume-seed, so this just ensures the agent is alive.
 /// Sends Subscribe + Reconnect via daemon (if available) so the agent re-emits
-/// SessionState and any buffered events — replaces the old ResumeSession hack.
+/// Snapshot and any buffered events — replaces the old ResumeSession hack.
 #[tauri::command]
 pub fn cmd_resume_session(seed: String) -> Result<(), String> {
     log::info!("[REGISTRY] cmd_resume_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     deepx_session::SessionManager::global().set_active_seed(&seed);
 
     // Register seed for daemon reconnect tracking
-    #[cfg(unix)]
     {
         if let Ok(mut seq_map) = last_seq_map().lock() {
             seq_map.entry(seed.clone()).or_insert(0);
@@ -851,8 +845,7 @@ pub fn cmd_resume_session(seed: String) -> Result<(), String> {
     ensure_agent(&seed)?;
 
     // Send Subscribe + Reconnect via daemon so the agent delivers
-    // SessionState + any buffered events the frontend may have missed.
-    #[cfg(unix)]
+    // Snapshot + any buffered events the frontend may have missed.
     {
         let seq = {
             last_seq_map().lock()
@@ -874,7 +867,6 @@ pub fn cmd_new_session() -> Result<String, String> {
     deepx_session::SessionManager::global().clear_active();
 
     // Register seed for daemon reconnect tracking
-    #[cfg(unix)]
     {
         if let Ok(mut seq_map) = last_seq_map().lock() {
             seq_map.insert(seed.clone(), 0);
@@ -887,7 +879,6 @@ pub fn cmd_new_session() -> Result<String, String> {
     }
 
     // For daemon path, send Subscribe so the daemon knows about this seed
-    #[cfg(unix)]
     {
         let _ = try_send_via_daemon(&seed, &Ui2Agent::Subscribe { seed: seed.clone() });
     }
@@ -1048,7 +1039,6 @@ pub fn cmd_delete_session(seed: String) -> Result<(), String> {
         inst.shutdown_and_wait();
     }
     // Remove from daemon reconnect tracking
-    #[cfg(unix)]
     {
         if let Ok(mut seq_map) = last_seq_map().lock() {
             seq_map.remove(&seed);
@@ -1356,111 +1346,19 @@ pub fn cmd_task_action(seed: String, action: String, taskId: u32) -> Result<(), 
     Ok(())
 }
 
-/// Get context composition stats from the last API request dump.
-/// Returns JSON breakdown: chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt (in chars).
-/// After compaction, reads from context_stats.json (written by the agent) which reflects
-/// the compacted state immediately, bypassing the stale API dump.
+/// Get context composition stats from the agent's compact stats file.
+/// Returns JSON breakdown from context_stats.json (written by the agent after compaction).
 #[tauri::command]
 pub fn cmd_get_context_stats(seed: String) -> Result<String, String> {
-    // Prefer post-compact stats file (always up-to-date after compaction)
     let stats_path = deepx_types::platform::sessions_dir().join(&seed).join("context_stats.json");
-    let api_path = deepx_types::platform::data_dir().join("logs").join(format!("{}_api.json", seed));
-
-    // Use compact stats if they're newer than the API dump (or API dump doesn't exist)
-    let use_compact = if stats_path.exists() {
-        let stats_time = stats_path.metadata().ok().and_then(|m| m.modified().ok());
-        let api_time = api_path.metadata().ok().and_then(|m| m.modified().ok());
-        match (stats_time, api_time) {
-            (Some(s), Some(a)) => s > a,
-            (Some(_), None) => true,
-            _ => false,
-        }
-    } else { false };
-
-    if use_compact {
-        let raw = std::fs::read_to_string(&stats_path).unwrap_or_default();
-        // Merge tools_schema from API dump if available (not tracked in message tree)
-        let mut val: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
-        if val.get("tools_schema").and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
-            if let Ok(api_data) = std::fs::read_to_string(&api_path) {
-                if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&api_data) {
-                    if let Some(last) = entries.last() {
-                        if let Some(req) = last.get("req") {
-                            let tools_len = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null))
-                                .unwrap_or_default().len() as u64;
-                            val["tools_schema"] = serde_json::json!(tools_len);
-                        }
-                    }
-                }
-            }
-        }
-        return Ok(val.to_string());
+    if stats_path.exists() {
+        return Ok(std::fs::read_to_string(&stats_path).unwrap_or_default());
     }
-
-    // Fallback: parse from API dump
-    let path = api_path;
-    let data: Vec<serde_json::Value> = if path.exists() {
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default()).unwrap_or_default()
-    } else {
-        return Ok(serde_json::json!({"messages":0,"chat_text":0,"thinking":0,"tool_calls":0,"tool_results":0,"tools_schema":0,"system_prompt":0}).to_string());
-    };
-    let last = match data.last() { Some(v) => v, None => return Ok("{}".into()) };
-    let req = match last.get("req") { Some(r) => r, None => return Ok("{}".into()) };
-    let msgs = req.get("messages").and_then(|m| m.as_array()).cloned().unwrap_or_default();
-
-    let mut chat_text = 0u64;
-    let mut thinking = 0u64;
-    let mut tool_calls = 0u64;
-    let mut tool_results = 0u64;
-    let mut system_prompt = 0u64;
-    let mut thinking_blocks = 0u64;
-    let mut tool_call_blocks = 0u64;
-
-    for m in &msgs {
-        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
-        if role == "system" {
-            if let Some(text) = m.get("content").and_then(|c| c.as_str()) {
-                system_prompt += deepx_types::count_tokens(text) as u64;
-            }
-            continue;
-        }
-        // Content can be a string (user/system/tool) or absent (assistant with tool_calls only)
-        if let Some(text) = m.get("content").and_then(|c| c.as_str()) {
-            let tok = deepx_types::count_tokens(text) as u64;
-            if role == "tool" {
-                tool_results += tok;
-            } else {
-                chat_text += tok;
-            }
-        }
-        // Assistant messages may have thinking/reasoning_content at top level
-        if let Some(reasoning) = m.get("reasoning_content").and_then(|r| r.as_str()) {
-            thinking_blocks += 1;
-            thinking += deepx_types::count_tokens(reasoning) as u64;
-        }
-        // Tool calls are at top level as "tool_calls" array
-        if let Some(arr) = m.get("tool_calls").and_then(|t| t.as_array()) {
-            for tc in arr {
-                tool_call_blocks += 1;
-                let json = serde_json::to_string(tc).unwrap_or_default();
-                tool_calls += deepx_types::count_tokens(&json) as u64;
-            }
-        }
-    }
-    let tools_json = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null)).unwrap_or_default();
-    let tools_schema = deepx_types::count_tokens(&tools_json) as u64;
-
-    serde_json::to_string(&serde_json::json!({
-        "messages": msgs.len(),
-        "chat_text": chat_text,
-        "thinking": thinking,
-        "tool_calls": tool_calls,
-        "tool_results": tool_results,
-        "tools_schema": tools_schema,
-        "system_prompt": system_prompt,
-        "thinking_blocks": thinking_blocks,
-        "tool_call_blocks": tool_call_blocks,
-    })).map_err(|e| format!("serialize: {e}"))
+    // No stats yet — return zeroed template
+    Ok(serde_json::json!({
+        "messages":0,"chat_text":0,"thinking":0,"tool_calls":0,"tool_results":0,
+        "tools_schema":0,"system_prompt":0,"thinking_blocks":0,"tool_call_blocks":0
+    }).to_string())
 }
 
 /// Get aggregated token usage stats for the last N days.

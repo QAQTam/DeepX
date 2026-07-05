@@ -136,8 +136,6 @@ pub fn chat_stream_openai(
             return Err(anyhow::anyhow!("cancelled by user"));
         }
 
-        dump_api_request(user_id.as_deref(), &body);
-
         let resp = agent.post(&url)
             .set("Authorization", &format!("Bearer {}", provider.api_key))
             .set("Content-Type", "application/json")
@@ -150,7 +148,6 @@ pub fn chat_stream_openai(
             }
             Err(ureq::Error::Status(code, resp)) => {
                 let text = resp.into_string().unwrap_or_default();
-                dump_api_error(user_id.as_deref(), code as u16, &text);
                 let code_desc = http_error_description(code);
                 if attempt >= MAX_RETRIES || !is_retryable(code as u16) {
                     let msg = format!("OpenAI API HTTP {} ({})", code, code_desc);
@@ -620,53 +617,5 @@ fn http_error_description(status: u16) -> &'static str {
         500 => "Internal Error — 服务器故障",
         503 => "Service Unavailable — 服务器繁忙",
         _ => "Unknown",
-    }
-}
-
-// ── Debug logging ──
-
-fn log_dir() -> std::path::PathBuf {
-    let mut p = deepx_types::platform::data_dir();
-    p.push("logs");
-    p
-}
-
-fn dump_api_request(user_id: Option<&str>, body: &serde_json::Value) {
-    let dir = log_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let seed = user_id.unwrap_or("unknown");
-    let path = dir.join(format!("{seed}_api.json"));
-    let mut entries: Vec<serde_json::Value> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    entries.push(serde_json::json!({"ts": ts, "req": body}));
-    if entries.len() > 20 { entries.remove(0); }
-    if let Ok(json) = serde_json::to_string_pretty(&entries) {
-        let _ = std::fs::write(&path, json);
-    }
-}
-
-fn dump_api_error(user_id: Option<&str>, status: u16, text: &str) {
-    let dir = log_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let seed = user_id.unwrap_or("unknown");
-    let path = dir.join(format!("{seed}_api.json"));
-    let mut entries: Vec<serde_json::Value> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    entries.push(serde_json::json!({"ts": ts, "err": {"status": status, "body": text}}));
-    if entries.len() > 20 { entries.remove(0); }
-    if let Ok(json) = serde_json::to_string_pretty(&entries) {
-        let _ = std::fs::write(&path, json);
     }
 }

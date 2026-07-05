@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 
-use deepx_proto::{FrontendToDaemon, DaemonToFrontend, Ui2Agent};
+use deepx_proto::{FrontendToDaemon, DaemonToFrontend, Ui2Agent, Agent2Ui, TurnData};
 
 use crate::pool::{AgentPool, AgentEvent};
 
@@ -23,14 +23,24 @@ struct FrontendConn {
 /// Maximum events buffered per seed (ring buffer capacity).
 const RING_BUFFER_CAP: usize = 256;
 
+/// Cached session state for snapshot construction.
+#[derive(Debug, Clone, Default)]
+struct SessionCache {
+    turns: Vec<TurnData>,
+    tokens_used: u32,
+    context_limit: u32,
+}
+
 /// Manages frontend connections and routes messages.
 pub struct FrontendManager {
     next_id: ConnId,
     connections: HashMap<ConnId, FrontendConn>,
     /// Seed → set of frontend IDs subscribed to it.
     subscriptions: HashMap<String, HashSet<ConnId>>,
-    /// Per-seed ring buffer of recent events: (seq_id, event).
-    ring_buffer: HashMap<String, VecDeque<(u64, AgentEvent)>>,
+    /// Per-seed ring buffer of recent events: (seq_id, Agent2Ui event).
+    ring_buffer: HashMap<String, VecDeque<(u64, Agent2Ui)>>,
+    /// Per-seed cached session state for snapshot.
+    session_cache: HashMap<String, SessionCache>,
     /// Monotonically increasing sequence number for each event.
     seq_id: u64,
 }
@@ -42,6 +52,7 @@ impl FrontendManager {
             connections: HashMap::new(),
             subscriptions: HashMap::new(),
             ring_buffer: HashMap::new(),
+            session_cache: HashMap::new(),
             seq_id: 0,
         }
     }
@@ -81,10 +92,31 @@ impl FrontendManager {
             .insert(conn_id);
     }
 
+    /// Update the session cache from relevant agent events.
+    fn update_cache(&mut self, seed: &str, event: &Agent2Ui) {
+        let cache = self.session_cache.entry(seed.to_string()).or_default();
+        match event {
+            Agent2Ui::SessionRestored { turns, tokens_used, .. } => {
+                cache.turns = turns.clone();
+                cache.tokens_used = *tokens_used;
+            }
+            Agent2Ui::Dashboard { usage, context_limit, .. } => {
+                if let Some(u) = usage {
+                    cache.tokens_used = u.total_tokens;
+                }
+                cache.context_limit = *context_limit;
+            }
+            _ => {}
+        }
+    }
+
     /// Broadcast an AgentEvent to all frontends subscribed to its seed.
     pub fn broadcast(&mut self, event: &AgentEvent) {
+        // Update session cache from relevant events
+        self.update_cache(&event.seed, &event.event);
+
         // Push into per-seed ring buffer with sequence id.
-        let entry = (self.seq_id, event.clone());
+        let entry = (self.seq_id, event.event.clone());
         self.seq_id += 1;
         let buf = self
             .ring_buffer
@@ -123,35 +155,59 @@ impl FrontendManager {
         }
     }
 
-    /// Replay all buffered events for a seed to a specific frontend connection.
-    /// Used to catch up a late-joining frontend.
-    pub fn replay_buffered(&mut self, conn_id: ConnId, seed: &str) {
+    /// Build and send a Snapshot to a reconnecting frontend.
+    /// Contains cached session state + buffered events since last_seq.
+    pub fn send_snapshot(&mut self, conn_id: ConnId, seed: &str, last_seq: u64) {
         let conn = match self.connections.get_mut(&conn_id) {
             Some(c) => c,
             None => return,
         };
-        let buf = match self.ring_buffer.get(seed) {
-            Some(b) => b,
-            None => return,
-        };
-        for (_seq_id, event) in buf {
-            let frame = DaemonToFrontend {
-                seed: event.seed.clone(),
-                event: event.event.clone(),
-            };
-            let payload = match serde_json::to_vec(&frame) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            let len = payload.len() as u32;
-            let mut wire = Vec::with_capacity(4 + payload.len());
-            wire.extend_from_slice(&len.to_le_bytes());
-            wire.extend_from_slice(&payload);
-            if conn.stream.write_all(&wire).is_err() {
-                // Connection dead; caller will clean up.
-                return;
+
+        let cache = self.session_cache.get(seed).cloned().unwrap_or_default();
+
+        // Collect buffered events with seq_id > last_seq
+        let mut buffered_events: Vec<Agent2Ui> = Vec::new();
+        let mut has_more = false;
+        let current_seq = self.seq_id;
+
+        if let Some(buf) = self.ring_buffer.get(seed) {
+            for (seq, ev) in buf {
+                if *seq > last_seq {
+                    buffered_events.push(ev.clone());
+                }
+            }
+            // If the earliest buffered seq_id > last_seq + 1, we lost events
+            if let Some((earliest_seq, _)) = buf.front() {
+                if *earliest_seq > last_seq + 1 {
+                    has_more = true;
+                }
             }
         }
+
+        let snapshot = Agent2Ui::Snapshot {
+            seed: seed.to_string(),
+            turns: cache.turns,
+            tokens_used: cache.tokens_used,
+            context_limit: cache.context_limit,
+            buffered_events,
+            seq_id: current_seq,
+            has_more,
+        };
+
+        let frame = DaemonToFrontend {
+            seed: seed.to_string(),
+            event: snapshot,
+        };
+
+        let payload = match serde_json::to_vec(&frame) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let len = payload.len() as u32;
+        let mut wire = Vec::with_capacity(4 + payload.len());
+        wire.extend_from_slice(&len.to_le_bytes());
+        wire.extend_from_slice(&payload);
+        let _ = conn.stream.write_all(&wire);
     }
 
     /// Process an incoming frame from a frontend: route to agent pool.
@@ -172,8 +228,8 @@ impl FrontendManager {
                 return Ok(());
             }
             Ui2Agent::Reconnect { seed, last_seq } => {
-                // Replay buffered events the frontend missed
-                self.replay_buffered(conn_id, seed);
+                // Send a unified Snapshot with session state + buffered events
+                self.send_snapshot(conn_id, seed, *last_seq);
                 log::info!("[FRONTEND] reconnect seed={}, last_seq={}", &seed[..seed.floor_char_boundary(seed.len().min(8))], last_seq);
                 return Ok(());
             }

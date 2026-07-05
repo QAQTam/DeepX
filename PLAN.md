@@ -13,10 +13,8 @@ Reference architectures: Codex `app-server` + OpenClaw `gateway`.
 ```
 ✅ Phase 1: frontend reader threads     ✅ Phase 3: ring buffer
 ✅ Phase 2: Tauri + TUI reconnect       ✅ Protocol: SessionState + BufferedEvents
-⏸️ Windows named pipe (windows-sys 不暴露 API)
-⏳ Phase 4: TCP loopback transport
-⏳ Phase 5: Snapshot unification
-⏳ Phase 6: Frame type layering (optional)
+✅ Phase 4: TCP loopback transport      ✅ Port file helpers
+✅ Phase 5: Snapshot unification      ⏳ Phase 6: Frame type layering (optional)
 ```
 
 ## Phase 4: TCP Loopback Transport

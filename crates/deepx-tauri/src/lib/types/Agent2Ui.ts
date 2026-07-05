@@ -28,7 +28,31 @@ has_more: boolean, } | { "type": "more_turns", turns: Array<TurnData>,
 /**
  * True if there are still more (older) turns available.
  */
-has_more: boolean, } | { "type": "session_created", seed: string, } | { "type": "error", message: string, } | { "type": "tool_notice", message: string, 
+has_more: boolean, } | { "type": "session_created", seed: string, } | { "type": "snapshot", seed: string, 
+/**
+ * Current turns in this session (from last SessionRestored).
+ */
+turns?: Array<TurnData>, 
+/**
+ * Total tokens consumed.
+ */
+tokens_used: number, 
+/**
+ * Model context window limit.
+ */
+context_limit: number, 
+/**
+ * Events buffered since the frontend's last_seq.
+ */
+buffered_events?: Array<Agent2Ui>, 
+/**
+ * Current monotonic sequence id (latest event seq).
+ */
+seq_id: bigint, 
+/**
+ * True if ring buffer wrapped and some events were lost.
+ */
+has_more: boolean, } | { "type": "error", message: string, } | { "type": "tool_notice", message: string, 
 /**
  * "warn" or "error"
  */

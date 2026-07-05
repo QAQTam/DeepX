@@ -1,8 +1,10 @@
-//! Frame-based socket transport: 4-byte LE length prefix + JSON payload.
+//! Frame-based TCP transport: 4-byte LE length prefix + JSON payload.
 //!
-//! Unix: Unix domain sockets. Windows: stub (falls back to direct spawn).
+//! Binds on 127.0.0.1:0 (OS-assigned random port), writes port to a `.port` file.
+//! Cross-platform — no Unix sockets or Windows named pipes needed.
 
 use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
 
 use deepx_proto::{FrontendToDaemon, DaemonToFrontend};
 
@@ -35,61 +37,24 @@ pub fn write_frame(stream: &mut impl Write, frame: &FrontendToDaemon) -> io::Res
     stream.flush()
 }
 
-// ── Unix domain socket ──
+// ── TCP loopback transport ──
 
-#[cfg(unix)]
-pub mod unix {
-    use std::io;
-    use std::os::unix::net::{UnixListener, UnixStream};
-    use std::path::Path;
-
-    pub fn bind(path: &Path) -> io::Result<UnixListener> {
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
-        }
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        UnixListener::bind(path)
-    }
-
-    pub fn accept(listener: &UnixListener) -> io::Result<UnixStream> {
-        let (stream, _addr) = listener.accept()?;
-        stream.set_nonblocking(false)?;
-        Ok(stream)
-    }
-
-    pub fn connect(path: &Path) -> io::Result<UnixStream> {
-        UnixStream::connect(path)
-    }
+/// Bind a TCP listener on 127.0.0.1:0 (OS picks a free port).
+/// Returns the listener and the assigned port number.
+pub fn bind() -> io::Result<(TcpListener, u16)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    Ok((listener, port))
 }
 
-// ── Windows named pipe (TODO: needs `windows` crate) ──
-// windows-sys does not expose CreateFileW / CreateNamedPipeW / PIPE_ACCESS_DUPLEX.
-// The full `windows` crate is required. Defer until: interprocess crate or raw FFI.
+/// Accept a single connection. Sets blocking mode.
+pub fn accept(listener: &TcpListener) -> io::Result<TcpStream> {
+    let (stream, _addr) = listener.accept()?;
+    stream.set_nonblocking(false)?;
+    Ok(stream)
+}
 
-#[cfg(windows)]
-pub mod win {
-    use std::io;
-    use std::path::Path;
-
-    /// TODO: needs `windows` crate for CreateFileW / CreateNamedPipeW.
-    /// windows-sys does not expose these. Evaluate interprocess crate or raw FFI.
-    pub fn bind(_path: &Path) -> io::Result<std::fs::File> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows named pipe: needs `windows` crate (not windows-sys). Use direct child process fallback.",
-        ))
-    }
-
-    pub fn accept(_pipe: std::fs::File) -> io::Result<std::fs::File> {
-        Ok(_pipe) // unreachable
-    }
-
-    pub fn connect(_path: &Path) -> io::Result<std::fs::File> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows named pipe: needs `windows` crate",
-        ))
-    }
+/// Connect to the daemon at 127.0.0.1 on the given port.
+pub fn connect(port: u16) -> io::Result<TcpStream> {
+    TcpStream::connect(("127.0.0.1", port))
 }

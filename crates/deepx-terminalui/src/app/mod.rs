@@ -1120,7 +1120,7 @@ impl App {
                 self.scroll_offset = 0;
                 self.load_turns(&turns);
             }
-            Agent2Ui::SessionState { seed, turns, tokens_used, context_limit, seq_id } => {
+            Agent2Ui::Snapshot { seed, turns, tokens_used, context_limit, seq_id, buffered_events, .. } => {
                 self.status = self.setup.lang.t_session_restored(&seed, turns.len() as u64, tokens_used);
                 self.debug.session_seed = seed.clone();
                 self.debug.context_tokens = tokens_used;
@@ -1129,12 +1129,10 @@ impl App {
                 self.last_seq = seq_id;
                 self.scroll_offset = 0;
                 self.load_turns(&turns);
-            }
-            Agent2Ui::BufferedEvents { events, to_seq, .. } => {
-                for event in events {
+                // Replay buffered events
+                for event in buffered_events {
                     self.handle_frame(event);
                 }
-                self.last_seq = to_seq;
             }
             Agent2Ui::Error { message } => {
                 self.streaming = false;

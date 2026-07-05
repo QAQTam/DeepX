@@ -35,27 +35,22 @@ fn spawn_agent_subprocess(
         }
     };
 
-    // ── Attempt daemon socket connection (Unix only) ──
-    #[cfg(unix)]
+    // ── Attempt daemon TCP connection ──
     {
         use std::io::Write;
-        use std::os::unix::net::UnixStream;
         use std::process::{Command, Stdio};
         use std::time::Duration;
         use deepx_proto::{FrontendToDaemon, DaemonToFrontend};
 
-        let socket_path = deepx_daemon::socket_path();
         let exe = std::env::current_exe().map_err(|e| format!("exe path: {e}"))?;
 
+        // Read port from file with retry
         let mut stream = {
-            let mut connected = false;
-            for attempt in 0..3 {
-                match deepx_daemon::transport::unix::connect(&socket_path) {
-                    Ok(s) => {
-                        connected = true;
-                        break s;
-                    }
-                    Err(_e) => {}
+            let mut result: Option<std::net::TcpStream> = None;
+            let mut attempt = 0;
+            while result.is_none() && attempt < 3 {
+                if let Some(port) = deepx_daemon::read_port() {
+                    result = deepx_daemon::transport::connect(port).ok();
                 }
                 if attempt == 0 {
                     // Auto-spawn daemon on first failure
@@ -65,12 +60,17 @@ fn spawn_agent_subprocess(
                         .stderr(Stdio::null())
                         .spawn();
                 }
-                std::thread::sleep(Duration::from_millis(500));
+                attempt += 1;
+                if result.is_none() && attempt < 3 {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
             }
-            if !connected {
-                // Fall through to child process spawn below
-                return spawn_agent_child(&seed, &exe, resume_seed)
-                    .map(|(tx, rx, child)| (tx, rx, child, false));
+            match result {
+                Some(s) => s,
+                None => {
+                    return spawn_agent_child(&seed, &exe, resume_seed)
+                        .map(|(tx, rx, child)| (tx, rx, child, false));
+                }
             }
         };
 
@@ -92,7 +92,7 @@ fn spawn_agent_subprocess(
             };
             deepx_daemon::transport::write_frame(&mut stream, &recon)
                 .map_err(|e| format!("daemon reconnect: {e}"))?;
-            // Responses (SessionState, BufferedEvents) are read by the reader thread below.
+            // Responses (Snapshot) are read by the reader thread below.
         }
 
         let seed_w = seed.clone();
@@ -304,23 +304,23 @@ pub fn run_tui() -> anyhow::Result<()> {
         match spawn_agent_subprocess(app.resume_seed.as_deref(), app.last_seq) {
             Ok((mut tui_tx, agent_rx, mut child_handle, is_daemon)) => {
                 if is_daemon {
-                    // Daemon path: drain handshake events (SessionState, BufferedEvents) before chat.
-                    let mut saw_session = false;
+                    // Daemon path: drain handshake events (Snapshot) before chat.
+                    let mut saw_snapshot = false;
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                     loop {
                         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                         if remaining.is_zero() {
-                            if saw_session { break; }
+                            if saw_snapshot { break; }
                             app.status = "Daemon handshake timed out (10s)".into();
                             return Ok(());
                         }
                         match agent_rx.recv_timeout(remaining) {
                             Ok(frame) => {
-                                if matches!(&frame, Agent2Ui::SessionState { .. }) {
-                                    saw_session = true;
+                                if matches!(&frame, Agent2Ui::Snapshot { .. }) {
+                                    saw_snapshot = true;
                                 }
                                 app.handle_frame(frame);
-                                if saw_session {
+                                if saw_snapshot {
                                     // Non-blocking drain of any remaining handshake events
                                     while let Ok(f) = agent_rx.try_recv() {
                                         app.handle_frame(f);

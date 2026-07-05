@@ -282,22 +282,28 @@ pub enum Agent2Ui {
         seed: String,
     },
 
-    /// Full session state sent to a reconnecting frontend.
-    #[serde(rename = "session_state")]
-    SessionState {
+    /// Full session snapshot sent to a reconnecting frontend.
+    /// Unifies SessionState + BufferedEvents into a single message.
+    #[serde(rename = "snapshot")]
+    Snapshot {
         seed: String,
+        /// Current turns in this session (from last SessionRestored).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         turns: Vec<TurnData>,
+        /// Total tokens consumed.
+        #[serde(default)]
         tokens_used: u32,
+        /// Model context window limit.
+        #[serde(default)]
         context_limit: u32,
+        /// Events buffered since the frontend's last_seq.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        buffered_events: Vec<Agent2Ui>,
+        /// Current monotonic sequence id (latest event seq).
         seq_id: u64,
-    },
-
-    /// Replay buffered events the frontend missed.
-    #[serde(rename = "buffered_events")]
-    BufferedEvents {
-        events: Vec<Agent2Ui>,
-        from_seq: u64,
-        to_seq: u64,
+        /// True if ring buffer wrapped and some events were lost.
+        #[serde(default)]
+        has_more: bool,
     },
 
     // ── System events ──
