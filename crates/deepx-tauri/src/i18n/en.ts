@@ -93,6 +93,17 @@ const en = {
     agentReconnected: "Agent reconnected",
     agentLost: "Agent connection lost — click Send to reconnect",
   },
+  planReview: {
+    title: "PLAN Review",
+    empty: "No PLAN.md found in workspace.",
+    pending: "Pending",
+    approved: "Approved",
+    rejected: "Rejected",
+    ask: "Question",
+    approve: "Approve",
+    reject: "Reject",
+    askItem: "Ask about this item",
+  },
 };
 
 export default en;

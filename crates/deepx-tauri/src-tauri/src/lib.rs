@@ -27,6 +27,8 @@ pub fn run() {
             agent_bridge::cmd_get_workspace,
             agent_bridge::cmd_set_workspace,
             agent_bridge::cmd_close_session,
+            agent_bridge::cmd_read_plan,
+            agent_bridge::cmd_plan_action,
             agent_bridge::cmd_get_token_stats,
             agent_bridge::cmd_get_code_stats,
             agent_bridge::cmd_get_git_diff,

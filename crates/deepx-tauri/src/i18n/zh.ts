@@ -95,6 +95,17 @@ const zh: I18nStrings = {
     agentReconnected: "Agent 已重连",
     agentLost: "Agent 连接丢失 — 点击发送重连",
   },
+  planReview: {
+    title: "PLAN 评审",
+    empty: "工作区中未找到 PLAN.md。",
+    pending: "待审批",
+    approved: "已批准",
+    rejected: "已拒绝",
+    ask: "提问",
+    approve: "批准",
+    reject: "拒绝",
+    askItem: "询问此项",
+  },
 };
 
 export default zh;

@@ -2,6 +2,7 @@ import { For, Show, createSignal, onCleanup } from "solid-js";
 import type { TaskInfo, ActivityEntry } from "../store/chat";
 import { useI18n } from "../i18n";
 import GitDiffPanel from "./GitDiffPanel";
+import PlanReviewPanel from "./PlanReviewPanel";
 
 const STATUS_ICON: Record<string, string> = {
   pending: "\u25cb", in_progress: "\u25cf", completed: "\u2713", cancelled: "\u2717",
@@ -98,6 +99,9 @@ export default function StatusPanel(props: {
             </div>
           </Show>
         </div>
+
+        {/* ── PLAN Review ── */}
+        <PlanReviewPanel seed={props.seed} />
 
         {/* ── Git Changes ── */}
         <GitDiffPanel seed={props.seed} />

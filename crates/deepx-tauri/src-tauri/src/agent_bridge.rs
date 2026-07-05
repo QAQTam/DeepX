@@ -1504,6 +1504,136 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
     }
 }
 
+// ── PLAN Review commands ────────────────────────────────────────────
+
+/// Read PLAN.md from the workspace root and return parsed plan items as JSON.
+#[tauri::command]
+pub fn cmd_read_plan(seed: String) -> Result<String, String> {
+    if seed.is_empty() {
+        return Err("No active session".into());
+    }
+    let ws = crate::agent_bridge::cmd_get_workspace(seed)?;
+    if ws.is_empty() {
+        return Err("No workspace set".into());
+    }
+    let plan_path = std::path::Path::new(&ws).join("PLAN.md");
+    let content = std::fs::read_to_string(&plan_path)
+        .map_err(|e| format!("read PLAN.md: {e}"))?;
+    let items = parse_plan_items(&content);
+    // Manual JSON serialization (avoid serde derive dependency)
+    let json_items: Vec<serde_json::Value> = items.into_iter().map(|item| {
+        serde_json::json!({
+            "id": item.id,
+            "title": item.title,
+            "status": item.status,
+            "comment": item.comment,
+            "actions": item.actions,
+        })
+    }).collect();
+    serde_json::to_string(&json_items).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Write a plan action (approve/reject/ask) back to PLAN.md as an HTML comment.
+#[tauri::command]
+pub fn cmd_plan_action(seed: String, item_id: String, action: String, user_comment: String) -> Result<(), String> {
+    if seed.is_empty() {
+        return Err("No active session".into());
+    }
+    let ws = crate::agent_bridge::cmd_get_workspace(seed)?;
+    if ws.is_empty() {
+        return Err("No workspace set".into());
+    }
+    let plan_path = std::path::Path::new(&ws).join("PLAN.md");
+    let mut content = std::fs::read_to_string(&plan_path)
+        .map_err(|e| format!("read PLAN.md: {e}"))?;
+
+    // Find the phase heading (e.g., "### 7.5 Safety") and insert comment after it
+    let marker = format!("### {}", item_id);
+    if let Some(pos) = content.find(&marker) {
+        let line_end = content[pos..].find('\n').unwrap_or(content[pos..].len());
+        let insert_at = pos + line_end + 1;
+        let comment = {
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let y = 1970 + (dur.as_secs() as i32 / 86400 / 365);
+            if user_comment.is_empty() {
+                format!("<!-- {action}: ~{y} -->\n")
+            } else {
+                format!("<!-- {action}: ~{y} — {user_comment} -->\n")
+            }
+        };
+        content.insert_str(insert_at, &comment);
+    } else {
+        return Err(format!("Plan item '{}' not found in PLAN.md", item_id));
+    }
+
+    std::fs::write(&plan_path, content).map_err(|e| format!("write PLAN.md: {e}"))?;
+    Ok(())
+}
+
+/// Parse PLAN.md content into structured items (phase number, title, status).
+struct PlanItem {
+    id: String,       // e.g. "7.1"
+    title: String,    // e.g. "审计持久化"
+    status: String,   // "pending", "approved", "rejected", or "ask"
+    comment: String,  // extracted from HTML comment if any
+    actions: Vec<String>, // list of action comments found
+}
+
+fn parse_plan_items(content: &str) -> Vec<PlanItem> {
+    let mut items = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Match "### 7.X" style headings
+        if let Some(rest) = trimmed.strip_prefix("### ") {
+            if let Some((id, title)) = rest.split_once(' ') {
+                if id.starts_with("7.") {
+                    items.push(PlanItem {
+                        id: id.to_string(),
+                        title: title.trim().to_string(),
+                        status: "pending".into(),
+                        comment: String::new(),
+                        actions: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
+    // Scan for status comments near each item
+    let mut current_id: Option<String> = None;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("### ") {
+            if let Some((id, _)) = rest.split_once(' ') {
+                if id.starts_with("7.") {
+                    current_id = Some(id.to_string());
+                } else {
+                    current_id = None;
+                }
+            }
+            continue;
+        }
+        if let Some(ref id) = current_id {
+            if trimmed.starts_with("<!-- ") && trimmed.ends_with(" -->") {
+                let inner = &trimmed[5..trimmed.len()-4];
+                if let Some(item) = items.iter_mut().find(|i| i.id == *id) {
+                    item.actions.push(inner.to_string());
+                    if inner.starts_with("approved") {
+                        item.status = "approved".into();
+                    } else if inner.starts_with("rejected") {
+                        item.status = "rejected".into();
+                    } else if inner.starts_with("ask") {
+                        item.status = "ask".into();
+                        item.comment = inner.replace("ask: ", "");
+                    }
+                }
+            }
+        }
+    }
+    items
+}
+
 /// Map a Ui2Agent variant to a short name for logging.
 fn agent2ui_event_name_for_ui(event: &Ui2Agent) -> &'static str {
     match event {

@@ -92,3 +92,14 @@
   .main-content { --panel-foot: 236px; }
   .status-panel { top: auto; bottom: 48px; right: 8px; width: 220px; max-height: 40vh; }
 }
+
+/* ── PLAN Review ── */
+.plan-status-pending { border-left-color: var(--yellow); }
+.plan-status-approved { border-left-color: var(--green); }
+.plan-status-rejected { border-left-color: var(--red); }
+.plan-status-ask { border-left-color: var(--accent); }
+.plan-comment { font-size: 10px; color: var(--text-muted); font-style: italic; }
+.task-btn-approve { background: transparent; color: var(--text-muted); }
+.task-btn-approve:hover { background: var(--green); color: #fff; }
+.task-btn-reject { background: transparent; color: var(--text-muted); }
+.task-btn-reject:hover { background: var(--red); color: #fff; }
