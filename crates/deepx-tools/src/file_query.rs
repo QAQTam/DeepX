@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-use crate::{parse_arg, parse_opt, parse_arg_or, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
+use crate::{parse_arg, parse_opt, parse_arg_or, ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler};
 use super::file_shared::{rust_grep, unified_diff, is_binary_read_error};
 
 // ── exec_read_file (from file_read.rs) ──
@@ -214,7 +214,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "File operations: read, write, edit, search, list, move, copy, delete, diff.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"start_line":{"type":"integer","description":"First line to read (1-based)","default":1},"end_line":{"type":"integer","description":"Last line to read (inclusive). If omitted, reads to end of file."}},"required":["path"],"additionalProperties":false}),
         handler: handle_read_file,
-        safety: crate::default_allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -222,7 +222,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "List directory contents with names and sizes.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"Directory path","default":"."}},"additionalProperties":false}),
         handler: handle_list_dir,
-        safety: crate::default_allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -230,7 +230,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Regex search across files. Returns file:line matches.",
         input_schema: serde_json::json!({"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern"},"glob":{"type":"string","description":"File glob filter (e.g. *.rs)"},"path":{"type":"string","description":"Search directory","default":"."}},"required":["pattern"],"additionalProperties":false}),
         handler: handle_search,
-        safety: crate::default_allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
@@ -238,7 +238,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Compare two files line by line.",
         input_schema: serde_json::json!({"type":"object","properties":{"path_a":{"type":"string","description":"First file path"},"path_b":{"type":"string","description":"Second file path"}},"required":["path_a","path_b"],"additionalProperties":false}),
         handler: handle_diff,
-        safety: crate::default_allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

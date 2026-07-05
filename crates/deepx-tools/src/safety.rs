@@ -1,62 +1,44 @@
 //! Safety verdicts for tool invocation.
 //!
-//! Each tool's safety function returns a `SafetyVerdict` that the
-//! ToolManager/Agent uses to decide whether to auto-execute
-//! or block outright.
-//!
-//! Centralized safety classification logic (is_danger_command, classify_execution)
-//! lives here.
+//! Centralized safety classification using [`ToolRisk`] levels
+//! evaluated against whether the operation is inside the workspace.
+
+use crate::ToolRisk;
 
 /// The result of a tool safety check.
 #[derive(Debug, Clone)]
 pub enum SafetyVerdict {
     /// Automatically allow execution.
     Allow,
+    /// Require authentication before execution.
+    RequireAuth { reason: String },
     /// Block execution with the given reason.
     Block(String),
 }
 
-impl SafetyVerdict {
-    /// Auto-allow shorthand.
-    pub const fn allowed() -> Self {
-        SafetyVerdict::Allow
-    }
+/// Static safety policy — evaluates a [`ToolRisk`] / in-workspace pair
+/// into a [`SafetyVerdict`].
+pub struct SafetyPolicy;
 
-}
-
-// ── Exec safety classification ──
-
-pub fn is_danger_command(cmd: &str) -> bool {
-    let dangerous = [
-        "sudo rm -rf", "sudo rm -r /", "sudo rm /", "sudo rm -rf /",
-        "rm -rf /", "rm -rf ~", "rm -rf .",
-        "dd if=", "mkfs.", "fdisk", ":(){ :|:& };:",
-        "chmod 777 /", "chmod -R 777 /", "chown -R",
-        "> /dev/sda", "mv /", "rm -r /",
-        "shutdown", "reboot", "halt", "poweroff",
-        // Windows destructive commands
-        "format ", "diskpart", "del /f /s", "rmdir /s /q",
-        "rd /s /q", "reg delete", "takeown /f",
-    ];
-    dangerous.iter().any(|d| {
-        if let Some(pos) = cmd.find(d) {
-            pos == 0 || matches!(cmd.as_bytes().get(pos - 1), Some(b' ') | Some(b';') | Some(b'|') | Some(b'&') | Some(b'(') | Some(b'{'))
-        } else {
-            false
+impl SafetyPolicy {
+    /// Evaluate whether a tool call with the given risk level, inside or
+    /// outside the workspace, should be allowed, require auth, or blocked.
+    pub fn evaluate(risk: ToolRisk, in_workspace: bool) -> SafetyVerdict {
+        match (risk, in_workspace) {
+            (ToolRisk::ReadOnly, _) => SafetyVerdict::Allow,
+            (ToolRisk::Write, true) => SafetyVerdict::Allow,
+            (ToolRisk::Write, false) => SafetyVerdict::RequireAuth {
+                reason: "Write operation outside workspace requires confirmation".into(),
+            },
+            (ToolRisk::Destructive, true) => SafetyVerdict::RequireAuth {
+                reason: "Destructive operation requires confirmation".into(),
+            },
+            (ToolRisk::Destructive, false) => SafetyVerdict::Block(
+                "Destructive operation outside workspace is blocked".into(),
+            ),
+            (ToolRisk::Administrative, _) => SafetyVerdict::RequireAuth {
+                reason: "Administrative operation requires confirmation".into(),
+            },
         }
-    })
-}
-
-/// Classify an exec/run action based on the command string.
-pub fn classify_execution(command: &str) -> SafetyVerdict {
-    let cmd = command.trim().to_lowercase();
-    if cmd.is_empty() {
-        return SafetyVerdict::Block("empty command".into());
-    }
-    if is_danger_command(&cmd) {
-        SafetyVerdict::Block(format!("Potentially destructive command: {}", command))
-    } else {
-        SafetyVerdict::Allow
     }
 }
-

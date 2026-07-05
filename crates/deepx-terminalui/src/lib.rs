@@ -281,7 +281,7 @@ fn spawn_agent_child(
 /// Entry point for `deepx --tui`. Shows setup wizard if needed, then the session
 /// selection screen, then spawns the agent subprocess and runs the chat loop.
 pub fn run_tui() -> anyhow::Result<()> {
-    deepx_session::SessionManager::init(deepx_types::platform::data_dir());
+    deepx_session::SessionManager::init(deepx_types::platform::data_dir(), None);
     let store = ConfigStore::default_location();
     let need_setup = !store.exists()
         || store.load_api_key().map_or(true, |k| k.is_empty());

@@ -1,6 +1,6 @@
 
 
-use deepx_types::{ConfigStore, PersistentConfig, PersistentSubagentConfig};
+use deepx_types::{ConfigStore, PersistentConfig, PersistentDatabaseConfig, PersistentSubagentConfig};
 use std::collections::HashMap; // still used by profiles
 
 /// Subagent default configuration.
@@ -39,6 +39,24 @@ impl Default for SubagentConfig {
     }
 }
 
+/// Database mirror configuration (Turso local .db).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DatabaseConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub api_key: String,
@@ -54,6 +72,12 @@ pub struct Config {
     pub context7_api_key: Option<String>,
     pub lang: Option<String>,
     pub subagent: SubagentConfig,
+    /// Compliance / content-filter configuration.
+    pub compliance_enabled: bool,
+    pub compliance_extra_keywords: Vec<String>,
+    pub compliance_allowlist: Vec<String>,
+    /// Turso local database mirror.
+    pub database: DatabaseConfig,
 }
 
 impl Default for Config {
@@ -79,6 +103,10 @@ impl Default for Config {
             context7_api_key: None,
             lang: None,
             subagent: SubagentConfig::default(),
+            compliance_enabled: true,
+            compliance_extra_keywords: Vec::new(),
+            compliance_allowlist: Vec::new(),
+            database: DatabaseConfig::default(),
         }
     }
 }
@@ -155,6 +183,17 @@ impl Config {
                 if let Some(ts) = s.timeout_secs { cfg.subagent.timeout_secs = ts; }
                 if let Some(ref tools) = s.default_tools { cfg.subagent.default_tools = tools.clone(); }
             }
+
+            // ── Compliance ──
+            if let Some(enabled) = pc.compliance_enabled { cfg.compliance_enabled = enabled; }
+            if let Some(ref keywords) = pc.compliance_extra_keywords { cfg.compliance_extra_keywords = keywords.clone(); }
+            if let Some(ref allowlist) = pc.compliance_allowlist { cfg.compliance_allowlist = allowlist.clone(); }
+
+            // ── Database (Turso mirror) ──
+            if let Some(ref db) = pc.database {
+                cfg.database.enabled = db.enabled;
+                cfg.database.url = db.url.clone();
+            }
         }
 
         if !cfg.profiles.contains_key("default") {
@@ -198,6 +237,13 @@ impl Config {
                 max_tokens: Some(self.subagent.max_tokens),
                 timeout_secs: Some(self.subagent.timeout_secs),
                 default_tools: if self.subagent.default_tools.is_empty() { None } else { Some(self.subagent.default_tools.clone()) },
+            }),
+            compliance_enabled: Some(self.compliance_enabled),
+            compliance_extra_keywords: if self.compliance_extra_keywords.is_empty() { None } else { Some(self.compliance_extra_keywords.clone()) },
+            compliance_allowlist: if self.compliance_allowlist.is_empty() { None } else { Some(self.compliance_allowlist.clone()) },
+            database: Some(PersistentDatabaseConfig {
+                enabled: self.database.enabled,
+                url: self.database.url.clone(),
             }),
         };
         if !store.save(&pc) {

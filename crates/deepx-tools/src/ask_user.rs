@@ -1,4 +1,4 @@
-use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
+use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler};
 
 pub(super) fn exec_ask_user(args: &str) -> String {
     let question = parse_arg(args, "question");
@@ -28,7 +28,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Ask the user a question when blocked. question: what to ask (supports **Markdown** for A/B/C sections). options: preset choices (optional array, e.g. [\"Option A\", \"Option B\", \"Other\"]). allow_custom: let user type free text instead of picking an option (default true).",
         input_schema: serde_json::json!({"type":"object","properties":{"question":{"type":"string","description":"The question to ask"},"options":{"type":"array","items":{"type":"string"},"description":"Preset answer choices"},"allow_custom":{"type":"boolean","description":"Allow custom text input","default":true}},"required":["question"],"additionalProperties":false}),
         handler: handle_ask_user,
-        safety: crate::default_allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(10),
     });
 }

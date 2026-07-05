@@ -2,7 +2,7 @@
 //!
 //! Functions take JSON args with optional `path` (repo root, defaults to workspace).
 
-use crate::{parse_arg, parse_arg_or, ToolCallCtx, ToolHandler, ToolKey, ToolResult, handler};
+use crate::{parse_arg, parse_arg_or, ToolCallCtx, ToolHandler, ToolKey, ToolRisk, ToolResult, handler};
 use git2::{DiffOptions, Repository, StatusOptions, StatusShow};
 use std::path::{Path, PathBuf};
 
@@ -452,7 +452,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"max_count":{"type":"string","description":"Max commits to show (default 20)"},"author":{"type":"string","description":"Filter by author name (partial match)"}},
         "additionalProperties":false}),
         handler: handle_log,
-        safety: crate::default_allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -462,7 +462,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"commit_a":{"type":"string","description":"Base commit ref (default HEAD)"},"commit_b":{"type":"string","description":"Target commit ref (default working tree)"},"cached":{"type":"string","description":"If 'true', diff staged vs HEAD instead of working tree"}},
         "additionalProperties":false}),
         handler: handle_diff,
-        safety: crate::default_allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -472,7 +472,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."}},
         "additionalProperties":false}),
         handler: handle_status,
-        safety: crate::default_allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(10),
     });
     mgr.register(ToolHandler {
@@ -482,7 +482,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"commit":{"type":"string","description":"Commit hash or ref (default HEAD)"}},
         "additionalProperties":false}),
         handler: handle_show,
-        safety: crate::default_allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -492,7 +492,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"files":{"type":"string","description":"File to stage: path string, JSON array, or '.' for all"}},
         "required":["files"],"additionalProperties":false}),
         handler: handle_add,
-        safety: crate::default_allow,
+        risk: ToolRisk::Destructive,
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -502,7 +502,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"message":{"type":"string","description":"Commit message (required)"}},
         "required":["message"],"additionalProperties":false}),
         handler: handle_commit,
-        safety: crate::default_allow,
+        risk: ToolRisk::Destructive,
         default_timeout: std::time::Duration::from_secs(15),
     });
 }

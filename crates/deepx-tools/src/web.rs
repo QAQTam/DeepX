@@ -339,7 +339,7 @@ fn exec_web_search(args: &str) -> String {
 
 // ── 注册入口 ──
 
-use crate::{ToolHandler, ToolKey, SafetyVerdict};
+use crate::{ToolHandler, ToolKey, ToolRisk};
 use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
@@ -356,7 +356,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_fetch,
-        safety: |_| SafetyVerdict::allowed(),
+        risk: ToolRisk::ReadOnly,
         default_timeout: Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
@@ -371,7 +371,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_search,
-        safety: |_| SafetyVerdict::allowed(),
+        risk: ToolRisk::ReadOnly,
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -387,7 +387,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_c7_resolve,
-        safety: |_| SafetyVerdict::allowed(),
+        risk: ToolRisk::ReadOnly,
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -403,7 +403,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_c7_query,
-        safety: |_| SafetyVerdict::allowed(),
+        risk: ToolRisk::ReadOnly,
         default_timeout: Duration::from_secs(15),
     });
 }

@@ -19,7 +19,7 @@ fn ten_parallel_reads_same_file() {
     deepx_tools::set_workspace(&tmp.path().to_string_lossy());
 
     // ── Init agent ──
-    deepx_session::SessionManager::init(deepx_types::platform::data_dir());
+    deepx_session::SessionManager::init(deepx_types::platform::data_dir(), None);
     let _ = deepx_msglp::logger::init_agent_logger(&deepx_types::platform::data_dir());
     let mut agent = AgentState::init("test");
     // Make the session ephemeral to avoid disk I/O interference

@@ -14,21 +14,37 @@ use deepx_types::{Message, SessionMeta};
 
 use crate::store;
 
+#[cfg(feature = "turso-backend")]
+use crate::store::turso_backend::TursoBackend;
+
 static INSTANCE: OnceLock<SessionManager> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct SessionManager {
     sessions_dir: PathBuf,
     active_path: PathBuf,
+    #[cfg(feature = "turso-backend")]
+    db: Option<TursoBackend>,
 }
 
 impl SessionManager {
     /// Initialize the global singleton. Must be called once at startup.
     /// Also triggers automatic migration from legacy TOML format if needed.
-    pub fn init(data_dir: PathBuf) {
+    /// When `db_url` is `Some`, a Turso local database mirror is opened.
+    pub fn init(data_dir: PathBuf, db_url: Option<String>) {
+        #[cfg(feature = "turso-backend")]
+        let db = db_url
+            .and_then(|url| TursoBackend::open(&url).ok())
+            .inspect(|_| log::info!("SessionManager: Turso backend opened"));
+
+        #[cfg(not(feature = "turso-backend"))]
+        let _ = db_url;
+
         let mgr = Self {
             active_path: data_dir.join(".active_session"),
             sessions_dir: data_dir.join("sessions"),
+            #[cfg(feature = "turso-backend")]
+            db,
         };
         // Migrate old TOML sessions on first startup of v0.4.0
         crate::migrate::run(&mgr.sessions_dir);
@@ -73,6 +89,11 @@ impl SessionManager {
 
         store::remove_from_index(&self.sessions_dir, seed);
 
+        #[cfg(feature = "turso-backend")]
+        if let Some(ref db) = self.db {
+            let _ = db.delete_session(seed);
+        }
+
         log::info!("SessionManager: deleted session {seed}");
         Ok(())
     }
@@ -105,6 +126,10 @@ impl SessionManager {
         let _ = std::fs::create_dir_all(&dir);
         if let Err(e) = store::append_one(&dir, msg) {
             log::error!("SessionManager: save_one failed: {e}");
+        }
+        #[cfg(feature = "turso-backend")]
+        if let Some(ref db) = self.db {
+            let _ = db.insert_message(seed, msg);
         }
     }
 
@@ -147,6 +172,11 @@ impl SessionManager {
             return;
         }
         store::upsert_index(&self.sessions_dir, &meta);
+
+        #[cfg(feature = "turso-backend")]
+        if let Some(ref db) = self.db {
+            let _ = db.upsert_meta(&meta);
+        }
     }
 
     /// Save session: write meta + rewrite all messages.
@@ -192,6 +222,14 @@ impl SessionManager {
             return;
         }
         store::upsert_index(&self.sessions_dir, &meta);
+
+        #[cfg(feature = "turso-backend")]
+        if let Some(ref db) = self.db {
+            let _ = db.upsert_meta(&meta);
+            for msg in messages {
+                let _ = db.insert_message(seed, msg);
+            }
+        }
     }
 
     /// Append new messages (since last save) to the session JSONL.
@@ -245,6 +283,14 @@ impl SessionManager {
             return;
         }
         store::upsert_index(&self.sessions_dir, &meta);
+
+        #[cfg(feature = "turso-backend")]
+        if let Some(ref db) = self.db {
+            let _ = db.upsert_meta(&meta);
+            for msg in new_messages {
+                let _ = db.insert_message(seed, msg);
+            }
+        }
     }
 
     /// Truncate messages.jsonl to `keep_lines` lines.

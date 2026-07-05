@@ -4,7 +4,7 @@
 //! These let the LLM inspect long-running exec/subagent processes that
 //! hit their timeout, instead of blindly retrying or killing.
 
-use crate::{ToolCallCtx, ToolResult, process_registry::ProcessRegistry};
+use crate::{ToolCallCtx, ToolResult, ToolRisk, process_registry::ProcessRegistry};
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(crate::ToolHandler {
@@ -22,7 +22,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_check,
-        safety: |_| crate::SafetyVerdict::Allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(10),
     });
 
@@ -41,7 +41,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_wait,
-        safety: |_| crate::SafetyVerdict::Allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(180),
     });
 
@@ -57,7 +57,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_kill,
-        safety: |_| crate::SafetyVerdict::Allow,
+        risk: ToolRisk::Administrative,
         default_timeout: std::time::Duration::from_secs(15),
     });
 
@@ -76,7 +76,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_write,
-        safety: |_| crate::SafetyVerdict::Allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(15),
     });
 }

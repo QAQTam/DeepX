@@ -5,11 +5,22 @@
 use std::io::Read;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use deepx_proto::FrontendToDaemon;
+use deepx_proto::{FrontendToDaemon, Ui2Agent, Agent2Ui};
 
 use crate::{pool::AgentPool, frontend::FrontendManager, write_port};
+
+/// Tracks heartbeat state for a single frontend connection.
+struct HeartbeatState {
+    /// When we last received a Ping from this frontend.
+    last_ping: Instant,
+    /// Consecutive heartbeat ticks where no Ping was received.
+    missed_pongs: u32,
+}
+
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const MAX_MISSED_PONGS: u32 = 3;
 
 /// Main entry point for the daemon (called from the unified binary).
 pub fn run() {
@@ -58,6 +69,10 @@ pub fn run() {
     // ── Main event loop ──
     let reap_interval = Duration::from_secs(60);
     let mut last_reap = std::time::Instant::now();
+
+    // Heartbeat tracking
+    let mut heartbeats: std::collections::HashMap<usize, HeartbeatState> = std::collections::HashMap::new();
+    let mut last_heartbeat = Instant::now();
 
     loop {
         // Accept new frontend connections
@@ -127,6 +142,18 @@ pub fn run() {
 
         // Process incoming frames from reader threads
         while let Ok((conn_id, frame)) = frame_rx.try_recv() {
+            // Intercept Ping for heartbeat tracking
+            if matches!(frame.frame, Ui2Agent::Ping) {
+                let state = heartbeats.entry(conn_id).or_insert(HeartbeatState {
+                    last_ping: Instant::now(),
+                    missed_pongs: 0,
+                });
+                state.last_ping = Instant::now();
+                state.missed_pongs = 0;
+                log::trace!("[DAEMON] heartbeat ping from frontend {}", conn_id);
+                continue;
+            }
+
             let mut f = frontends.lock().unwrap();
             if let Err(e) = f.handle_frame(conn_id, frame, &pool) {
                 log::error!("[DAEMON] handle_frame {} failed: {e}", conn_id);
@@ -137,6 +164,46 @@ pub fn run() {
         if last_reap.elapsed() >= reap_interval {
             pool.reap_idle();
             last_reap = std::time::Instant::now();
+        }
+
+        // ── Heartbeat tick every 10s ──
+        if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+            last_heartbeat = Instant::now();
+
+            let mut f = frontends.lock().unwrap();
+            let ids = f.conn_ids();
+
+            // Send Pong to all connected frontends
+            for &cid in &ids {
+                f.send_control(cid, Agent2Ui::Pong);
+            }
+
+            // Check for missed pongs
+            for &cid in &ids {
+                let state = heartbeats.entry(cid).or_insert(HeartbeatState {
+                    last_ping: Instant::now(),
+                    missed_pongs: 0,
+                });
+                // If we haven't received a Ping in 3 intervals, count a miss
+                if state.last_ping.elapsed() >= HEARTBEAT_INTERVAL * 3 {
+                    state.missed_pongs += 1;
+                    log::warn!(
+                        "[DAEMON] frontend {} missed pong {}/{}",
+                        cid,
+                        state.missed_pongs,
+                        MAX_MISSED_PONGS,
+                    );
+                    if state.missed_pongs >= MAX_MISSED_PONGS {
+                        log::warn!("[DAEMON] frontend {} heartbeat lost — removing", cid);
+                        f.remove(cid);
+                        heartbeats.remove(&cid);
+                    }
+                }
+            }
+
+            // Garbage-collect heartbeat entries for disconnected frontends
+            let ids_set: std::collections::HashSet<usize> = ids.into_iter().collect();
+            heartbeats.retain(|&id, _| ids_set.contains(&id));
         }
 
         // Process agent events

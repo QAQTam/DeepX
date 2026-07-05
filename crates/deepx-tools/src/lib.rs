@@ -31,14 +31,22 @@ pub mod memory;
 
 pub mod manager;
 
+pub mod audit;
+pub mod auth;
+pub mod agentfs_bridge;
+
 pub use web::set_c7_key;
 pub use web::set_bocha_key;
 pub use safety::SafetyVerdict;
 pub use manager::{ToolManager, ToolExecMeta, ToolExecReport, ToolStats};
 
-/// Default tool safety check: always allow.
-pub fn default_allow(_: &ToolCallCtx) -> SafetyVerdict {
-    SafetyVerdict::Allow
+/// Risk level for tool operations, replacing per-handler safety functions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolRisk {
+    ReadOnly,
+    Write,
+    Destructive,
+    Administrative,
 }
 
 // ── Macro: handler! ──
@@ -188,7 +196,7 @@ pub struct ToolHandler {
     pub description: &'static str,
     pub input_schema: serde_json::Value,
     pub handler: fn(ToolCallCtx) -> ToolResult,
-    pub safety: fn(&ToolCallCtx) -> SafetyVerdict,
+    pub risk: ToolRisk,
     pub default_timeout: Duration,
 }
 

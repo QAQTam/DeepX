@@ -6,7 +6,7 @@
 //!
 //! Persisted to `<data_dir>/memory/{scope}.md`, surviving session restarts.
 
-use crate::{ToolCallCtx, ToolResult};
+use crate::{ToolCallCtx, ToolResult, ToolRisk};
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(crate::ToolHandler {
@@ -23,7 +23,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_read,
-        safety: |_| crate::SafetyVerdict::Allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(10),
     });
 
@@ -44,7 +44,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_write,
-        safety: |_| crate::SafetyVerdict::Allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(10),
     });
 
@@ -63,7 +63,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_clear,
-        safety: |_| crate::SafetyVerdict::Allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(10),
     });
 }
@@ -73,7 +73,10 @@ fn handle_read(ctx: ToolCallCtx) -> ToolResult {
         Some(s) => s,
         _ => return ToolResult { success: false, content: "[ERROR] memory read: scope required".into() },
     };
-    let content = crate::persistence::read_global_memory(scope);
+    // Try AgentFS kv first, fall back to JSON file
+    let kv_key = format!("memory/{scope}");
+    let content = crate::agentfs_bridge::try_kv_get(&kv_key)
+        .unwrap_or_else(|| crate::persistence::read_global_memory(scope));
     if content.trim().is_empty() {
         ToolResult { success: true, content: format!("[OK] memory/{scope} is empty.") }
     } else {
@@ -94,6 +97,10 @@ fn handle_write(ctx: ToolCallCtx) -> ToolResult {
         _ => return ToolResult { success: false, content: "[ERROR] memory write: entry required".into() },
     };
     crate::persistence::append_global_memory(scope, entry);
+    // Mirror to AgentFS kv store (best-effort)
+    let kv_key = format!("memory/{scope}");
+    let full = crate::persistence::read_global_memory(scope);
+    crate::agentfs_bridge::try_kv_set(&kv_key, &full);
     ToolResult { success: true, content: format!("[OK] Appended to memory/{scope}: {entry}") }
 }
 
@@ -102,6 +109,7 @@ fn handle_clear(ctx: ToolCallCtx) -> ToolResult {
         Some(s) => s,
         _ => return ToolResult { success: false, content: "[ERROR] memory clear: scope required".into() },
     };
+    let kv_key = format!("memory/{scope}");
     if let Some(line) = ctx.args.get("line").and_then(|v| v.as_u64()) {
         let content = crate::persistence::read_global_memory(scope);
         let lines: Vec<&str> = content.lines().collect();
@@ -120,9 +128,13 @@ fn handle_clear(ctx: ToolCallCtx) -> ToolResult {
             .collect::<Vec<_>>()
             .join("\n");
         crate::persistence::write_global_memory(scope, &new_content);
+        // Mirror to AgentFS
+        crate::agentfs_bridge::try_kv_set(&kv_key, &new_content);
         ToolResult { success: true, content: format!("[OK] Deleted line {line} from memory/{scope}: {removed}") }
     } else {
         crate::persistence::write_global_memory(scope, "");
+        // Mirror to AgentFS
+        crate::agentfs_bridge::try_kv_set(&kv_key, "");
         ToolResult { success: true, content: format!("[OK] Cleared memory/{scope}.") }
     }
 }

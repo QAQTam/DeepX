@@ -204,7 +204,7 @@ pub(super) fn exec_task_list(args: &str) -> String {
 
 // ── Registration ──
 
-use crate::{ToolHandler, ToolKey, SafetyVerdict, ToolCallCtx, ToolResult};
+use crate::{ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult};
 use std::time::Duration;
 
 fn handle_task_create(ctx: ToolCallCtx) -> ToolResult {
@@ -231,7 +231,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             }, "required": ["subject", "description"], "additionalProperties": false
         }),
         handler: handle_task_create,
-        safety: |_| SafetyVerdict::Allow,
+        risk: ToolRisk::Write,
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -244,7 +244,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             }, "required": ["id", "status"], "additionalProperties": false
         }),
         handler: handle_task_update,
-        safety: |_| SafetyVerdict::Allow,
+        risk: ToolRisk::Write,
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -256,7 +256,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             }, "required": ["id"], "additionalProperties": false
         }),
         handler: handle_task_delete,
-        safety: |_| SafetyVerdict::Allow,
+        risk: ToolRisk::Write,
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -268,7 +268,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             }, "required": [], "additionalProperties": false
         }),
         handler: handle_task_list,
-        safety: |_| SafetyVerdict::Allow,
+        risk: ToolRisk::ReadOnly,
         default_timeout: Duration::from_secs(15),
     });
 }

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolCallCtx, ToolResult, handler};
+use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler};
 use super::file_shared::{
     unified_diff, diff_stats, normalize_newlines, closest_line,
     disambiguate_match, apply_diff_and_format, is_binary_read_error,
@@ -437,7 +437,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Create, overwrite, or append to a file.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false}},"required":["path","content"],"additionalProperties":false}),
         handler: handle_write_file,
-        safety: crate::default_allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
@@ -445,7 +445,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "String replacement in files.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"paths":{"type":"array","items":{"type":"string"},"description":"Multiple file paths"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"patterns":{"type":"array","items":{"type":"object","properties":{"old":{"type":"string"},"new":{"type":"string"}},"required":["old","new"]},"description":"Array of {old, new} for batch edits"},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file","default":false}},"required":["path","old_string","new_string"],"additionalProperties":false}),
         handler: handle_edit_file,
-        safety: crate::default_allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(60),
     });
     mgr.register(ToolHandler {
@@ -453,7 +453,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Fuzzy multi-line edit via old_lines+new_lines.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"description":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
-        safety: crate::default_allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
@@ -461,7 +461,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Move file to trash (.deepx-trash/) instead of permanent deletion.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path to delete"}},"required":["path"],"additionalProperties":false}),
         handler: handle_delete_file,
-        safety: crate::default_allow,
+        risk: ToolRisk::Destructive,
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
@@ -469,7 +469,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Move or rename a file or directory. Creates parent dirs of dest.",
         input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
         handler: handle_move_file,
-        safety: crate::default_allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
@@ -477,7 +477,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         description: "Copy a file. Creates parent dirs of dest.",
         input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
         handler: handle_copy_file,
-        safety: crate::default_allow,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),
     });
 }

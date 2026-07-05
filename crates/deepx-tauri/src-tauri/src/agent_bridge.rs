@@ -490,7 +490,7 @@ impl AgentRegistry {
 
     /// Initialize the global registry and SessionManager. Called once at startup.
     pub fn init(app: &AppHandle) {
-        deepx_session::SessionManager::init(deepx_types::platform::data_dir());
+        deepx_session::SessionManager::init(deepx_types::platform::data_dir(), None);
         let registry = AgentRegistry {
             instances: HashMap::new(),
             app_handle: app.clone(),

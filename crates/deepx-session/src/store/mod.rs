@@ -231,3 +231,6 @@ pub fn remove_from_index(sessions_dir: &Path, seed: &str) {
     index.retain(|m| m.seed != seed);
     write_index(sessions_dir, &index);
 }
+
+#[cfg(feature = "turso-backend")]
+pub mod turso_backend;

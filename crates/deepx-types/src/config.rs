@@ -38,6 +38,18 @@ pub struct PersistentConfig {
     // ── Subagent defaults ──
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent: Option<PersistentSubagentConfig>,
+
+    // ── Compliance / content filter ──
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compliance_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compliance_extra_keywords: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compliance_allowlist: Option<Vec<String>>,
+
+    // ── Turso local database mirror ──
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<PersistentDatabaseConfig>,
 }
 
 /// Persistence-friendly subagent config with all-Option fields.
@@ -55,6 +67,17 @@ pub struct PersistentSubagentConfig {
     pub timeout_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_tools: Option<Vec<String>>,
+}
+
+/// Persistence-friendly database config mirroring session data to local Turso.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PersistentDatabaseConfig {
+    /// Whether the database mirror is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to the local Turso database file. If `None`, a default path is used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 // ── Profile / Preferences ──

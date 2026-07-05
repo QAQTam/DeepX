@@ -12,6 +12,7 @@ serde_json = "1"
 ureq = { version = "2", features = ["json", "tls"] }
 anyhow = "1"
 log = "0.4"
+unicode-normalization = "0.1"
 
 [lints.clippy]
 unwrap_used = "deny"

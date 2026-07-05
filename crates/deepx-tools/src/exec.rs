@@ -19,6 +19,7 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     if command.trim().is_empty() {
         return "[ERROR] exec: empty command\n[HINT] Provide a shell command in the `cmd` or `command` parameter.".into();
     }
+    crate::audit::maybe_log_exec(&command);
     let cwd = parse_opt(args, "cwd");
     let timeout_secs = parse_opt_u64(args, "timeout_secs")
         .filter(|&n| n > 0 && n <= 3600)
@@ -356,7 +357,7 @@ use deepx_types::arg::{parse_opt, parse_opt_u64};
 
 // ── 注册入口 ──
 
-use crate::{ToolHandler, ToolKey};
+use crate::{ToolHandler, ToolKey, ToolRisk};
 use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
@@ -375,10 +376,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_run,
-        safety: |ctx| {
-            let cmd = ctx.get_str("command").unwrap_or("");
-            crate::safety::classify_execution(cmd)
-        },
+        risk: ToolRisk::Destructive,
         default_timeout: Duration::from_secs(300),
     });
 

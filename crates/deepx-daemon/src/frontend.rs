@@ -210,6 +210,30 @@ impl FrontendManager {
         let _ = conn.stream.write_all(&wire);
     }
 
+    /// Get all active connection IDs.
+    pub fn conn_ids(&self) -> Vec<ConnId> {
+        self.connections.keys().copied().collect()
+    }
+
+    /// Send a daemon-level event directly to a specific frontend (not routed via seed).
+    pub fn send_control(&mut self, conn_id: ConnId, event: Agent2Ui) {
+        let frame = DaemonToFrontend {
+            seed: String::new(),
+            event,
+        };
+        let payload = match serde_json::to_vec(&frame) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let len = payload.len() as u32;
+        if let Some(conn) = self.connections.get_mut(&conn_id) {
+            let mut buf = Vec::with_capacity(4 + payload.len());
+            buf.extend_from_slice(&len.to_le_bytes());
+            buf.extend_from_slice(&payload);
+            let _ = conn.stream.write_all(&buf);
+        }
+    }
+
     /// Process an incoming frame from a frontend: route to agent pool.
     /// Intercepts daemon-level commands (Subscribe, Reconnect) before forwarding.
     pub fn handle_frame(

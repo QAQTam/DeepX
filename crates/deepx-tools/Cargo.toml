@@ -22,6 +22,9 @@ log = "0.4"
 base64 = "0.22"
 git2 = { version = "0.21", features = ["vendored-libgit2"] }
 chrono = { version = "0.4", features = ["clock"] }
+sha2 = "0.10"
+hex = "0.4"
+agentfs = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 conpty = "0.7"

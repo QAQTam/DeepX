@@ -66,6 +66,10 @@ pub enum Ui2Agent {
 
     #[serde(rename = "reconnect")]
     Reconnect { seed: String, last_seq: u64 },
+
+    /// Heartbeat: frontend pings daemon to confirm it's alive.
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -405,6 +409,10 @@ pub enum Agent2Ui {
         #[ts(optional)]
         file: Option<String>,
     },
+
+    /// Heartbeat: daemon responds to frontend ping.
+    #[serde(rename = "pong")]
+    Pong,
 }
 
 fn default_load_count() -> u32 { 20 }

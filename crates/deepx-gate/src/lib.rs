@@ -11,6 +11,7 @@
 
 mod types;
 mod openai;
+pub mod guard;
 pub mod tool_parser;
 
 pub use types::{ProviderConfig, ProviderKind, StreamEvent};

@@ -15,7 +15,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
-use deepx_tools::{ToolCallCtx, ToolHandler, ToolKey, ToolManager, ToolResult};
+use deepx_tools::{ToolCallCtx, ToolHandler, ToolKey, ToolManager, ToolResult, ToolRisk};
 
 pub fn register(mgr: &mut ToolManager) {
     mgr.register(ToolHandler {
@@ -43,7 +43,7 @@ pub fn register(mgr: &mut ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_spawn_subagent,
-        safety: |_| deepx_tools::SafetyVerdict::Allow,
+        risk: ToolRisk::Administrative,
         default_timeout: std::time::Duration::from_secs(180),
     });
 }

@@ -80,7 +80,15 @@ impl ToolManager {
         let key = ToolKey::new(name, action);
         self.handlers.get(&key).or_else(|| {
             if action.is_empty() {
-                None
+                // Try splitting {name}_{action} format
+                if let Some(underscore) = name.rfind('_') {
+                    let name_part = &name[..underscore];
+                    let action_part = &name[underscore + 1..];
+                    self.handlers.get(&ToolKey::new(name_part, action_part))
+                        .or_else(|| self.handlers.get(&ToolKey::new(name_part, "")))
+                } else {
+                    self.handlers.get(&ToolKey::new(name, ""))
+                }
             } else {
                 self.handlers.get(&ToolKey::new(name, ""))
             }
@@ -93,63 +101,16 @@ impl ToolManager {
     }
 
     pub fn all_defs(&self) -> Vec<deepx_types::ToolDef> {
-        let mut seen = std::collections::HashSet::new();
         let mut defs = Vec::new();
         for (key, handler) in &self.handlers {
-            if seen.insert(key.name.clone()) {
-                let mut def = handler.to_tool_def();
-                // Build generic schema for multi-action namespaces
-                let actions: Vec<&str> = self.handlers.keys()
-                    .filter(|k| k.name == key.name && !k.action.is_empty())
-                    .map(|k| k.action.as_str())
-                    .collect();
-                if actions.len() > 1 {
-                    let actions_str = actions.join(", ");
-                    def.function.description = format!("{} -- actions: [{}]", def.function.description, actions_str);
-                    def.function.parameters = serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "action": {"type": "string", "enum": actions, "description": "Sub-action to perform"},
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "source": {"type": "string", "description": "Source path (move/copy)"},
-                            "dest": {"type": "string", "description": "Destination path (move/copy)"},
-                            "content": {"type": "string", "description": "Content to write"},
-                            "pattern": {"type": "string", "description": "Search pattern (regex)"},
-                            "old_string": {"type": "string", "description": "Text to find (edit)"},
-                            "new_string": {"type": "string", "description": "Replacement text (edit)"},
-                            "old_lines": {"type": "array", "items": {"type": "string"}, "description": "Lines to remove (edit_diff)"},
-                            "new_lines": {"type": "array", "items": {"type": "string"}, "description": "Lines to insert (edit_diff)"},
-                            "query": {"type": "string", "description": "Search query / C7 query"},
-                            "url": {"type": "string", "description": "URL to fetch"},
-                            "name": {"type": "string", "description": "Library name (C7 resolve)"},
-                            "library_id": {"type": "string", "description": "Context7 library ID"},
-                            "subject": {"type": "string", "description": "Task subject"},
-                            "description": {"type": "string", "description": "Task description"},
-                            "id": {"type": "integer", "description": "Task/Process ID"},
-                            "status": {"type": "string", "description": "Task status"},
-                            "command": {"type": "string", "description": "Shell command"},
-                            "start_line": {"type": "integer", "description": "First line to read (1-based)"},
-                            "end_line": {"type": "integer", "description": "Last line to read (inclusive)"},
-                            "append": {"type": "boolean", "description": "Append instead of overwrite"},
-                            "replace_all": {"type": "boolean", "description": "Replace all occurrences"},
-                            "regex": {"type": "boolean", "description": "Treat old_string as regex"},
-                            "dry_run": {"type": "boolean", "description": "Preview only, do not write"},
-                            "glob": {"type": "string", "description": "File glob filter (e.g. *.rs)"},
-                            "recursive": {"type": "boolean", "description": "Search recursively"},
-                            "reason": {"type": "string", "description": "Why this change is needed"},
-                            "timeout_secs": {"type": "integer", "description": "Max seconds to wait"},
-                            "question": {"type": "string", "description": "Question to ask user"},
-                            "options": {"type": "array", "items": {"type": "string"}, "description": "Preset choices"},
-                            "allow_custom": {"type": "boolean", "description": "Allow custom text input"},
-                            "model": {"type": "string", "description": "Override model"},
-                            "tools": {"type": "array", "items": {"type": "string"}, "description": "Allowed tool names"},
-                            "max_tokens": {"type": "integer", "description": "Max output tokens"}
-                        },
-                        "required": ["action"]
-                    });
-                }
-                defs.push(def);
-            }
+            let tool_name = if key.action.is_empty() {
+                key.name.clone()
+            } else {
+                format!("{}_{}", key.name, key.action)
+            };
+            let mut def = handler.to_tool_def();
+            def.function.name = tool_name;
+            defs.push(def);
         }
         defs
     }
@@ -214,10 +175,17 @@ impl ToolManager {
             id: id.clone(), name: name.to_string(), action: action.to_string(),
             args: args.clone(), tx_progress: progress_tx.clone(), timeout_secs,
         };
-        match (handler.safety)(&ctx) {
+        let in_workspace = is_path_in_workspace(&ctx);
+        match crate::safety::SafetyPolicy::evaluate(handler.risk.clone(), in_workspace) {
             SafetyVerdict::Block(reason) => {
                 let msg = format!("[ERROR] {}", reason);
                 return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
+            }
+            SafetyVerdict::RequireAuth { reason } => {
+                if !crate::auth::verify_pin(&reason) {
+                    let msg = format!("[ERROR] Authentication required: {}", reason);
+                    return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
+                }
             }
             SafetyVerdict::Allow => {}
         }
@@ -315,6 +283,28 @@ fn extract_files_affected(_tool_name: &str, args: &serde_json::Value) -> Vec<Str
         }
     }
     files
+}
+
+/// Determine whether the tool call is operating within the current workspace.
+fn is_path_in_workspace(ctx: &crate::ToolCallCtx) -> bool {
+    if let Some(path) = ctx.args.get("path").and_then(|v| v.as_str()) {
+        if path.is_empty() || path == "." {
+            return true;
+        }
+        let ws = crate::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock");
+        if ws.is_empty() || *ws == "." {
+            return true;
+        }
+        let abs_path = if std::path::Path::new(path).is_absolute() {
+            path.to_string()
+        } else {
+            std::path::Path::new(&*ws).join(path).to_string_lossy().to_string()
+        };
+        abs_path.starts_with(&*ws)
+    } else {
+        // No path arg — assume workspace operation (e.g. task, memory, ask_user)
+        true
+    }
 }
 
 /// Compact args summary for audit log — path and key values only.

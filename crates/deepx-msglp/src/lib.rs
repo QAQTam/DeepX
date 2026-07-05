@@ -1059,6 +1059,22 @@ impl Loop {
         self.cancel.clear();
         deepx_tools::CANCEL.store(false, Ordering::SeqCst);
 
+        // ── Compliance content guard ──
+        if self.agent.config.compliance_enabled {
+            let guard_result = deepx_gate::guard::content_guard(text);
+            if let Err(ref reason) = guard_result {
+                log::info!("[AGENT] compliance blocked: {reason}");
+                self.emit(Agent2Ui::Error { message: reason.clone() });
+                self.emit(Agent2Ui::TurnEnd {
+                    turn_id: "blocked".into(),
+                    stop_reason: Some("compliance_block".into()),
+                    usage: None,
+                });
+                self.emit(Agent2Ui::Done);
+                return;
+            }
+        }
+
         self.agent.msg.push_user(text);
 
         let turn_id = format!("t{}", self.agent.msg.turn_count());

@@ -353,7 +353,7 @@ fn count_rs_files(dir: &std::path::Path) -> usize {
 
 // ── Registration ──
 
-use crate::{ToolHandler, ToolKey, SafetyVerdict};
+use crate::{ToolHandler, ToolKey, ToolRisk};
 use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
@@ -369,7 +369,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
             "additionalProperties": false
         }),
         handler: handle_explore,
-        safety: |_| SafetyVerdict::allowed(),
+        risk: ToolRisk::ReadOnly,
         default_timeout: Duration::from_secs(30),
     });
 }

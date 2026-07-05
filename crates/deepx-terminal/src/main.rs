@@ -144,7 +144,7 @@ fn run_agent(is_subagent: bool) {
         }
     }
 
-    deepx_session::SessionManager::init(deepx_types::platform::data_dir());
+    deepx_session::SessionManager::init(deepx_types::platform::data_dir(), None);
     let _ = deepx_msglp::logger::init_agent_logger(&deepx_types::platform::data_dir());
 
     let mut agent = if tools_allowlist.is_empty()

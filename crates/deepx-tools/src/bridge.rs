@@ -29,6 +29,8 @@ pub fn init_tools(session_seed: &str, extra_registrars: &[crate::registration::T
     mgr.apply_init(allowed_tools, session_seed);
     let _ = TOOL_MANAGER.set(Mutex::new(mgr));
     log::info!("deepx: tool manager inited ({} tools)", all_tools().len());
+    // Initialise the AgentFS bridge for this session
+    crate::agentfs_bridge::init_bridge(session_seed);
 }
 
 pub fn set_context7_key(key: &str) {
@@ -147,7 +149,31 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     } else { None };
 
     match report {
-        Some(r) => ToolExecResult { content: r.content, success: r.success, meta: r.meta, code_delta },
+        Some(r) => {
+            let exec_result = ToolExecResult { content: r.content, success: r.success, meta: r.meta, code_delta };
+            // Audit trail
+            let audit_entry = crate::audit::AuditEntry {
+                ts: chrono::Utc::now().to_rfc3339(),
+                user: "agent".into(),
+                tool: name.to_string(),
+                action: effective_action.to_string(),
+                args_hash: crate::audit::hash_args(&args_val),
+                result: if exec_result.success { "ok".into() } else { "fail".into() },
+                elapsed_ms: exec_result.meta.elapsed_ms,
+                files: r.files_affected.clone(),
+            };
+            crate::audit::append_audit(&audit_entry);
+            // AgentFS tool recording (best-effort)
+            let params_json = serde_json::to_string(&args_val).unwrap_or_default();
+            crate::agentfs_bridge::try_record_tool(
+                name,
+                &effective_action,
+                &params_json,
+                if exec_result.success { "ok" } else { "fail" },
+                exec_result.meta.elapsed_ms,
+            );
+            exec_result
+        }
         None => ToolExecResult {
             content: "[ERROR] tool manager not initialised".to_string(),
             success: false,
