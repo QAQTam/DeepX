@@ -2,34 +2,32 @@
 
 ## Goal
 
-Phase 4-5: 完成 daemon 消息网关 + 跨平台 TCP 传输 + Snapshot 协议统一。
-Phase 7:  补齐审计链路 + OS 级授权 + 合规内容过滤，满足国企安全审查要求。
+v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + PLAN Review，从"能用的 agent"升级为"可审计的工作助手"。
 
-## Status (2026-07-05)
+## v0.4 → v0.6 回顾
 
 ```
-✅ Phase 1-5: Daemon gateway + TCP + Snapshot unification
-⏳ Phase 7.1:  审计持久化（低难度，80 行）
-⏳ Phase 7.2:  用户身份 + OS PIN 授权（中难度，120 行）
-⏳ Phase 7.3:  合规内容过滤（中难度，100 行）
-⏳ Phase 7.4:  PLAN Review 工具（中难度，200 行）
-⏳ Phase 7.5:  AgentFS 集成（中难度，150 行）
-⏸  Phase 6:   Frame 分层（可选，推迟）
+127 commits, 其中 122 个 fix（96%）
+  ├── 行为回归修复    13 次（handleDashboard/TurnEnd/loadTurns 字段映射丢失）
+  ├── 崩溃/栈溢出      5 次（0xc0000005，4KB buffer 栈→堆迁移）
+  ├── PTY / 竞态       5 次（ANSI 渲染、pty spawn 时序）
+  ├── 通道死锁/阻塞    4 次（SyncSender full → emit_delta try_send）
+  ├── CJK 序列化       4 次（Python→clippy lint 替代）
+  └── 通用 fix        111 次
 ```
 
-## 法规背景
+核心痛点：**协议字段映射不稳定**（TurnEnd/usage、Dashboard/tokens_used、blocks 丢失）反复出错，因为前后端类型定义分两套——Rust `Agent2Ui` + TypeScript 手写 interface。v0.6.0 引入 ts-rs 自动生成 `.ts` 后回归大减。
 
-《人工智能拟人化互动服务管理暂行办法》（2026.07.15 施行）第二条明确：
+## v0.7.0 Roadmap
 
-> 提供智能客服、知识问答、**工作助手**、学习教育、科学研究等服务，不涉及持续性的情感互动的，不适用本办法。
-
-DeepX 定位为"工作助手"，**不适用该办法**。但仍应主动对齐第八条禁止事项，在 prompt 层设置情感边界：
-
-- 拒绝情感陪伴、心理咨询、人生建议类对话
-- 检测到极端情绪 → 引导联系专业人员
-- 检测到诱导性询问 → 拒绝回答并提示合规边界
-
-## Phase 7: Audit, Auth, Compliance
+| Phase | 内容 | 难度 | 行数 |
+|-------|------|------|------|
+| **7.1** | 审计持久化（audit.jsonl + SHA-256 指纹） | 低 | +80 |
+| **7.2** | OS PIN 授权（Windows CredUI + Linux PAM） | 中 | +120 |
+| **7.3** | 合规内容过滤（system prompt + gate 关键词） | 中 | +100 |
+| **7.4** | PLAN Review 工具（Tauri 审批面板） | 中 | +200 |
+| **7.5** | AgentFS 集成（沙箱 + SQL 审计查询） | 中 | +150 |
+| **合计** | **5 项** | — | **+650** |
 
 ### 7.0 现状审计
 
@@ -112,6 +110,8 @@ pub fn verify_os_identity(reason: &str) -> Result<bool, String> {
 **2FA 指纹授权（Phase 7.2+，推迟）：** Windows Hello 指纹/人脸需要 UWP API，成本高；先用 PIN 单因素，后续按需加 `Windows.Security.Credentials.UI.UserConsentVerifier`。
 
 ### 7.3 合规内容过滤（P1，中难度）
+
+**法规背景：**《人工智能拟人化互动服务管理暂行办法》（2026.07.15 施行）第二条明确"工作助手"不适用该办法，但应主动对齐第八条禁止事项。
 
 在 system prompt 和 `deepx-gate` 两层设防线：
 
@@ -197,3 +197,4 @@ PLAN.md (Git 管理)              Tauri PLAN Review 面板
 | PIN 弹框在 headless 环境不可用 | SSH session 回退到 token 文件验证 |
 | `windows` crate 编译慢 | 用 feature flag 隔离，`cargo check` 不影响 |
 | 合规关键词误杀正常对话 | 只匹配整词 + 可配置白名单 |
+| audit.jsonl 文件增长 | 每会话上限 10MB（约 5 万条记录），超出触发压缩 |
