@@ -186,7 +186,44 @@ PLAN.md (Git 管理)              Tauri PLAN Review 面板
 
 **Tauri 新组件：** `PlanReviewPanel.tsx` + `cmd_plan_action`（读写 PLAN.md 元数据）
 
-### 7.5 AgentFS 集成（P2，中难度，可选加速器）
+### 7.6 Safety 集中化（P1，中难度，~80 行）
+
+**现状：** 29 个 handler 各自注册 `safety: fn`，只有 `exec` 有 `classify_execution` 检测，其余 28 个全部 `default_allow`。
+
+| 需要授权的工具 | 数量 |
+|---|---|
+| file_mutate（write/edit/delete/move/copy/add） | 6 |
+| git（add, commit） | 2 |
+| process（kill） | 1 |
+| memory（write, global_write） | 2 |
+| **合计** | **11** |
+
+**目标：** 将散落在 29 个注册点的安全检测集中为 `SafetyPolicy`，统一在 `prepare_req` 中评估：
+
+```rust
+// safety.rs 重构
+pub struct SafetyPolicy {
+    require_auth: Vec<String>,      // 需要 OS PIN 的工具名
+    blocked_tools: Vec<String>,     // 永久禁止
+    workspace_root: Option<String>, // 工作区边界
+}
+
+impl SafetyPolicy {
+    pub fn evaluate(&self, tool: &str, args: &serde_json::Value) -> SafetyVerdict {
+        if self.blocked_tools.contains(tool) { return Block("disabled"); }
+        if let Some(root) = &self.workspace_root {
+            if path_outside_root(args, root) { return RequireAuth { reason: "outside workspace" }; }
+        }
+        if self.require_auth.contains(tool) { return RequireAuth { reason: "requires identity" }; }
+        Allow
+    }
+}
+```
+
+改动点：
+- `safety.rs` → `SafetyPolicy` 结构体 + `evaluate()`（+60 行）
+- `manager.rs` `prepare_req` 中 `handler.safety` → `POLICY.evaluate`（-1 +1 行）
+- 删除 `ToolHandler.safety` 字段 + `handler!` 宏简化（-30 行）
 
 | AgentFS API | DeepX 替代 | 收益 |
 |---|---|---|
@@ -204,8 +241,9 @@ PLAN.md (Git 管理)              Tauri PLAN Review 面板
 | 7.2 OS PIN 授权 | 中 | +120 | `auth.rs`(新), `safety.rs`, `Cargo.toml` |
 | 7.3 合规内容过滤 | 中 | +100 | `guard.rs`(新), `lib.rs`(msglp), `config.rs` |
 | 7.4 PLAN Review | 中 | +200 | `PlanReviewPanel.tsx`(新), `agent_bridge.rs` |
-| 7.5 AgentFS | 中 | +150 | `Cargo.toml`, `file_*.rs`, `audit.rs` |
-| **合计** | — | **+650** | **12** |
+| 7.5 Safety 集中化 | 中 | +80 | `safety.rs`, `manager.rs`, `lib.rs`(tools), 29 个注册点 |
+| 7.6 AgentFS | 中 | +150 | `Cargo.toml`, `file_*.rs`, `audit.rs` |
+| **合计** | — | **+730** | **12** |
 
 ## Risk
 
