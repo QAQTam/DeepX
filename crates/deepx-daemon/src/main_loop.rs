@@ -166,44 +166,12 @@ pub fn run() {
             last_reap = std::time::Instant::now();
         }
 
-        // ── Heartbeat tick every 10s ──
-        if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-            last_heartbeat = Instant::now();
-
-            let mut f = frontends.lock().unwrap();
-            let ids = f.conn_ids();
-
-            // Send Pong to all connected frontends
-            for &cid in &ids {
-                f.send_control(cid, Agent2Ui::Pong);
-            }
-
-            // Check for missed pongs
-            for &cid in &ids {
-                let state = heartbeats.entry(cid).or_insert(HeartbeatState {
-                    last_ping: Instant::now(),
-                    missed_pongs: 0,
-                });
-                // If we haven't received a Ping in 3 intervals, count a miss
-                if state.last_ping.elapsed() >= HEARTBEAT_INTERVAL * 3 {
-                    state.missed_pongs += 1;
-                    log::warn!(
-                        "[DAEMON] frontend {} missed pong {}/{}",
-                        cid,
-                        state.missed_pongs,
-                        MAX_MISSED_PONGS,
-                    );
-                    if state.missed_pongs >= MAX_MISSED_PONGS {
-                        log::warn!("[DAEMON] frontend {} heartbeat lost — removing", cid);
-                        f.remove(cid);
-                        heartbeats.remove(&cid);
-                    }
-                }
-            }
-
-            // Garbage-collect heartbeat entries for disconnected frontends
-            let ids_set: std::collections::HashSet<usize> = ids.into_iter().collect();
-            heartbeats.retain(|&id, _| ids_set.contains(&id));
+        // ── Heartbeat tick disabled pending v0.7.1 rework (send_control blocks on TCP write) ──
+        // TODO: move heartbeat I/O to dedicated thread
+        if false {
+            let _ = &last_heartbeat;
+            HEARTBEAT_INTERVAL;
+            let _f = frontends.lock().unwrap();
         }
 
         // Process agent events
