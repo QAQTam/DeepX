@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 
-use deepx_proto::{FrontendToDaemon, DaemonToFrontend};
+use deepx_proto::{FrontendToDaemon, DaemonToFrontend, Ui2Agent};
 
 use crate::pool::{AgentPool, AgentEvent};
 
@@ -155,6 +155,7 @@ impl FrontendManager {
     }
 
     /// Process an incoming frame from a frontend: route to agent pool.
+    /// Intercepts daemon-level commands (Subscribe, Reconnect) before forwarding.
     pub fn handle_frame(
         &mut self,
         conn_id: ConnId,
@@ -164,7 +165,22 @@ impl FrontendManager {
         // Auto-subscribe to the seed this frontend is talking to
         self.subscribe(conn_id, &frame.seed);
 
-        // Route frame to agent
+        // Intercept daemon-level commands
+        match &frame.frame {
+            Ui2Agent::Subscribe { .. } => {
+                // Subscription already handled above — nothing more to do
+                return Ok(());
+            }
+            Ui2Agent::Reconnect { seed, last_seq } => {
+                // Replay buffered events the frontend missed
+                self.replay_buffered(conn_id, seed);
+                log::info!("[FRONTEND] reconnect seed={}, last_seq={}", &seed[..seed.floor_char_boundary(seed.len().min(8))], last_seq);
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // Route regular frames to agent
         pool.send_to_agent(&frame.seed, &frame.frame)
     }
 }
