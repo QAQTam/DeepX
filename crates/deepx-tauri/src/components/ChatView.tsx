@@ -39,10 +39,10 @@ export default function ChatView(props: ChatViewProps) {
       <InfoBar
         model={chat().sessionInfo.model}
         seed={chat().sessionInfo.seed}
-        contextTokens={chat().sessionInfo.contextTokens}
-        contextLimit={chat().sessionInfo.contextLimit}
-        promptCacheHit={chat().sessionInfo.promptCacheHit}
-        promptCacheMiss={chat().sessionInfo.promptCacheMiss}
+        context_tokens={chat().sessionInfo.context_tokens}
+        context_limit={chat().sessionInfo.context_limit}
+        prompt_cache_hit={chat().sessionInfo.prompt_cache_hit}
+        prompt_cache_miss={chat().sessionInfo.prompt_cache_miss}
         isStreaming={chat().isStreaming()}
         error={chat().error()}
         onDismissError={() => chat().clearError()}

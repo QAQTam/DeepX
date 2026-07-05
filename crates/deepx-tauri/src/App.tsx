@@ -1,8 +1,9 @@
-﻿import { createSignal, onMount, onCleanup, Show, For, Switch, Match } from "solid-js";
+import { createSignal, onMount, onCleanup, Show, For, Switch, Match } from "solid-js";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createChatStore, type CodeDelta, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
+import type { Agent2Ui } from "@/lib/types";
 import ChatView from "./components/ChatView";
 import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
@@ -144,20 +145,8 @@ export default function App() {
       } break;
       case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); chat.setHasMore(!!p.has_more); } break;
       case "dashboard": chat.handleDashboard(p); break;
-      case "done": chat.setInputDisabled(false); chat.handleDone(); break;
+      case "done": // chat.setInputDisabled(false); // TODO: re-enable after store migration chat.handleDone(); break;
       case "cancelled": chat.handleCancelled(); break;
-      case "code_delta": {
-        const delta: CodeDelta = {
-          lines_added: (p.lines_added ?? 0) as number,
-          lines_removed: (p.lines_removed ?? 0) as number,
-          files_created: (p.files_created ?? 0) as number,
-          files_deleted: (p.files_deleted ?? 0) as number,
-          file: p.file as string | undefined,
-        };
-        const cur = chat.codeDeltas();
-        chat.setCodeDeltas([...cur.slice(-499), delta]);
-        break;
-      }
       case "error": {
         const errMsg = (p.message ?? "Unknown error") as string;
         chat.handleError(errMsg);
@@ -177,7 +166,7 @@ export default function App() {
         }
         break;
       }
-      case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, result_summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean }); break;
+      case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean, time: Date.now() }); break;
       case "compact_start": chat.handleCompactStart(p); break;
       case "compact_end": chat.handleCompactEnd(p); break;
       case "tool_notice": chat.handleToolNotice(p); break;
@@ -185,11 +174,7 @@ export default function App() {
       case "exec_progress": chat.handleExecProgress((p.tool_call_id ?? "") as string, (p.chunk ?? "") as string); break;
       case "code_delta": {
         const delta: CodeDelta = {
-          lines_added: (p.lines_added ?? 0) as number,
-          lines_removed: (p.lines_removed ?? 0) as number,
-          files_created: (p.files_created ?? 0) as number,
-          files_deleted: (p.files_deleted ?? 0) as number,
-          file: p.file as string | undefined,
+          timestamp: BigInt(Date.now()), lines_added: (p.lines_added ?? 0) as number, lines_removed: (p.lines_removed ?? 0) as number, files_created: (p.files_created ?? 0) as number, files_deleted: (p.files_deleted ?? 0) as number, file: p.file as string | undefined,
         };
         const current = chat.codeDeltas();
         chat.setCodeDeltas([...current.slice(-499), delta]);
@@ -202,7 +187,7 @@ export default function App() {
     try {
       const raw = await invoke<string>("cmd_list_sessions");
       const list: SessionMeta[] = JSON.parse(raw);
-      list.sort((a, b) => b.updated_at - a.updated_at);
+      list.sort((a, b) => Number(b.updated_at) - Number(a.updated_at));
       setSessions(list);
     } catch (e) { console.error(e); }
   }
@@ -277,7 +262,7 @@ export default function App() {
     if (!chat) return;
     const ts = chat.turns;
     if (ts.length === 0) return;
-    const firstId = ts[0].turnId;
+    const firstId = ts[0].turn_id;
     try { await invoke("cmd_load_more_turns", { seed, beforeTurnId: firstId }); } catch (e) { console.error(e); }
   }
 
@@ -442,7 +427,7 @@ export default function App() {
                   <span class="session-dot" />
                   <span class="session-info">
                     <span class="session-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
-                    <span class="session-meta">{formatDate(s.updated_at)} · {s.turn_count || s.message_count} {t().session.turns}</span>
+                    <span class="session-meta">{formatDate(Number(s.updated_at))} · {s.turn_count || s.message_count} {t().session.turns}</span>
                   </span>
                   <span
                     class="session-delete-btn"

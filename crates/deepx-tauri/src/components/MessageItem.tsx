@@ -10,7 +10,7 @@ interface MessageItemProps {
   text?: string;
   rounds?: Round[];
   status?: "streaming" | "complete";
-  turnId?: string;
+  turn_id?: string;
   onUndo?: (turnId: string) => void;
 }
 
@@ -23,8 +23,8 @@ export default function MessageItem(props: MessageItemProps) {
       <div class="msg-body">
         <div class="msg-role">
           {isUser ? t().message.you : t().message.assistant}
-          <Show when={isUser && props.turnId && props.onUndo}>
-            <span class="msg-undo" onClick={() => props.onUndo!(props.turnId!)} title={t().message.undo}>
+          <Show when={isUser && props.turn_id && props.onUndo}>
+            <span class="msg-undo" onClick={() => props.onUndo!(props.turn_id!)} title={t().message.undo}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M3 10h10a5 5 0 0 1 0 10H11" /><path d="M7 6l-4 4 4 4" />
               </svg>
@@ -41,17 +41,17 @@ export default function MessageItem(props: MessageItemProps) {
                 // Merge tool results into tool calls / blocks so <For> re-renders
                 // when toolResults change independently of toolCalls/blocks.
                 const mergedToolCalls = createMemo(() =>
-                  round.toolCalls.map((tc) => ({
+                  round.tool_calls.map((tc) => ({
                     call: tc,
-                    result: round.toolResults.find((x) => x.tool_call_id === tc.id),
-                    streamOutput: round.toolResults.find((x) => x.tool_call_id === tc.id + "_stream")?.output,
+                    result: round.tool_results.find((x) => x.tool_call_id === tc.id),
+                    streamOutput: round.tool_results.find((x) => x.tool_call_id === tc.id + "_stream")?.output,
                   }))
                 );
                 const mergedBlocks = createMemo(() =>
                   round.blocks.map((block) => {
                     if (block.type !== "tool" || !block.card) return block;
-                    const res = round.toolResults.find((x) => x.tool_call_id === block.card!.id);
-                    const streamOut = round.toolResults.find((x) => x.tool_call_id === block.card!.id + "_stream")?.output;
+                    const res = round.tool_results.find((x) => x.tool_call_id === block.card!.id);
+                    const streamOut = round.tool_results.find((x) => x.tool_call_id === block.card!.id + "_stream")?.output;
                     return { ...block, card: { ...block.card, _result: res, _streamOutput: streamOut } };
                   })
                 );

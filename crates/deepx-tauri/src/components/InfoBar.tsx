@@ -10,10 +10,10 @@ const FMT = (n: number) => n.toLocaleString();
 export default function InfoBar(props: {
   model: string;
   seed: string;
-  contextTokens: number;
-  contextLimit: number;
-  promptCacheHit: number;
-  promptCacheMiss: number;
+  context_tokens: number;
+  context_limit: number;
+  prompt_cache_hit: number;
+  prompt_cache_miss: number;
   isStreaming: boolean;
   error: string | null;
   onDismissError?: () => void;
@@ -26,13 +26,13 @@ export default function InfoBar(props: {
   const seedShort = () => props.seed.substring(0, 8);
 
   const ctxPct = () =>
-    props.contextLimit > 0 ? Math.round((props.contextTokens / props.contextLimit) * 100) : 0;
+    props.context_limit > 0 ? Math.round((props.context_tokens / props.context_limit) * 100) : 0;
 
   const hitPct = () =>
-    props.contextTokens > 0 ? Math.round((props.promptCacheHit / props.contextTokens) * 100) : 0;
+    props.context_tokens > 0 ? Math.round((props.prompt_cache_hit / props.context_tokens) * 100) : 0;
 
   const hitLabel = () => {
-    if (!props.contextTokens) return "—";
+    if (!props.context_tokens) return "—";
     return `${hitPct()}%`;
   };
 
@@ -88,15 +88,15 @@ export default function InfoBar(props: {
       </Show>
       <div class="info-item">
         <span class="info-label">{t().infobar.context}</span>
-        <span class="info-value mono">{FMT(props.contextTokens)} / {FMT(props.contextLimit)}</span>
-        <Show when={props.contextLimit > 0}>
+        <span class="info-value mono">{FMT(props.context_tokens)} / {FMT(props.context_limit)}</span>
+        <Show when={props.context_limit > 0}>
           <span class="info-bar-pct" style={`--pct: ${ctxPct()}%`} />
         </Show>
       </div>
       <div class="info-item">
         <span class="info-label">{t().infobar.cacheHit}</span>
         <span class="info-value mono">{hitLabel()}</span>
-        <Show when={props.contextTokens > 0}>
+        <Show when={props.context_tokens > 0}>
           <span class="info-bar-pct" style={`--pct: ${hitPct()}%`} />
         </Show>
       </div>

@@ -1,7 +1,7 @@
 import { Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import MessageItem from "./MessageItem";
-import type { Turn } from "../store/chat";
+import type { Turn, Round } from "../store/chat";
 import { useI18n } from "../i18n";
 
 interface MessageListProps {
@@ -24,13 +24,13 @@ export default function MessageList(props: MessageListProps) {
     get count() { return props.turns.length; },
     getScrollElement: () => listRef,
     estimateSize: (index: number) => {
-      const tid = props.turns[index]?.turnId;
+      const tid = props.turns[index]?.turn_id;
       return tid ? (heightCache.get(tid) ?? 600) : 600;
     },
     overscan: 50,
     anchorTo: "end",
     followOnAppend: true,
-    getItemKey: (index: number) => props.turns[index]?.turnId ?? String(index),
+    getItemKey: (index: number) => props.turns[index]?.turn_id ?? String(index),
   });
 
   // When turns array reference changes (session switch), reset virtualizer state
@@ -142,7 +142,7 @@ export default function MessageList(props: MessageListProps) {
                         el.setAttribute("data-index", String(vItem.index));
                         virtualizer.measureElement(el);
                         const h = el.getBoundingClientRect().height;
-                        if (h > 0) heightCache.set(turn.turnId, h);
+                        if (h > 0) heightCache.set(turn.turn_id, h);
                       }
                     }}
                     style={{
@@ -155,13 +155,13 @@ export default function MessageList(props: MessageListProps) {
                   >
                     <MessageItem
                       role="user"
-                      text={turn.userText}
-                      turnId={turn.turnId}
+                      text={turn.user_text}
+                      turn_id={turn.turn_id}
                       onUndo={props.onUndo}
                     />
                     <MessageItem
                       role="assistant"
-                      rounds={turn.rounds}
+                      rounds={turn.rounds as Round[]}
                       status={turn.status}
                     />
                   </div>

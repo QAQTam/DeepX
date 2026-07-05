@@ -1,36 +1,29 @@
 import { createStore, produce } from "solid-js/store";
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import type { ToolCallDef, ToolResultDef, RoundBlock, RoundData, TurnData, TaskInfo, CodeDeltaRecord, CodeDaily, SessionMeta } from "@/lib/types";
 
-export interface ToolCallDef { id: string; name: string; args_display: string; args_json: string; }
-export interface ToolResultDef { tool_call_id: string; output: string; success: boolean; }
-export interface RoundBlock { type: "reasoning" | "text" | "tool"; content?: string; card?: ToolCallDef; }
-export interface Round { roundNum: number; thinking?: string; answer?: string; blocks: RoundBlock[]; toolCalls: ToolCallDef[]; toolResults: ToolResultDef[]; }
-export interface Turn { turnId: string; userText: string; rounds: Round[]; status: "streaming" | "complete"; stopReason?: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; }
-export interface SessionInfo { seed: string; model: string; contextTokens: number; contextLimit: number; totalTokens: number; promptCacheHit: number; promptCacheMiss: number; }
-export interface SessionMeta { seed: string; model: string; created_at: number; updated_at: number; message_count: number; turn_count: number; last_summary: string; }
-export interface TaskInfo { id: string; subject: string; description: string; status: string; }
+// Re-export for other modules
+export type { ToolCallDef, ToolResultDef, RoundBlock, TaskInfo, CodeDaily, SessionMeta };
+export type CodeDelta = CodeDeltaRecord;
+export interface Round extends RoundData {
+  blocks: RoundBlock[];
+}
+export interface Turn {
+  turn_id: string;
+  user_text: string;
+  rounds: Round[];
+  status: "streaming" | "complete";
+  stop_reason?: string;
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+}
+export interface SessionInfo { seed: string; model: string; context_tokens: number; context_limit: number; total_tokens: number; prompt_cache_hit: number; prompt_cache_miss: number; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
 export interface AskState { question: string; options: string[]; allow_custom: boolean; show: boolean; }
-export interface CodeDelta {
- lines_added: number;
- lines_removed: number;
- files_created: number;
- files_deleted: number;
- file?: string;
-}
-
-export interface CodeDelta {
-  lines_added: number;
-  lines_removed: number;
-  files_created: number;
-  files_deleted: number;
-  file?: string;
-}
 
 export function createChatStore(seed: string) {
   const [turns, setTurns] = createStore<Turn[]>([]);
-  const [sessionInfo, setSessionInfo] = createStore<SessionInfo>({ seed: "", model: "", contextTokens: 0, contextLimit: 0, totalTokens: 0, promptCacheHit: 0, promptCacheMiss: 0 });
+  const [sessionInfo, setSessionInfo] = createStore<SessionInfo>({ seed: "", model: "", context_tokens: 0, context_limit: 0, total_tokens: 0, prompt_cache_hit: 0, prompt_cache_miss: 0 });
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [inputDisabled, setInputDisabled] = createSignal(false);
   const [hasMore, setHasMore] = createSignal(false);
@@ -41,7 +34,7 @@ export function createChatStore(seed: string) {
   if (typeof window !== "undefined") {
     (window as any).__deepxDebugInject = (mockTurns: Turn[]) => {
       setTurns(mockTurns as any);
-      setSessionInfo({ seed: "debug", model: "mock", contextTokens: 0, contextLimit: 0, totalTokens: 0, promptCacheHit: 0, promptCacheMiss: 0 });
+      setSessionInfo({ seed: "debug", model: "mock", context_tokens: 0, context_limit: 0, total_tokens: 0, prompt_cache_hit: 0, prompt_cache_miss: 0 });
     };
   }
   const [error, setError] = createSignal<string | null>(null);
@@ -95,37 +88,39 @@ export function createChatStore(seed: string) {
     const rn = pendingRoundNum;
     pendingTurnId = "";
     pendingRoundNum = 0;
-    setTurns((t) => t.turnId === tid, "rounds", (r) => r.roundNum === rn, produce((round) => {
+    setTurns((t) => t.turn_id === tid, "rounds", (r) => r.round_num === rn, produce((round: Round) => {
       round.thinking = streamBuffer.thinking;
       round.answer = streamBuffer.answer;
     }));
   }
 
-  function ensureRound(turnId: string, roundNum: number) {
-    const turn = turns.find((t) => t.turnId === turnId);
+  function ensureRound(turn_id: string, round_num: number) {
+    const turn = turns.find((t) => t.turn_id === turn_id);
     if (!turn) return;
-    if (turn.rounds.find((r) => r.roundNum === roundNum)) return;
-    setTurns((t) => t.turnId === turnId, "rounds", produce((rounds) => rounds.push({ roundNum, thinking: undefined, answer: undefined, blocks: [], toolCalls: [], toolResults: [] })));
-  }
-
-  function handleTurnStart(turnId: string, userText: string) {
-    resetStreamBuffer(); lastRoundNum = 0; setIsStreaming(true); setInputDisabled(true); setError(null);
-    setTurns(produce((t) => t.push({ turnId, userText, rounds: [], status: "streaming" })));
+    const idx = turn.rounds.findIndex((r) => r.round_num === round_num);
+    if (idx < 0) {
+      setTurns((t) => t.turn_id === turn_id, "rounds", (r) => [...r, { round_num, thinking: "", answer: "", tool_calls: [], tool_results: [], blocks: [] } as Round]);
+    }
   }
 
   let lastRoundNum = 0;
 
-  function handleRoundDelta(turnId: string, roundNum: number, kind: string, delta: string) {
-    // Reset stream buffer when entering a new round (e.g. after tool calls)
-    if (roundNum !== lastRoundNum) {
-      resetStreamBuffer();
-      lastRoundNum = roundNum;
-    }
+  function handleTurnStart(turn_id: string, user_text: string) {
+    lastRoundNum = 0;
+    resetStreamBuffer();
+    // Add new turn at end — but guard against duplicate re-emission (resume race)
+    const already = turns[turns.length - 1];
+    if (already && already.turn_id === turn_id) return;
+    setTurns((prev) => [...prev, { turn_id, user_text, rounds: [], status: "streaming" } as Turn]);
+  }
+
+  function handleRoundDelta(turn_id: string, round_num: number, kind: string, delta: string) {
+    lastRoundNum = round_num;
     if (kind === "thinking") streamBuffer.thinking += delta; else if (kind === "answering") streamBuffer.answer += delta;
-    ensureRound(turnId, roundNum);
+    ensureRound(turn_id, round_num);
     // RAF-batched: defer setTurns to next animation frame to coalesce rapid deltas
-    pendingTurnId = turnId;
-    pendingRoundNum = roundNum;
+    pendingTurnId = turn_id;
+    pendingRoundNum = round_num;
     if (!rafPending) {
       rafPending = true;
       requestAnimationFrame(() => {
@@ -139,46 +134,46 @@ export function createChatStore(seed: string) {
   let tcRafPending = false;
   let pendingTcMap = new Map<string, { id: string; name: string; argsSoFar: string }>();
 
-  function flushToolCallPreviews(turnId: string, roundNum: number) {
+  function flushToolCallPreviews(turn_id: string, round_num: number) {
     const batch = [...pendingTcMap.values()];
     pendingTcMap.clear();
     if (batch.length === 0) return;
-    setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
+    setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
       for (const u of batch) {
-        const existing = round.toolCalls.findIndex(tc => tc.id === u.id);
+        const existing = round.tool_calls.findIndex(tc => tc.id === u.id);
         if (existing >= 0) {
-          round.toolCalls[existing].args_display = u.argsSoFar.slice(0, 100);
-          round.toolCalls[existing].args_json = u.argsSoFar;
+          round.tool_calls[existing].args_display = u.argsSoFar.slice(0, 100);
+          round.tool_calls[existing].args_json = u.argsSoFar;
         } else {
-          round.toolCalls.push({ id: u.id, name: u.name, args_display: u.argsSoFar.slice(0, 100), args_json: u.argsSoFar });
+          round.tool_calls.push({ id: u.id, name: u.name, args_display: u.argsSoFar.slice(0, 100), args_json: u.argsSoFar });
         }
       }
     }));
   }
 
-  function handleToolCallPreview(turnId: string, roundNum: number, index: number, id: string, name: string, argsSoFar: string) {
-    ensureRound(turnId, roundNum);
+  function handleToolCallPreview(turn_id: string, round_num: number, index: number, id: string, name: string, argsSoFar: string) {
+    ensureRound(turn_id, round_num);
     pendingTcMap.set(id, { id, name, argsSoFar });
     if (!tcRafPending) {
       tcRafPending = true;
       requestAnimationFrame(() => {
         tcRafPending = false;
-        flushToolCallPreviews(turnId, roundNum);
+        flushToolCallPreviews(turn_id, round_num);
       });
     }
   }
 
-  function handleRoundComplete(turnId: string, roundNum: number, thinking?: string, answer?: string, toolCalls?: ToolCallDef[], blocks?: RoundBlock[]) {
+  function handleRoundComplete(turn_id: string, round_num: number, thinking?: string, answer?: string, tool_calls?: ToolCallDef[], blocks?: RoundBlock[]) {
     flushDeltas(); // flush any pending streaming delta before replacing with final state
-    ensureRound(turnId, roundNum);
-    setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
-      if (thinking) round.thinking = thinking; if (answer) round.answer = answer; if (toolCalls) round.toolCalls = toolCalls; if (blocks) round.blocks = blocks;
+    ensureRound(turn_id, round_num);
+    setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
+      if (thinking) round.thinking = thinking; if (answer) round.answer = answer; if (tool_calls) round.tool_calls = tool_calls; if (blocks) round.blocks = blocks;
     }));
   }
 
   // ── RAF batching for exec progress (tool output streaming) ──
   let execRafPending = false;
-  let pendingExecChunks = new Map<string, string>(); // toolCallId -> accumulated output
+  let pendingExecChunks = new Map<string, string>(); // tool_call_id → accumulated output
 
   function flushExecProgress() {
     const batch = [...pendingExecChunks.entries()];
@@ -190,23 +185,23 @@ export function createChatStore(seed: string) {
       const round = turn.rounds[turn.rounds.length - 1];
       if (!round) return;
       for (const [streamKey, output] of batch) {
-        const existing = round.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
+        const existing = round.tool_results.findIndex(tr => tr.tool_call_id === streamKey);
         if (existing >= 0) {
-          round.toolResults[existing].output += output;
+          round.tool_results[existing].output += output;
         } else {
-          round.toolResults.push({ tool_call_id: streamKey, output, success: true });
+          round.tool_results.push({ tool_call_id: streamKey, output, success: true });
         }
       }
     }));
   }
 
-  function handleExecProgress(toolCallId: string, chunk: string) {
+  function handleExecProgress(tool_call_id: string, chunk: string) {
     // Guard: ignore if the last turn is already complete (prevents bleed into next round)
     const lastTurn = turns[turns.length - 1];
     if (!lastTurn || lastTurn.status !== "streaming") return;
 
-    const prev = pendingExecChunks.get(toolCallId) || "";
-    pendingExecChunks.set(toolCallId, prev + chunk);
+    const prev = pendingExecChunks.get(tool_call_id) || "";
+    pendingExecChunks.set(tool_call_id, prev + chunk);
     if (!execRafPending) {
       execRafPending = true;
       requestAnimationFrame(() => {
@@ -216,233 +211,92 @@ export function createChatStore(seed: string) {
     }
   }
 
-  function handleToolResults(turnId: string, roundNum: number, results: ToolResultDef[]) {
+  function handleToolResults(turn_id: string, round_num: number, results: ToolResultDef[]) {
     flushExecProgress(); // flush any pending exec progress before replacing with final results
-    ensureRound(turnId, roundNum);
-    setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
+    ensureRound(turn_id, round_num);
+    setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
       // Remove streaming placeholders matching the final result IDs
-      const resultIds = new Set(results.map(r => r.tool_call_id));
-      round.toolResults = round.toolResults.filter(tr => !resultIds.has(tr.tool_call_id));
-      // Push final results (ANSI rendering handled by ToolCallCard)
-      round.toolResults.push(...results);
+      const finalIds = new Set(results.map(r => r.tool_call_id));
+      round.tool_results = round.tool_results.filter(tr => !finalIds.has(tr.tool_call_id) || tr.success === undefined);
+      // Append final results
+      round.tool_results.push(...results);
     }));
-    for (const r of results) {
-      if (r.success && r.output.startsWith("[USER_QUERY] ")) {
-        try {
-          const json = JSON.parse(r.output.slice(13));
-          setAskState({ question: json.question || "", options: json.options || [], allow_custom: json.allow_custom !== false, show: true });
-        } catch {}
-      }
-    }
   }
 
-  function handleTurnEnd(turnId: string, data: Record<string, unknown>) {
-    flushDeltas(); flushToolCallPreviews(turnId, lastRoundNum); flushExecProgress(); // flush all pending state before marking complete
+  function handleTurnEnd(turn_id: string, data: Record<string, unknown>) {
+    flushDeltas(); flushToolCallPreviews(turn_id, lastRoundNum); flushExecProgress(); // flush all pending state before marking complete
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
-    setTurns((t) => t.turnId === turnId, produce((turn) => { turn.status = "complete"; turn.stopReason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
+    setTurns((t) => t.turn_id === turn_id, produce((turn) => { turn.status = "complete"; turn.stop_reason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
     const u = data.usage as Record<string, unknown> | undefined;
     if (u) {
-      if (u.prompt_tokens != null) setSessionInfo("contextTokens", u.prompt_tokens as number);
-      if (u.total_tokens != null) setSessionInfo("totalTokens", (s) => s + (u.total_tokens as number));
-      if (u.prompt_cache_hit_tokens != null) setSessionInfo("promptCacheHit", u.prompt_cache_hit_tokens as number);
-      if (u.prompt_cache_miss_tokens != null) setSessionInfo("promptCacheMiss", u.prompt_cache_miss_tokens as number);
+      setSessionInfo(produce((s) => {
+        const pt = (u.prompt_tokens ?? s.prompt_cache_hit) as number;
+        const ct = (u.completion_tokens ?? s.prompt_cache_miss) as number;
+        s.total_tokens += (pt + ct);
+      }));
     }
   }
 
-  function handleSessionCreated(seed: string) {
-    cacheCurrentStatus();           // save old session's tasks/activity/edits
-    setSessionInfo("seed", seed);
-    loadCachedStatus(seed);         // restore target session's data (or empty)
-  }
   function handleDashboard(data: Record<string, unknown>) {
-    if (data.session_seed) setSessionInfo("seed", data.session_seed as string);
-    if (data.model) setSessionInfo("model", data.model as string);
-    if (data.context_limit != null) setSessionInfo("contextLimit", data.context_limit as number);
-    if (data.usage != null) {
-      const u = data.usage as Record<string, unknown>;
-      if (u.prompt_tokens != null) setSessionInfo("contextTokens", u.prompt_tokens as number);
-      if (u.total_tokens != null) setSessionInfo("totalTokens", u.total_tokens as number);
-      if (u.prompt_cache_hit_tokens != null) setSessionInfo("promptCacheHit", u.prompt_cache_hit_tokens as number);
-      if (u.prompt_cache_miss_tokens != null) setSessionInfo("promptCacheMiss", u.prompt_cache_miss_tokens as number);
-    }
-    const newTasks = (data.tasks as TaskInfo[]) || [];
-    const currentTasks = tasks();
-    // Tag removed tasks for slide-out animation
-    const newIds = new Set(newTasks.map(t => t.id));
-    for (const t of currentTasks) {
-      if (!newIds.has(t.id) && !(t as any)._deleting) {
-        (t as any)._deleting = true;
-      }
-    }
-    // Merge: keep deleting tasks for animation, add new/updated tasks
-    const merged = newTasks.map(t => ({ ...t }));
-    for (const t of currentTasks) {
-      if ((t as any)._deleting && !newIds.has(t.id)) {
-        merged.push({ ...t, _deleting: true } as any);
-      }
-    }
-    setTasks(merged as TaskInfo[]);
-    // Remove after animation
-    for (const t of currentTasks) {
-      if ((t as any)._deleting && !newIds.has(t.id)) {
-        setTimeout(() => {
-          setTasks((prev: TaskInfo[]) => prev.filter((x: TaskInfo) => x.id !== t.id));
-        }, 400);
-      }
-    }
-    if (data.recent_edits != null) setRecentEdits(data.recent_edits as string[]);
+    setSessionInfo(produce((s) => {
+      s.seed = (data.session_seed ?? s.seed) as string;
+      s.model = (data.model ?? s.model) as string;
+      s.context_tokens = (data.context_limit ?? s.context_tokens) as number;
+      // Use context_limit from dashboard as the threshold
+      s.context_limit = (data.context_limit ?? s.context_limit) as number;
+    }));
+    if (data.tasks) setTasks(data.tasks as TaskInfo[]);
+    if (data.recent_edits) setRecentEdits(data.recent_edits as string[]);
+    if (data.documents) { /* TODO */ }
   }
 
-  function handleCancelled() { setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); }
-  function handleDone() { setIsStreaming(false); }
-  function handleError(message: string) {
-    setError(message); setIsStreaming(false); setInputDisabled(false);
-    const lastTurn = turns[turns.length - 1];
-    if (lastTurn && lastTurn.status === "streaming") setRestoreText(lastTurn.userText);
+  function handleAuditRecord(entry: ActivityEntry) {
+    setActivityLog((prev) => [...prev.slice(-99), entry]);
   }
+
+  function handleCancelled() {
+    setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
+  }
+
+  function handleDone() {
+    // No-op: input re-enabled in handleTurnEnd
+  }
+
+  function handleError(msg: string) { setError(msg); }
   function clearError() { setError(null); }
-  function handleAuditRecord(data: { tool_name: string; result_summary: string; success: boolean }) {
-    setActivityLog((prev) => {
-      const next = [{ tool_name: data.tool_name, summary: data.result_summary, success: data.success, time: Date.now() }, ...prev];
-      return next.length > 50 ? next.slice(0, 50) : next;
-    });
-  }
-  function clear() { setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]); resetStreamBuffer(); setIsStreaming(false); setInputDisabled(false); lastRoundNum = 0; }
-  function clearTurns() { setTurns([]); setError(null); resetStreamBuffer(); }
 
-  async function undoTurn(turnId: string) {
-    try {
-      await invoke("cmd_undo_turn", { seed, turnId });
-    } catch (e) { console.error(e); }
-    const num = parseInt(turnId.replace("t", ""), 10);
-    if (!isNaN(num)) {
-      setTurns((prev) => prev.filter((t) => parseInt(t.turnId.replace("t", ""), 10) < num));
-    }
+  function clear() {
+    setTurns([]); resetStreamBuffer(); lastRoundNum = 0;
+    setSessionInfo({ seed: "", model: "", context_tokens: 0, context_limit: 0, total_tokens: 0, prompt_cache_hit: 0, prompt_cache_miss: 0 });
+    setError(null); setIsStreaming(false);
   }
 
-  function handleCompactStart(_data: Record<string, unknown>) {
+  function clearTurns() {
+    cacheCurrentStatus();
+    setTurns([]); resetStreamBuffer(); lastRoundNum = 0;
+    setError(null);
+  }
+
+  function handleCompactStart(data: Record<string, unknown>) {
     setIsCompacting(true);
-    setCompactResult(null);
   }
+
   function handleCompactEnd(data: Record<string, unknown>) {
     setIsCompacting(false);
-    const chars = data.summary_chars as number;
-    const turns = data.turns_compacted as number;
-    if (chars > 0) {
-      setCompactResult(`Compacted ${turns} turns → ${chars} char summary`);
-      setTimeout(() => setCompactResult(null), 4000);
-    }
+    setCompactResult(`Compacted ${data.turns_compacted} turns`);
   }
 
   function handleToolNotice(data: Record<string, unknown>) {
-    const msg = (data.message ?? "") as string;
-    setCompactResult(msg);
-    setTimeout(() => setCompactResult(null), 4000);
+    // Tool notices are informational; just log for now
   }
 
-  // Load session data from disk (for resume / refresh restore)
-  function loadSessionFromData(sessionJson: string) {
-    try {
-      const session = JSON.parse(sessionJson);
-      if (!session.messages) return;
-      const messages: Array<{ role: string; content: Array<{ type: string; text?: string; reasoning?: string; id?: string; name?: string; input?: unknown; tool_use_id?: string; content?: string }> }> = session.messages;
-      const loaded: Turn[] = [];
-      let currentTurn: Turn | null = null;
-      let roundNum = 0;
-      let turnIdx = 0;
-
-      for (const msg of messages) {
-        if (msg.role === "system") continue;
-        if (msg.role === "user") {
-          currentTurn = {
-            turnId: `t${++turnIdx}`,
-            userText: msg.content.find((b) => b.type === "text")?.text ?? "",
-            rounds: [],
-            status: "complete",
-          };
-          loaded.push(currentTurn);
-          roundNum = 0;
-        } else if (msg.role === "assistant" && currentTurn) {
-          roundNum++;
-          const thinking = msg.content.find((b) => b.type === "reasoning")?.reasoning;
-          const answer = msg.content.find((b) => b.type === "text")?.text;
-          const toolCalls: ToolCallDef[] = msg.content
-            .filter((b) => b.type === "tool_use")
-            .map((b) => ({ id: b.id ?? "", name: b.name ?? "", args_display: b.name ?? "", args_json: JSON.stringify(b.input ?? {}) }));
- const blocks: RoundBlock[] = msg.content.map((b) => {
-            if (b.type === "text") return { type: "text", content: b.text ?? "" };
-            if (b.type === "tool_use") return { type: "tool", card: { id: b.id ?? "", name: b.name ?? "", args_display: b.name ?? "", args_json: JSON.stringify(b.input ?? {}) } };
-            return { type: "text", content: "" };
-          });
-          currentTurn.rounds.push({ roundNum, thinking, answer, blocks, toolCalls, toolResults: [] });
-        } else if (msg.role === "tool" && currentTurn) {
-          const lastRound = currentTurn.rounds[currentTurn.rounds.length - 1];
-          if (lastRound) {
-            for (const block of msg.content) {
-              if (block.type === "tool_result") {
-                lastRound.toolResults.push({ tool_call_id: block.tool_use_id ?? "", output: block.content ?? "", success: true });
-              }
-            }
-          }
-        }
-      }
-      setTurns(loaded);
-      return loaded.length;
-    } catch (e) {
-      console.error("Failed to load session data:", e);
-      return 0;
-    }
+  function undoTurn(turn_id: string) {
+    setTurns((prev) => prev.filter(t => t.turn_id !== turn_id));
   }
 
-  // Load turns from SessionRestored agent event (authoritative restored state).
-  function loadTurnsFromRestore(turnsData: Array<{
-    turn_id: string; user_text: string; rounds: Array<{
-      round_num: number; thinking?: string; answer?: string;
-      tool_calls: ToolCallDef[]; tool_results: ToolResultDef[];
-    }>;
-  }>) {
-    const loaded: Turn[] = turnsData.map((td) => {
-      const rounds: Round[] = td.rounds.map((rd) => {
-        const blocks: RoundBlock[] = [];
-        if (rd.thinking) blocks.push({ type: "reasoning", content: rd.thinking });
-        if (rd.answer) blocks.push({ type: "text", content: rd.answer });
-        for (const tc of rd.tool_calls) blocks.push({ type: "tool", card: tc });
-        return { roundNum: rd.round_num, thinking: rd.thinking, answer: rd.answer, blocks, toolCalls: rd.tool_calls, toolResults: rd.tool_results };
-      });
-      return { turnId: td.turn_id, userText: td.user_text, rounds, status: "complete" };
-    });
-    setTurns(loaded);
+  function handleSessionCreated(evtSeed: string) {
+    setSessionInfo(produce((s) => { s.seed = evtSeed; }));
   }
-
-  function prependTurns(turnsData: Array<{
-    turn_id: string; user_text: string; rounds: Array<{
-      round_num: number; thinking?: string; answer?: string;
-      tool_calls: ToolCallDef[]; tool_results: ToolResultDef[];
-    }>;
-  }>) {
-    const loaded: Turn[] = turnsData.map((td) => {
-      const rounds: Round[] = td.rounds.map((rd) => {
-        const blocks: RoundBlock[] = [];
-        if (rd.thinking) blocks.push({ type: "reasoning", content: rd.thinking });
-        if (rd.answer) blocks.push({ type: "text", content: rd.answer });
-        for (const tc of rd.tool_calls) blocks.push({ type: "tool", card: tc });
-        return { roundNum: rd.round_num, thinking: rd.thinking, answer: rd.answer, blocks, toolCalls: rd.tool_calls, toolResults: rd.tool_results };
-      });
-      return { turnId: td.turn_id, userText: td.user_text, rounds, status: "complete" as const };
-    });
-    setTurns(produce((prev) => {
-      prev.unshift(...loaded);
-    }));
-  }
-
-  async function submitAskAnswer(answer: string) {
-    setAskState({ question: "", options: [], allow_custom: true, show: false });
-    try {
-      await invoke("cmd_send_message", { seed, text: answer });
-    } catch (e) { console.error(e); }
-  }
-
-  function dismissAsk() { setAskState({ question: "", options: [], allow_custom: true, show: false }); }
 
   async function submitTaskAction(action: "cancel" | "delete" | "ask", taskId: string, subject: string, _description: string) {
     if (action === "ask") {
@@ -458,5 +312,33 @@ export function createChatStore(seed: string) {
     }
   }
 
- return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, setInputDisabled, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  async function submitAskAnswer(answer: string) {
+    setAskState({ question: "", options: [], allow_custom: true, show: false });
+    try {
+      await invoke("cmd_send_message", { seed, text: answer });
+    } catch (e) { console.error(e); }
+  }
+
+  function dismissAsk() { setAskState({ question: "", options: [], allow_custom: true, show: false }); }
+
+  function loadSessionFromData(snapshot: { turns: Turn[]; info: SessionInfo; codeDeltas: CodeDelta[] }) {
+    setTurns(snapshot.turns);
+    setSessionInfo(snapshot.info);
+    setCodeDeltas(snapshot.codeDeltas);
+  }
+
+  // Simplified: wire format is now snake_case, matching TS types exactly
+  function loadTurnsFromRestore(turnsData: TurnData[]) {
+    setTurns(turnsData.map((td) => ({ ...td, rounds: td.rounds as Round[], status: "complete" as const })));
+  }
+
+  // Simplified: wire format is now snake_case, matching TS types exactly
+  function prependTurns(turnsData: TurnData[]) {
+    const loaded: Turn[] = turnsData.map((td) => ({ ...td, rounds: td.rounds as Round[], status: "complete" as const }));
+    setTurns(produce((prev) => {
+      prev.unshift(...loaded);
+    }));
+  }
+
+  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

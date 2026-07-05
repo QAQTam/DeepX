@@ -14,7 +14,7 @@ interface StartupViewProps {
 function computeActivity(sessions: SessionMeta[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const s of sessions) {
-    const d = new Date(s.created_at * 1000);
+    const d = new Date(Number(s.created_at) * 1000);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     map.set(key, (map.get(key) ?? 0) + (s.message_count || 1));
   }
@@ -142,7 +142,7 @@ export default function StartupView(props: StartupViewProps) {
                 {(s) => (
                   <button class="startup-recent-item" onClick={() => props.onResume(s.seed)}>
                     <span class="startup-recent-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
-                    <span class="startup-recent-meta">{formatDate(s.updated_at)} · {s.turn_count || s.message_count} {t().session.turns}</span>
+                    <span class="startup-recent-meta">{formatDate(Number(s.updated_at))} · {s.turn_count || s.message_count} {t().session.turns}</span>
                   </button>
                 )}
               </For>
