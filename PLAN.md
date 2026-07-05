@@ -18,7 +18,7 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 
 核心痛点：协议字段映射反复断裂。v0.6.0 `ts-rs` 自动生成 `.ts` 后回归大减。
 
-## v0.7.0 Roadmap（一波流 — 全部 9 项同时交付原型，v0.7.1+ 只修 bug）
+## v0.7.0 Roadmap（一波流 — 全部 10 项同时交付原型，v0.7.1+ 只修 bug）
 
 ### 政策背景
 
@@ -44,7 +44,7 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 | **7.7** | 工具 Schema 修复（多 action 独立暴露） | 低 | +30 |
 | **7.8** | Daemon 心跳（Ping/Pong 健康检查） | 低 | +30 |
 | **7.9** | exec 命令审计（完整命令写入 audit.jsonl） | 低 | +20 |
-| **7.10** | Session 双库（JSONL + libSQL/Turso 并行写入） | 中 | +100 |
+| **7.10** | Session 双库（JSONL + Turso Database 引擎） | 中 | +100 |
 | **合计** | **10 项，v0.7.0 原型；v0.7.1+ 只修 bug** | — | **+950** |
 
 ---
@@ -293,7 +293,7 @@ v0.9.0:  移除 JSONL, Turso 唯一存储
 | 7.3 合规过滤 | 中 | +100 | `guard.rs`(新), `lib.rs`(msglp), `config.rs` |
 | 7.4 PLAN Review | 中 | +200 | `PlanReviewPanel.tsx`(新), `agent_bridge.rs` |
 | 7.5 Safety 分级 | 中 | +120 | `safety.rs`, `manager.rs`, `lib.rs`(tools), 29 注册点 |
-| 7.6 AgentFS | 中 | +150 | `Cargo.toml`, `file_*.rs`, `audit.rs` |
+| 7.6 AgentFS | 中 | +150 | `agentfs_bridge.rs`(新), `memory.rs`, `bridge.rs`, `Cargo.toml` |
 | 7.7 工具 Schema | 低 | +30 | `manager.rs` |
 | 7.8 Daemon 心跳 | 低 | +30 | `agent_protocol.rs`, `main_loop.rs` |
 | 7.9 exec 命令审计 | 低 | +20 | `exec.rs` |
