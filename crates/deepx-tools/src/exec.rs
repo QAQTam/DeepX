@@ -114,8 +114,13 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
                             raw_line
                         };
                         line_count += 1;
-                        if let Some(ref tx) = pt_out {
-                            let _ = tx.send((tc_id.clone(), clean_line.clone()));
+                        // Skip empty lines (just "\n") for progress streaming —
+                        // they add visual noise without information. Full output
+                        // (done_tx + ProcessRegistry) still includes everything.
+                        if clean_line != "\n" {
+                            if let Some(ref tx) = pt_out {
+                                let _ = tx.send((tc_id.clone(), clean_line.clone()));
+                            }
                         }
                         crate::process_registry::ProcessRegistry::append_output(registry_id, &clean_line);
                         let _ = done_tx_thread.send(clean_line);

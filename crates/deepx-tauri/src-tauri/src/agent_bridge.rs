@@ -1050,6 +1050,7 @@ pub fn cmd_get_git_diff(seed: String) -> Result<String, String> {
     };
 
     let mut files: Vec<serde_json::Value> = Vec::new();
+
     if let Ok(statuses) = repo.statuses(None) {
         for entry in statuses.iter() {
             let path = entry.path().unwrap_or("").to_string();
@@ -1066,18 +1067,19 @@ pub fn cmd_get_git_diff(seed: String) -> Result<String, String> {
                 continue;
             };
 
-            let mut lines_added = 0u32;
-            let mut lines_removed = 0u32;
-            if change == "modified" || change == "added" {
-                if let Ok(head) = repo.head().and_then(|h| h.peel_to_tree()) {
-                    if let Ok(diff) = repo.diff_tree_to_workdir(Some(&head), None) {
-                        if let Ok(stats) = diff.stats() {
-                            lines_added = stats.insertions() as u32;
-                            lines_removed = stats.deletions() as u32;
-                        }
-                    }
-                }
-            }
+            // Per-file line stats: diff just this file against HEAD.
+            let (lines_added, lines_removed) = if matches!(change, "modified" | "added") {
+                let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+                let mut opts = git2::DiffOptions::new();
+                opts.pathspec(&path);
+                head_tree
+                    .and_then(|tree| repo.diff_tree_to_workdir(Some(&tree), Some(&mut opts)).ok())
+                    .and_then(|d| d.stats().ok())
+                    .map(|s| (s.insertions() as u32, s.deletions() as u32))
+                    .unwrap_or((0, 0))
+            } else {
+                (0, 0)
+            };
 
             files.push(serde_json::json!({
                 "path": path,
@@ -1293,32 +1295,36 @@ pub fn cmd_get_context_stats(seed: String) -> Result<String, String> {
     for m in &msgs {
         let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
         if role == "system" {
-            system_prompt += serde_json::to_string(m).unwrap_or_default().len() as u64;
+            if let Some(text) = m.get("content").and_then(|c| c.as_str()) {
+                system_prompt += deepx_types::count_tokens(text) as u64;
+            }
             continue;
         }
         // Content can be a string (user/system/tool) or absent (assistant with tool_calls only)
         if let Some(text) = m.get("content").and_then(|c| c.as_str()) {
-            let len = text.len() as u64;
+            let tok = deepx_types::count_tokens(text) as u64;
             if role == "tool" {
-                tool_results += len;
+                tool_results += tok;
             } else {
-                chat_text += len;
+                chat_text += tok;
             }
         }
         // Assistant messages may have thinking/reasoning_content at top level
         if let Some(reasoning) = m.get("reasoning_content").and_then(|r| r.as_str()) {
             thinking_blocks += 1;
-            thinking += reasoning.len() as u64;
+            thinking += deepx_types::count_tokens(reasoning) as u64;
         }
         // Tool calls are at top level as "tool_calls" array
         if let Some(arr) = m.get("tool_calls").and_then(|t| t.as_array()) {
             for tc in arr {
                 tool_call_blocks += 1;
-                tool_calls += serde_json::to_string(tc).unwrap_or_default().len() as u64;
+                let json = serde_json::to_string(tc).unwrap_or_default();
+                tool_calls += deepx_types::count_tokens(&json) as u64;
             }
         }
     }
-    let tools_schema = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null)).unwrap_or_default().len() as u64;
+    let tools_json = serde_json::to_string(req.get("tools").unwrap_or(&serde_json::Value::Null)).unwrap_or_default();
+    let tools_schema = deepx_types::count_tokens(&tools_json) as u64;
 
     serde_json::to_string(&serde_json::json!({
         "messages": msgs.len(),

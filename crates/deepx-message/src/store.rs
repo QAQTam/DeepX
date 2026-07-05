@@ -216,14 +216,15 @@ impl MessageStore {
         if self.seed.is_empty() || self.ephemeral {
             return;
         }
+        let turn_count = self.turns.len();
         if !self.pending_save.is_empty() {
             SessionManager::global().save_append(
-                &self.seed, &self.pending_save, model, Some(effort), self.compact_skip,
+                &self.seed, &self.pending_save, model, Some(effort), self.compact_skip, turn_count,
             );
             self.pending_save.clear();
         } else {
             SessionManager::global().update_meta(
-                &self.seed, model, Some(effort), self.compact_skip,
+                &self.seed, model, Some(effort), self.compact_skip, turn_count,
             );
         }
     }
@@ -563,16 +564,18 @@ impl MessageStore {
             return;
         }
         let msgs = self.to_vec();
+        let turn_count = self.turns.len();
         SessionManager::global().save_full(
-            &self.seed, &msgs, model, Some(effort), self.compact_skip,
+            &self.seed, &msgs, model, Some(effort), self.compact_skip, turn_count,
         );
         self.pending_save.clear();
     }
 
     /// Reconstruct the internal turn/step structure by replaying saved messages
     /// through `push_user` / `push_assistant` / `push_tool_result`.
-    pub fn from_messages(seed: &str, msgs: &[Message]) -> (Self, Vec<String>) {
+    pub fn from_messages(seed: &str, msgs: &[Message], compact_skip: usize) -> (Self, Vec<String>) {
         let mut store = Self::new(seed);
+        store.compact_skip = compact_skip;
         store.replaying = true;
         let mut repairs = Vec::new();
         let mut i = 0;
@@ -728,7 +731,8 @@ impl MessageStore {
 
     /// Compute context composition stats from the current message store.
     /// This reflects the actual state (post-compact), unlike the API dump which lags.
-    /// Returns (chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt, thinking_blocks, tool_call_blocks).
+    /// Returns (chat_text_tok, thinking_tok, tool_calls_tok, tool_results_tok, tools_schema_tok, system_prompt_tok, thinking_blocks, tool_call_blocks).
+    /// All token fields use `deepx_types::count_tokens` (CJK-aware heuristic), NOT raw char length.
     #[allow(clippy::too_many_arguments)]
     pub fn compute_context_stats(&self) -> (u64, u64, u64, u64, u64, u64, u64, u64) {
         let mut chat_text = 0u64;
@@ -740,7 +744,11 @@ impl MessageStore {
         let mut tool_call_blocks = 0u64;
 
         for m in &self.system_messages {
-            system_prompt += serde_json::to_string(m).unwrap_or_default().len() as u64;
+            for b in &m.content {
+                if let deepx_types::ContentBlock::Text { text } = b {
+                    system_prompt += deepx_types::count_tokens(text) as u64;
+                }
+            }
         }
         for (i, turn) in self.turns.iter().enumerate() {
             if i < self.compact_skip { continue; }
@@ -748,18 +756,20 @@ impl MessageStore {
                 for b in &m.content {
                     match b {
                         deepx_types::ContentBlock::Text { text } => {
-                            chat_text += text.len() as u64;
+                            chat_text += deepx_types::count_tokens(text) as u64;
                         }
                         deepx_types::ContentBlock::Reasoning { reasoning } => {
-                            thinking += reasoning.len() as u64;
+                            thinking += deepx_types::count_tokens(reasoning) as u64;
                             thinking_blocks += 1;
                         }
                         deepx_types::ContentBlock::ToolUse { .. } => {
-                            tool_calls += serde_json::to_string(b).unwrap_or_default().len() as u64;
+                            // Tool call JSON ≈ token count of serialized form
+                            let json = serde_json::to_string(b).unwrap_or_default();
+                            tool_calls += deepx_types::count_tokens(&json) as u64;
                             tool_call_blocks += 1;
                         }
                         deepx_types::ContentBlock::ToolResult { content, .. } => {
-                            tool_results += content.len() as u64;
+                            tool_results += deepx_types::count_tokens(content) as u64;
                         }
                         _ => {}
                     }
@@ -769,14 +779,15 @@ impl MessageStore {
                 for b in &step.assistant.content {
                     match b {
                         deepx_types::ContentBlock::Text { text } => {
-                            chat_text += text.len() as u64;
+                            chat_text += deepx_types::count_tokens(text) as u64;
                         }
                         deepx_types::ContentBlock::Reasoning { reasoning } => {
-                            thinking += reasoning.len() as u64;
+                            thinking += deepx_types::count_tokens(reasoning) as u64;
                             thinking_blocks += 1;
                         }
                         deepx_types::ContentBlock::ToolUse { .. } => {
-                            tool_calls += serde_json::to_string(b).unwrap_or_default().len() as u64;
+                            let json = serde_json::to_string(b).unwrap_or_default();
+                            tool_calls += deepx_types::count_tokens(&json) as u64;
                             tool_call_blocks += 1;
                         }
                         _ => {}
@@ -785,7 +796,7 @@ impl MessageStore {
                 for tr in &step.tool_results {
                     for b in &tr.content {
                         if let deepx_types::ContentBlock::ToolResult { content, .. } = b {
-                            tool_results += content.len() as u64;
+                            tool_results += deepx_types::count_tokens(content) as u64;
                         }
                     }
                 }

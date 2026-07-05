@@ -62,10 +62,14 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
         if count == 0 {
             return (content.to_string(), Match::NoMatch { msg: format!("regex no matches") });
         }
+        // Escape $ in replacement string — regex interprets $1, ${name} as
+        // capture-group backreferences. The LLM intends literal replacement text,
+        // so we double every $ ($$ → literal $).
+        let escaped_new = new.replace('$', "$$");
         let new_content = if replace_all {
-            re.replace_all(content, new).to_string()
+            re.replace_all(content, &escaped_new).to_string()
         } else {
-            re.replacen(content, 1, new).to_string()
+            re.replacen(content, 1, &escaped_new).to_string()
         };
         let msg = if replace_all { format!("regex replaced {count} matches") } else { "regex replaced 1 match".into() };
         (new_content, Match::Ok { msg })
@@ -381,6 +385,11 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
         log::info!("file_edit_diff: {} had CRLF, normalized to LF for matching", path);
     }
     let file_lines: Vec<&str> = content.lines().collect();
+    // Normalize trailing whitespace for matching: LLMs often can't reproduce
+    // trailing spaces/tabs exactly, so trim_end on both old_lines and file
+    // lines avoids spurious mismatches. Note: this means significant trailing
+    // whitespace (e.g. Makefile recipes) may match the wrong location if
+    // multiple candidates exist — context_before/context_after disambiguates.
     let norm_old: Vec<String> = old_lines.iter().map(|l| l.trim_end().to_string()).collect();
     let win = norm_old.len();
     if win > file_lines.len() {

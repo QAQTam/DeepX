@@ -13,6 +13,9 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     pub message_count: usize,
+    /// Number of conversation turns (one user query + its assistant/tool chain).
+    #[serde(default)]
+    pub turn_count: usize,
     #[serde(default)]
     pub last_summary: String,
     /// Number of earliest turns compacted (skipped in LLM context).
@@ -42,6 +45,7 @@ impl Default for SessionMeta {
             model: String::new(),
             effort: None,
             message_count: 0,
+            turn_count: 0,
             last_summary: String::new(),
             compact_skip: 0,
             resume_seed: None,

@@ -3,8 +3,7 @@ target/
 *.swp
 *.swo
 .env
-
 node_modules/
-
 .deepx-trash/
 deepx.exe
+*.js

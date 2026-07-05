@@ -8,7 +8,7 @@ export interface RoundBlock { type: "reasoning" | "text" | "tool"; content?: str
 export interface Round { roundNum: number; thinking?: string; answer?: string; blocks: RoundBlock[]; toolCalls: ToolCallDef[]; toolResults: ToolResultDef[]; }
 export interface Turn { turnId: string; userText: string; rounds: Round[]; status: "streaming" | "complete"; stopReason?: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; }
 export interface SessionInfo { seed: string; model: string; contextTokens: number; contextLimit: number; totalTokens: number; promptCacheHit: number; promptCacheMiss: number; }
-export interface SessionMeta { seed: string; model: string; created_at: number; updated_at: number; message_count: number; last_summary: string; }
+export interface SessionMeta { seed: string; model: string; created_at: number; updated_at: number; message_count: number; turn_count: number; last_summary: string; }
 export interface TaskInfo { id: string; subject: string; description: string; status: string; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
 export interface AskState { question: string; options: string[]; allow_custom: boolean; show: boolean; }
@@ -84,6 +84,23 @@ export function createChatStore(seed: string) {
 
   function resetStreamBuffer() { streamBuffer = { thinking: "", answer: "" }; }
 
+  // ── RAF batching: coalesce rapid delta updates into a single setTurns per frame ──
+  let rafPending = false;
+  let pendingTurnId = "";
+  let pendingRoundNum = 0;
+
+  function flushDeltas() {
+    if (!pendingTurnId) return;
+    const tid = pendingTurnId;
+    const rn = pendingRoundNum;
+    pendingTurnId = "";
+    pendingRoundNum = 0;
+    setTurns((t) => t.turnId === tid, "rounds", (r) => r.roundNum === rn, produce((round) => {
+      round.thinking = streamBuffer.thinking;
+      round.answer = streamBuffer.answer;
+    }));
+  }
+
   function ensureRound(turnId: string, roundNum: number) {
     const turn = turns.find((t) => t.turnId === turnId);
     if (!turn) return;
@@ -106,29 +123,80 @@ export function createChatStore(seed: string) {
     }
     if (kind === "thinking") streamBuffer.thinking += delta; else if (kind === "answering") streamBuffer.answer += delta;
     ensureRound(turnId, roundNum);
+    // RAF-batched: defer setTurns to next animation frame to coalesce rapid deltas
+    pendingTurnId = turnId;
+    pendingRoundNum = roundNum;
+    if (!rafPending) {
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        flushDeltas();
+      });
+    }
+  }
+
+  // ── RAF batching for tool call previews ──
+  let tcRafPending = false;
+  let pendingTcMap = new Map<string, { id: string; name: string; argsSoFar: string }>();
+
+  function flushToolCallPreviews(turnId: string, roundNum: number) {
+    const batch = [...pendingTcMap.values()];
+    pendingTcMap.clear();
+    if (batch.length === 0) return;
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
-      if (kind === "thinking") round.thinking = streamBuffer.thinking; if (kind === "answering") round.answer = streamBuffer.answer;
+      for (const u of batch) {
+        const existing = round.toolCalls.findIndex(tc => tc.id === u.id);
+        if (existing >= 0) {
+          round.toolCalls[existing].args_display = u.argsSoFar.slice(0, 100);
+          round.toolCalls[existing].args_json = u.argsSoFar;
+        } else {
+          round.toolCalls.push({ id: u.id, name: u.name, args_display: u.argsSoFar.slice(0, 100), args_json: u.argsSoFar });
+        }
+      }
     }));
   }
 
   function handleToolCallPreview(turnId: string, roundNum: number, index: number, id: string, name: string, argsSoFar: string) {
     ensureRound(turnId, roundNum);
-    // Update or insert tool call preview in the round's toolCalls
-    setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
-      const existing = round.toolCalls.findIndex(tc => tc.id === id);
-      if (existing >= 0) {
-        round.toolCalls[existing].args_display = argsSoFar.slice(0, 100);
-        round.toolCalls[existing].args_json = argsSoFar;
-      } else {
-        round.toolCalls.push({ id, name, args_display: argsSoFar.slice(0, 100), args_json: argsSoFar });
-      }
-    }));
+    pendingTcMap.set(id, { id, name, argsSoFar });
+    if (!tcRafPending) {
+      tcRafPending = true;
+      requestAnimationFrame(() => {
+        tcRafPending = false;
+        flushToolCallPreviews(turnId, roundNum);
+      });
+    }
   }
 
   function handleRoundComplete(turnId: string, roundNum: number, thinking?: string, answer?: string, toolCalls?: ToolCallDef[], blocks?: RoundBlock[]) {
+    flushDeltas(); // flush any pending streaming delta before replacing with final state
     ensureRound(turnId, roundNum);
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
       if (thinking) round.thinking = thinking; if (answer) round.answer = answer; if (toolCalls) round.toolCalls = toolCalls; if (blocks) round.blocks = blocks;
+    }));
+  }
+
+  // ── RAF batching for exec progress (tool output streaming) ──
+  let execRafPending = false;
+  let pendingExecChunks = new Map<string, string>(); // toolCallId -> accumulated output
+
+  function flushExecProgress() {
+    const batch = [...pendingExecChunks.entries()];
+    pendingExecChunks.clear();
+    if (batch.length === 0) return;
+    setTurns(produce((ts) => {
+      const turn = ts[ts.length - 1];
+      if (!turn || turn.status !== "streaming") return;
+      const round = turn.rounds[turn.rounds.length - 1];
+      if (!round) return;
+      for (const [streamKey, output] of batch) {
+        const existing = round.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
+        if (existing >= 0) {
+          round.toolResults[existing].output += output;
+        } else {
+          round.toolResults.push({ tool_call_id: streamKey, output, success: true });
+        }
+      }
     }));
   }
 
@@ -137,23 +205,19 @@ export function createChatStore(seed: string) {
     const lastTurn = turns[turns.length - 1];
     if (!lastTurn || lastTurn.status !== "streaming") return;
 
-    const streamKey = toolCallId;
-    setTurns(produce((ts) => {
-      const turn = ts[ts.length - 1];
-      if (!turn || turn.status !== "streaming") return;
-      const round = turn.rounds[turn.rounds.length - 1];
-      if (!round) return;
-      const existing = round.toolResults.findIndex(tr => tr.tool_call_id === streamKey);
-      if (existing >= 0) {
-        // Append raw chunk — ANSI conversion is deferred to ToolCallCard render
-        round.toolResults[existing].output += chunk;
-      } else {
-        round.toolResults.push({ tool_call_id: streamKey, output: chunk, success: true });
-      }
-    }));
+    const prev = pendingExecChunks.get(toolCallId) || "";
+    pendingExecChunks.set(toolCallId, prev + chunk);
+    if (!execRafPending) {
+      execRafPending = true;
+      requestAnimationFrame(() => {
+        execRafPending = false;
+        flushExecProgress();
+      });
+    }
   }
 
   function handleToolResults(turnId: string, roundNum: number, results: ToolResultDef[]) {
+    flushExecProgress(); // flush any pending exec progress before replacing with final results
     ensureRound(turnId, roundNum);
     setTurns((t) => t.turnId === turnId, "rounds", (r) => r.roundNum === roundNum, produce((round) => {
       // Remove streaming placeholders matching the final result IDs
@@ -173,6 +237,7 @@ export function createChatStore(seed: string) {
   }
 
   function handleTurnEnd(turnId: string, data: Record<string, unknown>) {
+    flushDeltas(); flushToolCallPreviews(turnId, lastRoundNum); flushExecProgress(); // flush all pending state before marking complete
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
     setTurns((t) => t.turnId === turnId, produce((turn) => { turn.status = "complete"; turn.stopReason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
     const u = data.usage as Record<string, unknown> | undefined;

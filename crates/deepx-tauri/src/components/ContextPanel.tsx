@@ -2,6 +2,7 @@ import { createSignal, Show, onCleanup, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 
 interface ContextStats {
+  /** All values are token counts (CJK-aware heuristic), not character lengths */
   messages: number;
   chat_text: number;
   thinking: number;
@@ -74,7 +75,8 @@ export default function ContextPanel(props: { seed: string }) {
   const totalTokens = () => {
     const s = stats();
     if (!s) return 0;
-    return Math.round((s.chat_text + s.thinking + s.tool_calls + s.tool_results + s.tools_schema + s.system_prompt) / 4);
+    // Values are already token counts (CJK-aware heuristic), no /4 needed
+    return s.chat_text + s.thinking + s.tool_calls + s.tool_results + s.tools_schema + s.system_prompt;
   };
 
   const pct = (n: number) => {

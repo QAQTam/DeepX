@@ -1,4 +1,4 @@
-import { createSignal, For, Show, onCleanup } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { renderDiffHtml } from "../lib/diff";
 
@@ -67,9 +67,8 @@ export default function GitDiffPanel(props: { seed: string }) {
     } catch (e) { console.error("git_file_diff error:", e); }
   }
 
-  // Auto-refresh every 3 seconds
-  const timer = setInterval(refresh, 3000);
-  onCleanup(() => clearInterval(timer));
+  // Refresh on mount only; manual refresh via header click.
+  // (No auto-polling — avoids Tauri IPC thread-pool starvation during streaming)
   refresh();
 
   const countByChange = () => {

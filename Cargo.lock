@@ -680,7 +680,6 @@ name = "deepx-config"
 version = "0.6.0"
 dependencies = [
  "deepx-types",
- "log",
  "serde",
  "serde_json",
  "ureq 2.12.1",
@@ -780,7 +779,6 @@ dependencies = [
 name = "deepx-tauri"
 version = "0.6.0"
 dependencies = [
- "anyhow",
  "deepx-config",
  "deepx-daemon",
  "deepx-msglp",
@@ -790,13 +788,11 @@ dependencies = [
  "deepx-types",
  "git2",
  "log",
- "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
- "toml 0.8.2",
 ]
 
 [[package]]
@@ -829,7 +825,6 @@ dependencies = [
  "deepx-types",
  "pulldown-cmark",
  "ratatui",
- "serde",
  "serde_json",
  "syntect",
  "toml 0.8.2",

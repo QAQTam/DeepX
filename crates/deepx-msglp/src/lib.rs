@@ -231,7 +231,7 @@ impl Loop {
         let cancel_for_reader = cancel.clone();
 
         let (cmd_tx, cmd_rx) = mpsc::sync_channel::<Ui2Agent>(4096);
-        let (event_tx, event_rx) = mpsc::sync_channel::<Agent2Ui>(4096);
+        let (event_tx, event_rx) = mpsc::sync_channel::<Agent2Ui>(65536);
         let writer_dead = Arc::new(AtomicBool::new(false));
         let writer_dead_for_thread = writer_dead.clone();
 
@@ -273,15 +273,41 @@ impl Loop {
             log::info!("[AGENT] reader thread exiting");
         });
 
-        // Writer thread: event_rx → stdout
+        // Writer thread: event_rx → stdout (periodic flush, not per-frame)
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut writer = std::io::BufWriter::new(output);
-                while let Ok(event) = event_rx.recv() {
-                    match deepx_proto::write_frame(&mut writer, &event) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            log::error!("[AGENT] writer thread: write_frame error: {e}");
+                let mut writer = std::io::BufWriter::with_capacity(65536, output);
+                let flush_interval = std::time::Duration::from_millis(50);
+                loop {
+                    match event_rx.recv_timeout(flush_interval) {
+                        Ok(event) => {
+                            let json = match serde_json::to_string(&event) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    log::error!("[AGENT] writer thread: serialize error: {e}");
+                                    continue;
+                                }
+                            };
+                            if let Err(e) = writeln!(writer, "{}", json) {
+                                log::error!("[AGENT] writer thread: write error: {e}");
+                                break;
+                            }
+                            // Drain any backlog without flushing each
+                            while let Ok(event) = event_rx.try_recv() {
+                                let json = match serde_json::to_string(&event) {
+                                    Ok(j) => j,
+                                    Err(_) => continue,
+                                };
+                                if writeln!(writer, "{}", json).is_err() { break; }
+                            }
+                            let _ = writer.flush(); // flush after each batch
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            // Periodic flush even when idle
+                            let _ = writer.flush();
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            let _ = writer.flush();
                             break;
                         }
                     }
@@ -744,6 +770,7 @@ impl Loop {
         let tool_name = name.to_string();
         let tool_id = id.to_string();
         let tool_id_for_result = tool_id.clone();
+        let tool_id_progress = tool_id.clone();
         let args_s = args.to_string();
         let handle = std::thread::Builder::new()
             .stack_size(4 * 1024 * 1024)
@@ -752,16 +779,29 @@ impl Loop {
                 (tool_id, result.content, result.success, result.code_delta)
             })
             .expect("failed to spawn tool thread");
-        // Drain progress while tool runs
+        // Drain progress while tool runs (batch every 50ms, non-blocking emit)
+        let mut pending_chunk = String::new();
         loop {
-            match progress_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            match progress_rx.recv_timeout(std::time::Duration::from_millis(50)) {
                 Ok((tc_id, chunk)) => {
-                    self.emit(Agent2Ui::ExecProgress {
+                    pending_chunk.push_str(&chunk);
+                    // Drain any additional chunks immediately
+                    while let Ok((_, c)) = progress_rx.try_recv() {
+                        pending_chunk.push_str(&c);
+                    }
+                    self.emit_delta(Agent2Ui::ExecProgress {
                         tool_call_id: tc_id,
-                        chunk,
+                        chunk: std::mem::take(&mut pending_chunk),
                     });
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if !pending_chunk.is_empty() {
+                        self.emit_delta(Agent2Ui::ExecProgress {
+                            tool_call_id: tool_id_progress.clone(),
+                            chunk: std::mem::take(&mut pending_chunk),
+                        });
+                    }
+                }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }

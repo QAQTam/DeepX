@@ -442,7 +442,7 @@ export default function App() {
                   <span class="session-dot" />
                   <span class="session-info">
                     <span class="session-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
-                    <span class="session-meta">{formatDate(s.updated_at)} · {s.message_count} {t().session.messages}</span>
+                    <span class="session-meta">{formatDate(s.updated_at)} · {s.turn_count || s.message_count} {t().session.turns}</span>
                   </span>
                   <span
                     class="session-delete-btn"
