@@ -1507,18 +1507,21 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
 // ── PLAN Review commands ────────────────────────────────────────────
 
 /// Read PLAN.md from the workspace root and return parsed plan items as JSON.
+/// Returns empty array if PLAN.md doesn't exist or workspace is not set.
 #[tauri::command]
 pub fn cmd_read_plan(seed: String) -> Result<String, String> {
     if seed.is_empty() {
-        return Err("No active session".into());
+        return Ok("[]".into());
     }
-    let ws = crate::agent_bridge::cmd_get_workspace(seed)?;
-    if ws.is_empty() {
-        return Err("No workspace set".into());
-    }
+    let ws = match crate::agent_bridge::cmd_get_workspace(seed) {
+        Ok(w) if !w.is_empty() => w,
+        _ => return Ok("[]".into()),
+    };
     let plan_path = std::path::Path::new(&ws).join("PLAN.md");
-    let content = std::fs::read_to_string(&plan_path)
-        .map_err(|e| format!("read PLAN.md: {e}"))?;
+    let content = match std::fs::read_to_string(&plan_path) {
+        Ok(c) => c,
+        Err(_) => return Ok("[]".into()),
+    };
     let items = parse_plan_items(&content);
     // Manual JSON serialization (avoid serde derive dependency)
     let json_items: Vec<serde_json::Value> = items.into_iter().map(|item| {

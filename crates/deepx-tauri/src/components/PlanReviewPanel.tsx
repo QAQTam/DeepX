@@ -11,9 +11,13 @@ interface PlanItem {
 }
 
 async function fetchPlan(seed: string): Promise<PlanItem[]> {
-  const raw = await invoke<string>("cmd_read_plan", { seed });
-  if (!raw) return [];
-  return JSON.parse(raw);
+  try {
+    const raw = await invoke<string>("cmd_read_plan", { seed });
+    if (!raw || raw === "[]") return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];  // PLAN.md missing or no workspace — silent
+  }
 }
 
 export default function PlanReviewPanel(props: { seed: string }) {
