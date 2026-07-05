@@ -37,6 +37,9 @@ fn last_seq_map() -> &'static Arc<Mutex<HashMap<String, u64>>> {
 }
 
 /// Try to connect to the daemon, auto-spawning it if not running.
+/// Returns the child process handle (if auto-started) for later cleanup.
+static DAEMON_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
 fn ensure_daemon() -> Result<(), String> {
     let mut guard = daemon_conn().lock().map_err(|e| format!("lock: {e}"))?;
     if guard.is_some() { return Ok(()); }
@@ -65,7 +68,9 @@ fn ensure_daemon() -> Result<(), String> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("spawn daemon: {e}"))?;
-    // Wait for daemon to be ready
+    // Store handle for cleanup on exit
+    *DAEMON_CHILD.lock().unwrap() = Some(child);
+    // Wait for daemon to be ready (re-spawn the child since it was moved)
     std::thread::sleep(std::time::Duration::from_millis(800));
     for _ in 0..5 {
         if let Some(port) = deepx_daemon::read_port() {
@@ -82,7 +87,7 @@ fn ensure_daemon() -> Result<(), String> {
         }
     }
     // Daemon failed to start — kill and fall back
-    let _ = child.kill();
+    let _ = DAEMON_CHILD.lock().unwrap().take().map(|mut c| { let _ = c.kill(); let _ = c.wait(); });
     Err("daemon did not become ready".into())
 }
 
@@ -802,8 +807,25 @@ fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
     Ok(())
 }
 
-/// Shutdown all running agents. Called on window close.
+/// Shutdown all running agents and daemon. Called on window close.
 pub fn shutdown_all_agents() {
+    // Send Shutdown to daemon (best-effort)
+    if let Ok(mut guard) = daemon_conn().lock() {
+        if let Some(ref mut stream) = *guard {
+            let frame = FrontendToDaemon {
+                seed: String::new(),
+                frame: Ui2Agent::Shutdown,
+            };
+            let _ = deepx_daemon::transport::write_frame(stream, &frame);
+        }
+    }
+    // Kill daemon child process if we spawned it
+    if let Ok(mut child) = DAEMON_CHILD.lock() {
+        if let Some(mut c) = child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
     if let Some(registry) = REGISTRY.get() {
         if let Ok(mut reg) = registry.lock() {
             reg.shutdown_all();

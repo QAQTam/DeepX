@@ -43,6 +43,8 @@ pub struct FrontendManager {
     session_cache: HashMap<String, SessionCache>,
     /// Monotonically increasing sequence number for each event.
     seq_id: u64,
+    /// Pending reconnects: conn_id → (seed, last_seq). Delivered when cache is populated.
+    pending_reconnects: HashMap<ConnId, (String, u64)>,
 }
 
 impl FrontendManager {
@@ -54,6 +56,7 @@ impl FrontendManager {
             ring_buffer: HashMap::new(),
             session_cache: HashMap::new(),
             seq_id: 0,
+            pending_reconnects: HashMap::new(),
         }
     }
 
@@ -99,6 +102,8 @@ impl FrontendManager {
             Agent2Ui::SessionRestored { turns, tokens_used, .. } => {
                 cache.turns = turns.clone();
                 cache.tokens_used = *tokens_used;
+                // Deliver any pending reconnects now that we have session data
+                self.flush_pending_reconnects(seed);
             }
             Agent2Ui::Dashboard { usage, context_limit, .. } => {
                 if let Some(u) = usage {
@@ -107,6 +112,17 @@ impl FrontendManager {
                 cache.context_limit = *context_limit;
             }
             _ => {}
+        }
+    }
+
+    fn flush_pending_reconnects(&mut self, seed: &str) {
+        let reconnects: Vec<(ConnId, u64)> = self.pending_reconnects.iter()
+            .filter(|(_, (s, _))| s == seed)
+            .map(|(&conn_id, (_, last_seq))| (conn_id, *last_seq))
+            .collect();
+        for (conn_id, last_seq) in reconnects {
+            self.pending_reconnects.remove(&conn_id);
+            self.send_snapshot(conn_id, seed, last_seq);
         }
     }
 
@@ -252,9 +268,11 @@ impl FrontendManager {
                 return Ok(());
             }
             Ui2Agent::Reconnect { seed, last_seq } => {
-                // Send a unified Snapshot with session state + buffered events
-                self.send_snapshot(conn_id, seed, *last_seq);
-                log::info!("[FRONTEND] reconnect seed={}, last_seq={}", &seed[..seed.floor_char_boundary(seed.len().min(8))], last_seq);
+                // Don't send an empty snapshot — wait for the agent to emit SessionRestored first.
+                // Save the reconnect request for later delivery when cache is populated.
+                self.pending_reconnects.insert(conn_id, (seed.clone(), *last_seq));
+                log::info!("[FRONTEND] reconnect seed={}, last_seq={} — deferred until agent emits SessionRestored",
+                    &seed[..seed.floor_char_boundary(seed.len().min(8))], last_seq);
                 return Ok(());
             }
             _ => {}
