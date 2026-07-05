@@ -33,9 +33,20 @@ impl SessionManager {
     /// When `db_url` is `Some`, a Turso local database mirror is opened.
     pub fn init(data_dir: PathBuf, db_url: Option<String>) {
         #[cfg(feature = "turso-backend")]
-        let db = db_url
-            .and_then(|url| TursoBackend::open(&url).ok())
-            .inspect(|_| log::info!("SessionManager: Turso backend opened"));
+        let db = {
+            let path = db_url.unwrap_or_else(|| {
+                data_dir.join("sessions.db").to_string_lossy().to_string()
+            });
+            TursoBackend::open(&path)
+                .inspect(|_| log::info!("SessionManager: Turso backend at {}", path))
+                .ok()
+                .and_then(|db| {
+                    if let Err(e) = db.init_tables() {
+                        log::warn!("SessionManager: Turso init_tables failed: {e}");
+                    }
+                    Some(db)
+                })
+        };
 
         #[cfg(not(feature = "turso-backend"))]
         let _ = db_url;
