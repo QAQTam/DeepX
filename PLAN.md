@@ -18,7 +18,7 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 
 核心痛点：**协议字段映射不稳定**（TurnEnd/usage、Dashboard/tokens_used、blocks 丢失）反复出错，因为前后端类型定义分两套——Rust `Agent2Ui` + TypeScript 手写 interface。v0.6.0 引入 ts-rs 自动生成 `.ts` 后回归大减。
 
-## v0.7.0 Roadmap
+## v0.7.0 Roadmap（一波流 — 全部 6 项同时交付原型，v0.7.1+ 只修 bug）
 
 ### 政策背景
 
@@ -45,8 +45,9 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 | **7.2** | OS PIN 授权（Windows CredUI + Linux PAM） | 中 | +120 |
 | **7.3** | 合规内容过滤（system prompt + gate 关键词） | 中 | +100 |
 | **7.4** | PLAN Review 工具（Tauri 审批面板） | 中 | +200 |
-| **7.5** | AgentFS 集成（沙箱 + SQL 审计查询） | 中 | +150 |
-| **合计** | **5 项** | — | **+650** |
+| **7.5** | Safety 集中化（SafetyPolicy 统一评估） | 中 | +80 |
+| **7.6** | AgentFS 集成（沙箱 + SQL 审计查询） | 中 | +150 |
+| **合计** | **6 项，v0.7.0 原型；v0.7.1+ 只修 bug** | — | **+730** |
 
 ### 7.0 现状审计
 
