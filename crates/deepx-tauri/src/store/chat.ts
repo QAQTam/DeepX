@@ -115,7 +115,11 @@ export function createChatStore(seed: string) {
   }
 
   function handleRoundDelta(turn_id: string, round_num: number, kind: string, delta: string) {
-    lastRoundNum = round_num;
+    // Reset stream buffer when entering a new round (e.g. after tool calls)
+    if (round_num !== lastRoundNum) {
+      resetStreamBuffer();
+      lastRoundNum = round_num;
+    }
     if (kind === "thinking") streamBuffer.thinking += delta; else if (kind === "answering") streamBuffer.answer += delta;
     ensureRound(turn_id, round_num);
     // RAF-batched: defer setTurns to next animation frame to coalesce rapid deltas
