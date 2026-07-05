@@ -9,7 +9,7 @@ access uses `as` casts. This causes:
 
 - **Type drift**: `ToolResultDef` in TS is missing `file?: FileSnapshotInfo` present in Rust
 - **Duplicate definitions**: `CodeDelta` is defined twice identically in `store/chat.ts`
-- **No snake_case → camelCase automation**: `loadTurnsFromRestore()` manually remaps keys
+- **Naming mismatch**: TS types `Round`/`Turn`/`SessionInfo` use camelCase but the wire format is snake_case; `loadTurnsFromRestore()`/~30 lines of manual runtime remapping paper over the gap
 - **`invoke<string>` + `JSON.parse` as `any`**: 8+ Tauri commands return untyped JSON strings
 
 `ts-rs` replaces manual duplication with `#[derive(TS)]` → auto-generated `.ts` files,
@@ -27,7 +27,7 @@ ts-rs = { version = "10", features = ["serde-compat"] }
 ```
 
 `serde-compat` enables `#[serde(tag = "type")]` → TS discriminated unions, `#[serde(rename)]`
-→ TS property renaming, `#[serde(rename_all = "camelCase")]` → automatic camelCase conversion.
+→ TS property renaming.
 
 ### 1.2 Add `ts-rs` to `deepx-types/Cargo.toml`
 
@@ -104,22 +104,31 @@ All public types crossing the UI↔Agent boundary:
 
 ### 2.4 Naming strategy
 
-Use `#[ts(rename_all = "camelCase")]` on top-level enums to automatically map Rust
-snake_case to TS camelCase (e.g., `turn_id` → `turnId`, `tool_call_id` → `toolCallId`).
-This eliminates the manual remapping in `loadTurnsFromRestore()`.
+**Finding: the wire format is uniformly snake_case.** Rust struct fields use default serde
+behavior (no `rename_all` on any protocol type), so JSON keys are snake_case: `tool_call_id`,
+`round_num`, `user_text`, etc. Variant tags via `#[serde(rename = "...")]` are also snake_case:
+`"turn_start"`, `"round_complete"`.
 
-For enums with `#[serde(tag = "type")]`, `ts-rs` + `serde-compat` generates proper
-TypeScript discriminated unions with the type field as the discriminant.
+**Strategy: `ts-rs` generates snake_case TS by default.** No `rename_all` attribute needed.
+The generated TS types will match the wire format exactly:
 
-**Example expected output:**
 ```typescript
-// Generated from Agent2Ui
+// Generated from Agent2Ui (snake_case, matches wire)
 export type Agent2Ui =
-  | { type: "turn_start"; turnId: string; userText: string }
-  | { type: "round_delta"; turnId: string; roundNum: number; kind: RoundDeltaKind; delta: string }
-  | { type: "round_complete"; turnId: string; roundNum: number; thinking?: string; answer?: string; toolCalls: ToolCallDef[]; blocks: RoundBlock[]; isFinal: boolean }
+  | { type: "turn_start"; turn_id: string; user_text: string }
+  | { type: "round_delta"; turn_id: string; round_num: number; kind: RoundDeltaKind; delta: string }
+  | { type: "round_complete"; turn_id: string; round_num: number; thinking?: string; answer?: string; tool_calls: ToolCallDef[]; blocks: RoundBlock[]; is_final: boolean }
   // ... 22 more variants
 ```
+
+**What gets fixed on the TS side:**
+- `Round` (`roundNum`, `toolCalls`, `toolResults`) → replace with generated `RoundData` (`round_num`, `tool_calls`, `tool_results`)
+- `Turn` (`turnId`, `userText`, `stopReason`) → replace with generated `TurnData` (`turn_id`, `user_text`, `stop_reason`)
+- `SessionInfo` → keep as UI-only composite (no Rust struct), but rename fields to snake_case for consistency
+- `loadTurnsFromRestore()` and `prependTurns()` become pass-through — **~30 lines deleted**
+
+**Zero wire-format risk.** The JSON on the wire does not change. Old session files remain compatible.
+The change is purely on the TS side: fix the types to match the wire, then delete the runtime conversion.
 
 ---
 
@@ -167,8 +176,8 @@ import type { Agent2Ui } from "@/lib/types";
 
 function handleAgentEvent(chat: ChatStore, p: Agent2Ui, listenerSeed: string) {
   switch (p.type) {
-    case "turn_start":  chat.handleTurnStart(p.turnId, p.userText); break;
-    case "round_delta": chat.handleRoundDelta(p.turnId, p.roundNum, p.kind, p.delta); break;
+    case "turn_start":  chat.handleTurnStart(p.turn_id, p.user_text); break;
+    case "round_delta": chat.handleRoundDelta(p.turn_id, p.round_num, p.kind, p.delta); break;
     // ... all branches now type-safe, no `as` casts needed
   }
 }
@@ -182,34 +191,35 @@ The `listen` call changes from `listen<Record<string, unknown>>` to `listen<Agen
 - `GitDiffPanel.tsx` — `import type { CodeDaily } from "@/lib/types"`
 - `ContextPanel.tsx` — keep its `ContextStats` interface (computed on Rust side, no struct)
 
-### 3.5 Remove manual camelCase conversion
+### 3.5 Remove manual snake→camelCase conversion
 
-In `store/chat.ts` `loadTurnsFromRestore()` and `prependTurns()`: the snake_case→camelCase
-mapping logic becomes unnecessary because `ts-rs` with `rename_all = "camelCase"` generates
-camelCase TS types directly. The wire format (JSON from Rust) still uses the original
-`#[serde(rename = "...")]` names, so deserialization through `JSON.parse` preserves those.
-The TS types now match the wire format natively — no manual remapping.
+`loadTurnsFromRestore()` (chat.ts:397-414) and `prependTurns()` (chat.ts:416-435)
+manually convert snake_case JSON to camelCase TS objects because `Round` and `Turn`
+use the wrong naming convention. After replacing these with the generated snake_case
+types (`RoundData`, `TurnData`), both functions simplify to a direct assignment:
 
-Wait — **this is a known point of friction**: `ts-rs` with `rename_all = "camelCase"` changes
-the *TS property names* but the JSON wire format is controlled by `serde` renames. If Rust uses
-`#[serde(rename_all = "snake_case")]` on the wire and we want camelCase in TS, we can either:
+```typescript
+// Before (30 lines of manual remapping)
+function loadTurnsFromRestore(turnsData: Array<{...}>) {
+  const loaded: Turn[] = turnsData.map((td) => {
+    const rounds: Round[] = td.rounds.map((rd) => ({
+      roundNum: rd.round_num,   // ← manual snake→camelCase
+      toolCalls: rd.tool_calls,  // ← manual rename
+      // ...
+    }));
+    return { turnId: td.turn_id, userText: td.user_text, ... };  // ← manual rename
+  });
+}
 
-**Option A** (recommended): Add `#[serde(rename_all = "camelCase")]` to all protocol structs
-so the wire format is camelCase JSON. Then `ts-rs` generates matching camelCase TS. This is
-a **breaking wire-format change** but both Rust serialization and Rust deserialization stay
-consistent (serde handles both directions). The agent-child-process protocol is internal
-(no external consumers), so this is safe.
+// After (3 lines, types match wire exactly)
+function loadTurnsFromRestore(turnsData: TurnData[]) {
+  setTurns(turnsData.map((td) => ({ ...td, status: "complete" as const })));
+}
+```
 
-**Option B** (conservative): Keep snake_case on the wire. Use `#[ts(rename_all = "camelCase")]`
-and *also* keep the manual remapping in `loadTurnsFromRestore`. This preserves backward
-compatibility with existing session files.
-
-→ **Choose Option A** because:
-- Session restore uses `from_messages()` which re-parses from stored JSON — that JSON is
-  already in whatever serde format was used at save time. Changing to camelCase means new
-  sessions save in camelCase; old sessions have snake_case JSON that needs migration.
-  The `migrate.rs` in deepx-session already handles format migrations — add a v0.6.1
-  migration step.
+> **Note**: The `status` field is UI-only (not on the wire). Added here; `TurnData` from
+> `ts-rs` won't include it. Alternative: use a separate `Turn` type that extends `TurnData`
+> with `status`, keeping the UI concern separate.
 
 ---
 
@@ -263,7 +273,7 @@ Add a comment block at the top of `agent_protocol.rs`:
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
 | `serde_json::Value` fields map to `any` | Certain | `Ui2Agent::ToolCall.args` → `any`. Acceptable — these are user-typed arguments, inherently dynamic |
-| Breaking wire format change (snake→camelCase) | Medium | Session migration in `migrate.rs`. New sessions use camelCase. Old sessions load correctly via migration |
+| TS field rename (camelCase → snake_case) in `Round`/`Turn` | Medium | ~6 TS files reference `roundNum`/`toolCalls` etc. TypeScript compiler catches all mismatches at build time (`tsc --noEmit`) |
 | `ts-rs` version churn | Low | Pin to `"10"` in Cargo.toml. Upgrade later when stable |
 | Generated types go out of sync | Medium | Commit generated files to git; CI check enforces consistency |
 
