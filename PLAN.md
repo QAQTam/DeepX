@@ -207,29 +207,30 @@ frontend 每 10 秒 → Ui2Agent::Ping → daemon → Agent2Ui::Pong
 
 ### 7.10 Session 双库（P2，中难度，~100 行）
 
-**目标：** `deepx-session` 增加 libSQL（Turso）后端，与 JSONL 并行写入，逐步迁移。
+**目标：** `deepx-session` 增加 Turso Database 后端（`turso` crate），与 JSONL 并行写入，逐步迁移。
 
-**策略：JSONL 为主，SQL 为镜像。** 每条写入先过 JSONL（已有逻辑不变），成功后异步 mirror 到 SQL。JSONL 始终是权威数据源；SQL 出问题时 JSONL 不受影响。
+**策略：JSONL 为主，Turso 为镜像。** 每条写入先过 JSONL（已有逻辑不变），成功后 mirror 到 Turso local `.db`。
 
 **A. 依赖：**
 
 ```toml
 # crates/deepx-session/Cargo.toml
 [features]
-sql-backend = ["libsql"]
+turso-backend = ["dep:turso", "dep:tokio"]
 
-[target.'cfg(feature = "sql-backend")'.dependencies]
-libsql = { version = "0.6", features = ["native"] }
+[dependencies]
+turso = { version = "0.12", optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
 ```
 
-**B. 新增 `store/sql_backend.rs`：**
+**B. 新增 `store/turso_backend.rs`：**
 
 ```rust
-pub struct SqlBackend {
-    conn: libsql::Connection,
+pub struct TursoBackend {
+    db: turso::Database,
 }
 
-impl SqlBackend {
+impl TursoBackend {
     pub fn open(path: &str) -> Result<Self>;
     pub fn init_tables(&self) -> Result<()>;
     pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<()>;
@@ -241,12 +242,14 @@ impl SqlBackend {
 }
 ```
 
+> async → sync 桥接：`TursoBackend` 内部用 `tokio::runtime::Runtime::new().block_on(...)` 桥接。
+
 **C. SessionManager 修改：**
 
 ```rust
 pub struct SessionManager {
     data_dir: PathBuf,
-    db: Option<SqlBackend>,  // NEW: optional SQL backend
+    db: Option<TursoBackend>,  // NEW: optional Turso backend
 }
 ```
 
@@ -263,22 +266,22 @@ if let Some(db) = &self.db {
 ```toml
 # config.toml
 [database]
-url = "libsql://data/sessions.db"   # 本地文件；生产填 Turso URL
+url = "data/sessions.db"   # 本地 Turso 文件；生产用 Turso Cloud URL
 enabled = true
 ```
 
 **E. 迁移路径：**
 
 ```
-v0.7.0:  JSONL (primary) + SQL (mirror), 双写
-v0.8.0:  SQL 达到同等完整性 → JSONL 降级为 backup
-v0.9.0:  移除 JSONL, SQL 唯一存储
+v0.7.0:  JSONL (primary) + Turso local .db (mirror)
+v0.8.0:  Turso 达到同等完整性 → JSONL 降级为 backup
+v0.9.0:  移除 JSONL, Turso 唯一存储
 ```
 
 改动点：
-- `deepx-session/Cargo.toml`: +5 行 (features + dependency)
-- `deepx-session/src/store/sql_backend.rs`: +60 行 (新建)
-- `deepx-session/src/manager.rs`: +20 行 (Option<SqlBackend> 整合)
+- `deepx-session/Cargo.toml`: +5 行 (features + turso + tokio)
+- `deepx-session/src/store/turso_backend.rs`: +60 行 (新建)
+- `deepx-session/src/manager.rs`: +20 行 (Option<TursoBackend> 整合)
 - `deepx-config/src/config.rs`: +15 行 (database section)
 
 ## 工作量
@@ -294,7 +297,7 @@ v0.9.0:  移除 JSONL, SQL 唯一存储
 | 7.7 工具 Schema | 低 | +30 | `manager.rs` |
 | 7.8 Daemon 心跳 | 低 | +30 | `agent_protocol.rs`, `main_loop.rs` |
 | 7.9 exec 命令审计 | 低 | +20 | `exec.rs` |
-| 7.10 Session 双库 | 中 | +100 | `deepx-session/Cargo.toml`, `store/sql_backend.rs`(新), `manager.rs`, `config.rs` |
+| 7.10 Session 双库 | 中 | +100 | `deepx-session/Cargo.toml`, `store/turso_backend.rs`(新), `manager.rs`, `config.rs` |
 | **合计** | — | **+950** | **14** |
 
 ## Risk

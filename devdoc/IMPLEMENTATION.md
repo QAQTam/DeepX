@@ -282,145 +282,118 @@ let _ = crate::audit::maybe_log_exec(&command);
 
 ---
 
-## Phase 7.10 — Session 双库：JSONL + libSQL/Turso (P2, +100 lines)
+## Phase 7.10 — Session 双库：JSONL + Turso Database (P2, +100 lines)
+
+⚠️ **依赖变更：用 `turso` crate（Turso Database 引擎），不用 `libsql`。**
+
+`turso` 是 Turso 官方推荐的 Rust crate，基于 Turso Database 引擎（SQLite 兼容的重写版，
+支持 MVCC、async I/O）。本地模式与 SQLite 文件兼容；启用 `sync` feature 后可 push/pull 到 Turso Cloud。
 
 ### 策略
 
-JSONL 为主，SQL 为镜像。每条 session 写入先过 JSONL（已有逻辑不变），成功后异步 mirror 到 SQL。JSONL 始终是权威数据源。
+JSONL 为主，Turso 为镜像。每条 session 写入先过 JSONL（已有逻辑不变），成功后 mirror 到 Turso。
+JSONL 始终是权威数据源；Turso 出问题时 JSONL 不受影响。
 
-### 新增文件: `crates/deepx-session/src/store/sql_backend.rs` (+60 lines)
+### 依赖
+
+```toml
+# crates/deepx-session/Cargo.toml
+[features]
+default = []
+turso-backend = ["dep:turso", "dep:tokio"]
+
+[dependencies]
+turso = { version = "0.12", optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
+```
+
+### 新增文件: `crates/deepx-session/src/store/turso_backend.rs` (+60 lines)
 
 ```rust
-use libsql::Connection;
+use turso::Database;
 use deepx_types::session::SessionMeta;
 use deepx_types::message::Message;
 
-pub struct SqlBackend {
-    conn: Connection,
+pub struct TursoBackend {
+    db: Database,
 }
 
-impl SqlBackend {
-    pub fn open(path: &str) -> Result<Self, libsql::Error> {
-        let db = libsql::Builder::new_local(path).build()?;
-        let conn = db.connect()?;
-        Ok(Self { conn })
+impl TursoBackend {
+    /// 打开本地 Turso 数据库文件；async 但外层用 rt.block_on 桥接
+    pub fn open(path: &str) -> Result<Self, turso::Error> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let db = rt.block_on(turso::Builder::new_local(path).build())?;
+        Ok(Self { db })
     }
 
-    pub fn init_tables(&self) -> Result<(), libsql::Error> {
-        self.conn.execute_batch("
-            CREATE TABLE IF NOT EXISTS sessions (
-                seed TEXT PRIMARY KEY,
-                meta_json TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_seed TEXT NOT NULL,
-                msg_id INTEGER,
-                role TEXT NOT NULL,
-                name TEXT,
-                content_json TEXT NOT NULL,
-                FOREIGN KEY (session_seed) REFERENCES sessions(seed) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_seed, msg_id);
-        ")?;
-        Ok(())
+    pub fn init_tables(&self) -> Result<(), turso::Error> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            self.db.connect()?.execute_batch("
+                CREATE TABLE IF NOT EXISTS sessions (
+                    seed TEXT PRIMARY KEY,
+                    meta_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_seed TEXT NOT NULL,
+                    msg_id INTEGER,
+                    role TEXT NOT NULL,
+                    name TEXT,
+                    content_json TEXT NOT NULL,
+                    FOREIGN KEY (session_seed) REFERENCES sessions(seed) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_seed, msg_id);
+            ").await
+        })
     }
 
-    pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<(), libsql::Error> { ... }
-    pub fn insert_message(&self, seed: &str, msg: &Message) -> Result<(), libsql::Error> { ... }
-    pub fn load_messages(&self, seed: &str) -> Result<Vec<Message>, libsql::Error> { ... }
-    pub fn load_meta(&self, seed: &str) -> Result<Option<SessionMeta>, libsql::Error> { ... }
-    pub fn list_sessions(&self) -> Result<Vec<SessionMeta>, libsql::Error> { ... }
-    pub fn delete_session(&self, seed: &str) -> Result<(), libsql::Error> { ... }
+    pub fn upsert_meta(&self, seed: &str, meta: &SessionMeta) -> Result<(), turso::Error> { ... }
+    pub fn insert_message(&self, seed: &str, msg: &Message) -> Result<(), turso::Error> { ... }
+    pub fn load_messages(&self, seed: &str) -> Result<Vec<Message>, turso::Error> { ... }
+    pub fn load_meta(&self, seed: &str) -> Result<Option<SessionMeta>, turso::Error> { ... }
+    pub fn list_sessions(&self) -> Result<Vec<SessionMeta>, turso::Error> { ... }
+    pub fn delete_session(&self, seed: &str) -> Result<(), turso::Error> { ... }
 }
 ```
 
-### 修改: `crates/deepx-session/Cargo.toml` (+5 lines)
+> **async → sync 桥接：** DeepX 主链路是同步的（`SessionManager` 所有方法都是 `fn` 非 `async`）。
+> `TursoBackend` 内部用 `tokio::runtime::Runtime::new().block_on(...)` 桥接。
+> Runtime 创建开销小（~1µs），每次调用新建或复用单例均可。
 
-```toml
-[features]
-default = []
-sql-backend = ["dep:libsql"]
-
-[dependencies]
-libsql = { version = "0.6", features = ["native"], optional = true }
-```
-
-### 修改: `crates/deepx-session/src/manager.rs` (+20 lines)
-
-`SessionManager` 结构体增加 `db: Option<SqlBackend>`:
+### v0.8.0 云同步扩展
 
 ```rust
-pub struct SessionManager {
-    data_dir: PathBuf,
-    db: Option<SqlBackend>,  // NEW
-}
+// 启用 sync feature
+turso = { version = "0.12", features = ["sync"], optional = true }
 
-impl SessionManager {
-    pub fn init(data_dir: &Path, db_url: Option<&str>) -> &'static Self {
-        let db = match db_url {
-            Some(url) => SqlBackend::open(url).ok(),
-            None => None,
-        };
-        // ... existing JSONL init
-    }
-}
-```
+// 连接远程 Turso Cloud 并自动同步
+let db = turso::sync::Builder::new_remote(path)
+    .with_remote_url(&std::env::var("TURSO_DATABASE_URL")?)
+    .with_auth_token(&std::env::var("TURSO_AUTH_TOKEN")?)
+    .build()
+    .await?;
 
-每个写方法追加 mirror 调用（best-effort，不阻断 JSONL）:
-
-```rust
-// save_append, save_full, update_meta, delete 中追加:
-if let Some(db) = &self.db {
-    let _ = db.upsert_meta(seed, meta);  // 失败不影响主流程
-    for msg in messages {
-        let _ = db.insert_message(seed, msg);
-    }
-}
-```
-
-### 修改: `crates/deepx-config/src/config.rs` (+15 lines)
-
-```rust
-pub struct Config {
-    // ... existing fields ...
-    #[serde(default)]
-    pub database: DatabaseConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DatabaseConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub url: Option<String>,  // "libsql://data/sessions.db"
-}
-```
-
-### 调用点更新
-
-各处 `SessionManager::init()` 传递 config:
-
-```rust
-// deepx-terminal/src/main.rs:147
-let db_url = config.database.enabled.then(|| config.database.url.as_deref()).flatten();
-SessionManager::init(&data_dir, db_url);
+// 每 N 次写入后 push
+db.push().await?;
+db.pull().await?;
 ```
 
 ### 迁移路径
 
 ```
-v0.7.0:  JSONL (primary) + SQL (mirror), 双写, feature-gate 默认 off
-v0.7.x:  验证 SQL 数据完整性, 修复不一致
-v0.8.0:  feature-gate 默认 on, 读取优先 SQL, JSONL 降级为 backup
-v0.9.0:  移除 JSONL, SQL 唯一存储, 删除 store 模块 JSONL 逻辑
+v0.7.0:  JSONL (primary) + Turso local .db (mirror), feature-gate 默认 off
+v0.7.x:  验证 Turso 数据完整性
+v0.8.0:  feature-gate 默认 on, 启用 sync push/pull 到 Turso Cloud
+v0.9.0:  移除 JSONL, Turso 唯一存储
 ```
 
 ### 边界情况
 
-- **SQL 写入失败**: 静默跳过 (`let _ = ...`)，不影响 JSONL 主链路
-- **libSQL 不可用**: `cfg(feature = "sql-backend")` 编译期隔离，未启用时零成本
-- **Schema 变更**: `init_tables()` 确保幂等（`IF NOT EXISTS`），ALM 迁移留到 v0.8.0
-- **并发**: SQLite WAL 模式支持并发读，写仍需单线程（与 JSONL 一致）
+- **Turso 写入失败**: 静默跳过 (`let _ = ...`)，不影响 JSONL 主链路
+- **编译隔离**: `#[cfg(feature = "turso-backend")]` 编译期隔离，未启用时零成本
+- **async runtime**: `Runtime::new()` 开销 ~1µs，序列化为 lazy_static 单例进一步降低
+- **并发**: Turso Database 引擎原生支持 MVCC 并发写（优于 SQLite）
+- **文件格式**: Turso Database `.db` 文件与 SQLite 不兼容（新引擎格式），但 SQL 语法完全兼容
