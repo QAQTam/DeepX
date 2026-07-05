@@ -47,7 +47,8 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 | **7.4** | PLAN Review 工具（Tauri 审批面板） | 中 | +200 |
 | **7.5** | Safety 集中化（SafetyPolicy 统一评估） | 中 | +80 |
 | **7.6** | AgentFS 集成（沙箱 + SQL 审计查询） | 中 | +150 |
-| **合计** | **6 项，v0.7.0 原型；v0.7.1+ 只修 bug** | — | **+730** |
+| **7.7** | 工具 Schema 修复（多 action 工具独立暴露） | 低 | +30 |
+| **合计** | **7 项，v0.7.0 原型；v0.7.1+ 只修 bug** | — | **+760** |
 
 ### 7.0 现状审计
 
@@ -234,6 +235,19 @@ impl SafetyPolicy {
 
 **不引入的风险：** 无。底层 Turso 是 SQLite 兼容纯 Rust。
 
+### 7.7 工具 Schema 修复（P0，低难度，~30 行）
+
+**问题：** `all_defs()` 把同一 name 的多个 action 合并为一个巨型 schema（`action` 枚举 + 所有参数平铺），`required` 只有 `["action"]`。LLM 无法区分 `edit` 需要 `old_string` 而 `edit_diff` 需要 `old_lines`。
+
+**修复：** `all_defs()` 多 action 时不再合并，每个 `(name, action)` 独立暴露为 `{name}_{action}` 工具，各自带原生 `required` 字段。
+
+```
+修复前: file { action: enum[write/edit/edit_diff/...] }
+修复后: file_write, file_edit, file_edit_diff, file_delete, ... (各带独立 required)
+```
+
+改动仅 `manager.rs:95-154` `all_defs()` 函数，~30 行。
+
 ## 工作量
 
 | Phase | 难度 | 行数 | 文件 |
@@ -244,7 +258,8 @@ impl SafetyPolicy {
 | 7.4 PLAN Review | 中 | +200 | `PlanReviewPanel.tsx`(新), `agent_bridge.rs` |
 | 7.5 Safety 集中化 | 中 | +80 | `safety.rs`, `manager.rs`, `lib.rs`(tools), 29 个注册点 |
 | 7.6 AgentFS | 中 | +150 | `Cargo.toml`, `file_*.rs`, `audit.rs` |
-| **合计** | — | **+730** | **12** |
+| 7.7 工具 Schema | 低 | +30 | `manager.rs` |
+| **合计** | — | **+760** | **12** |
 
 ## Risk
 
