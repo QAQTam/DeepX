@@ -125,6 +125,46 @@ impl TursoBackend {
 
     // ── messages ──────────────────────────────────────────────────────
 
+    /// Insert a batch of messages in a single transaction (single fsync, 10x+ throughput).
+    pub fn insert_messages_batch(&self, seed: &str, messages: &[Message]) -> Result<(), String> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        let seed = seed.to_string();
+
+        RT.block_on(async move {
+            self.conn
+                .execute_batch("BEGIN IMMEDIATE")
+                .await
+                .map_err(|e| format!("begin tx: {e}"))?;
+
+            for msg in messages {
+                let json = serde_json::to_string(msg).unwrap_or_default();
+                let mid = msg.msg_id.map(|v| v as i64);
+                let role = msg.role.clone();
+                self.conn
+                    .execute(
+                        "INSERT OR REPLACE INTO messages (session_seed, msg_id, role, content_json)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        turso::params![seed.clone(), mid, role, json],
+                    )
+                    .await
+                    .map_err(|e| {
+                        // Rollback on any error
+                        let _ = RT.block_on(self.conn.execute_batch("ROLLBACK"));
+                        format!("insert msg batch: {e}")
+                    })?;
+            }
+
+            self.conn
+                .execute_batch("COMMIT")
+                .await
+                .map_err(|e| format!("commit tx: {e}"))?;
+
+            Ok(())
+        })
+    }
+
     pub fn insert_message(&self, seed: &str, msg: &Message) -> Result<(), String> {
         let json = serde_json::to_string(msg).unwrap_or_default();
         let seed = seed.to_string();

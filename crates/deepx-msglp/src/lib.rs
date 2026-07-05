@@ -1076,6 +1076,8 @@ impl Loop {
         }
 
         self.agent.msg.push_user(text);
+        // Flush user message immediately — survive LLM crash
+        self.flush_meta_and_stats();
 
         let turn_id = format!("t{}", self.agent.msg.turn_count());
         self.emit(Agent2Ui::TurnStart {
@@ -1279,6 +1281,8 @@ impl Loop {
             let parsed = util::parse_tool_calls_from_response(&content, &reasoning, &tool_calls_raw, &self.agent);
             let assistant_msg = util::build_assistant_message(&content, &reasoning, &parsed);
             let effect = self.agent.msg.push_assistant(assistant_msg.clone());
+            // Flush assistant message + reasoning immediately — survive tool crash
+            self.flush_meta_and_stats();
 
             util::emit_round_complete(&self.event_tx, &turn_id, round_num, &assistant_msg, &content, &reasoning, &parsed);
 

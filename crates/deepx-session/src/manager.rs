@@ -237,9 +237,7 @@ impl SessionManager {
         #[cfg(feature = "turso-backend")]
         if let Some(ref db) = self.db {
             let _ = db.upsert_meta(seed, &meta);
-            for msg in messages {
-                let _ = db.insert_message(seed, msg);
-            }
+            let _ = db.insert_messages_batch(seed, messages);
         }
     }
 
