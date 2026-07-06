@@ -69,7 +69,11 @@ macro_rules! handler {
                     return ToolResult { success: false, content: format!("[ERROR] bad arguments: {e}") };
                 }
             };
-            ToolResult::ok($exec(&args))
+            let result = $exec(&args);
+            ToolResult {
+                success: !result.starts_with("[ERROR"),
+                content: result,
+            }
         }
     };
 }
@@ -97,6 +101,13 @@ pub fn set_current_session(seed: &str) {
 }
 
 pub static CURRENT_WORKSPACE: RwLock<String> = RwLock::new(String::new());
+
+/// Tools blocked in PLAN mode. Keep in sync with permission::categorize_tool.
+pub const PLAN_BLOCKED: &[&str] = &[
+    "file_write", "file_edit", "file_edit_diff", "file_delete", "file_move", "file_copy",
+    "exec_run", "sed",
+    "git_commit", "git_push", "git_add",
+];
 
 pub fn set_workspace(path: &str) {
     let mut ws = CURRENT_WORKSPACE.write().expect("CURRENT_WORKSPACE lock");
@@ -207,6 +218,12 @@ pub struct ToolResult {
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
         Self { success: true, content: content.into() }
+    }
+    pub fn error(msg: impl Into<String>) -> Self {
+        Self { success: false, content: format!("[ERROR] {}", msg.into()) }
+    }
+    pub fn partial(msg: impl Into<String>) -> Self {
+        Self { success: false, content: format!("[PARTIAL] {}", msg.into()) }
     }
 }
 

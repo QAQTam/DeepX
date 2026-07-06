@@ -7,3 +7,11 @@
 - [completed] T7: Create deepx-sed crate + tool registration — Copy D:\project\red\red (lib+bin sed) into crates/deepx-sed, adapt to workspace conventions, register as sed tool in deepx-tools
 - [completed] T8: Route exec_run sed calls to deepx-sed library — Intercept sed commands in exec_run and route them to deepx-sed library instead of spawning a shell process
 - [completed] T9: Revert sed integration from project — Remove deepx-sed crate, exec interception code, dependency references, and tool registration
+- [cancelled] T10: Unify all tool handlers to fn(ToolCallCtx) -> ToolResult — Convert all 17 exec_*(args: &str) handlers to handle_*(ctx: ToolCallCtx), remove handler! macro, delete parse_arg/parse_opt wrappers from lib.rs and deepx_types::arg
+- [completed] T11: Remove double catch_unwind from bridge.rs — Remove duplicate catch_unwind in bridge.rs, keep only manager.rs panic guard
+- [completed] T12: Add ToolResult error constructors — Add ToolResult::error(msg) and ToolResult::partial(msg) constructors, use them across all tools instead of manual {success:false, content:...}
+- [completed] T13: Fix extract_files_affected using ToolRisk — Replace hardcoded tool name list with ToolRisk-based classification using handler.risk field
+- [cancelled] T14: Bug fixes: parse_opt_bool + deduplicate BLOCKED list — Fix parse_opt_bool: the string "false" currently evaluates as true (non-empty). Also deduplicate BLOCKED tool list between bridge.rs and permission.rs
+- [completed] T15: Remove dead SafetyVerdict auth code — Remove SafetyVerdict::RequireAuth dead code block in prepare_req, along with unused verify_pin references
+- [cancelled] T16: Eliminate double serialization: handler! macro + parse_arg to accept &Value — Change handler! macro to pass &Value instead of serialized string, update parse_arg/parse_opt/parse_opt_bool signatures, update all 17 exec functions
+- [completed] T17: Unify BLOCKED tool list — Unify BLOCKED tool list between bridge.rs PLAN gate and categorize_tool in permission.rs — extract to shared const

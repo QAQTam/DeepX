@@ -46,6 +46,7 @@ pub fn categorize_tool(name: &str) -> ToolCategory {
         | "memory_write" | "memory_clear"
         | "plan_create" | "plan_update"
         | "task_create" | "task_update" | "task_delete"
+        | "sed"
         => ToolCategory::Write,
 
         // ── Exec ──

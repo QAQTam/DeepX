@@ -122,12 +122,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
 
     // ── PLAN mode gate: block write/exec/destructive tools ──
     if AGENT_MODE.load(Ordering::SeqCst) == 1 {
-        const BLOCKED: &[&str] = &[
-            "file_write", "file_edit", "file_edit_diff", "file_delete", "file_move", "file_copy",
-            "exec_run",
-            "git_commit", "git_push", "git_add",
-        ];
-        if BLOCKED.contains(&name) {
+        if crate::PLAN_BLOCKED.contains(&name) {
             return ToolExecResult {
                 content: format!(
                     "[BLOCKED] PLAN mode: '{name}' is not allowed. Only explore, search, read_file, grep, and plan tools are available. Switch to CODE mode to write or execute."
@@ -156,21 +151,9 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
         },
     };
 
-    // Phase 2: execute (no lock — parallel-safe)
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        (prepared.handler_fn)(prepared.ctx.clone())
-    }));
-
+    // Phase 2: execute (no lock — parallel-safe, panic handled by agent loop)
+    let tool_result = (prepared.handler_fn)(prepared.ctx.clone());
     let elapsed_ms = t0.elapsed().as_millis() as u64;
-    let tool_result = match result {
-        Ok(tr) => tr,
-        Err(panic_info) => {
-            let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
-                else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
-                else { "unknown panic".to_string() };
-            crate::ToolResult { success: false, content: format!("[ERROR] Tool panicked: {}", msg) }
-        }
-    };
 
     // Phase 3: finalize (brief lock)
     let success = tool_result.success;

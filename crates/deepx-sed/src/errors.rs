@@ -293,15 +293,6 @@ impl From<std::io::Error> for SedError {
     }
 }
 
-/// Convert from lexopt::Error (CLI parsing errors)
-impl From<lexopt::Error> for SedError {
-    fn from(err: lexopt::Error) -> Self {
-        SedError::Usage {
-            message: err.to_string(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

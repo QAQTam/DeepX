@@ -59,6 +59,17 @@ enum Match {
     Error { msg: String },
 }
 
+fn build_fuzzy_hint(content: &str, old: &str) -> String {
+    if let Some((line_no, line)) = closest_line(content, old) {
+        return format!(
+            "\n[HINT] String not found exactly. Closest match at line {line_no}: \"{}\"\n       Retry with file_edit_diff start_line={} and old_lines set to the actual lines from the file.",
+            line.chars().take(120).collect::<String>(),
+            line_no
+        );
+    }
+    "\n[HINT] String not found. Use file_read to check current file content, then retry.".to_string()
+}
+
 fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: bool, _path: &str) -> (String, Match) {
     if use_regex {
         let re = match regex::Regex::new(old) {
@@ -82,10 +93,7 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
         (new_content, Match::Ok { msg })
     } else if replace_all {
         if !content.contains(old) {
-            let hint = match closest_line(content, old) {
-                Some((line_no, line)) => format!("\n[HINT] Closest match at line {line_no}: {}", line.chars().take(80).collect::<String>()),
-                None => String::new(),
-            };
+            let hint = build_fuzzy_hint(content, old);
             return (content.to_string(), Match::NoMatch { msg: format!("no occurrences{hint}") });
         }
         let count = content.matches(old).count();
@@ -99,10 +107,7 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
                 (new_content, Match::Ok { msg: format!("line {line}: +{} -{}", new.len(), old.len()) })
             }
             None => {
-                let hint = match closest_line(content, old) {
-                    Some((line_no, line)) => format!("\n[HINT] Closest match at line {line_no}: {}", line.chars().take(80).collect::<String>()),
-                    None => String::new(),
-                };
+                let hint = build_fuzzy_hint(content, old);
                 (content.to_string(), Match::NoMatch { msg: format!("string not found{hint}") })
             }
         }

@@ -198,12 +198,6 @@ impl ToolManager {
                 let msg = format!("[ERROR] {}", reason);
                 return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
             }
-            SafetyVerdict::RequireAuth { reason } => {
-                // Auth disabled pending proper Tauri dialog integration.
-                // PIN token file not yet created for agent subprocess (no terminal).
-                // TODO: replace verify_pin with Tauri confirm dialog.
-                log::info!("auth: skipping PIN for {} (reason: {reason})", name);
-            }
             SafetyVerdict::Allow => {}
         }
 
@@ -238,11 +232,14 @@ impl ToolManager {
         let files_affected = extract_files_affected(&prepared.name, &prepared.audit_args);
         if success {
             match prepared.name.as_str() {
-                "read_file" | "search" | "grep" | "glob" | "explore" | "list_dir" | "diff" => {
+                "file_read" | "file_search" | "file_list" | "file_diff" | "explore" | "explore_scan" => {
                     for f in &files_affected { if !self.files_read.contains(f) { self.files_read.push(f.clone()); } }
                 }
-                "write_file" | "edit_file" | "edit_file_diff" | "delete_file" | "copy_file" | "move_file" => {
+                "file_write" | "file_edit" | "file_edit_diff" | "file_delete" | "file_move" | "file_copy" => {
                     for f in &files_affected { if !self.files_written.contains(f) { self.files_written.push(f.clone()); } }
+                }
+                "exec_run" | "git_commit" | "git_add" => {
+                    // These mutate the workspace but don't have a single 'path' argument
                 }
                 _ => {}
             }
