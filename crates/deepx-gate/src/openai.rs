@@ -500,7 +500,7 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
             }
             "tool" => {
                 for block in &msg.content {
-                    if let ContentBlock::ToolResult { tool_use_id, content } = block {
+                    if let ContentBlock::ToolResult { tool_use_id, content, .. } = block {
                         out.push(serde_json::json!({
                             "role": "tool",
                             "tool_call_id": tool_use_id,

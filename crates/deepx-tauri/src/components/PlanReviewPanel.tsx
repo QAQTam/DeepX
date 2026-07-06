@@ -1,4 +1,4 @@
-import { For, Show, createSignal, createResource, onCleanup } from "solid-js";
+import { For, Show, createSignal, createResource, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useI18n } from "../i18n";
@@ -27,15 +27,30 @@ export default function PlanReviewPanel(props: { seed: string }) {
     () => props.seed,
     fetchPlan,
   );
+  const [submitted, setSubmitted] = createSignal(false);
 
   listen("plan-changed", (e: { payload: { seed: string } }) => {
     if (e.payload.seed === props.seed) refetch();
   }).then(unlisten => onCleanup(unlisten));
 
+  // Listen for plan submission events (emitted by agent via DOM)
+  onMount(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.seed === props.seed) {
+        refetch();
+        setSubmitted(true);
+        setTimeout(() => setSubmitted(false), 2000);
+      }
+    };
+    window.addEventListener("plan-submitted", handler);
+    onCleanup(() => window.removeEventListener("plan-submitted", handler));
+  });
+
   const [selected, setSelected] = createSignal<Set<string>>(new Set<string>());
   const [followUps, setFollowUps] = createSignal<Record<string, string>>({});
   const [busy, setBusy] = createSignal(false);
-  const [confirmAction, setConfirmAction] = createSignal<"approved" | "rejected" | null>(null);
+  const [confirmAction, setConfirmAction] = createSignal<"approve" | "reject" | null>(null);
 
   const toggle = (id: string) => {
     const next = new Set(selected());
@@ -57,7 +72,7 @@ export default function PlanReviewPanel(props: { seed: string }) {
     setFollowUps(prev => ({ ...prev, [id]: text }));
   };
 
-  const doBatchAction = async (action: "approved" | "rejected") => {
+  const doBatchAction = async (action: "approve" | "reject") => {
     setConfirmAction(action);
   };
 
@@ -91,6 +106,13 @@ export default function PlanReviewPanel(props: { seed: string }) {
 
   const cancelConfirm = () => setConfirmAction(null);
 
+  const deleteItem = async (id: string) => {
+    try {
+      await invoke("cmd_plan_action", { seed: props.seed, itemId: id, action: "delete", userComment: "" });
+      await refetch();
+    } catch (e) { console.error(`plan_delete ${id}:`, e); }
+  };
+
   const statusLabel = (s: string) => {
     switch (s) {
       case "approved": return t().planReview?.approved ?? "Approved";
@@ -106,13 +128,13 @@ export default function PlanReviewPanel(props: { seed: string }) {
   const totalCount = () => planItems()?.length ?? 0;
 
   return (
-    <div class="plan-review-full">
+    <div class="plan-review-full" classList={{ "plan-submitted-pulse": submitted() }}>
       {/* Confirm dialog overlay */}
       <Show when={confirmAction()}>
         <div class="plan-confirm-overlay" onClick={cancelConfirm}>
           <div class="plan-confirm-dialog" onClick={(e) => e.stopPropagation()}>
             <div class="plan-confirm-title">
-              {confirmAction() === "approved" ? "批准" : "拒绝"} {selectedCount()} 项？
+              {confirmAction() === "approve" ? "批准" : "拒绝"} {selectedCount()} 项？
             </div>
             <div class="plan-confirm-body">
               <For each={planItems()?.filter(i => selected().has(i.id))}>
@@ -173,6 +195,11 @@ export default function PlanReviewPanel(props: { seed: string }) {
                     </Show>
                   </div>
                 </div>
+                <button class="plan-row-delete" onClick={(e) => { e.stopPropagation(); deleteItem(item.id); }} title="删除此项">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
                 <div class="plan-row-followup">
                   <input
                     type="text"
@@ -192,10 +219,10 @@ export default function PlanReviewPanel(props: { seed: string }) {
       {/* Batch action bar */}
       <Show when={selectedCount() > 0 && !confirmAction()}>
         <div class="plan-batch-bar">
-          <button class="plan-btn plan-btn-approve" onClick={() => doBatchAction("approved")}>
+          <button class="plan-btn plan-btn-approve" onClick={() => doBatchAction("approve")}>
             ✓ 批准选中 ({selectedCount()})
           </button>
-          <button class="plan-btn plan-btn-reject" onClick={() => doBatchAction("rejected")}>
+          <button class="plan-btn plan-btn-reject" onClick={() => doBatchAction("reject")}>
             ✗ 拒绝选中 ({selectedCount()})
           </button>
         </div>

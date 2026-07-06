@@ -167,6 +167,7 @@ fn handle_plan_create(ctx: ToolCallCtx) -> ToolResult {
     ToolResult { success: true, content: format!("Plan item P{id} created: {title}") }
 }
 
+#[allow(dead_code)] // kept for frontend cmd_update_plan via admin server
 fn handle_plan_update(ctx: ToolCallCtx) -> ToolResult {
     let id = ctx.get_str("id").unwrap_or("");
     let status = ctx.get_str("status").unwrap_or("");
@@ -209,6 +210,23 @@ fn handle_plan_update(ctx: ToolCallCtx) -> ToolResult {
     ToolResult { success: true, content: format!("Plan item {id} updated to {status}") }
 }
 
+fn handle_plan_submit(_ctx: ToolCallCtx) -> ToolResult {
+    let content = match read_plan() {
+        Ok(c) => c,
+        Err(e) => return ToolResult { success: false, content: format!("[ERROR] {e}") },
+    };
+    if content.trim().is_empty() {
+        return ToolResult { success: false, content: "[INFO] PLAN.md is empty. Use plan_create to add items first.".into() };
+    }
+    ToolResult {
+        success: true,
+        content: format!(
+            "Plan submitted for review. The user will approve/reject items in the Status panel.\n\n{}",
+            content
+        ),
+    }
+}
+
 // ── registration ──
 
 pub fn register(mgr: &mut crate::ToolManager) {
@@ -228,14 +246,14 @@ pub fn register(mgr: &mut crate::ToolManager) {
 
     mgr.register(ToolHandler {
         key: ToolKey::new("plan_create", ""),
-        description: "Add a new item to PLAN.md. Returns the assigned plan ID.",
+        description: "Add a new item to PLAN.md. Returns the assigned plan ID. Each item must be concrete and verifiable.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
                 "title": {"type": "string", "description": "Short title for this plan item"},
-                "description": {"type": "string", "description": "What this step involves, including acceptance criteria"},
+                "description": {"type": "string", "description": "What this step involves, including specific acceptance criteria (e.g. 'Cargo check passes', 'test passes'). Must NOT be vague like 'improve UX'."},
                 "deps": {"type": "string", "description": "Comma-separated IDs this depends on, or 'none'"},
                 "effort": {"type": "string", "description": "Estimated effort, e.g. '2h' or '1d'"}
-            }, "required": ["title", "description"], "additionalProperties": false
+            }, "required": ["title", "description", "deps", "effort"], "additionalProperties": false
         }),
         handler: handle_plan_create,
         risk: ToolRisk::Write,
@@ -243,17 +261,13 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(ToolHandler {
-        key: ToolKey::new("plan_update", ""),
-        description: "Update the status of a PLAN.md item (approved, rejected, or pending).",
+        key: ToolKey::new("plan_submit", ""),
+        description: "Submit the current PLAN.md for user review. Call this after all plan_create calls are done. Returns the full plan content.",
         input_schema: serde_json::json!({
-            "type": "object", "properties": {
-                "id": {"type": "string", "description": "Plan item ID, e.g. 'P1'"},
-                "status": {"type": "string", "enum": ["pending", "approved", "rejected"]},
-                "comment": {"type": "string", "description": "Optional reason for the status change"}
-            }, "required": ["id", "status"], "additionalProperties": false
+            "type": "object", "properties": {}, "additionalProperties": false
         }),
-        handler: handle_plan_update,
-        risk: ToolRisk::Write,
+        handler: handle_plan_submit,
+        risk: ToolRisk::ReadOnly,
         default_timeout: Duration::from_secs(15),
     });
 }

@@ -130,6 +130,15 @@ impl SessionManager {
         store::read_meta(&dir)
     }
 
+    /// Persist agent mode to meta.json without rewriting messages.
+    /// Called when the user switches PLAN/CODE mode so it survives agent restart.
+    pub fn persist_mode(&self, seed: &str, mode: u8) {
+        let dir = self.session_path_dir(seed);
+        let mut meta = store::read_meta(&dir).unwrap_or_default();
+        meta.mode = mode;
+        let _ = store::write_meta(&dir, &meta);
+    }
+
     /// Append a single message to JSONL immediately (per-message persistence).
     /// Does NOT update meta or index — caller should update meta periodically.
     pub fn save_one(&self, seed: &str, msg: &Message) {
@@ -166,6 +175,8 @@ impl SessionManager {
             Err(_) => String::new(),
         };
 
+        let existing_mode = self.load_meta(seed).map(|m| m.mode).unwrap_or(0);
+
         let meta = SessionMeta {
             seed: seed.to_string(),
             created_at,
@@ -176,6 +187,7 @@ impl SessionManager {
             turn_count,
             last_summary,
             compact_skip,
+            mode: existing_mode,
             ..Default::default()
         };
         if let Err(e) = store::write_meta(&dir, &meta) {
@@ -209,6 +221,7 @@ impl SessionManager {
             .map(|m| m.created_at)
             .unwrap_or(now);
 
+        let existing_mode = self.load_meta(seed).map(|m| m.mode).unwrap_or(0);
         let last_summary = Self::extract_summary(messages);
 
         let meta = SessionMeta {
@@ -221,6 +234,7 @@ impl SessionManager {
             turn_count,
             last_summary,
             compact_skip,
+            mode: existing_mode,
             ..Default::default()
         };
 

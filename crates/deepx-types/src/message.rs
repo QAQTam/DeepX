@@ -24,6 +24,8 @@ pub enum ContentBlock {
     ToolResult {
         tool_use_id: String,
         content: String,
+        #[serde(default)]
+        success: bool,
     },
 }
 
@@ -75,7 +77,7 @@ impl Message {
             content: vec![ContentBlock::text(content)],
         }
     }
-    pub fn tool(tool_call_id: &str, result: &str) -> Self {
+    pub fn tool(tool_call_id: &str, result: &str, success: bool) -> Self {
         Self {
             msg_id: None,
             role: "tool".into(),
@@ -83,6 +85,7 @@ impl Message {
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: tool_call_id.into(),
                 content: result.into(),
+                success,
             }],
         }
     }

@@ -277,6 +277,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bindgen"
+version = "0.72.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
+dependencies = [
+ "bitflags 2.13.0",
+ "cexpr",
+ "clang-sys",
+ "itertools 0.12.1",
+ "log",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash 2.1.3",
+ "shlex 1.3.0",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1060,6 +1080,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepx-sed"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "encoding_rs",
+ "lazy_static",
+ "libc",
+ "rustc-hash 2.1.3",
+ "selinux",
+ "selinux-sys",
+ "signal-hook",
+]
+
+[[package]]
 name = "deepx-session"
 version = "0.7.0"
 dependencies = [
@@ -1148,6 +1182,7 @@ dependencies = [
  "conpty",
  "deepx-message",
  "deepx-proto",
+ "deepx-sed",
  "deepx-types",
  "git2",
  "hex",
@@ -4603,6 +4638,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "selinux"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f6af114a661557df02e60c25e5cb40779d295ec2e4ae0fd903fe414578b6191"
+dependencies = [
+ "bitflags 2.13.0",
+ "errno",
+ "libc",
+ "once_cell",
+ "parking_lot",
+ "selinux-sys",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "selinux-sys"
+version = "0.6.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "debaba5832b4831ffe0ba9118b526c752c960f41c46c4ef197d9a15f5179d6fd"
+dependencies = [
+ "bindgen 0.72.1",
+ "cc",
+ "dunce",
+ "walkdir",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6340,7 +6402,7 @@ version = "0.7.0-pre.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebb7f13561dadb97fb576e3a05f8cc072b81f8cbb5336103d49ebda38089e273"
 dependencies = [
- "bindgen",
+ "bindgen 0.69.5",
  "env_logger",
  "parking_lot",
  "tracing",
@@ -6390,7 +6452,7 @@ version = "0.7.0-pre.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "722ecf45be0c3a988fe31c9a8c5832b7eeda05b531a838b77fd1d3c70633b8f1"
 dependencies = [
- "bindgen",
+ "bindgen 0.69.5",
  "env_logger",
  "genawaiter",
  "parking_lot",

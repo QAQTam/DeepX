@@ -2,15 +2,16 @@ import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import MessageList from "./MessageList";
 import InputBar from "./InputBar";
+import type { SlashCommand } from "./SlashMenu";
 import InfoBar from "./InfoBar";
 import AskDialog from "./AskDialog";
 
-interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; hasMore: boolean; onLoadMore: () => void; }
+interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; hasMore: boolean; onLoadMore: () => void; onSlashCommand: (cmd: SlashCommand) => void; }
 
 export default function ChatView(props: ChatViewProps) {
   const chat = () => props.chat;
   const seed = () => chat().sessionInfo.seed;
-  const [mode, setMode] = createSignal("normal");
+  const [mode, setMode] = createSignal("plan");
 
   async function handleSetMode(m: string) {
     setMode(m);
@@ -66,6 +67,7 @@ export default function ChatView(props: ChatViewProps) {
         restoreText={chat().restoreText}
         mode={mode()}
         onModeChange={handleSetMode}
+        onSlashCommand={props.onSlashCommand}
       />
       <AskDialog
         state={chat().askState}

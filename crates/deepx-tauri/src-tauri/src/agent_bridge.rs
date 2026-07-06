@@ -668,6 +668,22 @@ pub fn cmd_set_mode(seed: String, mode: String) -> Result<(), String> {
     send_to_agent(&seed, Ui2Agent::SetMode { mode })
 }
 
+/// Send user's response to a permission request dialog.
+#[tauri::command]
+pub fn cmd_permission_response(
+    seed: String,
+    tool_call_id: String,
+    approved: bool,
+    trust_folder: Option<bool>,
+) -> Result<(), String> {
+    log::info!("[REGISTRY] permission_response id={tool_call_id} approved={approved}");
+    send_to_agent(&seed, Ui2Agent::PermissionResponse {
+        tool_call_id,
+        approved,
+        trust_folder: trust_folder.unwrap_or(false),
+    })
+}
+
 /// Return the app version from Cargo.toml.
 #[tauri::command]
 pub fn cmd_get_version() -> String {
@@ -1000,9 +1016,9 @@ pub fn cmd_get_git_file_diff(seed: String, file_path: String) -> Result<String, 
 pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
     use std::io::BufRead;
 
-    // Tasks from sessions/{seed}/tasks-mem.md
+    // Tasks from .deepx/tasks.md (same path as the task tool)
     let tasks: Vec<serde_json::Value> = {
-        let path = deepx_types::platform::sessions_dir().join(&seed).join("tasks-mem.md");
+        let path = resolve_deepx_dir(&seed).join("tasks.md");
         if let Ok(file) = std::fs::File::open(&path) {
             std::io::BufReader::new(file).lines()
                 .filter_map(|l| l.ok())
@@ -1053,12 +1069,11 @@ pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
 }
 
 /// Modify or delete a task directly from the frontend.
-/// Writes to tasks-mem.md on disk, then sends a ToolCall frame to the agent
+/// Writes to .deepx/tasks.md on disk, then sends a ToolCall frame to the agent
 /// so its in-memory state stays in sync.
 #[tauri::command]
 pub fn cmd_task_action(seed: String, action: String, task_id: u32) -> Result<(), String> {
-    let dir = deepx_types::platform::sessions_dir().join(&seed);
-    let path = dir.join("tasks-mem.md");
+    let path = resolve_deepx_dir(&seed).join("tasks.md");
     let _guard = std::sync::Mutex::new(()); // serialize access
 
     let mut lines: Vec<String> = if path.exists() {
@@ -1253,7 +1268,20 @@ fn days_before_today(days: u32) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-// ── PLAN Review commands ────────────────────────────────────────────
+// ── PLAN / Task Review commands ──────────────────────────────────────
+
+/// Resolve the `.deepx/` directory path with the same fallback as
+/// `deepx_tools::workspace::deepx_dir()`.
+/// Priority: {workspace}/.deepx/ → {data_dir}/workspace/ (fallback)
+fn resolve_deepx_dir(seed: &str) -> std::path::PathBuf {
+    let ws = crate::agent_bridge::cmd_get_workspace(seed.to_string())
+        .unwrap_or_default();
+    if !ws.is_empty() && ws != "." {
+        std::path::Path::new(&ws).join(".deepx")
+    } else {
+        deepx_types::platform::data_dir().join("workspace")
+    }
+}
 
 /// Read PLAN.md from .deepx/ and return parsed plan items as JSON.
 /// Returns empty array if PLAN.md doesn't exist or workspace is not set.
@@ -1262,11 +1290,7 @@ pub fn cmd_read_plan(seed: String) -> Result<String, String> {
     if seed.is_empty() {
         return Ok("[]".into());
     }
-    let ws = match crate::agent_bridge::cmd_get_workspace(seed) {
-        Ok(w) if !w.is_empty() => w,
-        _ => return Ok("[]".into()),
-    };
-    let plan_path = std::path::Path::new(&ws).join(".deepx").join("PLAN.md");
+    let plan_path = resolve_deepx_dir(&seed).join("PLAN.md");
     let content = match std::fs::read_to_string(&plan_path) {
         Ok(c) => c,
         Err(_) => return Ok("[]".into()),
@@ -1292,11 +1316,7 @@ pub fn cmd_plan_action(app: AppHandle, seed: String, item_id: String, action: St
     if seed.is_empty() {
         return Err("No active session".into());
     }
-    let ws = crate::agent_bridge::cmd_get_workspace(seed.clone())?;
-    if ws.is_empty() {
-        return Err("No workspace set".into());
-    }
-    let plan_path = std::path::Path::new(&ws).join(".deepx").join("PLAN.md");
+    let plan_path = resolve_deepx_dir(&seed).join("PLAN.md");
     let content = std::fs::read_to_string(&plan_path)
         .map_err(|e| format!("read PLAN.md: {e}"))?;
 
@@ -1307,12 +1327,13 @@ pub fn cmd_plan_action(app: AppHandle, seed: String, item_id: String, action: St
         if !found && trimmed.starts_with("- [") && trimmed.contains(&format!(" {}: ", item_id)) {
             found = true;
             match action.as_str() {
-                "approve" => line.replacen("- [", "- [✓", 1),
+                "approve" => line.replacen("- [ ]", "- [✓]", 1),
                 "reject" => {
-                    let base = line.replacen("- [", "- [-", 1);
+                    let base = line.replacen("- [ ]", "- [-]", 1);
                     if user_comment.is_empty() { base } else { format!("{base} | {user_comment}") }
                 },
-                "ask" => line.replacen("- [", "- [?", 1),
+                "ask" => line.replacen("- [ ]", "- [?]", 1),
+                "delete" => return String::new(), // remove the line entirely
                 _ => format!("{line} | {user_comment}"),
             }
         } else {

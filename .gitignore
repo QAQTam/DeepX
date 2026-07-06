@@ -9,3 +9,4 @@ deepx.exe
 *.js
 bindings/
 tmp/
+.deepx/

@@ -24,6 +24,10 @@ pub struct SessionMeta {
     /// Number of earliest turns compacted (skipped in LLM context).
     #[serde(default)]
     pub compact_skip: usize,
+    /// Agent operating mode: 0=Normal, 1=Plan, 2=Code.
+    /// Persisted so PLAN/CODE mode survives agent restart within the same session.
+    #[serde(default)]
+    pub mode: u8,
 
     // ── Runtime fields (not persisted) ──
     /// If set, this seed is passed as a CLI argument to the agent subprocess for auto-restore on startup.
@@ -55,6 +59,7 @@ impl Default for SessionMeta {
             turn_count: 0,
             last_summary: String::new(),
             compact_skip: 0,
+            mode: 0,
             resume_seed: None,
             tokens: 0,
             title: None,

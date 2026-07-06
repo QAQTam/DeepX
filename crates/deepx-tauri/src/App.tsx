@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createChatStore, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
 import type { Agent2Ui } from "@/lib/types";
+import type { SlashCommand } from "./components/SlashMenu";
 import ChatView from "./components/ChatView";
 import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
@@ -12,7 +13,10 @@ import StatusPanel from "./components/StatusPanel";
 import TokenChart from "./components/TokenChart";
 import "./styles/git-diff-panel.css";
 import "./styles/context-panel.css";
+import "./styles/slash-menu.css";
+import "./styles/permission-dialog.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
+import PermissionDialog, { type PermissionRequest } from "./components/PermissionDialog";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
 
@@ -41,7 +45,7 @@ type ChatStore = ReturnType<typeof createChatStore>;
 
 export default function App() {
   const i18n = createI18n(((localStorage.getItem("deepx:lang") ?? "en") as Lang));
-  const [view, setView] = createSignal<View>("chat");
+  const [view, setView] = createSignal<View>("home");
   const [configLang, setConfigLang] = createSignal<Lang>("en");
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
   // Active session seed — drives which ChatStore is displayed
@@ -63,6 +67,7 @@ export default function App() {
   });
   const [theme, setTheme] = createSignal<ThemeMode>("system");
   const [refreshKey, setRefreshKey] = createSignal(0); // bump to refresh TokenChart
+  const [permissionRequest, setPermissionRequest] = createSignal<PermissionRequest | null>(null);
 
   // ── Toast notifications (disconnect warnings, errors) ──
   const toastCtrl: ToastCtrl = createToastCtrl();
@@ -121,6 +126,11 @@ export default function App() {
       case "tool_call_preview": chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
       case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
       case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
+      case "plan_changed": {
+        // Forward to PlanReviewPanel via DOM custom event
+        window.dispatchEvent(new CustomEvent("plan-submitted", { detail: { seed: listenerSeed } }));
+        break;
+      }
       case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); if (listenerSeed === activeSeed()) setRefreshKey((k) => k + 1); break;
       case "session_created": {
         const evtSeed = p.seed as string;
@@ -193,6 +203,17 @@ export default function App() {
       case "compact_start": chat.handleCompactStart(p); break;
       case "compact_end": chat.handleCompactEnd(p); break;
       case "tool_notice": chat.handleToolNotice(p); break;
+      case "permission_request": {
+        setPermissionRequest({
+          tool_call_id: (p.tool_call_id ?? "") as string,
+          tool_name: (p.tool_name ?? "") as string,
+          reason: (p.reason ?? "") as string,
+          paths: (Array.isArray(p.paths) ? p.paths : []) as string[],
+          category: (p.category ?? "") as string,
+          level: (p.level ?? 4) as number,
+        });
+        break;
+      }
 
       case "exec_progress": chat.handleExecProgress((p.tool_call_id ?? "") as string, (p.chunk ?? "") as string); break;
     }
@@ -420,6 +441,22 @@ export default function App() {
   });
 
   const t = () => i18n.t() ?? en;
+  function handleSlashCommand(cmd: SlashCommand) {
+    switch (cmd.id) {
+      case "settings": setView("settings"); break;
+      case "new": newSession(); break;
+      case "compact": invoke("cmd_compact", { seed: activeSeed() }).catch(console.error); break;
+      case "undo": {
+        const chat = activeChat();
+        if (chat) {
+          const turns = chat.turns;
+          if (turns.length > 0) chat.undoTurn(turns[turns.length - 1].turn_id);
+        }
+        break;
+      }
+    }
+  }
+
   async function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("deepx:lang", l); try { await invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l, context7ApiKey: "", subagentModel: "", subagentBaseUrl: "", subagentApiKey: "", subagentMaxTokens: 0, subagentTimeoutSecs: 0, subagentDefaultTools: [] }); } catch (e) { console.error(e); } }
   function switchTheme(t: ThemeMode) { setTheme(t); localStorage.setItem(LS_THEME, t); applyTheme(t); }
 
@@ -555,7 +592,7 @@ export default function App() {
           </Show>
           <Switch>
             <Match when={view() === "settings"}>
-              <SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} theme={theme} onThemeChange={switchTheme} />
+              <SettingsView lang={configLang} onLangChange={switchLang} theme={theme} onThemeChange={switchTheme} />
             </Match>
             <Match when={view() === "home"}>
               <div class="home-dashboard">
@@ -564,13 +601,11 @@ export default function App() {
               </div>
             </Match>
             <Match when={view() === "chat"}>
-              <Show when={hasChosenSession() && activeSeed() && activeChat()} fallback={<StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} />}>
-                {activeChat() && (
-                  <div class="chat-area">
-                    <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} />
-                    <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
-                  </div>
-                )}
+              <Show when={hasChosenSession() && activeSeed() && activeChat()}>
+                <div class="chat-area">
+                  <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} onSlashCommand={handleSlashCommand} />
+                  <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
+                </div>
               </Show>
             </Match>
           </Switch>
@@ -578,6 +613,13 @@ export default function App() {
         
       </div>
       <ToastContainer ctrl={toastCtrl} />
+      <Show when={permissionRequest()}>
+        <PermissionDialog
+          request={permissionRequest()!}
+          seed={activeSeed()}
+          onClose={() => setPermissionRequest(null)}
+        />
+      </Show>
     </I18nCtx.Provider>
   );
 }

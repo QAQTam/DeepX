@@ -123,8 +123,9 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     // ── PLAN mode gate: block write/exec/destructive tools ──
     if AGENT_MODE.load(Ordering::SeqCst) == 1 {
         const BLOCKED: &[&str] = &[
-            "write_file", "edit_file", "delete_file", "move_file",
-            "exec_command", "git_commit", "git_push",
+            "file_write", "file_edit", "file_edit_diff", "file_delete", "file_move", "file_copy",
+            "exec_run",
+            "git_commit", "git_push", "git_add",
         ];
         if BLOCKED.contains(&name) {
             return ToolExecResult {

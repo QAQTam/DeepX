@@ -11,10 +11,17 @@ use super::file_shared::{
 
 // ── Shared helpers ──
 
-fn format_diff_result(prefix: &str, path: &str, diff: &str, label: &str) -> String {
+fn format_diff_result(prefix: &str, path: &str, diff: &str, label: &str, success: bool) -> String {
     let (added, removed, first_line) = diff_stats(diff);
-    format!("[{prefix}] {path}:{first_line} +{added} -{removed} | {label}\n\n{diff}",
-        added = added.max(1), removed = removed.max(1), diff = diff.trim_end())
+    let summary = format!("[{prefix}] {path}:{first_line} +{added} -{removed} | {label}",
+        added = added.max(1), removed = removed.max(1));
+    if success {
+        // Omit diff body on success — the LLM already knows what it edited.
+        // Saves ~80-90% of tool result tokens per edit.
+        summary
+    } else {
+        format!("{}\n\n{}", summary, diff.trim_end())
+    }
 }
 
 // ── Helpers from file_edit ──
@@ -145,7 +152,7 @@ pub(super) fn exec_write_file(args: &str) -> String {
                     if diff.is_empty() {
                         format!("[OK] {} — {} bytes, {} lines (no changes)", path, content.len(), line_count)
                     } else {
-                        format_diff_result("OK", &path, &diff, "write_file")
+                        format_diff_result("OK", &path, &diff, "write_file", true)
                     }
                 } else {
                     format!("[OK] {} — {} bytes, {} lines (new file)", path, content.len(), line_count)
@@ -214,7 +221,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
 
         if dry_run {
             let diff = unified_diff(&orig, &content, path);
-            results.push(format_diff_result("DRY RUN", path, &diff, "edit_file"));
+            results.push(format_diff_result("DRY RUN", path, &diff, "edit_file", false));
         } else {
             // Restore CRLF if original file had Windows line endings
             let write_content = if was_crlf {
@@ -225,7 +232,7 @@ pub(super) fn exec_edit_file(args: &str) -> String {
             match std::fs::write(&resolved, &write_content) {
                 Ok(_) => {
                     let diff = unified_diff(&orig, &content, path);
-                    results.push(format_diff_result("OK", path, &diff, "edit_file"));
+                    results.push(format_diff_result("OK", path, &diff, "edit_file", true));
                 }
                 Err(e) => {
                     results.push(format!("[ERROR] Cannot write {path}: {e}"));
@@ -348,8 +355,6 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
     if path.is_empty() { return "[ERROR] Missing required field: path".to_string(); }
     let old_lines: Vec<String> = v.get("old_lines").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    if old_lines.is_empty() { return "[ERROR] Missing required field: old_lines".to_string(); }
-    if old_lines.len() > 100 { return format!("[ERROR] old_lines too large ({} lines, max 100)\n[HINT] Reduce the diff scope or use write_file for full rewrites.", old_lines.len()); }
     let new_lines: Vec<String> = v.get("new_lines").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
     let context_before: Vec<String> = v.get("context_before").and_then(|v| v.as_array())
@@ -358,6 +363,17 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
     let description = v.get("description").and_then(|v| v.as_str()).unwrap_or("");
     let dry_run = v.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
+    // Line-number addressing: when provided, bypass content matching entirely.
+    let start_line: Option<usize> = v.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
+    let end_line: Option<usize> = v.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
+
+    // Require either old_lines (content match) or start_line (line addressing)
+    if old_lines.is_empty() && start_line.is_none() {
+        return "[ERROR] Missing required field: old_lines or start_line".to_string();
+    }
+    if old_lines.len() > 100 && start_line.is_none() {
+        return format!("[ERROR] old_lines too large ({} lines, max 100)\n[HINT] Reduce the diff scope or use write_file for full rewrites.", old_lines.len());
+    }
 
     let raw = match std::fs::read_to_string(&path) {
         Ok(c) => c,
@@ -374,11 +390,42 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
         log::info!("file_edit_diff: {} had CRLF, normalized to LF for matching", path);
     }
     let file_lines: Vec<&str> = content.lines().collect();
-    // Normalize trailing whitespace for matching: LLMs often can't reproduce
-    // trailing spaces/tabs exactly, so trim_end on both old_lines and file
-    // lines avoids spurious mismatches. Note: this means significant trailing
-    // whitespace (e.g. Makefile recipes) may match the wrong location if
-    // multiple candidates exist — context_before/context_after disambiguates.
+    // ── Line-number fast path ──
+    if let Some(start) = start_line {
+        let s = start.saturating_sub(1); // 1-based → 0-based
+        let e = end_line.map(|n| n.saturating_sub(1)).unwrap_or(s);
+        if s >= file_lines.len() {
+            return format!("[ERROR] start_line {start} past end of file ({} lines)", file_lines.len());
+        }
+        let e = e.min(file_lines.len().saturating_sub(1));
+        if s > e {
+            return format!("[ERROR] start_line {start} > end_line {}", end_line.unwrap_or(start));
+        }
+        let win = e - s + 1;
+
+        // Optional validation: if old_lines provided, cross-check them
+        if !old_lines.is_empty() {
+            let actual: Vec<&str> = file_lines[s..=e].iter().map(|l| *l).collect();
+            let norm_actual: Vec<String> = actual.iter().map(|l| l.trim_end().to_string()).collect();
+            let norm_old: Vec<String> = old_lines.iter().map(|l| l.trim_end().to_string()).collect();
+            if norm_actual != norm_old {
+                let mut ctx = String::new();
+                for (i, line) in actual.iter().enumerate() {
+                    if i >= norm_old.len() || line.trim_end() != norm_old[i] {
+                        ctx.push_str(&format!("  L{} actual: {}\n", s + i + 1, line));
+                        if i < norm_old.len() {
+                            ctx.push_str(&format!("  L{} old_lines: {}\n", s + i + 1, norm_old[i]));
+                        }
+                    }
+                }
+                log::warn!("file_edit_diff: {} line-number mismatch at L{}:\n{}", path, start, ctx);
+            }
+        }
+
+        return apply_diff_and_format(&path, &file_lines, s, win, &new_lines, description, false, dry_run, was_crlf);
+    }
+
+    // ── Content matching (original path) ──
     let norm_old: Vec<String> = old_lines.iter().map(|l| l.trim_end().to_string()).collect();
     let win = norm_old.len();
     if win > file_lines.len() {
@@ -403,7 +450,19 @@ pub(super) fn exec_edit_file_diff(args: &str) -> String {
         }
     }
     if candidates.is_empty() {
-        return format!("[PARTIAL] {} — old_lines not found\n[HINT] Verify current file content.", path);
+        // Show best-match hint using closest_line on the first line of old_lines
+        let first_old = old_lines.first().map(|l| l.trim()).unwrap_or("");
+        if let Some((line_num, line_text)) = closest_line(&content, first_old) {
+            return format!(
+                "[PARTIAL] {} — old_lines not found.\n\
+                 Closest match at line {line_num}: {}\n\
+                 [HINT] Use file_read first, then retry with start_line={} or corrected old_lines.",
+                path,
+                line_text,
+                line_num
+            );
+        }
+        return format!("[PARTIAL] {} — old_lines not found\n[HINT] Verify current file content or use start_line/end_line for line-number editing.", path);
     }
 
     // Disambiguate with context
@@ -439,8 +498,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
     mgr.register(ToolHandler {
         key: ToolKey::new("file", "edit_diff"),
-        description: "Fuzzy multi-line edit via old_lines+new_lines.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"description":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","old_lines","new_lines"],"additionalProperties":false}),
+        description: "Fuzzy multi-line edit via old_lines+new_lines. Supports line-number addressing with start_line/end_line.",
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove (not needed when start_line set)"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"start_line":{"type":"integer","description":"1-based line number to start replacement at (bypasses content matching)"},"end_line":{"type":"integer","description":"1-based line number to end replacement at (inclusive, defaults to start_line)"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"description":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
         risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),

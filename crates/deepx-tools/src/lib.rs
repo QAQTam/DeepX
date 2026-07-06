@@ -21,6 +21,7 @@ pub mod ask_user;
 pub mod task;
 
 pub mod plan;
+pub mod sed;
 
 pub mod workspace;
 
@@ -34,6 +35,8 @@ pub mod persistence;
 pub mod memory;
 
 pub mod manager;
+/// Permission engine: tool categories, levels, trusted folders.
+pub mod permission;
 
 pub mod audit;
 pub mod auth;

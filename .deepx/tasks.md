@@ -1,8 +1,9 @@
-- [completed] T1: Find root cause of missing assistant messages on session resume — Resume session causes assistant messages to be missing from UI. Introduced when replacing streaming-markdown with marked.
-- [completed] T2: Fix MarkdownBody.tsx — remove defer:true to render on mount — Remove { defer: true } from MarkdownBody.tsx createEffect so markdown renders on initial mount for resumed sessions.
-- [completed] T3: Investigate why assistant messages still missing after MarkdownBody fix — MarkdownBody fix alone didn't resolve — need to trace the full session restore data pipeline from Rust to frontend.
-- [completed] T4: Fix streaming flicker in MarkdownBody — Streaming causes flickering due to full markdown re-parse + innerHTML replacement on every RAF delta. Fix: plain text during streaming, markdown only when final.
-- [completed] T5: Analyze opencode approach: learnable vs non-applicable — Analyze opencode's anti-flicker architecture, identify what DeepX can adopt vs what's blocked by architectural differences.
-- [completed] T6: Implement P0-P2 anti-flicker in MarkdownBody — Implement P0 block projection (marked.lexer), P1 DOM identity tracking (data-key+hash), P2 word-boundary pacing in MarkdownBody.tsx
-- [in_progress] T7: Analyze Codex font rendering & animation — Analyze OpenAI Codex Electron app font rendering and streaming animation design to learn best practices for DeepX.
-- [completed] T8: Add shimmer + staggered fade-in animations — Add cadenced shimmer to ThinkingBlock and staggered fade-in to completed markdown blocks, inspired by Codex.
+- [completed] T1: Fix PlanReviewPanel status update on approve/reject — Investigate PlanReviewPanel approve/reject not updating frontend state after click
+- [completed] T2: Persist agent mode (PLAN/CODE) to session meta — Add mode field to SessionMeta, persist on SetMode, restore on resume — so PLAN/CODE mode survives agent restart
+- [completed] T3: Implement permission engine: categories + levels + trusted folders — Define tool category taxonomy (Read/Write/Exec/Net) and implement the PermissionLevel state with trusted folder logic
+- [completed] T4: Add permission gate to agent loop — Add PermissionRequest/PermissionResponse to proto, pending tool call state, check in handle_tool_call, response handler
+- [completed] T5: Frontend PermissionDialog + event wiring — Add PermissionDialog.tsx component listening to permission-request event, showing tool name/paths/category with approve/deny buttons, trust-folder checkbox, and session-remember checkbox
+- [completed] T6: Improve file editing tools with line addressing and fuzzy matching — Add line-number addressing (start_line/end_line) to file_edit_diff, return closest match on failure, apply fuzzy indentation normalization from similar
+- [completed] T7: Create deepx-sed crate + tool registration — Copy D:\project\red\red (lib+bin sed) into crates/deepx-sed, adapt to workspace conventions, register as sed tool in deepx-tools
+- [completed] T8: Route exec_run sed calls to deepx-sed library — Intercept sed commands in exec_run and route them to deepx-sed library instead of spawning a shell process
+- [completed] T9: Revert sed integration from project — Remove deepx-sed crate, exec interception code, dependency references, and tool registration

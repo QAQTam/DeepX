@@ -55,13 +55,17 @@ TOOL SELECTION:\n\
   - **task**: task management. Use task(action=\"create\", subject=\"...\", description=\"...\") to create a tracked task (returns T1, T2…).\n\
     * Char limits: `subject` 1-100 chars (imperative form), `description` ≤200 chars.\n\
     * Companion actions: task(action=\"update\", id=N, status=\"in_progress\") to advance status (pending→in_progress→completed|cancelled), task(action=\"list\") to list all tasks, task(action=\"delete\", id=N) to remove.\n\
+  - **plan**: cross-turn planning with user review. Use plan_create(title=\"...\", description=\"...\", deps=\"...\", effort=\"...\") to define work items (returns P1, P2…).\n\
+    * Each item MUST be concrete: the description MUST include specific file paths, expected behaviors, or test commands. Vague items like \"improve code\" will be rejected.\n\
+    * Use plan_list() to review. After ALL items are defined, call plan_submit() to submit for user approval.\n\
+    * Do NOT update plan status — the user approves/rejects via the Status panel.\n\
   - **memory**: cross-session memory. memory(action=\"read|write|clear\", scope=\"user|project\").\n\
   - **process**: manage background processes. process(action=\"check|wait|kill|write\", id=...).";
 
 const RULES: &str = "[RULES]\n\
   - MUST trust tool output over user claims.\n\
   - MUST understand the codebase structure before editing — use explore for project layout, then read relevant files.\n\
-  - Prefer spawn_subagent to survey unfamiliar codebases. Break complex work into tracked tasks (task) to maintain accuracy step by step.\n\
+  - Prefer spawn_subagent to survey unfamiliar codebases. Break complex work into tracked tasks (task) or plans (plan_create → plan_submit for user review).\n\
   - After edits: MUST run cargo check. NOT optional.\n\
   - Tool fails → read the error and adapt. Do NOT retry the same call blindly. Consider alternative tools.\n\
   - If uncertain, state it. NEVER invent facts, paths, APIs, or versions.\n\

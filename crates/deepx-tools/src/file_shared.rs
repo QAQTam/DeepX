@@ -175,33 +175,12 @@ pub(super) fn apply_diff_and_format(
             if was_fuzzy {
                 result.push_str("\u{26a0} fuzzy match (indentation normalized)\n");
             }
-            // Unified diff header
-            result.push_str(&format!("--- a/{}\n+++ b/{}\n", path, path));
-            // Hunk header
-            let ctx_line = file_lines.get(match_idx.saturating_sub(1)).unwrap_or(&"");
-            result.push_str(&format!("@@ -{},{} +{},{} @@ {}\n",
-                line, removed.max(1), line, added.max(1), ctx_line));
-            // Context before
-            let ctx_start = match_idx.saturating_sub(2);
-            for i in ctx_start..match_idx {
-                result.push_str(&format!(" {}\n", file_lines[i]));
-            }
-            // Removed lines
-            for i in match_idx..match_idx + win {
-                result.push_str(&format!("-{}\n", file_lines[i]));
-            }
-            // Added lines
-            for l in new_lines {
-                result.push_str(&format!("+{}\n", l));
-            }
-            // Context after
-            let ctx_end = (match_idx + win + 2).min(out_lines.len());
-            for i in (match_idx + win)..ctx_end {
-                result.push_str(&format!(" {}\n", out_lines[i]));
-            }
             let desc = if description.is_empty() { "edit_file_diff" } else { description };
             let disp = crate::display_path(&path);
-            result.push_str(&format!("\n[OK] {disp}:{line} +{added} -{removed} | {desc}"));
+            // On success, omit the full diff body — the LLM already knows what it changed.
+            // Saves ~80-90% of tool result tokens per edit.
+            use std::fmt::Write;
+            let _ = write!(result, "[OK] {disp}:{line} +{added} -{removed} | {desc}");
             result
         }
         Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.", crate::display_path(&path), e),

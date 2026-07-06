@@ -45,7 +45,8 @@ impl TursoBackend {
         runtime()?.block_on(async {
             self.conn
                 .execute_batch(
-                    "CREATE TABLE IF NOT EXISTS sessions (
+                    "PRAGMA journal_mode=WAL;
+                     CREATE TABLE IF NOT EXISTS sessions (
                         seed TEXT PRIMARY KEY,
                         meta_json TEXT NOT NULL DEFAULT '{}',
                         created_at INTEGER NOT NULL DEFAULT (unixepoch()),

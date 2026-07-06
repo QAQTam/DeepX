@@ -50,6 +50,11 @@ pub struct PersistentConfig {
     // ── Turso local database mirror ──
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<PersistentDatabaseConfig>,
+
+    // ── Permission ──
+    /// Agent permission level: 1=MaxLockdown, 2=ReadFree, 3=WorkspaceFree, 4=Unrestricted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_level: Option<u8>,
 }
 
 /// Persistence-friendly subagent config with all-Option fields.

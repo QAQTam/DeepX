@@ -111,10 +111,24 @@ pub(crate) fn format_tool_args_display(name: &str, input: &serde_json::Value) ->
     }
 }
 
-pub(crate) fn build_turns_from_context(agent: &AgentState) -> Vec<deepx_proto::TurnData> {
+/// Build TurnData for IPC. If `start` is provided, only turns from that
+/// index (0-based) onward are built — avoids cloning full tool results
+/// for hundreds of old turns when only the tail is needed (resume / load-more).
+pub(crate) fn build_turns_from_context(
+    agent: &AgentState,
+    start: Option<usize>,
+    max_count: Option<usize>,
+) -> Vec<deepx_proto::TurnData> {
     use deepx_types::ContentBlock;
+    let all_turns = agent.msg.turns();
+    let range_start = start.unwrap_or(0).min(all_turns.len());
+    let range_end = match max_count {
+        Some(n) => (range_start + n).min(all_turns.len()),
+        None => all_turns.len(),
+    };
+
     let mut turns = Vec::new();
-    for (ti, turn) in agent.msg.turns().iter().enumerate() {
+    for (ti, turn) in all_turns.iter().enumerate().skip(range_start).take(range_end - range_start) {
         let mut rounds = Vec::new();
         for (ri, step) in turn.steps.iter().enumerate() {
             let thinking = step.assistant.content.iter().find_map(|b| {
@@ -133,7 +147,7 @@ pub(crate) fn build_turns_from_context(agent: &AgentState) -> Vec<deepx_proto::T
             }).collect();
             let trs: Vec<deepx_proto::ToolResultDef> = step.tool_results.iter().flat_map(|msg| {
                 msg.content.iter().filter_map(|b| {
-                    if let ContentBlock::ToolResult { tool_use_id, content } = b {
+                    if let ContentBlock::ToolResult { tool_use_id, content, .. } = b {
                         Some(deepx_proto::ToolResultDef {
                             tool_call_id: tool_use_id.clone(),
                             output: content.clone(), success: true, file: None,

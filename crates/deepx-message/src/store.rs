@@ -5,20 +5,78 @@ use deepx_session::SessionManager;
 /// Truncate tool result for LLM context. Tools return full output for the user,
 /// but long results are trimmed here before storage to keep KV-cache prefixes
 /// stable across turns.
+///
+/// - `file_*` results snap to the nearest preceding newline so code lines are
+///   never cut in half.
+/// - Other tools cut at a UTF-8 char boundary.
 fn truncate_tool_result(tool_name: &str, result: &str) -> String {
-    let limit = match tool_name {
-        "file" => 6000,
-        "web" => 8000,
-        "exec" => 5000,
-        _ => return result.to_string(),
+    let limit: Option<usize> = if tool_name.starts_with("file") {
+        Some(4000)
+    } else if tool_name.starts_with("web") {
+        Some(4000)
+    } else if tool_name.starts_with("exec") {
+        Some(4000)
+    } else if tool_name.starts_with("explore") {
+        Some(4000)
+    } else if tool_name.starts_with("task") || tool_name.starts_with("plan") {
+        Some(4000)
+    } else if tool_name.starts_with("memory") || tool_name.starts_with("git")
+        || tool_name.starts_with("process")
+    {
+        Some(4000)
+    } else {
+        None
+    };
+    let Some(limit) = limit else {
+        return result.to_string();
     };
     if result.len() <= limit {
         return result.to_string();
     }
-    let cut = result.floor_char_boundary(limit);
+
+    let cut = if tool_name.starts_with("file") {
+        // Snap to previous newline so code lines stay intact.
+        let head = &result[..result.floor_char_boundary(limit)];
+        head.rfind('\n').map(|n| n + 1).unwrap_or(head.len())
+    } else {
+        result.floor_char_boundary(limit)
+    };
+
     let mut out = result[..cut].to_string();
     out.push_str(&format!("\n... [truncated: {} total chars]", result.len()));
     out
+}
+
+/// Fold a completed-turn tool result into a compact status summary.
+/// Deterministic: same input → same output, preserving KV-cache prefix stability.
+///
+/// - `file_read` / `file_search`: exempt — code/grep results are essential reference.
+/// - All others: keep only the first non-empty line (status + key metadata).
+fn fold_completed_tool_result(tool_name: &str, result: &str) -> String {
+    // Exempt: code and grep results must stay visible for reference.
+    if tool_name == "file_read" || tool_name == "file_search" {
+        return result.to_string();
+    }
+
+    let hint = if tool_name.starts_with("web") {
+        " [web content folded]"
+    } else if tool_name.starts_with("exec") {
+        " [stdout folded]"
+    } else if tool_name.starts_with("explore") {
+        " [architecture folded]"
+    } else if tool_name.starts_with("file") {
+        " [output folded]"
+    } else {
+        " [details folded]"
+    };
+
+    // Keep first non-empty line — it always carries [OK]/[ERROR]/[PARTIAL] + metadata.
+    let first = result.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    if first.is_empty() {
+        return hint[1..].to_string(); // strip leading space
+    }
+    let cap = first.floor_char_boundary(first.len().min(400));
+    format!("{}{}", &first[..cap], hint)
 }
 
 #[derive(Debug, Clone)]
@@ -237,9 +295,11 @@ impl MessageStore {
     }
 
     pub fn push_user(&mut self, text: &str) -> Effect {
-        if let Some(turn) = self.turns.last_mut() {
-            if let Some(step) = turn.steps.last_mut() {
-                auto_complete_unfulfilled(step, "[CANCELLED] Tool was not executed (user interrupted).");
+        if !self.replaying {
+            if let Some(turn) = self.turns.last_mut() {
+                if let Some(step) = turn.steps.last_mut() {
+                    auto_complete_unfulfilled(step, "[CANCELLED] Tool was not executed (user interrupted).");
+                }
             }
         }
         let msg = Message::user(text);
@@ -259,8 +319,10 @@ impl MessageStore {
             }
         };
 
-        if let Some(step) = turn.steps.last_mut() {
-            auto_complete_unfulfilled(step, "[AUTO] Tool was not executed before next assistant response.");
+        if !self.replaying {
+            if let Some(step) = turn.steps.last_mut() {
+                auto_complete_unfulfilled(step, "[AUTO] Tool was not executed before next assistant response.");
+            }
         }
 
         let step = Step::new(msg.clone());
@@ -275,8 +337,8 @@ impl MessageStore {
         }
     }
 
-    pub fn push_tool_result(&mut self, tool_call_id: &str, result: &str) -> Effect {
-        self.push_tool_result_inner(tool_call_id, result);
+    pub fn push_tool_result(&mut self, tool_call_id: &str, result: &str, success: bool) -> Effect {
+        self.push_tool_result_inner(tool_call_id, result, success);
 
         if let Some(turn) = self.turns.last() {
             if let Some(step) = turn.steps.last() {
@@ -292,9 +354,9 @@ impl MessageStore {
         Effect::None
     }
 
-    pub fn push_tool_results_batch(&mut self, results: &[(String, String)]) -> Effect {
-        for (tc_id, result) in results {
-            self.push_tool_result_inner(tc_id, result);
+    pub fn push_tool_results_batch(&mut self, results: &[(String, String, bool)]) -> Effect {
+        for (tc_id, result, success) in results {
+            self.push_tool_result_inner(tc_id, result, *success);
         }
 
         if let Some(turn) = self.turns.last() {
@@ -311,7 +373,7 @@ impl MessageStore {
         Effect::None
     }
 
-    fn push_tool_result_inner(&mut self, tool_call_id: &str, result: &str) {
+    fn push_tool_result_inner(&mut self, tool_call_id: &str, result: &str, success: bool) {
         // Look up tool name from any step that owns this tool_call_id.
         let tool_name: Option<String> = self.turns.iter().rev().find_map(|turn| {
             turn.steps.iter().rev().find_map(|step| {
@@ -326,7 +388,7 @@ impl MessageStore {
             .map(|name| truncate_tool_result(name, result))
             .unwrap_or_else(|| result.to_string());
 
-        let tool_msg = Message::tool(tool_call_id, &final_result);
+        let tool_msg = Message::tool(tool_call_id, &final_result, success);
 
         for turn in self.turns.iter_mut().rev() {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
@@ -348,7 +410,7 @@ impl MessageStore {
         log::error!("push_tool_result: orphan tool_result {} — nowhere to place, dropped", tool_call_id);
     }
 
-    pub fn replace_tool_result(&mut self, tool_call_id: &str, result: &str) {
+    pub fn replace_tool_result(&mut self, tool_call_id: &str, result: &str, success: bool) {
         // Same truncation for replace path.
         let tool_name: Option<String> = self.turns.iter().rev().find_map(|turn| {
             turn.steps.iter().rev().find_map(|step| {
@@ -370,7 +432,7 @@ impl MessageStore {
                         matches!(b, deepx_types::ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == tool_call_id)
                     })
                 });
-                step.tool_results.push(Message::tool(tool_call_id, &final_result));
+                step.tool_results.push(Message::tool(tool_call_id, &final_result, success));
                 return;
             }
         }
@@ -384,16 +446,41 @@ impl MessageStore {
     ) -> Vec<Message> {
         let mut full: Vec<Message> = {
             let mut v = Vec::new();
+            v.extend(self.system_messages.clone());
+            // Mode hint at fixed position — right after system messages, before all turns.
+            // Consistent prefix ensures KV-cache hits across rounds.
             if !system_prompt.is_empty() {
                 v.push(Message::system(system_prompt));
             }
-            v.extend(self.system_messages.clone());
+            let total_turns = self.turns.len();
             for (i, turn) in self.turns.iter().enumerate() {
                 if i < self.compact_skip { continue; }
                 v.push(turn.user.clone());
-                for step in &turn.steps {
+                let is_last_turn = i == total_turns - 1;
+                let total_steps = turn.steps.len();
+                for (si, step) in turn.steps.iter().enumerate() {
                     v.push(step.assistant.clone());
-                    v.extend(step.tool_results.clone());
+                    let is_last_step_of_last_turn = is_last_turn && si == total_steps - 1;
+                    for tr in &step.tool_results {
+                        if is_last_step_of_last_turn {
+                            // Current turn — keep full (truncated to 4KB).
+                            v.push(tr.clone());
+                        } else {
+                            // Completed turn — fold to status line.
+                            let tool_name = step.assistant.content.iter().find_map(|b| {
+                                if let deepx_types::ContentBlock::ToolUse { name, .. } = b {
+                                    Some(name.as_str())
+                                } else { None }
+                            }).unwrap_or("");
+                            let mut folded = tr.clone();
+                            for block in &mut folded.content {
+                                if let deepx_types::ContentBlock::ToolResult { content, .. } = block {
+                                    *content = fold_completed_tool_result(tool_name, content);
+                                }
+                            }
+                            v.push(folded);
+                        }
+                    }
                 }
             }
             v
@@ -435,8 +522,8 @@ impl MessageStore {
     }
 
     /// Push a tool result directly (for manual execution).
-    pub fn push_tool_result_direct(&mut self, tool_call_id: &str, result: &str) {
-        self.push_tool_result_inner(tool_call_id, result);
+    pub fn push_tool_result_direct(&mut self, tool_call_id: &str, result: &str, success: bool) {
+        self.push_tool_result_inner(tool_call_id, result, success);
     }
 
     /// Execute all pending tools in the current step. When `tool_executor` is None
@@ -466,7 +553,7 @@ impl MessageStore {
             return Effect::None;
         }
 
-        let mut reports: Vec<(String, String)> = Vec::new();
+        let mut reports: Vec<(String, String, bool)> = Vec::new();
         for tool in &pending {
             let req = ToolExecRequest {
                 id: tool.id.clone(),
@@ -474,10 +561,10 @@ impl MessageStore {
                 args: tool.args.clone(),
             };
             let report = executor(req);
-            reports.push((tool.id.clone(), report.content));
+            reports.push((tool.id.clone(), report.content, report.success));
         }
-        for (tc_id, content) in reports {
-            self.push_tool_result_inner(&tc_id, &content);
+        for (tc_id, content, success) in reports {
+            self.push_tool_result_inner(&tc_id, &content, success);
         }
 
         // Tools executed; caller re-evaluates (build context → gate → push_assistant)
@@ -491,18 +578,17 @@ impl MessageStore {
         };
         let mut results = Vec::new();
         for tr in &step.tool_results {
-            if let Some(tb) = tr.content.iter().find_map(|b| {
-                if let deepx_types::ContentBlock::ToolResult { tool_use_id, content } = b {
-                    Some((tool_use_id.clone(), content.clone()))
+            if let Some((tc_id, result_text, ok)) = tr.content.iter().find_map(|b| {
+                if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, success } = b {
+                    Some((tool_use_id.clone(), content.clone(), *success))
                 } else { None }
             }) {
                 let tool_name = step.assistant.content.iter().find_map(|b| {
                     if let deepx_types::ContentBlock::ToolUse { id, name, .. } = b {
-                        if id == &tb.0 { Some(name.clone()) } else { None }
+                        if id == &tc_id { Some(name.clone()) } else { None }
                     } else { None }
                 }).unwrap_or_default();
-                let success = !tb.1.starts_with("[ERROR]") && !tb.1.starts_with("[FAIL]");
-                results.push((tb.0, tool_name, tb.1, success));
+                results.push((tc_id, tool_name, result_text, ok));
             }
         }
         results
@@ -605,12 +691,12 @@ impl MessageStore {
                     i += 1;
                 }
                 "tool" => {
-                    let (tc_id, result) = msgs[i].content.iter().find_map(|b| {
-                        if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = b {
-                            Some((tool_use_id.clone(), content.clone()))
+                    let (tc_id, result, success) = msgs[i].content.iter().find_map(|b| {
+                        if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, success } = b {
+                            Some((tool_use_id.clone(), content.clone(), *success))
                         } else { None }
                     }).unwrap_or_default();
-                    store.push_tool_result(&tc_id, &result);
+                    store.push_tool_result(&tc_id, &result, success);
                     i += 1;
                 }
                 _ => { i += 1; }
@@ -638,7 +724,7 @@ impl MessageStore {
                     let note = format!(
                         "[RESTORE] Tool \"{name}\" had no result when session was saved — not executed.\n[HINT] Do NOT retry."
                     );
-                    step.tool_results.push(Message::tool(&id, &note));
+                    step.tool_results.push(Message::tool(&id, &note, false));
                     repairs.push(format!("injected [RESTORE] for orphan tool_use {}", id));
                 }
             }
@@ -675,17 +761,16 @@ impl MessageStore {
         true
     }
 
-    /// Compact: keep `keep` recent turns in LLM context, skip older ones.
-    /// Inserts the summary as a user message with [Compacted] / [UserInput] markers
-    /// so the LLM treats it as past conversation context, not system instructions.
+    /// Compact: keep `keep` recent turns in LLM context, physically remove older ones.
+    /// Inserts the summary as a synthetic user turn before the kept turns
+    /// so that `to_vec()` serializes correctly without duplicating compacted data.
+    /// Sets `compact_skip` to 0 because all turns now present are live.
     pub fn apply_compact(&mut self, summary: &str, keep: usize) {
         let skip = self.turns.len().saturating_sub(keep);
         if skip == 0 { return; }
-        self.compact_skip = skip;
 
         // Capture the LAST user message from the compacted range —
         // the most recent user instruction carries the current intent.
-        // (First user message is typically a simple greeting, not useful.)
         let last_user = self.turns.iter()
             .take(skip)
             .rev()
@@ -699,24 +784,28 @@ impl MessageStore {
             !m.content.iter().any(|b| matches!(b, deepx_types::ContentBlock::Text { text } if text.starts_with("[COMPACT")))
         });
 
-        // Insert as user message: summary first, then marker with first user input
+        // Build compact summary as a synthetic user turn (no steps).
         let compact_text = format!(
             "[Compacted {} turns]\n{}\n\n[UserInput]\n{}",
             skip, summary.trim(), last_user
         );
-        // Insert before the compacted turns (at position skip in the turns list)
-        // Actually, insert as system message that appears before the compacted turns.
-        // The build_context_for_gate skips turns[0..compact_skip], so we need the
-        // compact message to appear before the first kept turn.
-        // Inserting into system_messages achieves this — they come before all turns.
-        self.system_messages.push(Message::user(&compact_text));
+        let compact_turn = Turn::new(Message::user(&compact_text));
+
+        // Physically remove compacted turns, keep only the most recent `keep`.
+        let kept = self.turns.split_off(skip);
+        self.turns = kept;
+        // Prepend compact summary as a synthetic turn before the kept turns.
+        self.turns.insert(0, compact_turn);
+        // No skipping needed — compacted data is physically gone.
+        self.compact_skip = 0;
     }
 
     /// Get the text of any previous compaction summary (for incremental update mode).
     /// Returns the summary portion (between header and [UserInput] marker).
+    /// Searches turns[0] since compact summary is now stored as a synthetic turn.
     pub fn previous_compact_summary(&self) -> Option<String> {
-        self.system_messages.iter().find_map(|m| {
-            m.content.iter().find_map(|b| {
+        self.turns.first().and_then(|turn| {
+            turn.user.content.iter().find_map(|b| {
                 if let deepx_types::ContentBlock::Text { text } = b {
                     if text.starts_with("[Compacted") {
                         let after_header = text.find('\n').map(|n| n + 1).unwrap_or(0);
@@ -825,7 +914,7 @@ fn auto_complete_unfulfilled(step: &mut Step, reason: &str) {
         for (id, name) in missing {
             step.tool_results.push(Message::tool(&id, &format!(
                 "{} Tool \"{name}\" was not executed.", reason
-            )));
+            ), false));
         }
     }
 }

@@ -74,6 +74,16 @@ pub enum Ui2Agent {
     /// Set agent operating mode (Normal / Plan / Code).
     #[serde(rename = "set_mode")]
     SetMode { mode: String },
+
+    /// Response to a permission request dialog.
+    #[serde(rename = "permission_response")]
+    PermissionResponse {
+        tool_call_id: String,
+        approved: bool,
+        /// If true, trust the target folder permanently.
+        #[serde(default)]
+        trust_folder: bool,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -421,6 +431,22 @@ pub enum Agent2Ui {
     /// Heartbeat: daemon responds to frontend ping.
     #[serde(rename = "pong")]
     Pong,
+
+    /// Permission request: agent asks user to approve/deny a tool call.
+    /// Frontend shows a dialog with tool details and target paths.
+    #[serde(rename = "permission_request")]
+    PermissionRequest {
+        tool_call_id: String,
+        tool_name: String,
+        /// Human-readable reason for the request.
+        reason: String,
+        /// Target paths affected by the tool.
+        paths: Vec<String>,
+        /// Tool category: "read", "write", "exec", "net".
+        category: String,
+        /// Current permission level (1-4).
+        level: u8,
+    },
 }
 
 fn default_load_count() -> u32 { 20 }

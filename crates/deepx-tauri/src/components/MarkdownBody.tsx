@@ -45,14 +45,6 @@ function blockHash(raw: string): string {
   return `${raw.length}:${raw.slice(0, 10)}…${raw.slice(-10)}`;
 }
 
-/** Inject table separator if header row exists but separator is missing. */
-function fixTable(src: string): string {
-  return src.replace(
-    /^(\|.+\|)\n(?!\s*\|[-\s|]*\|)/m,
-    "$1\n|---|---|---|\n",
-  );
-}
-
 /** Build a marked Renderer with Shiki highlighting. */
 function buildRenderer(hi: Awaited<ReturnType<typeof getHi>>) {
   const theme = detectTheme();
@@ -73,8 +65,7 @@ function buildRenderer(hi: Awaited<ReturnType<typeof getHi>>) {
 
 /** Render a single stable block's raw markdown to HTML. */
 function renderBlockHTML(raw: string, hi: Awaited<ReturnType<typeof getHi>>): string {
-  const src = fixTable(raw);
-  let html = marked.parse(src, {
+  let html = marked.parse(raw, {
     async: false,
     gfm: true,
     breaks: false,
@@ -107,10 +98,22 @@ function projectBlocks(text: string, final: boolean, prev: MarkdownBlock[]): Mar
   // Find the last non-space token — this is the "live" tail
   let tailIdx = tokens.length;
   while (tailIdx > 0 && tokens[tailIdx - 1]?.type === "space") tailIdx--;
+
   if (tailIdx === 0) {
     return [{ key: "l0", hash: blockHash(text), raw: text, stable: false }];
   }
   tailIdx--; // index of the last content token
+
+  // Promote a structurally-complete table to stable so it renders
+  // as HTML immediately during streaming instead of waiting for final.
+  const lastToken = tokens[tailIdx];
+  const lastIsCompleteTable =
+    lastToken?.type === "table" &&
+    (lastToken as any).align != null &&
+    (lastToken as any).align.length > 0;
+  if (lastIsCompleteTable) {
+    tailIdx++; // move table from live tail into stable zone
+  }
 
   const blocks: MarkdownBlock[] = [];
 
@@ -128,10 +131,13 @@ function projectBlocks(text: string, final: boolean, prev: MarkdownBlock[]): Mar
     blocks.push({ key, hash, raw, stable: true, html: cached?.html });
   }
 
-  // Live tail: raw text of the last token(s), possibly incomplete
-  const liveRaw = tokens.slice(tailIdx).map(t => t.raw).join("");
-  const paced = paceText(liveRaw);
-  blocks.push({ key: `l${blocks.length}`, hash: blockHash(paced), raw: paced, stable: false });
+  // Live tail: raw text of the last token(s), possibly incomplete.
+  // When the table was promoted above, live tail is empty.
+  if (tailIdx < tokens.length) {
+    const liveRaw = tokens.slice(tailIdx).map(t => t.raw).join("");
+    const paced = paceText(liveRaw);
+    blocks.push({ key: `l${blocks.length}`, hash: blockHash(paced), raw: paced, stable: false });
+  }
 
   return blocks;
 }

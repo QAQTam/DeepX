@@ -212,3 +212,24 @@
 .plan-confirm-item { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-secondary); padding: 4px 0; border-bottom: 1px solid var(--border-divider); }
 .plan-confirm-followup { font-size: 11px; color: var(--accent); }
 .plan-confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.plan-row-delete {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; flex-shrink: 0;
+  border: none; border-radius: var(--radius);
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.plan-row:hover .plan-row-delete { opacity: 1; }
+.plan-row-delete:hover { background: rgba(var(--red-rgb, 220,38,38), 0.1); color: var(--red); }
+
+/* ── Plan submission pulse animation ── */
+@keyframes plan-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.4); }
+  50%  { box-shadow: 0 0 0 6px rgba(var(--accent-rgb), 0); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); }
+}
+.plan-submitted-pulse {
+  animation: plan-pulse 0.6s ease-out 2;
+  border-radius: var(--radius);
+}

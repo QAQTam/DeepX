@@ -1,8 +1,9 @@
-import { createSignal, createEffect, For, Show } from "solid-js";
+import { createSignal, createEffect, createMemo, For, Show } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../i18n";
+import SlashMenu, { type SlashCommand } from "./SlashMenu";
 
-const MODES = ["normal", "plan", "code"] as const;
+const MODES = ["plan", "code"] as const;
 
 interface InputBarProps {
   onSend: (text: string, files: string[]) => void;
@@ -12,12 +13,43 @@ interface InputBarProps {
   restoreText: () => string | null;
   mode: string;
   onModeChange: (mode: string) => void;
+  onSlashCommand: (cmd: SlashCommand) => void;
 }
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { id: "new",      trigger: "new",      title: "New Session",     description: "Start a new conversation",  icon: "🆕" },
+  { id: "compact",  trigger: "compact",  title: "Compact Context", description: "Summarize & trim history",   icon: "📦" },
+  { id: "undo",     trigger: "undo",     title: "Undo Last Turn",  description: "Remove last exchange",      icon: "↩" },
+  { id: "settings", trigger: "settings", title: "Settings",        description: "Open settings page",         icon: "🔧" },
+];
 
 export default function InputBar(props: InputBarProps) {
   const { t } = useI18n();
   let textareaRef!: HTMLTextAreaElement;
   const [files, setFiles] = createSignal<string[]>([]);
+  const [slashFilter, setSlashFilter] = createSignal("");
+  const [slashActive, setSlashActive] = createSignal(0);
+  const [slashVisible, setSlashVisible] = createSignal(false);
+
+  const filteredCommands = createMemo(() => {
+    const q = slashFilter().toLowerCase();
+    if (!q) return SLASH_COMMANDS;
+    return SLASH_COMMANDS.filter(
+      (c) => c.trigger.toLowerCase().startsWith(q) || c.title.toLowerCase().includes(q)
+    );
+  });
+
+  function closeSlash() {
+    setSlashVisible(false);
+    setSlashFilter("");
+    setSlashActive(0);
+  }
+
+  function openSlash(filter: string) {
+    setSlashFilter(filter);
+    setSlashActive(0);
+    setSlashVisible(true);
+  }
 
   createEffect(() => {
     const text = props.restoreText();
@@ -43,15 +75,84 @@ export default function InputBar(props: InputBarProps) {
     setFiles(prev => prev.filter(f => f !== path));
   }
 
+  function handleSlashSelect(cmd: SlashCommand) {
+    closeSlash();
+    textareaRef.value = "";
+    textareaRef.style.height = "auto";
+    props.onSlashCommand(cmd);
+  }
+
   function handleKeyDown(e: KeyboardEvent) {
+    if (slashVisible()) {
+      // Slash menu keyboard nav
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashActive(i => (i + 1) % Math.max(filteredCommands().length, 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashActive(i => (i - 1 + filteredCommands().length) % Math.max(filteredCommands().length, 1));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const cmds = filteredCommands();
+        if (cmds.length > 0) {
+          handleSlashSelect(cmds[slashActive()]);
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSlash();
+        return;
+      }
+      if (e.key === "Backspace") {
+        // Update filter on backspace
+        const val = textareaRef.value;
+        const match = val.match(/^\/(\S*)$/);
+        if (match) {
+          setSlashFilter(match[1] || "");
+          setSlashActive(0);
+        } else {
+          closeSlash();
+        }
+        return;
+      }
+      // Any other typing — check if still a slash pattern
+      const val = textareaRef.value + (e.key.length === 1 ? e.key : "");
+      const match = val.match(/^\/(\S*)$/);
+      if (match) {
+        setSlashFilter(match[1] || "");
+        setSlashActive(0);
+      } else {
+        closeSlash();
+      }
+      return;
+    }
+
+    // Normal mode: detect "/" trigger
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
     }
   }
 
+  function handleInput() {
+    autoResize();
+    const val = textareaRef.value;
+    const match = val.match(/^\/(\S*)$/);
+    if (match) {
+      openSlash(match[1] || "");
+    } else {
+      closeSlash();
+    }
+  }
+
   function submit() {
     const text = textareaRef.value.trim();
+    if (slashVisible()) return; // Don't send while slash menu is open
     if ((!text && files().length === 0) || props.disabled || props.isStreaming()) return;
     props.onSend(text, files());
     textareaRef.value = "";
@@ -67,7 +168,17 @@ export default function InputBar(props: InputBarProps) {
   const fileName = (p: string) => p.split(/[/\\]/).pop() || p;
 
   return (
-    <div class="input-bar">
+    <div class="input-bar" style={{ position: "relative" }}>
+      {/* Slash menu popover */}
+      <SlashMenu
+        commands={filteredCommands()}
+        filter={slashFilter()}
+        activeIndex={slashActive()}
+        onSelect={handleSlashSelect}
+        onHover={setSlashActive}
+        visible={slashVisible()}
+      />
+
       {/* Mode segment control — iOS style */}
       <div class="mode-segment">
         <For each={MODES}>
@@ -107,7 +218,7 @@ export default function InputBar(props: InputBarProps) {
           placeholder={t().chat.placeholder}
           disabled={props.disabled}
           onKeyDown={handleKeyDown}
-          onInput={autoResize}
+          onInput={handleInput}
         />
         {props.isStreaming() ? (
           <button class="stop" onClick={props.onStop} title={t().chat.stop}>

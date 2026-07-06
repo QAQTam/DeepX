@@ -78,6 +78,8 @@ pub struct Config {
     pub compliance_allowlist: Vec<String>,
     /// Turso local database mirror.
     pub database: DatabaseConfig,
+    /// Agent permission level (1-4). Default 4 = Unrestricted.
+    pub permission_level: u8,
 }
 
 impl Default for Config {
@@ -107,6 +109,7 @@ impl Default for Config {
             compliance_extra_keywords: Vec::new(),
             compliance_allowlist: Vec::new(),
             database: DatabaseConfig::default(),
+            permission_level: 4, // Unrestricted — backward compat
         }
     }
 }
@@ -194,6 +197,9 @@ impl Config {
                 cfg.database.enabled = db.enabled;
                 cfg.database.url = db.url.clone();
             }
+
+            // ── Permission ──
+            if let Some(pl) = pc.permission_level { cfg.permission_level = pl; }
         }
 
         if !cfg.profiles.contains_key("default") {
@@ -245,6 +251,7 @@ impl Config {
                 enabled: self.database.enabled,
                 url: self.database.url.clone(),
             }),
+            permission_level: Some(self.permission_level),
         };
         if !store.save(&pc) {
             Err(format!("Failed to save config to {}", deepx_types::platform::config_path().display()))

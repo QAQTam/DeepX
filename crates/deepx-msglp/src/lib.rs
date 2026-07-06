@@ -47,6 +47,14 @@ Do not include the <template> tags in your response.\n\
 ## Important Details\n\
 - [constraints/preferences, decisions and why, important facts/assumptions, \
 exact context needed to continue, or \"(none)\"]\n\n\
+## File Inventory\n\
+- Added: [new files with paths, or \"(none)\"]\n\
+- Modified: [changed files with paths and what changed, or \"(none)\"]\n\
+- Deleted: [removed files with paths, or \"(none)\"]\n\n\
+## Decision Log\n\
+- [key trade-offs made: why approach A over B, rejected alternatives and rationale; otherwise \"(none)\"]\n\n\
+## Key Symbols\n\
+- [function signatures, type names, trait impls, API routes, config keys that are essential to resume work; otherwise \"(none)\"]\n\n\
 ## Work State\n\
 - Completed: [finished work, verified facts, or FILES created/modified/deleted with paths; otherwise \"(none)\"]\n\
 - Active: [current work, partial changes, or investigation state; otherwise \"(none)\"]\n\
@@ -143,6 +151,18 @@ pub struct Loop {
     notify: notification::NotificationThread,
     /// Agent operating mode (0=Normal, 1=Plan, 2=Code).
     mode: u8,
+    /// Tool call waiting for permission approval from user dialog.
+    pending_permission: Option<PendingToolCall>,
+    /// Persisted trusted folders for cross-workspace access (Level 3).
+    trusted_folders: deepx_tools::permission::TrustedFolderSet,
+}
+
+/// Tool call suspended while waiting for user permission.
+struct PendingToolCall {
+    id: String,
+    name: String,
+    action: String,
+    args: serde_json::Value,
 }
 /// Extract file paths that a tool writes to (mutates).
 /// Returns empty vec for read-only and non-file tools.
@@ -340,6 +360,8 @@ impl Loop {
             writer_dead,
             notify: notification::NotificationThread::spawn(),
             mode: 0,
+            pending_permission: None,
+            trusted_folders: deepx_tools::permission::TrustedFolderSet::load(""),
         }
     }
 
@@ -466,11 +488,15 @@ impl Loop {
             Ui2Agent::CreateSession => { self.handle_create_session(); }
             Ui2Agent::ResumeSession { ref seed } => { self.handle_resume_session(seed); }
             Ui2Agent::LoadMoreTurns { ref before_turn_id, count } => {
-                let all_turns = util::build_turns_from_context(&self.agent);
-                let idx = all_turns.iter().position(|t| t.turn_id == *before_turn_id);
-                let end = idx.unwrap_or(all_turns.len());
+                let total = self.agent.msg.turn_count();
+                let idx: usize = before_turn_id
+                    .strip_prefix('t')
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .map(|n| n.saturating_sub(1))
+                    .unwrap_or(total);
+                let end = idx.min(total);
                 let start = end.saturating_sub(count as usize);
-                let batch: Vec<_> = all_turns[start..end].to_vec();
+                let batch = util::build_turns_from_context(&self.agent, Some(start), Some(count as usize));
                 self.emit(Agent2Ui::MoreTurns {
                     turns: batch,
                     has_more: start > 0,
@@ -494,25 +520,15 @@ impl Loop {
                 };
                 self.mode = m;
                 deepx_tools::bridge::set_mode(m);
-
-                // Inject mode system message into context (not persisted to JSONL)
-                let mode_msg = match m {
-                    1 => "## PLAN Mode\n\
-You are now in PLAN mode. Your job: understand the user's intent, gather \
-context via explore/search/read_file/grep, and produce a detailed plan \
-using plan_create and plan_list tools.\n\n\
-ALLOWED: explore, search, fetch, read_file, grep, list_dir, plan_list, \
-plan_create, plan_update, task (subagent).\n\
-BLOCKED: write_file, edit_file, delete_file, move_file, exec_command, \
-git_commit, git_push.",
-                    2 => "## CODE Mode\n\
-You are now in CODE mode. All tools are available. Execute the plan.",
-                    _ => "",
-                };
-                if !mode_msg.is_empty() {
-                    self.agent.msg.push_system(deepx_types::Message::system(mode_msg));
+                // Persist mode to session meta so it survives agent restart
+                if !self.agent.session.seed.is_empty() {
+                    deepx_session::SessionManager::global().persist_mode(&self.agent.session.seed, m);
                 }
                 log::info!("[AGENT] mode set to {mode} (internal={m})");
+            }
+            Ui2Agent::PermissionResponse { tool_call_id, approved, trust_folder } => {
+                log::info!("[AGENT] permission_response id={tool_call_id} approved={approved} trust={trust_folder}");
+                self.handle_permission_response(approved, trust_folder);
             }
             _ => {}
         }
@@ -707,12 +723,24 @@ You are now in CODE mode. All tools are available. Execute the plan.",
         if lifecycle::init_session(&mut self.agent, Some(seed)) {
             log::info!("[AGENT] init_session succeeded, current_seed={}", self.agent.session.seed);
             self.agent.rebind_store();
+            // Restore persisted agent mode (PLAN/CODE) from session meta
+            let saved_mode = self.agent.session.mode;
+            if saved_mode != 0 {
+                self.mode = saved_mode;
+                deepx_tools::bridge::set_mode(saved_mode);
+                log::info!("[AGENT] restored mode={} from session meta", saved_mode);
+            }
+            // Reload trusted folders for the resumed session
+            self.trusted_folders = deepx_tools::permission::TrustedFolderSet::load(&self.agent.session.seed);
             let current_seed = self.agent.session.seed.clone();
             if current_seed == seed {
-                let all_turns = util::build_turns_from_context(&self.agent);
-                let total = all_turns.len() as u32;
+                let total = self.agent.msg.turn_count() as u32;
                 let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
-                let recent: Vec<_> = all_turns[start..].to_vec();
+                let recent = util::build_turns_from_context(
+                    &self.agent,
+                    Some(start),
+                    Some(INITIAL_LOAD_COUNT),
+                );
                 let has_more = start > 0;
                 log::info!("[AGENT] sending SessionRestored, turns.len={} (total={}, has_more={})", recent.len(), total, has_more);
                 self.emit(Agent2Ui::SessionRestored {
@@ -748,6 +776,7 @@ You are now in CODE mode. All tools are available. Execute the plan.",
             self.agent.config.reasoning_effort = cfg.reasoning_effort;
             self.agent.config.max_tokens = cfg.max_tokens;
             self.agent.config.context_limit = cfg.context_limit;
+            self.agent.config.permission_level = cfg.permission_level;
             if let Some(ref key) = cfg.context7_api_key {
                 if !key.is_empty() {
                     deepx_tools::bridge::set_context7_key(key);
@@ -759,6 +788,53 @@ You are now in CODE mode. All tools are available. Execute the plan.",
 
     fn handle_tool_call(&mut self, id: &str, name: &str, _action: &str, args: &serde_json::Value) {
         log::info!("[AGENT] handle_tool_call: name={name} id={id}");
+
+        // ── Permission gate: Level 1-3 require user confirmation ──
+        let level = deepx_tools::permission::PermissionLevel::from_u8(self.agent.config.permission_level);
+        let ws_root = std::path::PathBuf::from(
+            deepx_tools::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock").clone(),
+        );
+        if ws_root.as_os_str().is_empty() {
+            // Fallback to current dir when no workspace
+            let _ = std::env::current_dir();
+        }
+        let ws_root = if ws_root.as_os_str().is_empty() {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        } else {
+            ws_root
+        };
+
+        match deepx_tools::permission::needs_permission(
+            level, name, args, &ws_root, self.trusted_folders.set(),
+        ) {
+            deepx_tools::permission::PermissionDecision::AskUser { reason, paths, category } => {
+                // Suspend execution — wait for user response
+                self.pending_permission = Some(PendingToolCall {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    action: _action.to_string(),
+                    args: args.clone(),
+                });
+                let cat_str = match category {
+                    deepx_tools::permission::ToolCategory::Read => "read",
+                    deepx_tools::permission::ToolCategory::Write => "write",
+                    deepx_tools::permission::ToolCategory::Exec => "exec",
+                    deepx_tools::permission::ToolCategory::Net => "net",
+                };
+                self.emit(Agent2Ui::PermissionRequest {
+                    tool_call_id: id.to_string(),
+                    tool_name: name.to_string(),
+                    reason,
+                    paths: paths.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+                    category: cat_str.to_string(),
+                    level: level.to_u8(),
+                });
+                return;
+            }
+            deepx_tools::permission::PermissionDecision::AutoApprove => {
+                // Fall through to normal execution
+            }
+        }
         let turn_id = format!("tc_{id}");
         let round_num = 0u32;
 
@@ -864,16 +940,68 @@ You are now in CODE mode. All tools are available. Execute the plan.",
         });
     }
 
+    fn handle_permission_response(&mut self, approved: bool, trust_folder: bool) {
+        let pending = match self.pending_permission.take() {
+            Some(p) => p,
+            None => {
+                log::warn!("[AGENT] PermissionResponse with no pending tool call");
+                return;
+            }
+        };
+
+        if trust_folder {
+            // Extract paths and add to trusted folders
+            let paths = deepx_tools::permission::extract_target_paths(&pending.name, &pending.args);
+            for p in &paths {
+                let dir = p.parent().unwrap_or(p);
+                self.trusted_folders.trust(dir);
+            }
+            log::info!("[AGENT] trusted folders updated: {:?}", paths);
+        }
+
+        if !approved {
+            // Denied — emit a synthetic tool result
+            let turn_id = format!("tc_{}", pending.id);
+            self.emit(Agent2Ui::TurnStart {
+                turn_id: turn_id.clone(),
+                user_text: format!("tool: {}", pending.name),
+            });
+            self.emit(Agent2Ui::ToolResults {
+                turn_id: turn_id.clone(),
+                round_num: 0,
+                results: vec![deepx_proto::ToolResultDef {
+                    tool_call_id: pending.id.clone(),
+                    output: format!("[DENIED] '{}' (user denied permission)", pending.name),
+                    success: false,
+                    file: None,
+                }],
+            });
+            self.emit(Agent2Ui::TurnEnd {
+                turn_id,
+                stop_reason: None,
+                usage: None,
+            });
+            return;
+        }
+
+        // Approved — execute the tool normally
+        // Use the same function, but it will re-check permission (should auto-approve now).
+        self.handle_tool_call(&pending.id, &pending.name, &pending.action, &pending.args);
+    }
+
     fn handle_undo_turn(&mut self, turn_id: &str) {
         log::info!("[AGENT] UndoTurn {turn_id} — turns before: {}", self.agent.msg.turn_count());
         if self.agent.msg.truncate_before_turn(turn_id) {
             log::info!("[AGENT] UndoTurn — truncated, turns after: {}", self.agent.msg.turn_count());
             // Full rewrite needed — the JSONL on disk still has the truncated messages.
             self.agent.msg.snapshot_full(&self.agent.config.model, &self.agent.config.reasoning_effort);
-            let all_turns = util::build_turns_from_context(&self.agent);
-            let total = all_turns.len() as u32;
+            let total = self.agent.msg.turn_count() as u32;
             let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
-            let recent: Vec<_> = all_turns[start..].to_vec();
+            let recent = util::build_turns_from_context(
+                &self.agent,
+                Some(start),
+                Some(INITIAL_LOAD_COUNT),
+            );
             let has_more = start > 0;
             self.emit(Agent2Ui::SessionRestored {
                 seed: self.agent.session.seed.clone(),
@@ -1106,11 +1234,7 @@ You are now in CODE mode. All tools are available. Execute the plan.",
         }
 
         // ── Inject mode suffix into user text ──
-        let full_text = if self.mode == 1 {
-            format!("{}\n\n[Mode:PLAN:gathering]\nYou are in PLAN mode. Only explore, search, read_file, grep, and plan tools are allowed. Do NOT use write, edit, delete, or exec tools.", text)
-        } else {
-            text.to_string()
-        };
+        let full_text = text.to_string();
 
         self.agent.msg.push_user(&full_text);
         // Flush user message immediately — survive LLM crash
@@ -1363,7 +1487,7 @@ You are now in CODE mode. All tools are available. Execute the plan.",
                             let ts = util::chrono_local_datetime();
                             // Push placeholder results so the store doesn't get stuck
                             for (tc_id, _tool_name) in &tool_infos {
-                                self.agent.msg.push_tool_result_direct(tc_id, &format!("[timeis: {ts}]\n[CANCELLED]"));
+                                self.agent.msg.push_tool_result_direct(tc_id, &format!("[timeis: {ts}]\n[CANCELLED]"), false);
                             }
                             // Spawn a background reaper thread to join the tool
                             // threads. This avoids leaking threads (M1) while
@@ -1379,8 +1503,8 @@ You are now in CODE mode. All tools are available. Execute the plan.",
                             let ts = util::chrono_local_datetime();
                             for (tc_id, h) in handles {
                                 match h.join() {
-                                    Ok((_id, content, _success, code_delta)) => {
-                                        self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n{content}"));
+                                    Ok((_id, content, success, code_delta)) => {
+                                        self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n{content}"), success);
                                         if let Some(ref delta) = code_delta {
                                             self.code_stats.push(delta.clone());
                                             self.emit_delta(Agent2Ui::CodeDelta {
@@ -1397,7 +1521,7 @@ You are now in CODE mode. All tools are available. Execute the plan.",
                                         // so the step's all_tools_satisfied() can
                                         // eventually return true (fixes M2).
                                         log::error!("[AGENT] tool thread panicked for {tc_id}");
-                                        self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n[ERROR] tool thread panicked"));
+                                        self.agent.msg.push_tool_result_direct(&tc_id, &format!("[timeis: {ts}]\n[ERROR] tool thread panicked"), false);
                                     }
                                 }
                             }
@@ -1415,6 +1539,7 @@ You are now in CODE mode. All tools are available. Execute the plan.",
                                     self.agent.msg.push_tool_result_direct(
                                         &tool.id,
                                         &format!("[timeis: {ts}]\n{}", result.content),
+                                        result.success,
                                     );
                                     if let Some(ref delta) = result.code_delta {
                                         self.code_stats.push(delta.clone());
@@ -1456,6 +1581,14 @@ You are now in CODE mode. All tools are available. Execute the plan.",
 
                     // Refresh status panel after tool execution
                     self.emit_dashboard();
+
+                    // If plan_submit was called, notify frontend to open PlanReviewPanel
+                    for (_, tool_name, _, _) in &results {
+                        if tool_name == "plan_submit" {
+                            self.emit(Agent2Ui::PlanChanged);
+                            break;
+                        }
+                    }
 
                     // Flush pending messages to disk each round so that
                     // pending_save doesn't accumulate across rounds.  Large
@@ -1525,6 +1658,28 @@ You are now in CODE mode. All tools are available. Execute the plan.",
     // ── Dashboard ──
 
     fn emit_dashboard(&self) {
+        // Write live context stats to disk so ContextPanel always has fresh data.
+        // Previously only written during compact, leaving the panel at zero otherwise.
+        {
+            let (chat_text, thinking, tool_calls, tool_results, _, system_prompt, thinking_blocks, tool_call_blocks) =
+                self.agent.msg.compute_context_stats();
+            let stats = serde_json::json!({
+                "chat_text": chat_text,
+                "thinking": thinking,
+                "tool_calls": tool_calls,
+                "tool_results": tool_results,
+                "tools_schema": 0,
+                "system_prompt": system_prompt,
+                "thinking_blocks": thinking_blocks,
+                "tool_call_blocks": tool_call_blocks,
+                "messages": 0,
+            });
+            let stats_path = deepx_types::platform::sessions_dir()
+                .join(&self.agent.session.seed)
+                .join("context_stats.json");
+            let _ = std::fs::write(&stats_path, stats.to_string());
+        }
+
         self.emit_delta(Agent2Ui::Dashboard {
             hp_connected: true,
             session_seed: self.agent.session.seed.clone(),
