@@ -976,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-config"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "deepx-types",
  "serde",
@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-gate"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "deepx-config",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-message"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "deepx-proto",
  "deepx-session",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-msglp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "deepx-config",
  "deepx-gate",
@@ -1031,7 +1031,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-proto"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "deepx-types",
  "serde",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-session"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "deepx-types",
  "log",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-subagent"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "deepx-session",
  "deepx-tools",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-tauri"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "deepx-config",
  "deepx-msglp",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-terminal"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "deepx-config",
  "deepx-msglp",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-terminalui"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-tools"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-types"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",

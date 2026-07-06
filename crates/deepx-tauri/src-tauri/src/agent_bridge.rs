@@ -877,6 +877,7 @@ pub fn cmd_set_workspace(seed: String, path: String) -> Result<(), String> {
 // pub fn cmd_get_code_stats(seed: String, days: u32) -> Result<String, String> { ... }
 
 /// Convert epoch seconds to "YYYY-MM-DD" UTC.
+#[allow(dead_code)]
 fn chrono_local_date_from_epoch(epoch_secs: u64) -> String {
     let total_days = (epoch_secs / 86400) as i64;
     let (y, m, d) = deepx_types::platform::civil_from_days(total_days);
@@ -960,7 +961,7 @@ pub fn cmd_get_git_diff(seed: String) -> Result<String, String> {
 
 /// Get the diff for a single file in the workspace git repo.
 #[tauri::command]
-pub fn cmd_get_git_file_diff(seed: String, filePath: String) -> Result<String, String> {
+pub fn cmd_get_git_file_diff(seed: String, file_path: String) -> Result<String, String> {
     let workspace = {
         let dir = deepx_types::platform::sessions_dir().join(&seed);
         let ws_path = dir.join("workspace.txt");
@@ -973,7 +974,7 @@ pub fn cmd_get_git_file_diff(seed: String, filePath: String) -> Result<String, S
     let head_tree = head.peel_to_tree().map_err(|e| format!("tree: {e}"))?;
 
     let mut diff_opts = git2::DiffOptions::new();
-    diff_opts.pathspec(&filePath);
+    diff_opts.pathspec(&file_path);
 
     let diff = repo.diff_tree_to_workdir(Some(&head_tree), Some(&mut diff_opts))
         .map_err(|e| format!("diff: {e}"))?;
@@ -1052,7 +1053,7 @@ pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
 /// Writes to tasks-mem.md on disk, then sends a ToolCall frame to the agent
 /// so its in-memory state stays in sync.
 #[tauri::command]
-pub fn cmd_task_action(seed: String, action: String, taskId: u32) -> Result<(), String> {
+pub fn cmd_task_action(seed: String, action: String, task_id: u32) -> Result<(), String> {
     let dir = deepx_types::platform::sessions_dir().join(&seed);
     let path = dir.join("tasks-mem.md");
     let _guard = std::sync::Mutex::new(()); // serialize access
@@ -1064,12 +1065,12 @@ pub fn cmd_task_action(seed: String, action: String, taskId: u32) -> Result<(), 
         Vec::new()
     };
 
-    let prefix = format!("T{}:", taskId);
+    let prefix = format!("T{}:", task_id);
     let idx = lines.iter().position(|l| l.contains(&prefix));
 
     match action.as_str() {
         "cancel" => {
-            let idx = idx.ok_or_else(|| format!("Task T{} not found", taskId))?;
+            let idx = idx.ok_or_else(|| format!("Task T{} not found", task_id))?;
             for marker in &["[pending]", "[in_progress]", "[completed]", "[cancelled]"] {
                 if lines[idx].contains(marker) {
                     lines[idx] = lines[idx].replace(marker, "[cancelled]");
@@ -1088,11 +1089,11 @@ pub fn cmd_task_action(seed: String, action: String, taskId: u32) -> Result<(), 
     std::fs::write(&path, lines.join("\n")).map_err(|e| format!("write tasks: {e}"))?;
 
     // Notify agent if running
-    let args = serde_json::json!({"id": taskId, "status": if action == "cancel" { "cancelled" } else { "deleted" }});
+    let args = serde_json::json!({"id": task_id, "status": if action == "cancel" { "cancelled" } else { "deleted" }});
     let frame = if action == "cancel" {
-        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", taskId), name: "task".into(), action: "update".into(), args }
+        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", task_id), name: "task".into(), action: "update".into(), args }
     } else {
-        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", taskId), name: "task".into(), action: "delete".into(), args }
+        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", task_id), name: "task".into(), action: "delete".into(), args }
     };
     let _ = send_to_agent(&seed, frame);
     Ok(())
@@ -1283,7 +1284,7 @@ fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
 
 // ── PLAN Review commands ────────────────────────────────────────────
 
-/// Read PLAN.md from the workspace root and return parsed plan items as JSON.
+/// Read PLAN.md from .deepx/ and return parsed plan items as JSON.
 /// Returns empty array if PLAN.md doesn't exist or workspace is not set.
 #[tauri::command]
 pub fn cmd_read_plan(seed: String) -> Result<String, String> {
@@ -1294,7 +1295,7 @@ pub fn cmd_read_plan(seed: String) -> Result<String, String> {
         Ok(w) if !w.is_empty() => w,
         _ => return Ok("[]".into()),
     };
-    let plan_path = std::path::Path::new(&ws).join("PLAN.md");
+    let plan_path = std::path::Path::new(&ws).join(".deepx").join("PLAN.md");
     let content = match std::fs::read_to_string(&plan_path) {
         Ok(c) => c,
         Err(_) => return Ok("[]".into()),
@@ -1313,7 +1314,8 @@ pub fn cmd_read_plan(seed: String) -> Result<String, String> {
     serde_json::to_string(&json_items).map_err(|e| format!("serialize: {e}"))
 }
 
-/// Write a plan action (approve/reject/ask) back to PLAN.md as an HTML comment.
+/// Write a plan action (approve/reject/ask) back to PLAN.md by updating
+/// the checklist status marker. Format: `- [✓] P1: ...` or `- [-] P1: ... | reason`
 #[tauri::command]
 pub fn cmd_plan_action(app: AppHandle, seed: String, item_id: String, action: String, user_comment: String) -> Result<(), String> {
     if seed.is_empty() {
@@ -1323,32 +1325,35 @@ pub fn cmd_plan_action(app: AppHandle, seed: String, item_id: String, action: St
     if ws.is_empty() {
         return Err("No workspace set".into());
     }
-    let plan_path = std::path::Path::new(&ws).join("PLAN.md");
-    let mut content = std::fs::read_to_string(&plan_path)
+    let plan_path = std::path::Path::new(&ws).join(".deepx").join("PLAN.md");
+    let content = std::fs::read_to_string(&plan_path)
         .map_err(|e| format!("read PLAN.md: {e}"))?;
 
-    // Find the phase heading (e.g., "### 7.5 Safety") and insert comment after it
-    let marker = format!("### {}", item_id);
-    if let Some(pos) = content.find(&marker) {
-        let line_end = content[pos..].find('\n').unwrap_or(content[pos..].len());
-        let insert_at = pos + line_end + 1;
-        let comment = {
-            let dur = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
-            let y = 1970 + (dur.as_secs() as i32 / 86400 / 365);
-            if user_comment.is_empty() {
-                format!("<!-- {action}: ~{y} -->\n")
-            } else {
-                format!("<!-- {action}: ~{y} — {user_comment} -->\n")
+    // Find checklist line matching "- [ ] P1:" or "- [✓] P1:" etc.
+    let mut found = false;
+    let new_content: String = content.lines().map(|line| {
+        let trimmed = line.trim();
+        if !found && trimmed.starts_with("- [") && trimmed.contains(&format!(" {}: ", item_id)) {
+            found = true;
+            match action.as_str() {
+                "approve" => line.replacen("- [", "- [✓", 1),
+                "reject" => {
+                    let base = line.replacen("- [", "- [-", 1);
+                    if user_comment.is_empty() { base } else { format!("{base} | {user_comment}") }
+                },
+                "ask" => line.replacen("- [", "- [?", 1),
+                _ => format!("{line} | {user_comment}"),
             }
-        };
-        content.insert_str(insert_at, &comment);
-    } else {
+        } else {
+            line.to_string()
+        }
+    }).collect::<Vec<_>>().join("\n");
+
+    if !found {
         return Err(format!("Plan item '{}' not found in PLAN.md", item_id));
     }
 
-    std::fs::write(&plan_path, content).map_err(|e| format!("write PLAN.md: {e}"))?;
+    std::fs::write(&plan_path, new_content).map_err(|e| format!("write PLAN.md: {e}"))?;
 
     // Notify frontend that PLAN.md changed
     let _ = app.emit("plan-changed", serde_json::json!({"seed": seed}));
@@ -1356,64 +1361,65 @@ pub fn cmd_plan_action(app: AppHandle, seed: String, item_id: String, action: St
     Ok(())
 }
 
-/// Parse PLAN.md content into structured items (phase number, title, status).
+/// Parse PLAN.md checklist format into structured items.
+/// Format: `- [ ] P1: Title — Description。Deps: none。Effort: 2h | comment`
 struct PlanItem {
-    id: String,       // e.g. "7.1"
+    id: String,       // e.g. "P1"
     title: String,    // e.g. "审计持久化"
     status: String,   // "pending", "approved", "rejected", or "ask"
-    comment: String,  // extracted from HTML comment if any
-    actions: Vec<String>, // list of action comments found
+    comment: String,  // text after `|`
+    actions: Vec<String>, // kept for frontend compatibility
 }
 
 fn parse_plan_items(content: &str) -> Vec<PlanItem> {
     let mut items = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        // Match "### 7.X" style headings
-        if let Some(rest) = trimmed.strip_prefix("### ") {
-            if let Some((id, title)) = rest.split_once(' ') {
-                if id.starts_with("7.") {
-                    items.push(PlanItem {
-                        id: id.to_string(),
-                        title: title.trim().to_string(),
-                        status: "pending".into(),
-                        comment: String::new(),
-                        actions: Vec::new(),
-                    });
-                }
+        if !trimmed.starts_with("- [") { continue; }
+
+        // Extract status marker
+        let status = if let Some(bracket_end) = trimmed.find("] ") {
+            let inner = &trimmed[3..bracket_end];
+            match inner {
+                "✓" | "x" | "X" => "approved",
+                "-" => "rejected",
+                "?" => "ask",
+                _ => "pending",
             }
-        }
-    }
-    // Scan for status comments near each item
-    let mut current_id: Option<String> = None;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("### ") {
-            if let Some((id, _)) = rest.split_once(' ') {
-                if id.starts_with("7.") {
-                    current_id = Some(id.to_string());
-                } else {
-                    current_id = None;
-                }
-            }
-            continue;
-        }
-        if let Some(ref id) = current_id {
-            if trimmed.starts_with("<!-- ") && trimmed.ends_with(" -->") {
-                let inner = &trimmed[5..trimmed.len()-4];
-                if let Some(item) = items.iter_mut().find(|i| i.id == *id) {
-                    item.actions.push(inner.to_string());
-                    if inner.starts_with("approved") {
-                        item.status = "approved".into();
-                    } else if inner.starts_with("rejected") {
-                        item.status = "rejected".into();
-                    } else if inner.starts_with("ask") {
-                        item.status = "ask".into();
-                        item.comment = inner.replace("ask: ", "");
-                    }
-                }
-            }
-        }
+        } else { continue };
+
+        // Extract body after "] "
+        let body = match trimmed.split_once("] ") {
+            Some((_, b)) => b,
+            None => continue,
+        };
+
+        // Split: "P1: Title — Description。Deps: ...。Effort: ... | comment"
+        let (id, rest) = match body.split_once(": ") {
+            Some((i, r)) => (i.trim().to_string(), r.trim()),
+            None => continue,
+        };
+
+        // Extract title (before ' — ')
+        let (title, tail) = match rest.split_once(" — ") {
+            Some((t, r)) => (t.trim().to_string(), r.to_string()),
+            None => (rest.to_string(), String::new()),
+        };
+
+        // Extract comment (after last '|')
+        let (_description, comment) = if let Some(pos) = tail.rfind(" | ") {
+            (tail[..pos].trim().to_string(), tail[pos+3..].trim().to_string())
+        } else {
+            (tail, String::new())
+        };
+
+        items.push(PlanItem {
+            id,
+            title,
+            status: status.to_string(),
+            comment: comment.clone(),
+            actions: if comment.is_empty() { Vec::new() } else { vec![comment] },
+        });
     }
     items
 }

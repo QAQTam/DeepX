@@ -33,14 +33,16 @@ pub(super) fn exec_read_file(args: &str) -> String {
             let shown = lines.len();
 
             if start.is_some() || end.is_some() {
-                let mut result = format!("[OK] {} lines {}-{}/{} of {}\n", shown, start_idx + 1, end_idx, total, path);
+                let display = crate::display_path(&path);
+                let mut result = format!("[OK] {} lines {}-{}/{} of {}\n", shown, start_idx + 1, end_idx, total, display);
                 for (i, l) in lines.iter().enumerate() {
                     result.push_str(&format!("{:>4} {}\n", start_idx + i + 1, l));
                 }
                 result
             } else if total <= 200 {
                 // Full output for files ≤200 lines (avoids AI re-read)
-                let mut result = format!("[OK] {} lines total ({})\n", total, path);
+                let display = crate::display_path(&path);
+                let mut result = format!("[OK] {} lines total ({})\n", total, display);
                 for (i, l) in all_lines.iter().enumerate() {
                     result.push_str(&format!("{:>4} {}\n", i + 1, l));
                 }

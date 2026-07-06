@@ -32,10 +32,11 @@ fn open_repo(path_arg: &str) -> Result<Repository, String> {
 }
 
 fn fmt_time(t: i64) -> String {
-    use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+    use chrono::{DateTime, Local};
     let secs = if t >= 0 { t as u64 } else { 0 };
-    let naive = NaiveDateTime::from_timestamp_opt(secs as i64, 0).unwrap_or_default();
-    let dt: DateTime<Local> = Local.from_utc_datetime(&naive);
+    let dt: DateTime<Local> = DateTime::from_timestamp(secs as i64, 0)
+        .unwrap_or_default()
+        .with_timezone(&Local);
     dt.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
@@ -262,7 +263,7 @@ pub(super) fn exec_show(args: &str) -> String {
 
     let oid = if commit.is_empty() {
         match repo.head() {
-            Ok(h) => h.target().unwrap_or(git2::Oid::zero()),
+            Ok(h) => h.target().unwrap_or(git2::Oid::ZERO_SHA1),
             Err(e) => return format!("[ERROR] head: {e}"),
         }
     } else if let Ok(o) = git2::Oid::from_str(&commit) {
@@ -396,7 +397,7 @@ pub(super) fn exec_commit(args: &str) -> String {
 
     let parents = match repo.head() {
         Ok(head) => {
-            let oid = head.target().unwrap_or(git2::Oid::zero());
+            let oid = head.target().unwrap_or(git2::Oid::ZERO_SHA1);
             if oid.is_zero() {
                 vec![]
             } else {

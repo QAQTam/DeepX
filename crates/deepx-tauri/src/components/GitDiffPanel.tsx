@@ -62,9 +62,12 @@ export default function GitDiffPanel(props: { seed: string }) {
   async function loadDiff(path: string) {
     try {
       const rawDiff: string = await invoke("cmd_get_git_file_diff", { seed: props.seed, filePath: path });
-      const html = renderDiffHtml(rawDiff);
+      const html = renderDiffHtml(rawDiff) || "<div class='status-empty'>No diff available (new/untracked file)</div>";
       setFiles(prev => prev.map(f => f.path === path ? { ...f, diffHtml: html } : f));
-    } catch (e) { console.error("git_file_diff error:", e); }
+    } catch (e) {
+      console.error("git_file_diff error:", e);
+      setFiles(prev => prev.map(f => f.path === path ? { ...f, diffHtml: "<div class='status-empty'>Diff failed</div>" } : f));
+    }
   }
 
   // Refresh on mount only; manual refresh via header click.

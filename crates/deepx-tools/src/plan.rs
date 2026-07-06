@@ -9,32 +9,45 @@
 //! - [-] P3: Title — Description。Deps: P2。Effort: 1h | rejection reason
 //! ```
 //!
-//! Status markers: `[ ]` pending, `[x]` done, `[-]` rejected.
+//! Status markers: `[ ]` pending, `[✓]` approved, `[-]` rejected.
 
 use crate::{ToolCallCtx, ToolResult};
 use std::io::Write;
+use std::path::Path;
 use std::sync::Mutex;
 
 static PLAN_LOCK: Mutex<()> = Mutex::new(());
 
-fn workspace() -> String {
-    crate::CURRENT_WORKSPACE.read()
-        .expect("CURRENT_WORKSPACE lock")
-        .clone()
-}
+/// Path to PLAN.md inside the `.deepx/` directory.
+/// Attempts migration from old `{workspace}/PLAN.md` if the new path doesn't exist.
+fn plan_path() -> std::path::PathBuf {
+    let dir = crate::workspace::deepx_dir();
+    let new_path = dir.join("PLAN.md");
 
-fn plan_path() -> Option<std::path::PathBuf> {
-    let ws = workspace();
-    if ws.is_empty() || ws == "." { return None; }
-    Some(std::path::Path::new(&ws).join("PLAN.md"))
+    // One-time migration: copy old PLAN.md → .deepx/PLAN.md
+    if !new_path.exists() {
+        let ws = crate::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock").clone();
+        if !ws.is_empty() && ws != "." {
+            let old_path = Path::new(&ws).join("PLAN.md");
+            if old_path.exists() {
+                let _ = std::fs::create_dir_all(&dir);
+                if std::fs::copy(&old_path, &new_path).is_ok() {
+                    log::info!("plan: migrated PLAN.md from {} to {}", old_path.display(), new_path.display());
+                }
+            }
+        }
+    }
+
+    new_path
 }
 
 fn read_plan() -> Result<String, String> {
-    let path = match plan_path() {
-        Some(p) => p,
-        None => return Err("No workspace set".into()),
-    };
-    std::fs::read_to_string(&path).map_err(|e| format!("read PLAN.md: {e}"))
+    let path = plan_path();
+    match std::fs::read_to_string(&path) {
+        Ok(c) => Ok(c),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("read PLAN.md: {e}")),
+    }
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -55,7 +68,7 @@ fn parse_plan(content: &str) -> Vec<PlanItem> {
         if let Some(rest) = trimmed.strip_prefix("- [") {
             if let Some(bracket_end) = rest.find(']') {
                 let status = match &rest[..bracket_end] {
-                    "x" | "X" => "completed",
+                    "x" | "X" | "✓" => "approved",
                     "-" => "rejected",
                     _ => "pending",
                 };
@@ -126,10 +139,8 @@ fn handle_plan_create(ctx: ToolCallCtx) -> ToolResult {
     }
 
     let _lock = PLAN_LOCK.lock();
-    let path = match plan_path() {
-        Some(p) => p,
-        None => return ToolResult { success: false, content: "[ERROR] No workspace set".into() },
-    };
+    let path = plan_path();
+    let _ = crate::workspace::ensure_deepx_dir(); // ensure .deepx/ and trash/ exist
 
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     let items = parse_plan(&content);
@@ -165,10 +176,8 @@ fn handle_plan_update(ctx: ToolCallCtx) -> ToolResult {
     }
 
     let _lock = PLAN_LOCK.lock();
-    let path = match plan_path() {
-        Some(p) => p,
-        None => return ToolResult { success: false, content: "[ERROR] No workspace set".into() },
-    };
+    let path = plan_path();
+    let _ = crate::workspace::ensure_deepx_dir();
 
     let content = std::fs::read_to_string(&path).unwrap_or_default();
 
@@ -178,7 +187,7 @@ fn handle_plan_update(ctx: ToolCallCtx) -> ToolResult {
         if trimmed.starts_with("- [") && trimmed.contains(&format!(" {id}: ")) && !found {
             found = true;
             let new_marker = match status {
-                "completed" => "- [x]",
+                "approved" => "- [✓]",
                 "rejected" => "- [-]",
                 _ => "- [ ]",
             };
@@ -235,11 +244,11 @@ pub fn register(mgr: &mut crate::ToolManager) {
 
     mgr.register(ToolHandler {
         key: ToolKey::new("plan_update", ""),
-        description: "Update the status of a PLAN.md item (completed, rejected, or pending).",
+        description: "Update the status of a PLAN.md item (approved, rejected, or pending).",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
                 "id": {"type": "string", "description": "Plan item ID, e.g. 'P1'"},
-                "status": {"type": "string", "enum": ["pending", "completed", "rejected"]},
+                "status": {"type": "string", "enum": ["pending", "approved", "rejected"]},
                 "comment": {"type": "string", "description": "Optional reason for the status change"}
             }, "required": ["id", "status"], "additionalProperties": false
         }),

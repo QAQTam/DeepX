@@ -313,3 +313,15 @@ v0.9.0:  移除 JSONL, Turso 唯一存储
 | `windows` crate 编译慢 | feature flag 隔离 |
 | 合规关键词误杀 | 整词匹配 + 白名单 |
 | audit.jsonl 增长 | 上限 10MB，超出触发压缩 |
+
+- [x] ] P1: PLAN.md 迁移到 .deepx/ — plan_path() 改为 deepx_dir().join("PLAN.md")。同时读取旧路径做迁移。。Deps: P1。Effort: 0.5h。 | plan_path() 改用 deepx_dir().join("PLAN.md")，含旧路径迁移；Tauri 侧 cmd_read_plan/cmd_plan_action 同步更新
+
+- [x] ] P2: Trash 迁移到 .deepx/trash/ — trash_dir() 改为 deepx_dir().join("trash")。旧 .deepx-trash/ 内容迁移。。Deps: P1。Effort: 0.5h。 | trash_dir() 改用 deepx_dir().join("trash")，去掉旧 find_trash_root() 的上溯逻辑
+
+- [x] ] P3: .deepx 目录解析函数 — 新增 deepx_dir() 解析函数：优先 CURRENT_WORKSPACE/.deepx/，fallback home_dir()/.deepx/。确保目录存在。放在 lib.rs 或新文件 workspace.rs。。Deps: none。Effort: 0.5h。 | deepx_dir() + ensure_deepx_dir() 实现完成，3/3 测试通过
+
+- [x] ] P4: Project memory 迁移到 .deepx/ — scope="project" 的 memory 读写改为 deepx_dir()/memory.md，scope="user" 保持 data_dir 不变。确保切换工作区时 project memory 自动切换。。Deps: P1。Effort: 0.5h。 | scope="project" → .deepx/memory.md, scope="user" → data_dir/memory/user.md
+
+- [x] ] P5: 自动 .gitignore .deepx/ — 如果工作区有 .git 且 .deepx/ 不在 .gitignore 中，自动追加一行。可在 init/deepx_dir 首次创建时触发。。Deps: P1。Effort: 0.5h。 | ensure_deepx_dir() 创建时自动检查 .gitignore 并追加 .deepx/
+
+- [x] ] P6: Task 持久化到 .deepx/tasks.jsonl — task.rs 加 JSONL 持久化：启动时从 deepx_dir()/tasks.jsonl 加载，每次 create/update/delete 写入。同时更正 tool desc 里的路径。。Deps: P1。Effort: 1h。 | 读写改为 .deepx/tasks.md，去掉 session 依赖，切工作区自动切换

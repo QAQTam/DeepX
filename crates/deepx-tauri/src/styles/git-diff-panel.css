@@ -3,7 +3,8 @@
   display: flex; flex-direction: column; 
   border-top: 0.5px solid var(--border-panel); 
   background: var(--bg-secondary);
-  max-height: 200px;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 .git-diff-header {
@@ -24,10 +25,6 @@
 .git-diff-empty { padding: 8px 10px; font-size: 11px; color: var(--text-muted); }
 .git-diff-list { overflow-y: auto; flex: 1; }
 
-/* In Level 2 full view, remove the max-height cap */
-.status-level2-body .git-diff-panel { max-height: none; flex: 1; }
-.status-level2-body .plan-review-full { flex: 1; overflow-y: auto; }
-
 .git-diff-card { border-bottom: 0.5px solid var(--border-divider); }
 .git-diff-card-hd {
   display: flex; align-items: center; gap: 6px;
@@ -45,7 +42,6 @@
 .git-diff-card-arrow { font-size: 10px; color: var(--text-muted); width: 12px; text-align: center; }
 
 .git-diff-card-body {
-  max-height: 200px;
   overflow: auto;
   border-top: 0.5px solid var(--border-divider);
 }

@@ -48,15 +48,16 @@
   --radius-pill: 999px;
   --transition: 200ms ease;
 
-  /* Diff colors */
-  --text-diff-old: #e09080;
-  --text-diff-new: #90c080;
-  --text-diff-ctx: #888;
-  --text-diff-hdr: #6b8db5;
-  --text-diff-body: #c0c0c0;
-  --bg-diff-del: rgba(196,85,61,0.12);
-  --bg-diff-add: rgba(90,138,74,0.12);
-  --bg-diff-hdr-border: rgba(255,255,255,0.06);
+  /* Diff colors — light theme: warm paper bg, solid-tinted rows */
+  --text-diff-del: #b04030;
+  --text-diff-add: #3a6a30;
+  --text-diff-ctx: #5a5040;
+  --text-diff-hdr: #5a8ab5;
+  --text-diff-body: #444;
+  --bg-diff-del: rgba(196,85,61,0.22);
+  --bg-diff-add: rgba(90,138,74,0.22);
+  --bg-diff-hdr-border: rgba(0,0,0,0.08);
+  --text-diff-ln: #8a7a6a;
 
   /* Frosted glass (light) */
   --frost-bg: rgba(0,0,0,0.04);
@@ -110,14 +111,15 @@
   --orange: #e08850;
   --purple: #9b7bba;
 
-  --text-diff-old: #e09080;
-  --text-diff-new: #90c080;
+  --text-diff-del: #ff9080;
+  --text-diff-add: #a0d090;
   --text-diff-ctx: #888;
-  --text-diff-hdr: #6b8db5;
-  --text-diff-body: #c0c0c0;
-  --bg-diff-del: rgba(196,85,61,0.12);
-  --bg-diff-add: rgba(90,138,74,0.12);
-  --bg-diff-hdr-border: rgba(255,255,255,0.06);
+  --text-diff-hdr: #7badc5;
+  --text-diff-body: #d0d0d0;
+  --bg-diff-del: rgba(212,101,77,0.25);
+  --bg-diff-add: rgba(106,154,90,0.25);
+  --bg-diff-hdr-border: rgba(255,255,255,0.08);
+  --text-diff-ln: #706b5e;
 
   --frost-bg: rgba(255,255,255,0.04);
   --frost-card-bg: rgba(255,255,255,0.02);
@@ -166,14 +168,15 @@
   --orange: #d4783c;
   --purple: #8b6baa;
 
-  --text-diff-old: #e09080;
-  --text-diff-new: #90c080;
+  --text-diff-del: #f09080;
+  --text-diff-add: #98cf88;
   --text-diff-ctx: #888;
-  --text-diff-hdr: #6b8db5;
-  --text-diff-body: #c0c0c0;
-  --bg-diff-del: rgba(196,85,61,0.12);
-  --bg-diff-add: rgba(90,138,74,0.12);
-  --bg-diff-hdr-border: rgba(255,255,255,0.06);
+  --text-diff-hdr: #7badc5;
+  --text-diff-body: #d0d0d0;
+  --bg-diff-del: rgba(196,85,61,0.25);
+  --bg-diff-add: rgba(90,138,74,0.25);
+  --bg-diff-hdr-border: rgba(255,255,255,0.08);
+  --text-diff-ln: #706b5e;
 
   --frost-bg: rgba(255,255,255,0.04);
   --frost-card-bg: rgba(255,255,255,0.02);

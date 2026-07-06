@@ -73,10 +73,14 @@ fn handle_read(ctx: ToolCallCtx) -> ToolResult {
         Some(s) => s,
         _ => return ToolResult { success: false, content: "[ERROR] memory read: scope required".into() },
     };
-    // Try AgentFS kv first, fall back to JSON file
     let kv_key = format!("memory/{scope}");
-    let content = crate::agentfs_bridge::try_kv_get(&kv_key)
-        .unwrap_or_else(|| crate::persistence::read_global_memory(scope));
+    let content = if scope == "project" {
+        crate::agentfs_bridge::try_kv_get(&kv_key)
+            .unwrap_or_else(|| crate::persistence::read_project_memory())
+    } else {
+        crate::agentfs_bridge::try_kv_get(&kv_key)
+            .unwrap_or_else(|| crate::persistence::read_global_memory(scope))
+    };
     if content.trim().is_empty() {
         ToolResult { success: true, content: format!("[OK] memory/{scope} is empty.") }
     } else {
@@ -96,10 +100,18 @@ fn handle_write(ctx: ToolCallCtx) -> ToolResult {
         Some(e) if !e.trim().is_empty() => e.trim(),
         _ => return ToolResult { success: false, content: "[ERROR] memory write: entry required".into() },
     };
-    crate::persistence::append_global_memory(scope, entry);
+    if scope == "project" {
+        crate::persistence::append_project_memory(entry);
+    } else {
+        crate::persistence::append_global_memory(scope, entry);
+    }
     // Mirror to AgentFS kv store (best-effort)
     let kv_key = format!("memory/{scope}");
-    let full = crate::persistence::read_global_memory(scope);
+    let full = if scope == "project" {
+        crate::persistence::read_project_memory()
+    } else {
+        crate::persistence::read_global_memory(scope)
+    };
     crate::agentfs_bridge::try_kv_set(&kv_key, &full);
     ToolResult { success: true, content: format!("[OK] Appended to memory/{scope}: {entry}") }
 }
@@ -111,7 +123,11 @@ fn handle_clear(ctx: ToolCallCtx) -> ToolResult {
     };
     let kv_key = format!("memory/{scope}");
     if let Some(line) = ctx.args.get("line").and_then(|v| v.as_u64()) {
-        let content = crate::persistence::read_global_memory(scope);
+        let content = if scope == "project" {
+            crate::persistence::read_project_memory()
+        } else {
+            crate::persistence::read_global_memory(scope)
+        };
         let lines: Vec<&str> = content.lines().collect();
         let idx = line as usize;
         if idx < 1 || idx > lines.len() {
@@ -127,12 +143,20 @@ fn handle_clear(ctx: ToolCallCtx) -> ToolResult {
             .map(|(_, l)| *l)
             .collect::<Vec<_>>()
             .join("\n");
-        crate::persistence::write_global_memory(scope, &new_content);
+        if scope == "project" {
+            crate::persistence::write_project_memory(&new_content);
+        } else {
+            crate::persistence::write_global_memory(scope, &new_content);
+        }
         // Mirror to AgentFS
         crate::agentfs_bridge::try_kv_set(&kv_key, &new_content);
         ToolResult { success: true, content: format!("[OK] Deleted line {line} from memory/{scope}: {removed}") }
     } else {
-        crate::persistence::write_global_memory(scope, "");
+        if scope == "project" {
+            crate::persistence::write_project_memory("");
+        } else {
+            crate::persistence::write_global_memory(scope, "");
+        }
         // Mirror to AgentFS
         crate::agentfs_bridge::try_kv_set(&kv_key, "");
         ToolResult { success: true, content: format!("[OK] Cleared memory/{scope}.") }
@@ -143,7 +167,7 @@ fn handle_clear(ctx: ToolCallCtx) -> ToolResult {
 /// Returns (preferences_xml, project_xml) or empty strings.
 pub fn format_memory_annotations() -> (String, String) {
     let user_mem = crate::persistence::read_global_memory("user");
-    let project_mem = crate::persistence::read_global_memory("project");
+    let project_mem = crate::persistence::read_project_memory();
     let prefs = if user_mem.trim().is_empty() {
         String::new()
     } else {

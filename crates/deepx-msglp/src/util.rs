@@ -53,6 +53,7 @@ pub(crate) fn has_xml(s: &str) -> bool {
     s.contains("<tool_use>") || s.contains("<invoke ") || s.contains("<tool_calls>")
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_compact_prompt(contexts: &[String]) -> String {
     let conv = contexts.join("\n");
     format!(

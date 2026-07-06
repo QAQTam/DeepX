@@ -82,6 +82,36 @@ pub fn write_global_memory(scope: &str, content: &str) {
     let _ = std::fs::write(&path, content);
 }
 
+// ── Project-scoped memory (workspace-local, in .deepx/) ──
+
+fn project_memory_path() -> PathBuf {
+    crate::workspace::deepx_dir().join("memory.md")
+}
+
+pub fn read_project_memory() -> String {
+    let _lock = PERSIST_LOCK.lock().expect("PERSIST_LOCK");
+    let path = project_memory_path();
+    if !path.exists() { return String::new(); }
+    std::fs::read_to_string(&path).unwrap_or_default()
+}
+
+pub fn write_project_memory(content: &str) {
+    let _lock = PERSIST_LOCK.lock().expect("PERSIST_LOCK");
+    let path = project_memory_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, content);
+}
+
+pub fn append_project_memory(line: &str) {
+    let existing = read_project_memory();
+    let mut content = existing.trim().to_string();
+    if !content.is_empty() { content.push('\n'); }
+    content.push_str(line);
+    write_project_memory(&content);
+}
+
 /// Append a line to global memory.
 pub fn append_global_memory(scope: &str, line: &str) {
     let existing = read_global_memory(scope);

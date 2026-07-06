@@ -951,7 +951,6 @@ You are now in CODE mode. All tools are available. Execute the plan.",
                         .collect::<Vec<_>>().join(" | ");
                     Some(format!("[Tool result]: {}", &compact[..compact.floor_char_boundary(compact.len().min(600))]))
                 }
-                _ => None,
             }).collect();
             if !serialized.is_empty() {
                 contexts.push(serialized.join("\n"));

@@ -33,7 +33,7 @@ fn exec_architecture(path: &str) -> String {
         Err(e) => return format!("[ERROR] Cannot determine current directory: {e}"),
     };
     let abs = if root.is_absolute() { root.to_path_buf() } else { cwd.join(root) };
-    let abs_str = abs.to_string_lossy().to_string();
+    let abs_str = crate::display_path(&abs.to_string_lossy());
 
     let is_rust = abs.join("Cargo.toml").exists();
     let is_go = abs.join("go.mod").exists();

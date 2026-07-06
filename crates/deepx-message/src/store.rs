@@ -771,7 +771,6 @@ impl MessageStore {
                         deepx_types::ContentBlock::ToolResult { content, .. } => {
                             tool_results += deepx_types::count_tokens(content) as u64;
                         }
-                        _ => {}
                     }
                 }
             }

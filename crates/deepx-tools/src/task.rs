@@ -1,19 +1,21 @@
 //! Task management: create, update, delete, list tasks.
 //! Format: "- [status] T{id}: subject — description"
+//!
+//! Persisted to `.deepx/tasks.md` (workspace-scoped).
 
 use super::{parse_arg, parse_opt};
 use std::sync::Mutex;
 
 static TASK_LOCK: Mutex<()> = Mutex::new(());
 
-fn current_seed() -> String {
-    crate::CURRENT_SESSION.lock().expect("CURRENT_SESSION lock").clone().unwrap_or_default()
+fn tasks_path() -> std::path::PathBuf {
+    crate::workspace::deepx_dir().join("tasks.md")
 }
 
 fn read_tasks() -> Vec<String> {
-    let seed = current_seed();
-    if seed.is_empty() { return Vec::new(); }
-    let content = crate::persistence::read_memory(&seed, "tasks");
+    let path = tasks_path();
+    if !path.exists() { return Vec::new(); }
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
     content
         .lines()
         .filter(|l| l.starts_with("- [") && !l.trim().is_empty())
@@ -22,9 +24,11 @@ fn read_tasks() -> Vec<String> {
 }
 
 fn write_tasks(lines: &[String]) {
-    let seed = current_seed();
-    if seed.is_empty() { return; }
-    crate::persistence::write_memory(&seed, "tasks", &lines.join("\n"));
+    let path = tasks_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, lines.join("\n") + "\n");
 }
 
 fn next_id(lines: &[String]) -> u32 {
@@ -90,11 +94,6 @@ pub(super) fn exec_task_create(args: &str) -> String {
     }
     if description.chars().count() > 200 {
         return "[ERROR] task_create: description max 200 chars\n[HINT] Write a concise 1-sentence description.".to_string();
-    }
-
-    let seed = current_seed();
-    if seed.is_empty() {
-        return "[ERROR] task_create: no active session. Start a conversation first.".to_string();
     }
 
     let mut lines = read_tasks();

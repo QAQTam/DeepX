@@ -241,19 +241,10 @@ handler!(handle_edit_file, exec_edit_file);
 
 // ── exec_delete_file (from file_delete.rs) ──
 
-fn find_trash_root() -> std::path::PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    // Walk up to find project root (where .git or Cargo.toml exists)
-    let mut current = cwd.as_path();
-    loop {
-        if current.join(".git").exists() || current.join("Cargo.toml").exists() {
-            return current.join(".deepx-trash");
-        }
-        match current.parent() {
-            Some(p) => current = p,
-            None => return cwd.join(".deepx-trash"),
-        }
-    }
+fn trash_dir() -> std::path::PathBuf {
+    let dir = crate::workspace::deepx_dir().join("trash");
+    let _ = std::fs::create_dir_all(&dir); // ensure exists
+    dir
 }
 
 pub(super) fn exec_delete_file(args: &str) -> String {
@@ -263,13 +254,12 @@ pub(super) fn exec_delete_file(args: &str) -> String {
         return format!("[ERROR] {} does not exist.", path);
     }
 
-    let trash_root = find_trash_root();
-    // Ensure .deepx-trash/ exists before moving
-    let _ = std::fs::create_dir_all(&trash_root);
+    let trash_root = trash_dir();
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 
-    // Build a safe relative name: strip project root, replace all path separators
-    let project_root = trash_root.parent().unwrap_or_else(|| Path::new("."));
+    // Build a safe relative name: relative to workspace root, replace path separators
+    let ws = crate::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock").clone();
+    let project_root = if !ws.is_empty() && ws != "." { Path::new(&ws) } else { Path::new(".") };
     let rel = if let Ok(stripped) = p.strip_prefix(project_root) {
         stripped.to_string_lossy().to_string()
     } else if let Some(name) = p.file_name() {
@@ -277,7 +267,6 @@ pub(super) fn exec_delete_file(args: &str) -> String {
     } else {
         path.replace(['/', '\\', ':'], "__")
     };
-    // Replace ALL platform path separators and special chars
     let safe_name = rel.replace(['/', '\\', ':'], "__");
     let trash_path = trash_root.join(format!("{}.{}", safe_name, ts));
 
@@ -287,7 +276,7 @@ pub(super) fn exec_delete_file(args: &str) -> String {
 
     match std::fs::rename(p, &trash_path) {
         Ok(_) => format!(
-            "[OK] Moved to trash: .deepx-trash/{}\n[HINT] Restore with exec(\"mv {}\" \"{}\") or exec(\"ls .deepx-trash/\") to list trash.",
+            "[OK] Moved to trash: .deepx/trash/{}\n[HINT] Restore with exec(\"mv {}\" \"{}\") or exec(\"ls .deepx/trash/\") to list trash.",
             trash_path.file_name().unwrap_or_default().to_string_lossy(),
             trash_path.display(), path
         ),
@@ -300,7 +289,7 @@ pub(super) fn exec_delete_file(args: &str) -> String {
             } else {
                 match std::fs::remove_file(p) {
                     Ok(_) => format!(
-                        "[OK] Moved to trash (cross-device): .deepx-trash/{}\n[HINT] Restore with exec(\"cp {}\" \"{}\").",
+                        "[OK] Moved to trash (cross-device): .deepx/trash/{}\n[HINT] Restore with exec(\"cp {}\" \"{}\").",
                         trash_path.file_name().unwrap_or_default().to_string_lossy(),
                         trash_path.display(), path
                     ),
@@ -458,7 +447,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
     mgr.register(ToolHandler {
         key: ToolKey::new("file", "delete"),
-        description: "Move file to trash (.deepx-trash/) instead of permanent deletion.",
+        description: "Move file to trash (.deepx/trash/) instead of permanent deletion.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path to delete"}},"required":["path"],"additionalProperties":false}),
         handler: handle_delete_file,
         risk: ToolRisk::Destructive,

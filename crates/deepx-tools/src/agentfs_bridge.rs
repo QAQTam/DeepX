@@ -13,7 +13,6 @@ use std::sync::{LazyLock, Mutex};
 
 #[cfg(feature = "agentfs")]
 mod imp {
-    use super::*;
     use tokio::runtime::Runtime;
 
     static RT: LazyLock<Runtime> = LazyLock::new(|| Runtime::new().unwrap());

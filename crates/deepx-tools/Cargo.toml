@@ -30,6 +30,9 @@ hex = "0.4"
 # [features]
 # agentfs = ["dep:agentfs-sdk", "dep:tokio"]
 
+[features]
+agentfs = []
+
 [target.'cfg(windows)'.dependencies]
 conpty = "0.7"
 windows-sys = { version = "0.59", features = ["Win32_System_Registry"] }

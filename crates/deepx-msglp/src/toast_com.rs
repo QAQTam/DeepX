@@ -3,6 +3,7 @@
 //! Desktop (non-packaged) apps cannot use `ToastNotification::Activated`.
 //! Instead, the system invokes an `INotificationActivationCallback` COM
 //! object registered via `CoRegisterClassObject` + registry entries.
+#![allow(unsafe_op_in_unsafe_fn)]
 //!
 //! ## Flow
 //! 1. `init()` — register COM class factory, write registry keys.
@@ -92,6 +93,7 @@ struct INotificationActivationCallbackVtbl {
 }
 
 struct ToastActivator {
+    #[allow(dead_code)]
     vtbl: *const INotificationActivationCallbackVtbl,
     ref_count: u32,
 }
@@ -207,6 +209,7 @@ struct IClassFactoryVtbl {
 }
 
 struct ClassFactory {
+    #[allow(dead_code)]
     vtbl: *const IClassFactoryVtbl,
     ref_count: u32,
 }

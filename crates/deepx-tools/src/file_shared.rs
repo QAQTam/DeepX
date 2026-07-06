@@ -200,10 +200,11 @@ pub(super) fn apply_diff_and_format(
                 result.push_str(&format!(" {}\n", out_lines[i]));
             }
             let desc = if description.is_empty() { "edit_file_diff" } else { description };
-            result.push_str(&format!("\n[OK] {path}:{line} +{added} -{removed} | {desc}"));
+            let disp = crate::display_path(&path);
+            result.push_str(&format!("\n[OK] {disp}:{line} +{added} -{removed} | {desc}"));
             result
         }
-        Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.", path, e),
+        Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.", crate::display_path(&path), e),
     }
 }
 
@@ -257,10 +258,11 @@ fn search_file(
     };
     for (i, line) in content.lines().enumerate() {
         if re.is_match(line) {
+            let disp = crate::display_path(&path.to_string_lossy());
             if line_numbers {
-                results.push(format!("{}:{}:{}", path.display(), i + 1, line));
+                results.push(format!("{}:{}:{}", disp, i + 1, line));
             } else {
-                results.push(format!("{}:{}", path.display(), line));
+                results.push(format!("{}:{}", disp, line));
             }
             if results.len() >= max_results {
                 return;

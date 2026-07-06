@@ -22,6 +22,8 @@ pub mod task;
 
 pub mod plan;
 
+pub mod workspace;
+
 pub mod process_registry;
 pub mod process_inspect;
 
@@ -109,7 +111,42 @@ pub fn resolve_workspace_path(path: &str) -> String {
     if p.is_absolute() { return path.to_string(); }
     let ws = CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock");
     if ws.is_empty() || *ws == "." { return path.to_string(); }
-    Path::new(&*ws).join(p).to_string_lossy().to_string()
+    let joined = Path::new(&*ws).join(p);
+    // Normalise: strip redundant . components via iterator (e.g. D:\foo\./bar → D:\foo\bar)
+    let normalized: std::path::PathBuf = joined.components().collect();
+    normalized.to_string_lossy().to_string()
+}
+
+/// Convert an absolute path into a display-friendly relative path.
+///
+/// Strips the workspace root prefix and uses `/` separators for
+/// cross-platform consistency (like Git, VS Code, etc.).
+///
+/// # Examples
+/// ```ignore
+/// // workspace = D:\project\DeepX
+/// display_path("D:\\project\\DeepX\\crates\\foo\\bar.rs") → "crates/foo/bar.rs"
+/// display_path("/home/user/project/src/main.rs")          → "src/main.rs"
+/// ```
+pub fn display_path(abs_path: &str) -> String {
+    // Normalise input: strip redundant . components
+    let normalized: std::path::PathBuf = std::path::Path::new(abs_path).components().collect();
+    let norm_str = normalized.to_string_lossy();
+
+    let ws = CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock");
+    let ws = ws.trim_end_matches(['/', '\\']);
+
+    if !ws.is_empty() && ws != "." {
+        // Case-insensitive prefix match on Windows
+        let ws_lower = ws.to_lowercase();
+        let p_lower = norm_str.to_lowercase();
+        if p_lower.starts_with(&ws_lower) {
+            let rel = &norm_str[ws.len()..].trim_start_matches(['/', '\\']);
+            return rel.replace('\\', "/");
+        }
+    }
+    // Not under workspace — return normalised path with forward slashes
+    norm_str.replace('\\', "/")
 }
 
 // ── ToolKey ──
