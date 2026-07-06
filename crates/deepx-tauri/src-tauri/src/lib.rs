@@ -14,6 +14,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agent_bridge::cmd_send_message,
+            agent_bridge::cmd_set_mode,
+            agent_bridge::cmd_get_version,
+            agent_bridge::cmd_list_available_tools,
             agent_bridge::cmd_cancel,
             agent_bridge::cmd_save_config,
             agent_bridge::cmd_load_config,
@@ -30,7 +33,6 @@ pub fn run() {
             agent_bridge::cmd_read_plan,
             agent_bridge::cmd_plan_action,
             agent_bridge::cmd_get_token_stats,
-            agent_bridge::cmd_get_code_stats,
             agent_bridge::cmd_get_git_diff,
             agent_bridge::cmd_get_git_file_diff,
             agent_bridge::cmd_get_dashboard_data,

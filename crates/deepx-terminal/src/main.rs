@@ -34,9 +34,6 @@ fn main() {
     match arg.as_str() {
         "--agent" | "agent" => run_agent(false),
         "subagent" => run_agent(true),
-        "daemon" => {
-            deepx_daemon::run();
-        }
         "config" | "init" => {
             run_config();
         }

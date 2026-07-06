@@ -11,7 +11,6 @@ members = [
     "crates/deepx-terminalui",
     "crates/deepx-session",
     "crates/deepx-subagent",
-    "crates/deepx-daemon",
     "crates/deepx-terminal",
     "crates/deepx-tauri/src-tauri",
 ]

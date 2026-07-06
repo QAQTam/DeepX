@@ -2,7 +2,12 @@
 .msg-list-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
 /* ── Load More Bar ── */
-.load-more-bar { display: flex; justify-content: center; padding: 8px 0 4px; flex-shrink: 0; }
+.load-more-bar {
+  --side: max(24px, calc((100% - var(--panel-foot) - var(--content-w)) / 2));
+  display: flex; justify-content: center;
+  padding: 8px calc(var(--panel-foot) + var(--side)) 4px var(--side);
+  flex-shrink: 0;
+}
 .load-more-btn { padding: 4px 16px; border: 0.5px solid var(--border-input); border-radius: var(--radius-pill); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; cursor: pointer; font-family: var(--font-sans); transition: background var(--transition); }
 .load-more-btn:hover { background: var(--bg-hover); }
 
@@ -18,7 +23,7 @@
 .msg-empty-hint { font-size: 13px; color: var(--text-muted); max-width: 320px; text-align: center; line-height: 1.6; }
 
 /* ── Jump-to-bottom FAB ── */
-.msg-jump-bottom { position: absolute; bottom: 16px; right: calc(356px + 8px); z-index: 10; padding: 6px 16px; border: 0.5px solid var(--accent); border-radius: var(--radius-pill); background: var(--bg-primary); color: var(--accent); font-size: 12px; font-weight: 500; cursor: pointer; font-family: var(--font-sans); box-shadow: var(--shadow-fab); transition: background var(--transition), color var(--transition); }
+.msg-jump-bottom { position: absolute; bottom: 16px; right: calc(var(--panel-foot) + 8px); z-index: 10; padding: 6px 16px; border: 0.5px solid var(--accent); border-radius: var(--radius-pill); background: var(--bg-primary); color: var(--accent); font-size: 12px; font-weight: 500; cursor: pointer; font-family: var(--font-sans); box-shadow: var(--shadow-fab); transition: background var(--transition), color var(--transition); }
 .msg-jump-bottom:hover { background: var(--accent); color: #fff; }
 
 /* ── Message Item ── */

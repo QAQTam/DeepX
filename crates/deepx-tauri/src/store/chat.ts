@@ -1,11 +1,10 @@
 import { createStore, produce } from "solid-js/store";
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import type { ToolCallDef, ToolResultDef, RoundBlock, RoundData, TurnData, TaskInfo, CodeDeltaRecord, CodeDaily, SessionMeta } from "@/lib/types";
+import type { ToolCallDef, ToolResultDef, RoundBlock, RoundData, TurnData, TaskInfo, SessionMeta } from "@/lib/types";
 
 // Re-export for other modules
-export type { ToolCallDef, ToolResultDef, RoundBlock, TaskInfo, CodeDaily, SessionMeta };
-export type CodeDelta = CodeDeltaRecord;
+export type { ToolCallDef, ToolResultDef, RoundBlock, TaskInfo, SessionMeta };
 export interface Round extends RoundData {
   blocks: RoundBlock[];
 }
@@ -28,7 +27,6 @@ export function createChatStore(seed: string) {
   const [inputDisabled, setInputDisabled] = createSignal(false);
   const [hasMore, setHasMore] = createSignal(false);
   const [workspace, setWorkspace] = createSignal("");
-  const [codeDeltas, setCodeDeltas] = createSignal<CodeDelta[]>([]);
 
   // Debug hook: inject mock data from browser console
   if (typeof window !== "undefined") {
@@ -353,10 +351,9 @@ export function createChatStore(seed: string) {
 
   function dismissAsk() { setAskState({ question: "", options: [], allow_custom: true, show: false }); }
 
-  function loadSessionFromData(snapshot: { turns: Turn[]; info: SessionInfo; codeDeltas: CodeDelta[] }) {
+  function loadSessionFromData(snapshot: { turns: Turn[]; info: SessionInfo }) {
     setTurns(snapshot.turns);
     setSessionInfo(snapshot.info);
-    setCodeDeltas(snapshot.codeDeltas);
   }
 
   // Simplified: wire format is now snake_case; blocks are derived UI-side
@@ -392,5 +389,5 @@ export function createChatStore(seed: string) {
     setTurns(produce((prev) => { prev.unshift(...loaded); }));
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, codeDeltas, setCodeDeltas, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

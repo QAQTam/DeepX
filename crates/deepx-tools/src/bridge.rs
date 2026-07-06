@@ -4,6 +4,7 @@
 //! IPC failures, respawn complexity, and serialization overhead.
 
 use deepx_types::ToolDef;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 
 /// Return type for tool execution with interrupt support.
@@ -18,6 +19,15 @@ pub struct ToolExecResult {
 // ── Global state ──
 
 static TOOL_MANAGER: OnceLock<Mutex<crate::ToolManager>> = OnceLock::new();
+
+/// Agent operating mode: 0=Normal, 1=Plan, 2=Code.
+/// PLAN mode blocks write/exec/destructive tools at the bridge level.
+static AGENT_MODE: AtomicU8 = AtomicU8::new(0);
+
+/// Set the agent's operating mode. Called by the agent loop on SetMode command.
+pub fn set_mode(mode: u8) {
+    AGENT_MODE.store(mode, Ordering::SeqCst);
+}
 
 /// Initialize the in-process tool manager.
 /// Must be called once at startup, before any tool execution.
@@ -53,6 +63,12 @@ where
 
 pub fn all_tools() -> Vec<ToolDef> {
     with_mgr(|mgr| mgr.all_defs()).unwrap_or_default()
+}
+
+/// Return all registered tool names (e.g. "file_read", "exec_run").
+/// Used by the frontend Settings page for subagent default tools.
+pub fn all_tool_names() -> Vec<String> {
+    with_mgr(|mgr| mgr.all_defs().iter().map(|d| d.function.name.clone()).collect()).unwrap_or_default()
 }
 
 // ── Execute ──
@@ -102,6 +118,24 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
             meta: crate::ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
             code_delta: None,
         };
+    }
+
+    // ── PLAN mode gate: block write/exec/destructive tools ──
+    if AGENT_MODE.load(Ordering::SeqCst) == 1 {
+        const BLOCKED: &[&str] = &[
+            "write_file", "edit_file", "delete_file", "move_file",
+            "exec_command", "git_commit", "git_push",
+        ];
+        if BLOCKED.contains(&name) {
+            return ToolExecResult {
+                content: format!(
+                    "[BLOCKED] PLAN mode: '{name}' is not allowed. Only explore, search, read_file, grep, and plan tools are available. Switch to CODE mode to write or execute."
+                ),
+                success: false,
+                meta: crate::ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
+                code_delta: None,
+            };
+        }
     }
 
     // Phase 1: prepare (brief lock)

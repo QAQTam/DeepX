@@ -9,8 +9,6 @@ interface Endpoint { id: string; display: string; base_url: string; default_mode
 
 interface SettingsViewProps { lang: () => Lang; onLangChange: (l: Lang) => void; onClose: () => void; theme: () => ThemeMode; onThemeChange: (t: ThemeMode) => void; }
 
-const ALL_TOOLS = ["read_file", "write_file", "edit_file", "edit_file_diff", "search", "grep", "jaq", "exec", "list_dir", "glob", "file_delete", "file_move", "file_diff", "explore", "web_fetch", "web_search", "task_create", "task_update", "task_delete", "task_list", "ask_user", "spawn_subagent", "check_process", "wait_process", "kill_process"];
-
 export default function SettingsView(props: SettingsViewProps) {
   const { t } = useI18n();
   const [apiKey, setApiKey] = createSignal("");
@@ -39,6 +37,12 @@ export default function SettingsView(props: SettingsViewProps) {
   const [configData] = createResource(async () => {
     try { const raw = await invoke<string>("cmd_load_config"); return JSON.parse(raw); }
     catch (e) { console.error(e); return null; }
+  });
+
+  // Fetch available tools from backend
+  const [allTools] = createResource(async () => {
+    try { const raw = await invoke<string>("cmd_list_available_tools"); return JSON.parse(raw) as string[]; }
+    catch (e) { console.error(e); return []; }
   });
 
   createEffect(() => {
@@ -229,7 +233,7 @@ export default function SettingsView(props: SettingsViewProps) {
               <div class="settings-field">
                 <label>Default Tools</label>
                 <div class="settings-checkbox-grid">
-                  <For each={ALL_TOOLS}>
+                  <For each={allTools() ?? []}>
                     {(name) => (
                       <label class={`settings-checkbox-item ${subTools().includes(name) ? "checked" : ""}`}>
                         <input type="checkbox" checked={subTools().includes(name)} onChange={() => toggleTool(name)} />

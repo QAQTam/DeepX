@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onCleanup } from "solid-js";
+import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import type { TaskInfo, ActivityEntry } from "../store/chat";
 import { useI18n } from "../i18n";
 import GitDiffPanel from "./GitDiffPanel";
@@ -14,6 +14,8 @@ const TOOL_ICONS: Record<string, string> = {
   task_create: "T", task_update: "T", task_delete: "T", ask_user: "?",
 };
 
+type NavPage = null | "tasks" | "activity" | "plan" | "git";
+
 export default function StatusPanel(props: {
   tasks: () => TaskInfo[];
   recentEdits: () => string[];
@@ -22,32 +24,102 @@ export default function StatusPanel(props: {
   onTaskAction?: (action: "cancel" | "delete" | "ask", taskId: string, subject: string, description: string) => void;
 }) {
   const { t } = useI18n();
+  const [nav, setNav] = createSignal<NavPage>(null);
   const [nowTick, setNowTick] = createSignal(Date.now());
   const timer = setInterval(() => setNowTick(Date.now()), 1000);
+
+  // Panel resize
+  let panelW = Number(localStorage.getItem("deepx:panel-w")) || 340;
+  const setPanelW = (w: number) => {
+    panelW = w;
+    document.documentElement.style.setProperty("--panel-w", w + "px");
+    document.documentElement.style.setProperty("--panel-foot", w + "px");
+    localStorage.setItem("deepx:panel-w", String(w));
+  };
+  onMount(() => setPanelW(panelW));
   onCleanup(() => clearInterval(timer));
   const elapsed = (ts: number) => {
-    const _ = nowTick(); // drive reactive re-render
+    const _ = nowTick();
     const s = Math.floor((Date.now() - ts) / 1000);
     if (s < 60) return s + "s";
     if (s < 3600) return Math.floor(s / 60) + "m";
     return Math.floor(s / 3600) + "h";
   };
 
+  const navTitle = () => {
+    switch (nav()) {
+      case "tasks": return t().status.tasks;
+      case "activity": return t().status.activity;
+      case "plan": return t().planReview?.title ?? "PLAN Review";
+      case "git": return t().status.gitChanges;
+      default: return t().status.title;
+    }
+  };
+
   return (
     <div class="status-panel">
-      <div class="status-panel-hd">{t().status.title}</div>
+      <div
+        class="status-resize-handle"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          const startX = e.clientX;
+          const startW = panelW;
+          const handle = e.currentTarget as HTMLElement;
+          handle.classList.add("active");
+          const onMove = (ev: MouseEvent) => {
+            const w = Math.max(240, Math.min(600, startW - (ev.clientX - startX)));
+            setPanelW(w);
+          };
+          const onUp = () => {
+            handle.classList.remove("active");
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+          };
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        }}
+      />
+      <div class="status-panel-hd">
+        <Show when={nav()} fallback={<span>{t().status.title}</span>}>
+          <button class="status-nav-back" onClick={() => setNav(null)}>← {navTitle()}</button>
+        </Show>
+      </div>
       <div class="status-panel-body">
 
-        {/* ── Tasks ── */}
-        <div class="status-section">
-          <div class="status-section-hd">
-            {t().status.tasks}
+        {/* Level 1 — section tiles */}
+        <Show when={!nav()}>
+          {/* Tasks */}
+          <div class="status-tile" onClick={() => setNav("tasks")}>
+            <span class="status-tile-label">{t().status.tasks}</span>
             <Show when={props.tasks().length > 0}>
-              <span class="status-section-badge">{props.tasks().filter((t) => t.status === "completed").length}/{props.tasks().length}</span>
+              <span class="status-tile-badge">{props.tasks().filter((t) => t.status === "completed").length}/{props.tasks().length}</span>
             </Show>
+            <span class="status-tile-arrow">▶</span>
           </div>
+          {/* Activity */}
+          <div class="status-tile" onClick={() => setNav("activity")}>
+            <span class="status-tile-label">{t().status.activity}</span>
+            <Show when={props.activityLog().length > 0}>
+              <span class="status-tile-badge">{props.activityLog().length}</span>
+            </Show>
+            <span class="status-tile-arrow">▶</span>
+          </div>
+          {/* PLAN Review */}
+          <div class="status-tile" onClick={() => setNav("plan")}>
+            <span class="status-tile-label">{t().planReview?.title ?? "PLAN Review"}</span>
+            <span class="status-tile-arrow">▶</span>
+          </div>
+          {/* Git Changes */}
+          <div class="status-tile" onClick={() => setNav("git")}>
+            <span class="status-tile-label">{t().status.gitChanges}</span>
+            <span class="status-tile-arrow">▶</span>
+          </div>
+        </Show>
+
+        {/* Level 2 — Tasks full view */}
+        <Show when={nav() === "tasks"}>
+          <div class="status-level2-body">
           <Show when={props.tasks().length > 0} fallback={<div class="status-empty">{t().status.noTasks}</div>}>
-            <div class="status-section-body">
             <For each={props.tasks()}>
               {(task) => (
                 <div class={`status-row status-${task.status}${(task as any)._deleting ? ' deleting' : ''}`}>
@@ -70,20 +142,14 @@ export default function StatusPanel(props: {
                 </div>
               )}
             </For>
-            </div>
           </Show>
-        </div>
-
-        {/* ── {t().status.activity} ── */}
-        <div class="status-section">
-          <div class="status-section-hd">
-            {t().status.activity}
-            <Show when={props.activityLog().length > 0}>
-              <span class="status-section-badge">{props.activityLog().length}</span>
-            </Show>
           </div>
+        </Show>
+
+        {/* Level 2 — Activity full view */}
+        <Show when={nav() === "activity"}>
+          <div class="status-level2-body">
           <Show when={props.activityLog().length > 0} fallback={<div class="status-empty">{t().status.noActivity}</div>}>
-            <div class="status-section-body">
             <For each={props.activityLog()}>
               {(entry) => (
                 <div class={`status-row status-${entry.success ? "success" : "fail"}`}>
@@ -96,15 +162,23 @@ export default function StatusPanel(props: {
                 </div>
               )}
             </For>
-            </div>
           </Show>
-        </div>
+          </div>
+        </Show>
 
-        {/* ── PLAN Review ── */}
-        <PlanReviewPanel seed={props.seed} />
+        {/* Level 2 — PLAN Review full view */}
+        <Show when={nav() === "plan"}>
+          <div class="status-level2-body">
+          <PlanReviewPanel seed={props.seed} />
+          </div>
+        </Show>
 
-        {/* ── Git Changes ── */}
-        <GitDiffPanel seed={props.seed} />
+        {/* Level 2 — Git Changes full view */}
+        <Show when={nav() === "git"}>
+          <div class="status-level2-body">
+          <GitDiffPanel seed={props.seed} />
+          </div>
+        </Show>
 
       </div>
     </div>

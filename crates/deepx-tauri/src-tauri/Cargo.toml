@@ -26,7 +26,6 @@ deepx-session = { path = "../../deepx-session" }
 deepx-tools = { path = "../../deepx-tools" }
 deepx-types = { path = "../../deepx-types" }
 deepx-proto = { path = "../../deepx-proto" }
-deepx-daemon = { path = "../../deepx-daemon" }
 serde_json = "1"
 log = "0.4"
 git2 = { version = "0.21", features = ["vendored-libgit2"] }

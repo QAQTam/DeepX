@@ -1,13 +1,10 @@
 //! AgentRegistry — manages multiple agent child processes, one per session.
 //!
-//! Architecture (v8 — daemon-first with deprecated fallback):
-//! - Preferred: connects to `deepxd` daemon socket; all agent lifecycle managed by daemon.
-//! - Deprecated fallback (Windows / daemon unavailable): direct child process spawn (v6).
-//!   Will be removed once Windows named pipe support is implemented.
-//! - A single background reader thread dispatches Agent2Ui events from the daemon
-//!   to per-seed Tauri events (`agent-{seed}-event`).
-//! - Tauri commands write `FrontendToDaemon` frames to the daemon socket.
-//! - `shutdown_all()` sends `Shutdown` via daemon or kills child processes directly.
+//! Architecture (v9 — direct child process spawn):
+//! - Each session gets its own agent subprocess, spawned directly via stdin/stdout pipes.
+//! - A per-agent reader thread dispatches Agent2Ui events from stdout to Tauri events.
+//! - Tauri commands write Ui2Agent frames directly to the agent's stdin pipe.
+//! - `shutdown_all()` kills all child processes directly.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -17,98 +14,9 @@ use std::sync::OnceLock;
 
 use tauri::{AppHandle, Emitter};
 
-use deepx_proto::{Agent2Ui, Ui2Agent, FrontendToDaemon};
+use deepx_proto::{Agent2Ui, Ui2Agent};
 
-// ── Daemon connection (TCP loopback) ──
-
-use std::net::TcpStream;
-
-static DAEMON_CONN: OnceLock<Mutex<Option<TcpStream>>> = OnceLock::new();
-
-fn daemon_conn() -> &'static Mutex<Option<TcpStream>> {
-    DAEMON_CONN.get_or_init(|| Mutex::new(None))
-}
-
-/// Per-seed last known sequence number from daemon events.
-static LAST_SEQ: OnceLock<Arc<Mutex<HashMap<String, u64>>>> = OnceLock::new();
-
-fn last_seq_map() -> &'static Arc<Mutex<HashMap<String, u64>>> {
-    LAST_SEQ.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
-}
-
-/// Try to connect to the daemon, auto-spawning it if not running.
-/// Returns the child process handle (if auto-started) for later cleanup.
-static DAEMON_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
-
-fn ensure_daemon() -> Result<(), String> {
-    let mut guard = daemon_conn().lock().map_err(|e| format!("lock: {e}"))?;
-    if guard.is_some() { return Ok(()); }
-    
-    // Try existing daemon first
-    if let Some(port) = deepx_daemon::read_port() {
-        match deepx_daemon::transport::connect(port) {
-            Ok(stream) => {
-                log::info!("[DAEMON] connected to daemon on port {}", port);
-                *guard = Some(stream);
-                return Ok(());
-            }
-            Err(_) => {
-                // Port file stale — daemon not running, will try auto-start
-            }
-        }
-    }
-
-    // Daemon not running — try to start it
-    log::info!("[DAEMON] daemon not running, attempting auto-start...");
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let mut child = std::process::Command::new(&exe)
-        .arg("daemon")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("spawn daemon: {e}"))?;
-    // Store handle for cleanup on exit
-    *DAEMON_CHILD.lock().unwrap() = Some(child);
-    // Wait for daemon to be ready (re-spawn the child since it was moved)
-    std::thread::sleep(std::time::Duration::from_millis(800));
-    for _ in 0..5 {
-        if let Some(port) = deepx_daemon::read_port() {
-            match deepx_daemon::transport::connect(port) {
-                Ok(stream) => {
-                    log::info!("[DAEMON] connected after auto-start on port {}", port);
-                    *guard = Some(stream);
-                    return Ok(());
-                }
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(300)),
-            }
-        } else {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-    }
-    // Daemon failed to start — kill and fall back
-    let _ = DAEMON_CHILD.lock().unwrap().take().map(|mut c| { let _ = c.kill(); let _ = c.wait(); });
-    Err("daemon did not become ready".into())
-}
-
-/// Send a frame to the daemon. Returns Ok(true) if sent via daemon, Ok(false) if daemon unavailable.
-fn try_send_via_daemon(seed: &str, frame: &Ui2Agent) -> Result<bool, String> {
-    let mut guard = daemon_conn().lock().map_err(|e| format!("lock: {e}"))?;
-    if let Some(ref mut stream) = *guard {
-        let f2d = FrontendToDaemon { seed: seed.to_string(), frame: frame.clone() };
-        match deepx_daemon::transport::write_frame(stream, &f2d) {
-            Ok(()) => return Ok(true),
-            Err(e) => {
-                log::warn!("[DAEMON] write failed: {e}, reconnecting...");
-                *guard = None;
-                return Ok(false);
-            }
-        }
-    }
-    Ok(false)
-}
-
-/// One agent child process — dedicated to a single session.
+// ── Agent instance ──
 pub struct AgentInstance {
     #[allow(dead_code)]
     seed: String,
@@ -502,112 +410,6 @@ impl AgentRegistry {
         };
         REGISTRY.set(Mutex::new(registry))
             .expect("AgentRegistry already initialized");
-        
-        // Start daemon reader thread — dispatches daemon events to Tauri
-        {
-            use deepx_proto::FrontendToDaemon;
-            let app_handle = app.clone();
-            std::thread::spawn(move || {
-                // Retry loop for daemon to become available
-                loop {
-                    let port = match deepx_daemon::read_port() {
-                        Some(p) => p,
-                        None => {
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                            continue;
-                        }
-                    };
-                    match deepx_daemon::transport::connect(port) {
-                        Ok(mut stream) => {
-                            log::info!("[DAEMON] reader thread connected");
-
-                            // Send Subscribe + Reconnect for all known seeds
-                            {
-                                if let Ok(seq_map) = last_seq_map().lock() {
-                                    for (seed, &seq) in seq_map.iter() {
-                                        let f2d_sub = FrontendToDaemon {
-                                            seed: seed.clone(),
-                                            frame: Ui2Agent::Subscribe { seed: seed.clone() },
-                                        };
-                                        if let Err(e) = deepx_daemon::transport::write_frame(&mut stream, &f2d_sub) {
-                                            log::warn!("[DAEMON] reader failed Subscribe for {seed}: {e}");
-                                            continue;
-                                        }
-                                        let f2d_rec = FrontendToDaemon {
-                                            seed: seed.clone(),
-                                            frame: Ui2Agent::Reconnect { seed: seed.clone(), last_seq: seq },
-                                        };
-                                        if let Err(e) = deepx_daemon::transport::write_frame(&mut stream, &f2d_rec) {
-                                            log::warn!("[DAEMON] reader failed Reconnect for {seed}: {e}");
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Read loop: dispatch events to Tauri frontend
-                            loop {
-                                match deepx_daemon::transport::read_frame(&mut stream) {
-                                    Ok(Some(frame)) => {
-                                        match &frame.event {
-                                            Agent2Ui::Snapshot { seed: _ss_seed, turns, tokens_used, context_limit: _, seq_id, buffered_events, has_more: _ } => {
-                                                // Update last_seq from Snapshot
-                                                if let Ok(mut seq_map) = last_seq_map().lock() {
-                                                    seq_map.insert(frame.seed.clone(), *seq_id);
-                                                }
-                                                // Convert to SessionRestored so the frontend's
-                                                // existing loadTurnsFromRestore mechanism handles it
-                                                let restored = Agent2Ui::SessionRestored {
-                                                    seed: frame.seed.clone(),
-                                                    turns: turns.clone(),
-                                                    tokens_used: *tokens_used,
-                                                    cache_hit_pct: 0.0,
-                                                    total_turns: turns.len() as u32,
-                                                    has_more: false,
-                                                };
-                                                let payload = serde_json::to_value(&restored).unwrap_or_default();
-                                                let _ = app_handle.emit(
-                                                    &format!("agent-{}-event", frame.seed),
-                                                    payload.clone(),
-                                                );
-                                                let _ = app_handle.emit("agent-event", payload);
-
-                                                // Replay each buffered event
-                                                for event in buffered_events {
-                                                    let payload = serde_json::to_value(event).unwrap_or_default();
-                                                    let _ = app_handle.emit(
-                                                        &format!("agent-{}-event", frame.seed),
-                                                        payload.clone(),
-                                                    );
-                                                    let _ = app_handle.emit("agent-event", payload);
-                                                }
-                                            }
-                                            _ => {
-                                                // Regular event — emit as-is
-                                                let payload = serde_json::to_value(&frame.event).unwrap_or_default();
-                                                let _ = app_handle.emit(
-                                                    &format!("agent-{}-event", frame.seed),
-                                                    payload.clone(),
-                                                );
-                                                let _ = app_handle.emit("agent-event", payload);
-                                            }
-                                        }
-                                    }
-                                    Ok(None) => break, // EOF
-                                    Err(e) => {
-                                        log::warn!("[DAEMON] read error: {e}");
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            std::thread::sleep(std::time::Duration::from_secs(2));
-                        }
-                    }
-                    log::info!("[DAEMON] reader thread reconnecting...");
-                }
-            });
-        }
     }
 
     /// Get or spawn an agent for the given seed. If an agent is already running for this
@@ -750,34 +552,16 @@ impl AgentInstance {
 // ── Public API ──
 
 /// Ensure an agent is running for the given seed (resume existing session).
-/// Returns error if spawn fails. Tries daemon first, falls back to direct spawn.
 fn ensure_agent(seed: &str) -> Result<(), String> {
-    // Try daemon first — if available, it handles agent lifecycle
-    if ensure_daemon().is_ok() {
-        // Daemon is connected — it manages agent spawn/restart
-        return Ok(());
-    }
-    // Deprecated fallback: direct child process spawn.
-    // Prefer daemon (ensure_daemon + send_to_agent) for reconnect support.
-    log::warn!("[REGISTRY] daemon unavailable, falling back to deprecated direct child spawn for seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
     registry.get_or_spawn(seed)
 }
 
 /// Send a Ui2Agent frame to the agent for the given seed.
-/// Only holds the registry lock during lookup — the actual write happens outside the lock.
 fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
     log::info!("[REGISTRY] send_to_agent seed={} type={}",
         &seed[..seed.floor_char_boundary(seed.len().min(8))], agent2ui_event_name_for_ui(&frame));
     
-    // Try daemon first (Unix)
-    match try_send_via_daemon(seed, &frame) {
-        Ok(true) => return Ok(()),
-        Ok(false) => {} // daemon unavailable, fall through
-        Err(e) => log::warn!("[DAEMON] send error: {e}"),
-    }
-    
-    // Fallback: direct pipe write
     let json = serde_json::to_string(&frame).map_err(|e| format!("serialize: {e}"))?;
     let stdin_arc = {
         let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
@@ -792,14 +576,12 @@ fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
         registry.instances.remove(seed);
         drop(registry);
         log::warn!("[REGISTRY] agent {} pipe broken, respawning...", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
-        // Respawn the agent for this seed
         let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
         registry.get_or_spawn(seed)?;
         let stdin_arc2 = registry.instances.get(seed)
             .ok_or_else(|| format!("respawn failed for {seed}"))?
             .stdin.clone();
         drop(registry);
-        // Retry write to the new agent
         let mut stdin2 = stdin_arc2.lock().map_err(|e| format!("lock: {e}"))?;
         writeln!(*stdin2, "{}", json).map_err(|e| format!("write retry: {e}"))?;
         stdin2.flush().map_err(|e| format!("flush retry: {e}"))?;
@@ -807,25 +589,8 @@ fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
     Ok(())
 }
 
-/// Shutdown all running agents and daemon. Called on window close.
+/// Shutdown all running agents. Called on window close.
 pub fn shutdown_all_agents() {
-    // Send Shutdown to daemon (best-effort)
-    if let Ok(mut guard) = daemon_conn().lock() {
-        if let Some(ref mut stream) = *guard {
-            let frame = FrontendToDaemon {
-                seed: String::new(),
-                frame: Ui2Agent::Shutdown,
-            };
-            let _ = deepx_daemon::transport::write_frame(stream, &frame);
-        }
-    }
-    // Kill daemon child process if we spawned it
-    if let Ok(mut child) = DAEMON_CHILD.lock() {
-        if let Some(mut c) = child.take() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-    }
     if let Some(registry) = REGISTRY.get() {
         if let Ok(mut reg) = registry.lock() {
             reg.shutdown_all();
@@ -837,47 +602,93 @@ pub fn shutdown_all_agents() {
 // Tauri Commands (v6 — all commands now carry `seed`)
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Read a file preview: first `max_lines` lines, capped at `max_chars` chars.
+/// Truncation is CJK-safe (uses char boundary).
+fn read_file_preview(path: &str, max_lines: usize, max_chars: usize) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
+    let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+    let reader = BufReader::new(file);
+    let mut result = String::new();
+    let mut line_count = 0;
+    for line in reader.lines() {
+        if line_count >= max_lines { break; }
+        let line = line.map_err(|e| format!("read: {e}"))?;
+        if !result.is_empty() { result.push('\n'); }
+        result.push_str(&line);
+        line_count += 1;
+        if result.chars().count() >= max_chars {
+            // Truncate at char boundary
+            let end = result.floor_char_boundary(max_chars);
+            result.truncate(end);
+            result.push_str("\n… (truncated)");
+            break;
+        }
+    }
+    Ok(result)
+}
+
 /// Send a user text message to the agent for the given session.
+/// If `files` is non-empty, reads and truncates each file,
+/// prepending their content to the user text.
 #[tauri::command]
 pub fn cmd_send_message(
     seed: String,
     text: String,
+    files: Option<Vec<String>>,
 ) -> Result<(), String> {
+    let files = files.unwrap_or_default();
     log::info!("[REGISTRY] cmd_send_message seed={}: {}", &seed[..seed.floor_char_boundary(seed.len().min(8))], &text[..text.floor_char_boundary(50)]);
     ensure_agent(&seed)?;
-    send_to_agent(&seed, Ui2Agent::UserInput { text })
+
+    let full_text = if files.is_empty() {
+        text
+    } else {
+        let mut parts = Vec::new();
+        parts.push("[Files]".to_string());
+        for path in &files {
+            match read_file_preview(path, 10, 1000) {
+                Ok(preview) => {
+                    parts.push(format!("\n{path}:\n{preview}"));
+                }
+                Err(e) => {
+                    parts.push(format!("\n{path}: [ERROR: {e}]"));
+                }
+            }
+        }
+        parts.push(format!("\n\n[Message]\n{text}"));
+        parts.join("")
+    };
+
+    send_to_agent(&seed, Ui2Agent::UserInput { text: full_text })
 }
 
-/// Resume an existing session (spawn agent if not running). The agent auto-resumes
-/// on startup via --resume-seed, so this just ensures the agent is alive.
-/// Sends Subscribe + Reconnect via daemon (if available) so the agent re-emits
-/// Snapshot and any buffered events — replaces the old ResumeSession hack.
+/// Set the agent's operating mode (Normal, Plan, Code).
+#[tauri::command]
+pub fn cmd_set_mode(seed: String, mode: String) -> Result<(), String> {
+    log::info!("[REGISTRY] cmd_set_mode seed={} mode={mode}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+    send_to_agent(&seed, Ui2Agent::SetMode { mode })
+}
+
+/// Return the app version from Cargo.toml.
+#[tauri::command]
+pub fn cmd_get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Return all registered tool names. Used by Settings for default tools.
+#[tauri::command]
+pub fn cmd_list_available_tools() -> Result<String, String> {
+    let tools = deepx_tools::bridge::all_tool_names();
+    serde_json::to_string(&tools).map_err(|e| format!("{e}"))
+}
+
+/// Resume an existing session — spawns agent with --resume-seed if not already running.
+/// The agent auto-loads the session on startup and emits SessionRestored.
 #[tauri::command]
 pub fn cmd_resume_session(seed: String) -> Result<(), String> {
     log::info!("[REGISTRY] cmd_resume_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     deepx_session::SessionManager::global().set_active_seed(&seed);
-
-    // Register seed for daemon reconnect tracking
-    {
-        if let Ok(mut seq_map) = last_seq_map().lock() {
-            seq_map.entry(seed.clone()).or_insert(0);
-        }
-    }
-
     ensure_agent(&seed)?;
-
-    // Send Subscribe + Reconnect via daemon so the agent delivers
-    // Snapshot + any buffered events the frontend may have missed.
-    {
-        let seq = {
-            last_seq_map().lock()
-                .map(|m| m.get(&seed).copied().unwrap_or(0))
-                .unwrap_or(0)
-        };
-        let _ = try_send_via_daemon(&seed, &Ui2Agent::Subscribe { seed: seed.clone() });
-        let _ = try_send_via_daemon(&seed, &Ui2Agent::Reconnect { seed: seed.clone(), last_seq: seq });
-    }
-
     Ok(())
 }
 
@@ -887,24 +698,10 @@ pub fn cmd_new_session() -> Result<String, String> {
     let seed = deepx_session::SessionManager::generate_seed();
     log::info!("[REGISTRY] cmd_new_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     deepx_session::SessionManager::global().clear_active();
-
-    // Register seed for daemon reconnect tracking
-    {
-        if let Ok(mut seq_map) = last_seq_map().lock() {
-            seq_map.insert(seed.clone(), 0);
-        }
-    }
-
     {
         let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
         registry.spawn_new(&seed)?;
     }
-
-    // For daemon path, send Subscribe so the daemon knows about this seed
-    {
-        let _ = try_send_via_daemon(&seed, &Ui2Agent::Subscribe { seed: seed.clone() });
-    }
-
     Ok(seed)
 }
 
@@ -1026,7 +823,6 @@ pub fn cmd_list_sessions() -> Result<String, String> {
 pub fn cmd_delete_session(seed: String) -> Result<(), String> {
     log::info!("[REGISTRY] cmd_delete_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
     // Kill the agent first so it doesn't resurrect the session on flush.
-    // Extract instance under lock, then wait outside lock.
     let instance = {
         if let Ok(mut registry) = AgentRegistry::get().lock() {
             registry.kill_agent(&seed)
@@ -1034,12 +830,6 @@ pub fn cmd_delete_session(seed: String) -> Result<(), String> {
     };
     if let Some(inst) = instance {
         inst.shutdown_and_wait();
-    }
-    // Remove from daemon reconnect tracking
-    {
-        if let Ok(mut seq_map) = last_seq_map().lock() {
-            seq_map.remove(&seed);
-        }
     }
     deepx_session::SessionManager::global().delete(&seed)
 }
@@ -1082,44 +872,9 @@ pub fn cmd_set_workspace(seed: String, path: String) -> Result<(), String> {
     send_to_agent(&seed, Ui2Agent::ReloadConfig)
 }
 
-/// Get aggregated code stats for the last N days.
-/// Returns JSON array of CodeDaily sorted oldest-first.
-#[tauri::command]
-pub fn cmd_get_code_stats(seed: String, days: u32) -> Result<String, String> {
-    use std::collections::BTreeMap;
-    use std::io::BufRead;
-
-    let dir = deepx_types::platform::sessions_dir().join(&seed);
-    let path = dir.join("code_stats.jsonl");
-    let mut daily: BTreeMap<String, deepx_proto::CodeDaily> = BTreeMap::new();
-    if let Ok(file) = std::fs::File::open(&path) {
-        let reader = std::io::BufReader::new(file);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                if let Ok(rec) = serde_json::from_str::<deepx_proto::CodeDeltaRecord>(&line) {
-                    let date = chrono_local_date_from_epoch(rec.timestamp);
-                    let entry = daily.entry(date.clone()).or_insert_with(|| deepx_proto::CodeDaily {
-                        date,
-                        lines_added: 0,
-                        lines_removed: 0,
-                        files_created: 0,
-                        files_deleted: 0,
-                    });
-                    entry.lines_added += rec.lines_added;
-                    entry.lines_removed += rec.lines_removed;
-                    entry.files_created += rec.files_created;
-                    entry.files_deleted += rec.files_deleted;
-                }
-            }
-        }
-    }
-    let mut result: Vec<deepx_proto::CodeDaily> = daily.into_values().collect();
-    result.sort_by(|a, b| b.date.cmp(&a.date));
-    let take = days as usize;
-    if result.len() > take { result.truncate(take); }
-    result.reverse();
-    serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
-}
+/// Get aggregated code stats for the last N days (removed in v0.7.0).
+// #[tauri::command]
+// pub fn cmd_get_code_stats(seed: String, days: u32) -> Result<String, String> { ... }
 
 /// Convert epoch seconds to "YYYY-MM-DD" UTC.
 fn chrono_local_date_from_epoch(epoch_secs: u64) -> String {
@@ -1560,11 +1315,11 @@ pub fn cmd_read_plan(seed: String) -> Result<String, String> {
 
 /// Write a plan action (approve/reject/ask) back to PLAN.md as an HTML comment.
 #[tauri::command]
-pub fn cmd_plan_action(seed: String, item_id: String, action: String, user_comment: String) -> Result<(), String> {
+pub fn cmd_plan_action(app: AppHandle, seed: String, item_id: String, action: String, user_comment: String) -> Result<(), String> {
     if seed.is_empty() {
         return Err("No active session".into());
     }
-    let ws = crate::agent_bridge::cmd_get_workspace(seed)?;
+    let ws = crate::agent_bridge::cmd_get_workspace(seed.clone())?;
     if ws.is_empty() {
         return Err("No workspace set".into());
     }
@@ -1594,6 +1349,10 @@ pub fn cmd_plan_action(seed: String, item_id: String, action: String, user_comme
     }
 
     std::fs::write(&plan_path, content).map_err(|e| format!("write PLAN.md: {e}"))?;
+
+    // Notify frontend that PLAN.md changed
+    let _ = app.emit("plan-changed", serde_json::json!({"seed": seed}));
+
     Ok(())
 }
 

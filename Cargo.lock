@@ -985,19 +985,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepx-daemon"
-version = "0.6.0"
-dependencies = [
- "deepx-proto",
- "deepx-session",
- "deepx-types",
- "libc",
- "log",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "deepx-gate"
 version = "0.6.0"
 dependencies = [
@@ -1082,7 +1069,6 @@ name = "deepx-tauri"
 version = "0.6.0"
 dependencies = [
  "deepx-config",
- "deepx-daemon",
  "deepx-msglp",
  "deepx-proto",
  "deepx-session",
@@ -1103,7 +1089,6 @@ name = "deepx-terminal"
 version = "0.6.0"
 dependencies = [
  "deepx-config",
- "deepx-daemon",
  "deepx-msglp",
  "deepx-proto",
  "deepx-session",
@@ -1122,7 +1107,6 @@ dependencies = [
  "chrono",
  "crossterm",
  "deepx-config",
- "deepx-daemon",
  "deepx-proto",
  "deepx-session",
  "deepx-types",

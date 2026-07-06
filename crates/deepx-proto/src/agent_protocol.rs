@@ -67,9 +67,13 @@ pub enum Ui2Agent {
     #[serde(rename = "reconnect")]
     Reconnect { seed: String, last_seq: u64 },
 
-    /// Heartbeat: frontend pings daemon to confirm it's alive.
+    /// Heartbeat: frontend pings daemon to confirm it's alive (deprecated — daemon removed in v0.7.0).
     #[serde(rename = "ping")]
     Ping,
+
+    /// Set agent operating mode (Normal / Plan / Code).
+    #[serde(rename = "set_mode")]
+    SetMode { mode: String },
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -318,6 +322,10 @@ pub enum Agent2Ui {
         /// "warn" or "error"
         level: String,
     },
+
+    /// PLAN.md changed — frontend should refresh PlanReviewPanel.
+    #[serde(rename = "plan_changed")]
+    PlanChanged,
 
     #[serde(rename = "balance")]
     Balance {

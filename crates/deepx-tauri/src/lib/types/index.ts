@@ -12,7 +12,5 @@ export type { DocInfo } from "./DocInfo";
 export type { TaskInfo } from "./TaskInfo";
 export type { RoundData } from "./RoundData";
 export type { TurnData } from "./TurnData";
-export type { CodeDeltaRecord } from "./CodeDeltaRecord";
-export type { CodeDaily } from "./CodeDaily";
 export type { UsageInfo } from "./UsageInfo";
 export type { SessionMeta } from "./SessionMeta";

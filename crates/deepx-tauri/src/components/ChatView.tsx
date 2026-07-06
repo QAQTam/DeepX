@@ -1,3 +1,4 @@
+import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import MessageList from "./MessageList";
 import InputBar from "./InputBar";
@@ -7,14 +8,20 @@ import AskDialog from "./AskDialog";
 interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; hasMore: boolean; onLoadMore: () => void; }
 
 export default function ChatView(props: ChatViewProps) {
-  // Use props.chat directly — SolidJS reactivity depends on prop access, not destructuring.
   const chat = () => props.chat;
   const seed = () => chat().sessionInfo.seed;
+  const [mode, setMode] = createSignal("normal");
 
-  async function handleSend(text: string) {
+  async function handleSetMode(m: string) {
+    setMode(m);
+    try { await invoke("cmd_set_mode", { seed: seed(), mode: m }); }
+    catch (e) { console.error("set_mode error:", e); }
+  }
+
+  async function handleSend(text: string, files: string[]) {
     try {
       chat().clearError();
-      await invoke("cmd_send_message", { seed: seed(), text });
+      await invoke("cmd_send_message", { seed: seed(), text, files });
     } catch (e) {
       console.error("send_message error:", e);
     }
@@ -47,7 +54,6 @@ export default function ChatView(props: ChatViewProps) {
         error={chat().error()}
         onDismissError={() => chat().clearError()}
         isCompacting={chat().isCompacting}
-        codeDeltas={chat().codeDeltas}
         compactResult={chat().compactResult}
         onCompact={handleCompact}
       />
@@ -58,6 +64,8 @@ export default function ChatView(props: ChatViewProps) {
         isStreaming={chat().isStreaming}
         disabled={chat().inputDisabled()}
         restoreText={chat().restoreText}
+        mode={mode()}
+        onModeChange={handleSetMode}
       />
       <AskDialog
         state={chat().askState}

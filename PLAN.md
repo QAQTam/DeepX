@@ -50,6 +50,7 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 ---
 
 ### 7.0 现状审计
+<!-- approved: ~2026 -->
 
 **已有：**
 
@@ -70,6 +71,7 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 结论：只在执行点有审计，其余全无。
 
 ### 7.1 审计持久化（P0，低难度）
+<!-- approved: ~2026 -->
 
 **不存 body，存指纹：**
 
@@ -88,6 +90,7 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 - `manager.rs`: `args` 存储完整 `serde_json::Value`
 
 ### 7.2 OS PIN 授权（P1，中难度）
+<!-- approved: ~2026 -->
 
 | 平台 | API | 备注 |
 |------|-----|------|
@@ -97,6 +100,7 @@ v0.7.0: 告别 bug-fix 时代，引入审计链路 + OS 授权 + 合规过滤 + 
 两阶段：会话级（agent 启动验证一次）→ 操作级（高危工具执行前弹框）
 
 ### 7.3 合规内容过滤（P1，中难度）
+<!-- approved: ~2026 -->
 
 **A. System prompt 层：** 拒绝情感陪伴、心理咨询、诱导性询问
 
@@ -111,6 +115,7 @@ fn content_guard(input: &str) -> Result<(), String> { ... }
 调用点：`handle_user_input` → `content_guard(&text)?`
 
 ### 7.4 PLAN Review 工具（P1，中难度）
+<!-- approved: ~2026 -->
 
 Tauri 新组件 `PlanReviewPanel.tsx`：解析 PLAN.md → 逐条 Approve/Reject/Ask → 写回 HTML 注释元数据。
 

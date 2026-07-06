@@ -10,6 +10,7 @@ use super::file_mutate;
 use super::file_query;
 
 use super::task;
+use super::plan;
 use super::ask_user;
 use super::process_inspect;
 use super::memory;
@@ -34,6 +35,9 @@ pub fn build_tool_manager(extra_registrars: &[ToolRegistrar]) -> ToolManager {
 
     // ── 任务 ──
     task::register(&mut mgr);
+
+    // ── PLAN ──
+    plan::register(&mut mgr);
 
     // ── 交互 ──
     ask_user::register(&mut mgr);

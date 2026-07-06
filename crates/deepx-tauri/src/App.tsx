@@ -2,7 +2,7 @@ import { createSignal, onMount, onCleanup, Show, For, Switch, Match } from "soli
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { createChatStore, type CodeDelta, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
+import { createChatStore, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
 import type { Agent2Ui } from "@/lib/types";
 import ChatView from "./components/ChatView";
 import StartupView from "./components/StartupView";
@@ -48,6 +48,17 @@ export default function App() {
   const [activeSeed, setActiveSeed] = createSignal<string>("");
   // Has the user explicitly chosen a session?
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
+  const [version, setVersion] = createSignal("");
+  const [sidebarW, setSidebarW] = createSignal(
+    Number(localStorage.getItem("deepx:sidebar-w")) || 220
+  );
+
+  // Apply sidebar width to CSS variable
+  onMount(() => {
+    document.documentElement.style.setProperty("--sidebar-w", sidebarW() + "px");
+    // Fetch version
+    invoke<string>("cmd_get_version").then(setVersion).catch(() => {});
+  });
   const [theme, setTheme] = createSignal<ThemeMode>("system");
   const [refreshKey, setRefreshKey] = createSignal(0); // bump to refresh TokenChart
 
@@ -172,14 +183,6 @@ export default function App() {
       case "tool_notice": chat.handleToolNotice(p); break;
 
       case "exec_progress": chat.handleExecProgress((p.tool_call_id ?? "") as string, (p.chunk ?? "") as string); break;
-      case "code_delta": {
-        const delta: CodeDelta = {
-          timestamp: BigInt(Date.now()), lines_added: (p.lines_added ?? 0) as number, lines_removed: (p.lines_removed ?? 0) as number, files_created: (p.files_created ?? 0) as number, files_deleted: (p.files_deleted ?? 0) as number, file: p.file as string | undefined,
-        };
-        const current = chat.codeDeltas();
-        chat.setCodeDeltas([...current.slice(-499), delta]);
-        break;
-      }
     }
   }
 
@@ -461,8 +464,35 @@ export default function App() {
               </button>
             </div>
           </div>
+          <Show when={version()}>
+            <div class="sidebar-version">v{version()}</div>
+          </Show>
+          <div
+            class="sidebar-resize-handle"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const startX = e.clientX;
+              const startW = sidebarW();
+              const handle = e.currentTarget as HTMLElement;
+              handle.classList.add("active");
+              const onMove = (ev: MouseEvent) => {
+                const w = Math.max(160, Math.min(500, startW + ev.clientX - startX));
+                setSidebarW(w);
+                document.documentElement.style.setProperty("--sidebar-w", w + "px");
+              };
+              const onUp = () => {
+                handle.classList.remove("active");
+                localStorage.setItem("deepx:sidebar-w", String(sidebarW()));
+                document.removeEventListener("mousemove", onMove);
+                document.removeEventListener("mouseup", onUp);
+              };
+              document.addEventListener("mousemove", onMove);
+              document.addEventListener("mouseup", onUp);
+            }}
+          />
         </aside>
         <main class="main-content">
+          <Show when={chatStores.size > 0}>
           <div class="open-tabs">
             <For each={[...chatStores.keys()]}>
               {(seed) => (
@@ -490,6 +520,7 @@ export default function App() {
               )}
             </For>
           </div>
+          </Show>
           <Switch>
             <Match when={view() === "settings"}>
               <SettingsView lang={configLang} onLangChange={switchLang} onClose={() => setView("chat")} theme={theme} onThemeChange={switchTheme} />

@@ -18,9 +18,9 @@
 
 /* ── DeepX Tauri App Styles ── */
 :root {
-  --bg-primary: #faf8f5;
-  --bg-secondary: #f3efe9;
-  --bg-tertiary: #ebe5db;
+  --bg-primary: #f5efe6;
+  --bg-secondary: #ede5d8;
+  --bg-tertiary: #e3d9c7;
   --bg-hover: #e3dcd0;
   --border-panel: rgba(0,0,0,0.10);
   --border-card: rgba(0,0,0,0.08);
@@ -71,8 +71,8 @@
   --shadow-toast: 0 4px 16px rgba(44,36,22,0.10);
 
   /* Panel semi-transparent backgrounds */
-  --bg-glass-panel: rgba(250,248,245,0.82);
-  --bg-glass-bar: rgba(250,248,245,0.75);
+  --bg-glass-panel: rgba(245,239,230,0.82);
+  --bg-glass-bar: rgba(245,239,230,0.75);
 
   /* Heatmap (green scale) */
   --heatmap-l1: #c6e48b;
@@ -208,7 +208,17 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── App Layout ── */
-.app-container { display: grid; grid-template-columns: 220px 1fr; grid-template-rows: 1fr; height: 100vh; }
+.app-container { display: grid; grid-template-columns: var(--sidebar-w, 220px) 1fr; grid-template-rows: 1fr; height: 100vh; }
+
+/* ── Sidebar resize handle ── */
+.sidebar-resize-handle {
+  position: absolute; right: -2px; top: 0; bottom: 0;
+  width: 6px; cursor: col-resize; z-index: 2;
+  transition: background 150ms;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.active { background: var(--accent); }
+.sidebar { position: relative; }
 
 /* ── Main Content ── */
 .main-content {

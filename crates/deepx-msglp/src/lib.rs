@@ -141,6 +141,8 @@ pub struct Loop {
     writer_dead: Arc<AtomicBool>,
     /// Dedicated notification thread to keep COM alive across notifications.
     notify: notification::NotificationThread,
+    /// Agent operating mode (0=Normal, 1=Plan, 2=Code).
+    mode: u8,
 }
 /// Extract file paths that a tool writes to (mutates).
 /// Returns empty vec for read-only and non-file tools.
@@ -337,6 +339,7 @@ impl Loop {
             code_stats: Vec::new(),
             writer_dead,
             notify: notification::NotificationThread::spawn(),
+            mode: 0,
         }
     }
 
@@ -483,6 +486,34 @@ impl Loop {
             Ui2Agent::ToolCall { id, name, action, args } => { self.handle_tool_call(&id, &name, &action, &args); }
             Ui2Agent::UndoTurn { ref turn_id } => { self.handle_undo_turn(turn_id); }
             Ui2Agent::Compact => { self.handle_compact(); }
+            Ui2Agent::SetMode { ref mode } => {
+                let m: u8 = match mode.as_str() {
+                    "plan" => 1,
+                    "code" => 2,
+                    _ => 0,
+                };
+                self.mode = m;
+                deepx_tools::bridge::set_mode(m);
+
+                // Inject mode system message into context (not persisted to JSONL)
+                let mode_msg = match m {
+                    1 => "## PLAN Mode\n\
+You are now in PLAN mode. Your job: understand the user's intent, gather \
+context via explore/search/read_file/grep, and produce a detailed plan \
+using plan_create and plan_list tools.\n\n\
+ALLOWED: explore, search, fetch, read_file, grep, list_dir, plan_list, \
+plan_create, plan_update, task (subagent).\n\
+BLOCKED: write_file, edit_file, delete_file, move_file, exec_command, \
+git_commit, git_push.",
+                    2 => "## CODE Mode\n\
+You are now in CODE mode. All tools are available. Execute the plan.",
+                    _ => "",
+                };
+                if !mode_msg.is_empty() {
+                    self.agent.msg.push_system(deepx_types::Message::system(mode_msg));
+                }
+                log::info!("[AGENT] mode set to {mode} (internal={m})");
+            }
             _ => {}
         }
     }
@@ -1075,7 +1106,14 @@ impl Loop {
             }
         }
 
-        self.agent.msg.push_user(text);
+        // ── Inject mode suffix into user text ──
+        let full_text = if self.mode == 1 {
+            format!("{}\n\n[Mode:PLAN:gathering]\nYou are in PLAN mode. Only explore, search, read_file, grep, and plan tools are allowed. Do NOT use write, edit, delete, or exec tools.", text)
+        } else {
+            text.to_string()
+        };
+
+        self.agent.msg.push_user(&full_text);
         // Flush user message immediately — survive LLM crash
         self.flush_meta_and_stats();
 

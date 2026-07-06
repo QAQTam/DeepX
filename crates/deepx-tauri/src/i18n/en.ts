@@ -87,6 +87,7 @@ const en = {
     noActivity: "No activity",
     files: "Files",
     noFiles: "No files",
+    gitChanges: "Git Changes",
   },
   toast: {
     agentDisconnected: "Agent process disconnected — reconnecting...",
@@ -104,6 +105,12 @@ const en = {
     reject: "Reject",
     askItem: "Ask about this item",
   },
+  mode: {
+    normal: "Normal",
+    plan: "PLAN",
+    code: "CODE",
+  },
+  chatAttach: "Attach files",
 };
 
 export default en;

@@ -89,6 +89,7 @@ const zh: I18nStrings = {
     noActivity: "无活动",
     files: "文件",
     noFiles: "无文件",
+    gitChanges: "Git 变更",
   },
   toast: {
     agentDisconnected: "Agent 进程已断开 — 正在重连...",
@@ -106,6 +107,12 @@ const zh: I18nStrings = {
     reject: "拒绝",
     askItem: "询问此项",
   },
+  mode: {
+    normal: "普通",
+    plan: "规划",
+    code: "执行",
+  },
+  chatAttach: "添加文件",
 };
 
 export default zh;

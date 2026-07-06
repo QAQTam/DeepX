@@ -20,6 +20,8 @@ pub mod ask_user;
 
 pub mod task;
 
+pub mod plan;
+
 pub mod process_registry;
 pub mod process_inspect;
 
