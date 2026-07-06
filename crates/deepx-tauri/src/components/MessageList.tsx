@@ -163,6 +163,7 @@ export default function MessageList(props: MessageListProps) {
                       role="assistant"
                       rounds={turn.rounds as Round[]}
                       status={turn.status}
+                      turn={turn}
                     />
                   </div>
                 );

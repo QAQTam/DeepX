@@ -4,18 +4,63 @@ import { useI18n } from "../i18n";
 import AnsiUp from "ansi-to-html";
 import { renderDiffHtml, isUnifiedDiff } from "../lib/diff";
 
-// Per-component AnsiUp: avoids state pollution from split ANSI sequences across chunks
-// A fresh instance is created for each ToolCallCard mount.
 function createAnsiRenderer() {
   return new AnsiUp({ escapeXML: true });
 }
 
 function renderOutput(text: string, ansi: AnsiUp): string {
-  if (isUnifiedDiff(text)) {
-    return renderDiffHtml(text);
-  }
-  const html = ansi.toHtml(text);
-  return `<pre class="diff-plain">${html}</pre>`;
+  if (isUnifiedDiff(text)) return renderDiffHtml(text);
+  return `<pre class="diff-plain">${ansi.toHtml(text)}</pre>`;
+}
+
+// ── Tool meta mapping ──
+interface ToolMeta { icon: string; verb: string; }
+function toolMeta(name: string): ToolMeta {
+  const map: Record<string, ToolMeta> = {
+    explore:        { icon: "🔍", verb: "explore" },
+    read_file:      { icon: "📖", verb: "reading" },
+    file_read:      { icon: "📖", verb: "reading" },
+    write_file:     { icon: "✏️", verb: "writing" },
+    file_write:     { icon: "✏️", verb: "writing" },
+    edit_file:      { icon: "✂️", verb: "editing" },
+    file_edit:      { icon: "✂️", verb: "editing" },
+    edit_file_diff: { icon: "✂️", verb: "editing" },
+    file_edit_diff: { icon: "✂️", verb: "editing" },
+    delete_file:    { icon: "🗑", verb: "deleting" },
+    file_delete:    { icon: "🗑", verb: "deleting" },
+    file_move:      { icon: "📦", verb: "moving" },
+    file_copy:      { icon: "📋", verb: "copying" },
+    file_diff:      { icon: "=", verb: "diffing" },
+    file_list:      { icon: "📂", verb: "listing" },
+    list_dir:       { icon: "📂", verb: "listing" },
+    file_search:    { icon: "🔎", verb: "searching" },
+    grep:           { icon: "🔎", verb: "searching" },
+    exec:           { icon: "⚡", verb: "exec" },
+    exec_run:       { icon: "⚡", verb: "exec" },
+    web_search:     { icon: "🌐", verb: "web" },
+    web_fetch:      { icon: "🌐", verb: "webFetch" },
+    git_add:        { icon: "📦", verb: "git" },
+    git_commit:     { icon: "📦", verb: "git" },
+    git_diff:       { icon: "📦", verb: "git" },
+    git_log:        { icon: "📦", verb: "git" },
+    git_show:       { icon: "📦", verb: "git" },
+    git_status:     { icon: "📦", verb: "git" },
+    task_create:    { icon: "📋", verb: "task" },
+    task_update:    { icon: "📋", verb: "task" },
+    task_delete:    { icon: "📋", verb: "task" },
+    task_list:      { icon: "📋", verb: "task" },
+    plan_create:    { icon: "📐", verb: "plan" },
+    plan_update:    { icon: "📐", verb: "plan" },
+    plan_list:      { icon: "📐", verb: "plan" },
+    ask_user:       { icon: "❓", verb: "ask" },
+    memory_read:    { icon: "🧠", verb: "memory" },
+    memory_write:   { icon: "🧠", verb: "memory" },
+    memory_clear:   { icon: "🧠", verb: "memory" },
+    process_check:  { icon: "🔧", verb: "process" },
+    process_kill:   { icon: "🔧", verb: "process" },
+    process_wait:   { icon: "🔧", verb: "process" },
+  };
+  return map[name] ?? { icon: "•", verb: name };
 }
 
 export default function ToolCallCard(props: {
@@ -25,76 +70,54 @@ export default function ToolCallCard(props: {
 }) {
   const { t } = useI18n();
   let bodyRef!: HTMLDivElement;
-  const icon = toolIcon(props.call.name);
+  const meta = toolMeta(props.call.name);
   const hasResult = !!props.result;
-  // Default open for running tools so streaming output is immediately visible
-  const [open, setOpen] = createSignal(!hasResult);
+  const isOk = hasResult && props.result!.success;
+  const [open, setOpen] = createSignal(false);
   const [elapsed, setElapsed] = createSignal(0);
   let timer: ReturnType<typeof setInterval> | null = null;
 
-  // Track elapsed time while tool is running
   onMount(() => {
-    if (!hasResult) {
-      timer = setInterval(() => setElapsed((n) => n + 1), 1000);
-    }
+    if (!hasResult) timer = setInterval(() => setElapsed((n) => n + 0.1), 100);
   });
-  onCleanup(() => {
-    if (timer) { clearInterval(timer); timer = null; }
-  });
-  // Stop timer when result arrives
-  createEffect(() => {
-    if (hasResult && timer) {
-      clearInterval(timer);
-      timer = null;
-    }
-  });
-  const stateClass = () =>
-    hasResult
-      ? props.result!.success ? "tool-success" : "tool-error"
-      : "tool-running";
+  onCleanup(() => { if (timer) { clearInterval(timer); timer = null; } });
+  createEffect(() => { if (hasResult && timer) { clearInterval(timer); timer = null; } });
 
-  // Per-component ANSI renderer — avoids cross-chunk state pollution
-  const ansi = createAnsiRenderer();
-
-  // Auto-expand when streaming output arrives (redundant with default but safe)
-  createEffect(on(() => props.streamingOutput, (v) => {
-    if (v) setOpen(true);
-  }));
-
-  // Auto-expand when result arrives (tool completed)
-  createEffect(on(() => props.result, (r) => {
-    if (r) setOpen(true);
-  }));
-
-  // Auto-scroll to bottom on content change
   createEffect(on(() => [props.streamingOutput, props.result?.output], () => {
     if (bodyRef) bodyRef.scrollTop = bodyRef.scrollHeight;
   }));
 
+  const fmtElapsed = () => {
+    const s = elapsed();
+    if (s < 1) return "0." + Math.floor(s * 10) + "s";
+    if (s < 10) return s.toFixed(1) + "s";
+    return Math.floor(s) + "s";
+  };
+
+  const verb = () => {
+    const map = t().tool.status as Record<string, string>;
+    return map[meta.verb] ?? meta.verb;
+  };
+
+  // State class: running (yellow) / ok (green) / err (red)
+  const stateCls = () => !hasResult ? "capsule-running" : isOk ? "capsule-ok" : "capsule-err";
+
+  const ansi = createAnsiRenderer();
+
   return (
-    <div class={`tool-card ${stateClass()}`}>
-      <div class="tool-card-header" onClick={() => setOpen((o) => !o)}>
-        <span class="tool-card-icon">{icon}</span>
-        <span class="tool-card-name">{props.call.name}</span>
-        <span class="tool-card-args">{props.call.args_display}</span>
-        <Show when={hasResult}>
-          <span class={`tool-card-status ${props.result!.success ? "success" : "error"}`}>
-            {props.result!.success ? t().tool.ok : t().tool.err}
-          </span>
+    <div class={`tool-capsule ${stateCls()} ${open() ? "expanded" : ""}`}>
+      <div class="capsule-bar" onClick={() => setOpen((o) => !o)}>
+        <span class="capsule-icon">{meta.icon}</span>
+        <span class="capsule-verb">{verb()}</span>
+        <Show when={props.call.args_display}>
+          <span class="capsule-args">{props.call.args_display}</span>
         </Show>
         <Show when={!hasResult}>
-          <span class="tool-card-status tool-running-text">{t().tool.running}</span>
-          <Show when={elapsed() > 0}>
-            <span class="tool-card-elapsed">{elapsed()}s</span>
-          </Show>
+          <span class="capsule-timer">{fmtElapsed()}</span>
         </Show>
       </div>
-      <Show when={open() && (hasResult || props.streamingOutput)} fallback={
-        <Show when={!hasResult}>
-          <div class="tool-card-body muted">{t().tool.running}...</div>
-        </Show>
-      }>
-        <div class="tool-card-body" ref={bodyRef} innerHTML={
+      <Show when={open() && (hasResult || props.streamingOutput)}>
+        <div class="capsule-body" ref={bodyRef} innerHTML={
           hasResult
             ? renderOutput(props.result!.output, ansi)
             : (props.streamingOutput ? renderOutput(props.streamingOutput, ansi) : "")
@@ -103,14 +126,3 @@ export default function ToolCallCard(props: {
     </div>
   );
 }
-
-function toolIcon(name: string): string {
-  const icons: Record<string, string> = {
-    read_file: "R", write_file: "W", edit_file: "E", delete_file: "D",
-    exec: ">", explore: "S", search: "Z", glob: "G",
-    web_search: "@", web_fetch: "@", list_dir: "L", diff: "=",
-    task: "T", ask_user: "?",
-  };
-  return icons[name] ?? "*";
-}
-

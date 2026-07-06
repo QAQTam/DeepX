@@ -1,0 +1,8 @@
+- [completed] T1: Find root cause of missing assistant messages on session resume — Resume session causes assistant messages to be missing from UI. Introduced when replacing streaming-markdown with marked.
+- [completed] T2: Fix MarkdownBody.tsx — remove defer:true to render on mount — Remove { defer: true } from MarkdownBody.tsx createEffect so markdown renders on initial mount for resumed sessions.
+- [completed] T3: Investigate why assistant messages still missing after MarkdownBody fix — MarkdownBody fix alone didn't resolve — need to trace the full session restore data pipeline from Rust to frontend.
+- [completed] T4: Fix streaming flicker in MarkdownBody — Streaming causes flickering due to full markdown re-parse + innerHTML replacement on every RAF delta. Fix: plain text during streaming, markdown only when final.
+- [completed] T5: Analyze opencode approach: learnable vs non-applicable — Analyze opencode's anti-flicker architecture, identify what DeepX can adopt vs what's blocked by architectural differences.
+- [completed] T6: Implement P0-P2 anti-flicker in MarkdownBody — Implement P0 block projection (marked.lexer), P1 DOM identity tracking (data-key+hash), P2 word-boundary pacing in MarkdownBody.tsx
+- [in_progress] T7: Analyze Codex font rendering & animation — Analyze OpenAI Codex Electron app font rendering and streaming animation design to learn best practices for DeepX.
+- [completed] T8: Add shimmer + staggered fade-in animations — Add cadenced shimmer to ThinkingBlock and staggered fade-in to completed markdown blocks, inspired by Codex.

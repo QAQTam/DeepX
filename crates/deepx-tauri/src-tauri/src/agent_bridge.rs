@@ -354,8 +354,8 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
                 }
             };
             if line.trim().is_empty() { continue; }
-            let event: Agent2Ui = match serde_json::from_str(&line) {
-                Ok(e) => e,
+            let payload: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
                 Err(e) => {
                     log::info!("[REGISTRY] failed to parse from {}: {} -- error: {e}",
                         &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))],
@@ -363,9 +363,8 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
                     continue;
                 }
             };
-            let event_type = agent2ui_event_name(&event);
+            let event_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
             log::info!("[REGISTRY] agent {} got event: {}", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))], event_type);
-            let payload = serde_json::to_value(&event).unwrap_or_default();
             if app_handle.emit(&format!("agent-{}-event", seed_owned), payload.clone()).is_err() {
                 break;
             }
@@ -868,8 +867,12 @@ pub fn cmd_set_workspace(seed: String, path: String) -> Result<(), String> {
     let dir = deepx_types::platform::sessions_dir().join(&seed);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
     std::fs::write(dir.join("workspace.txt"), path.trim()).map_err(|e| format!("write: {e}"))?;
-    // Tell agent to reload config (which includes workspace)
-    send_to_agent(&seed, Ui2Agent::ReloadConfig)
+    // Tell agent to reload config (which includes workspace).
+    // If agent isn't running yet, the change will apply on next spawn.
+    if let Err(e) = send_to_agent(&seed, Ui2Agent::ReloadConfig) {
+        log::warn!("cmd_set_workspace: ReloadConfig not sent (agent not running): {e}");
+    }
+    Ok(())
 }
 
 /// Get aggregated code stats for the last N days (removed in v0.7.0).
@@ -1248,38 +1251,6 @@ fn days_before_today(days: u32) -> String {
     let epoch_days = total_secs / 86400;
     let (y, m, d) = deepx_types::platform::civil_from_days(epoch_days as i64);
     format!("{y:04}-{m:02}-{d:02}")
-}
-
-// ── Helpers ──
-
-/// Map an Agent2Ui variant to a short event name for typed frontend filtering.
-fn agent2ui_event_name(event: &Agent2Ui) -> &'static str {
-    match event {
-        Agent2Ui::TurnStart { .. } => "turn_start",
-        Agent2Ui::TurnEnd { .. } => "turn_end",
-        Agent2Ui::RoundDelta { .. } => "round_delta",
-        Agent2Ui::RoundComplete { .. } => "round_complete",
-        Agent2Ui::ToolResults { .. } => "tool_results",
-        Agent2Ui::ToolExecDelta { .. } => "tool_exec_delta",
-        Agent2Ui::SessionRestored { .. } => "session_restored",
-        Agent2Ui::MoreTurns { .. } => "more_turns",
-        Agent2Ui::SessionCreated { .. } => "session_created",
-        Agent2Ui::Error { .. } => "error",
-        Agent2Ui::ToolNotice { .. } => "tool_notice",
-        Agent2Ui::Balance { .. } => "balance",
-        Agent2Ui::Dashboard { .. } => "dashboard",
-        Agent2Ui::Done => "done",
-        Agent2Ui::CompactStart { .. } => "compact_start",
-        Agent2Ui::CompactEnd { .. } => "compact_end",
-        Agent2Ui::Cancelled => "cancelled",
-        Agent2Ui::ShutdownAck => "shutdown_ack",
-        Agent2Ui::AuditRecord { .. } => "audit_record",
-        Agent2Ui::Ready => "ready",
-        Agent2Ui::ExecProgress { .. } => "exec_progress",
-        Agent2Ui::ToolCallPreview { .. } => "tool_call_preview",
-        Agent2Ui::CodeDelta { .. } => "code_delta",
-        _ => "unknown",
-    }
 }
 
 // ── PLAN Review commands ────────────────────────────────────────────

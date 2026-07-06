@@ -1,34 +1,3 @@
-/* ── Thinking Block ── */
-.think-block { margin: 6px 0; border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0; background: var(--bg-secondary); }
-.think-header { display: flex; align-items: center; gap: 6px; padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--text-muted); user-select: none; transition: background var(--transition); border-radius: 0 var(--radius) 0 0; }
-.think-header:hover { background: var(--bg-tertiary); }
-.think-header svg { transition: transform var(--transition); }
-.think-header.open svg { transform: rotate(90deg); }
-.think-body { padding: 10px 14px; font-size: 13px; line-height: 1.6; color: var(--text-secondary); max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; font-family: var(--font-sans); transition: opacity 0.18s ease; border-radius: 0 0 var(--radius) 0; }
-@starting-style { .think-body { opacity: 0; } }
-
-/* ── Tool Call Card ── */
-.tool-card { margin: 6px 0; border-left: 3px solid var(--border-card); border-radius: 0 var(--radius) var(--radius) 0; background: var(--bg-secondary); transition: border-left-color var(--transition); }
-.tool-card-header { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; transition: background var(--transition); user-select: none; border-radius: 0 var(--radius) 0 0; }
-.tool-card-header:hover { background: var(--bg-tertiary); }
-.tool-card-icon { font-size: 14px; flex-shrink: 0; width: 22px; height: 22px; border-radius: var(--radius); background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-weight: 600; font-size: 11px; color: var(--accent); }
-.tool-card-name { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--accent); flex-shrink: 0; }
-.tool-card-args { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-card-status { margin-left: auto; font-size: 11px; flex-shrink: 0; font-weight: 500; }
-.tool-card-status.success { color: var(--green); }
-.tool-card-status.error { color: var(--red); }
-.tool-card-status.tool-running-text { color: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
-.tool-card-elapsed { margin-left: 6px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); flex-shrink: 0; }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-.tool-card-body { padding: 10px 14px; font-size: 13px; line-height: 1.5; color: var(--text-tool-body); background: var(--bg-tool-body); max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; font-family: var(--font-mono); transition: opacity 0.18s ease; border-radius: 0 0 var(--radius) 0; }
-.tool-card-body.muted { opacity: 0.4; }
-@starting-style { .tool-card-body { opacity: 0; } }
-
-/* Tool card state borders */
-.tool-card.tool-running { border-left-color: var(--accent); }
-.tool-card.tool-success { border-left-color: var(--green); }
-.tool-card.tool-error   { border-left-color: var(--red); }
-
 /* ── Diff View (unified) ── */
 .diff-block {
   font-family: var(--font-mono); font-size: 12px; line-height: 1.6;

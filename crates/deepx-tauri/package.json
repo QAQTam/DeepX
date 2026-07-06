@@ -21,8 +21,10 @@
     "ansi-to-html": "^0.7.2",
     "diff2html": "^3.4.56",
     "lightweight-charts": "^5.2.0",
+    "marked": "^18.0.5",
+    "marked-shiki": "^1.2.1",
+    "shiki": "^4.3.1",
     "solid-js": "^1.9.13",
-    "streaming-markdown": "^0.2.15",
     "tailwindcss": "^4.3.0"
   },
   "devDependencies": {

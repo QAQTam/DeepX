@@ -1,57 +1,284 @@
-import * as smd from "streaming-markdown";
-import { onMount, onCleanup, createEffect } from "solid-js";
+import { on, createEffect } from "solid-js";
+import { marked, Renderer } from "marked";
+import { createHighlighter, createOnigurumaEngine } from "shiki";
+
+let hiPromise: ReturnType<typeof createHighlighter> | null = null;
+
+function getHi() {
+  if (!hiPromise) {
+    hiPromise = createHighlighter({
+      themes: ["github-light", "github-dark"],
+      langs: [
+        "ts", "tsx", "js", "jsx", "json", "yaml", "toml",
+        "rs", "rust", "py", "python", "go", "java", "kt",
+        "css", "scss", "html", "bash", "sh", "shell",
+        "sql", "graphql", "md", "markdown", "diff",
+        "c", "cpp", "zig", "nim",
+      ],
+      engine: createOnigurumaEngine(() => import("shiki/wasm")),
+    }).catch((err) => {
+      hiPromise = null;
+      throw err;
+    });
+  }
+  return hiPromise;
+}
+
+function detectTheme(): "github-light" | "github-dark" {
+  if (typeof document === "undefined") return "github-dark";
+  const theme = document.documentElement.getAttribute("data-theme");
+  return theme === "dark" || theme === "dark-gray" ? "github-dark" : "github-light";
+}
+
+// ── P0: Block projection ──
+
+interface MarkdownBlock {
+  key: string;
+  hash: string;
+  raw: string;
+  stable: boolean;   // true = parsed markdown block; false = live streaming tail
+  html?: string;      // cached rendered HTML (stable blocks only)
+}
+
+function blockHash(raw: string): string {
+  if (raw.length <= 24) return String(raw.length);
+  return `${raw.length}:${raw.slice(0, 10)}…${raw.slice(-10)}`;
+}
+
+/** Inject table separator if header row exists but separator is missing. */
+function fixTable(src: string): string {
+  return src.replace(
+    /^(\|.+\|)\n(?!\s*\|[-\s|]*\|)/m,
+    "$1\n|---|---|---|\n",
+  );
+}
+
+/** Build a marked Renderer with Shiki highlighting. */
+function buildRenderer(hi: Awaited<ReturnType<typeof getHi>>) {
+  const theme = detectTheme();
+  const renderer = new Renderer();
+  renderer.code = ({ text, lang }) => {
+    const langId = !lang ? "text"
+      : lang === "h" ? "c"
+      : lang === "hpp" ? "cpp"
+      : lang;
+    try {
+      return hi.codeToHtml(text, { lang: langId, theme });
+    } catch {
+      return `<pre><code>${text}</code></pre>`;
+    }
+  };
+  return renderer;
+}
+
+/** Render a single stable block's raw markdown to HTML. */
+function renderBlockHTML(raw: string, hi: Awaited<ReturnType<typeof getHi>>): string {
+  const src = fixTable(raw);
+  let html = marked.parse(src, {
+    async: false,
+    gfm: true,
+    breaks: false,
+    renderer: buildRenderer(hi),
+  });
+  if (typeof html !== "string") return "";
+  // Strip Shiki's inline background-color so CSS variables control the theme
+  html = html.replace(
+    /(<pre\b[^>]*style=")([^"]*)(")/gi,
+    (_, before, styles, after) =>
+      before + styles.replace(/background-color\s*:\s*[^;]+;?/gi, "") + after,
+  );
+  return html;
+}
+
+/** P0: Split markdown text into stable blocks + live streaming tail. */
+function projectBlocks(text: string, final: boolean, prev: MarkdownBlock[]): MarkdownBlock[] {
+  if (final) {
+    const hash = blockHash(text);
+    const cached = prev[0];
+    if (cached && cached.key === "f" && cached.hash === hash && cached.html) {
+      return [cached];
+    }
+    return [{ key: "f", hash, raw: text, stable: true }];
+  }
+
+  // Streaming: use marked.lexer() to find block boundaries
+  const tokens = marked.lexer(text);
+
+  // Find the last non-space token — this is the "live" tail
+  let tailIdx = tokens.length;
+  while (tailIdx > 0 && tokens[tailIdx - 1]?.type === "space") tailIdx--;
+  if (tailIdx === 0) {
+    return [{ key: "l0", hash: blockHash(text), raw: text, stable: false }];
+  }
+  tailIdx--; // index of the last content token
+
+  const blocks: MarkdownBlock[] = [];
+
+  // Stable blocks: all tokens before the live tail
+  for (let i = 0; i < tailIdx; i++) {
+    const token = tokens[i];
+    if (!token || token.type === "space") continue;
+    let raw = token.raw;
+    // Absorb trailing whitespace tokens into this block
+    while (i + 1 < tailIdx && tokens[i + 1]?.type === "space") raw += tokens[++i]!.raw;
+    const key = `b${blocks.length}`;
+    const hash = blockHash(raw);
+    // Reuse cached HTML if this block hasn't changed
+    const cached = prev.find(p => p.key === key && p.hash === hash);
+    blocks.push({ key, hash, raw, stable: true, html: cached?.html });
+  }
+
+  // Live tail: raw text of the last token(s), possibly incomplete
+  const liveRaw = tokens.slice(tailIdx).map(t => t.raw).join("");
+  const paced = paceText(liveRaw);
+  blocks.push({ key: `l${blocks.length}`, hash: blockHash(paced), raw: paced, stable: false });
+
+  return blocks;
+}
+
+// ── P2: Word-boundary pacing ──
+
+const TEXT_SNAP = /[\s.,!?;:)\]]/;
+
+/** Pace live text: hide trailing partial words for smoother reveal. */
+function paceText(text: string): string {
+  if (text.length < 60) return text;
+  // Search backwards for a word boundary within last 12 chars
+  const start = Math.max(0, text.length - 12);
+  for (let i = text.length - 1; i >= start; i--) {
+    if (TEXT_SNAP.test(text[i]!)) return text.slice(0, i + 1);
+  }
+  return text;
+}
+
+// ── P1: DOM patching via data-key + data-hash ──
+
+/** Create a wrapper div for a stable block's rendered HTML. */
+function createStableEl(block: MarkdownBlock): HTMLDivElement {
+  const el = document.createElement("div");
+  el.dataset.key = block.key;
+  el.dataset.hash = block.hash;
+  el.style.display = "contents";
+  el.innerHTML = block.html ?? "";
+  return el;
+}
+
+/** Create a text node wrapper for the live tail. */
+function createLiveEl(block: MarkdownBlock): HTMLDivElement {
+  const el = document.createElement("div");
+  el.dataset.key = block.key;
+  el.dataset.hash = block.hash;
+  el.style.display = "contents";
+  el.textContent = block.raw;
+  return el;
+}
+
+/** P1: Patch container DOM children to match blocks array. */
+function patchDOM(container: HTMLDivElement, blocks: MarkdownBlock[]) {
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]!;
+    const existing = container.children[i] as HTMLDivElement | undefined;
+
+    // Skip if existing child matches key + hash
+    if (
+      existing instanceof HTMLDivElement &&
+      existing.dataset.key === block.key &&
+      existing.dataset.hash === block.hash
+    ) {
+      // For live blocks, update textContent in place (minimal flicker)
+      if (!block.stable && existing.textContent !== block.raw) {
+        existing.textContent = block.raw;
+      }
+      continue;
+    }
+
+    // Need to create or replace this child
+    if (block.stable && block.html) {
+      const el = createStableEl(block);
+      if (existing) {
+        existing.replaceWith(el);
+      } else {
+        container.appendChild(el);
+      }
+    } else if (!block.stable) {
+      const el = createLiveEl(block);
+      if (existing) {
+        existing.replaceWith(el);
+      } else {
+        container.appendChild(el);
+      }
+    }
+    // If stable but no html yet, leave existing (will fill in next render)
+  }
+
+  // Remove excess children
+  while (container.children.length > blocks.length) {
+    container.lastElementChild?.remove();
+  }
+}
+
+// ── Component ──
 
 interface MarkdownBodyProps {
   content: string;
   class?: string;
-  /** Whether the content is finalized (streaming complete). When true, parser_end is called to flush. */
   final?: boolean;
 }
 
 export default function MarkdownBody(props: MarkdownBodyProps) {
   let container!: HTMLDivElement;
-  let parser: smd.Parser | null = null;
-  let lastLen = 0;
-  let finalized = false; // guard against double parser_end
+  let prevBlocks: MarkdownBlock[] = [];
 
-  onMount(() => {
-    const renderer = smd.default_renderer(container);
-    parser = smd.parser(renderer);
-    // Feed any content that already exists at mount time
-    if (props.content) {
-      smd.parser_write(parser, props.content);
-      lastLen = props.content.length;
+  createEffect(on(() => [props.content, props.final] as const, async ([text, final]) => {
+    // Empty content — clear everything
+    if (!text) {
+      container.innerHTML = "";
+      container.classList.remove("final");
+      prevBlocks = [];
+      return;
     }
-    // If already finalized, flush pending
-    if (props.final && !finalized) {
-      finalized = true;
-      smd.parser_end(parser);
-    }
-  });
 
-  // Feed only the new portion of content (incremental)
-  createEffect(() => {
-    if (!parser) return;
-    const delta = props.content.slice(lastLen);
-    if (delta.length > 0) {
-      smd.parser_write(parser, delta);
-      lastLen = props.content.length;
-    }
-    // Flush remaining pending when content is finalized (once)
-    if (props.final && !finalized) {
-      finalized = true;
-      smd.parser_end(parser);
-    }
-  });
+    // P0: split into blocks
+    const blocks = projectBlocks(text, !!final, prevBlocks);
 
-  onCleanup(() => {
-    if (parser) {
-      if (!finalized) {
-        smd.parser_end(parser);
+    if (final) {
+      // Final render: markdown with syntax highlighting
+      const hi = await getHi();
+      if (!hi) return;
+      if (!blocks[0]!.html) {
+        blocks[0]!.html = renderBlockHTML(blocks[0]!.raw, hi);
       }
-      parser = null;
+      // Replace entire container with the final rendered block
+      container.innerHTML = "";
+      container.appendChild(createStableEl(blocks[0]!));
+      container.classList.add("final");
+      prevBlocks = blocks;
+      return;
     }
-  });
+
+    container.classList.remove("final");
+
+    // Streaming: check if any stable block needs initial rendering
+    const needsRender = blocks.some(b => b.stable && !b.html);
+    if (needsRender) {
+      const hi = await getHi();
+      if (!hi) {
+        // Fallback: all live text
+        container.textContent = paceText(text);
+        prevBlocks = blocks;
+        return;
+      }
+      for (const b of blocks) {
+        if (b.stable && !b.html) {
+          b.html = renderBlockHTML(b.raw, hi);
+        }
+      }
+    }
+
+    // P1: patch the DOM
+    patchDOM(container, blocks);
+    prevBlocks = blocks;
+  }));
 
   return <div ref={container} class={props.class} />;
 }

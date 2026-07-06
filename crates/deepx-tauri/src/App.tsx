@@ -48,6 +48,8 @@ export default function App() {
   const [activeSeed, setActiveSeed] = createSignal<string>("");
   // Has the user explicitly chosen a session?
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
+  // Workspace draft — survives session switches so the sidebar input keeps its value.
+  const [workspaceDraft, setWorkspaceDraft] = createSignal(localStorage.getItem("deepx:workspace") ?? "");
   const [version, setVersion] = createSignal("");
   const [sidebarW, setSidebarW] = createSignal(
     Number(localStorage.getItem("deepx:sidebar-w")) || 220
@@ -125,6 +127,11 @@ export default function App() {
         chat.clearTurns();
         chat.handleSessionCreated(evtSeed);
         localStorage.setItem(LS_KEY, evtSeed);
+        // Sync workspace from backend to draft
+        invoke<string>("cmd_get_workspace", { seed: evtSeed }).then(ws => {
+          chat.setWorkspace(ws);
+          if (evtSeed === activeSeed()) { setWorkspaceDraft(ws); localStorage.setItem("deepx:workspace", ws); }
+        }).catch(() => {});
         // If the agent created a different seed (fallback from failed resume),
         // remap chatStores and activeSeed to the new seed.
         if (evtSeed !== listenerSeed) {
@@ -141,6 +148,11 @@ export default function App() {
         chat.clearTurns();
         chat.handleSessionCreated(evtSeed);
         localStorage.setItem(LS_KEY, evtSeed);
+        // Sync workspace from backend to draft
+        invoke<string>("cmd_get_workspace", { seed: evtSeed }).then(ws => {
+          chat.setWorkspace(ws);
+          if (evtSeed === activeSeed()) { setWorkspaceDraft(ws); localStorage.setItem("deepx:workspace", ws); }
+        }).catch(() => {});
         const turnsArr = p.turns as any[] | undefined;
         if (turnsArr && turnsArr.length > 0) {
           chat.loadTurnsFromRestore(turnsArr);
@@ -220,6 +232,8 @@ export default function App() {
         try {
           const ws = await invoke<string>("cmd_get_workspace", { seed });
           existing.setWorkspace(ws);
+          setWorkspaceDraft(ws);
+          localStorage.setItem("deepx:workspace", ws);
         } catch (_) {}
         return;
       }
@@ -275,6 +289,12 @@ export default function App() {
       const chat = await getOrCreateChatStore(seed);
       chat.clear();
       localStorage.removeItem(LS_KEY);
+      // Apply workspace draft
+      const ws = workspaceDraft();
+      if (ws) {
+        chat.setWorkspace(ws);
+        try { await invoke("cmd_set_workspace", { seed, path: ws }); } catch (e) { console.error(e); }
+      }
       setActiveSeed(seed);
       setHasChosenSession(true);
       setView("chat");
@@ -289,6 +309,12 @@ export default function App() {
       const chat = await getOrCreateChatStore(seed);
       chat.clear();
       localStorage.removeItem(LS_KEY);
+      // Apply workspace draft before sending the message
+      const ws = workspaceDraft();
+      if (ws) {
+        chat.setWorkspace(ws);
+        try { await invoke("cmd_set_workspace", { seed, path: ws }); } catch (e) { console.error(e); }
+      }
       setActiveSeed(seed);
       setHasChosenSession(true);
       setView("chat");
@@ -299,10 +325,12 @@ export default function App() {
   }
 
   async function saveWorkspace(val: string) {
+    setWorkspaceDraft(val);
+    localStorage.setItem("deepx:workspace", val);
     const seed = activeSeed();
-    if (!seed) return;
     const chat = activeChat();
     if (chat) chat.setWorkspace(val);
+    if (!seed) return; // Persisted to localStorage; will apply when session is created.
     try { await invoke("cmd_set_workspace", { seed, path: val }); } catch (e) { console.error(e); }
   }
 
@@ -310,6 +338,8 @@ export default function App() {
     try {
       const selected = await open({ directory: true, multiple: false, title: t().session.workspace });
       if (selected && typeof selected === "string") {
+        setWorkspaceDraft(selected);
+        localStorage.setItem("deepx:workspace", selected);
         const seed = activeSeed();
         const chat = activeChat();
         if (chat) chat.setWorkspace(selected);
@@ -357,6 +387,8 @@ export default function App() {
           // Store workspace in the session's ChatStore once created
           const existingStore = chatStores.get(savedSeed);
           if (existingStore) existingStore.setWorkspace(ws);
+          // Sync to draft if it's currently empty (session workspace takes priority)
+          if (ws && !workspaceDraft()) { setWorkspaceDraft(ws); localStorage.setItem("deepx:workspace", ws); }
         } catch (_) {}
         // Resume the session — this spawns the agent and loads history
         resumeSession(savedSeed);
@@ -452,9 +484,9 @@ export default function App() {
               <input
                 class="sidebar-workspace-input"
                 type="text"
-                value={activeChat()?.workspace() ?? ""}
+                value={workspaceDraft()}
                 placeholder={t().session.workspaceHint}
-                onInput={(e) => { const chat = activeChat(); if (chat) chat.setWorkspace(e.currentTarget.value); }}
+                onInput={(e) => { setWorkspaceDraft(e.currentTarget.value); const chat = activeChat(); if (chat) chat.setWorkspace(e.currentTarget.value); }}
                 onChange={(e) => saveWorkspace(e.currentTarget.value)}
               />
               <button class="sidebar-workspace-browse" onClick={browseWorkspace} title={t().session.workspaceBrowse}>

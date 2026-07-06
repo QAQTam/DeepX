@@ -25,6 +25,7 @@
   --border-panel: rgba(0,0,0,0.10);
   --border-card: rgba(0,0,0,0.08);
   --border-input: rgba(0,0,0,0.12);
+  --border-secondary: rgba(0,0,0,0.10);
   --border-divider: rgba(0,0,0,0.06);
   --border: #d9d2c5;
   --text-primary: #2c2416;
@@ -38,10 +39,10 @@
   --red: #c4553d;
   --red-rgb: 196,85,61;
   --yellow: #b8860b;
-  --orange: #d4783c;
+  --yellow-rgb: 184,134,11;
   --purple: #8b6baa;
   --font-sans: "MiSans", "Noto Sans SC", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code", monospace;
+  --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code", "MiSans", "Noto Sans SC", monospace;
   --radius: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -95,6 +96,7 @@
   --border-panel: rgba(255,255,255,0.08);
   --border-card: rgba(255,255,255,0.06);
   --border-input: rgba(255,255,255,0.10);
+  --border-secondary: rgba(255,255,255,0.08);
   --border-divider: rgba(255,255,255,0.04);
   --border: #333333;
   --text-primary: #e8e4dd;
@@ -108,7 +110,7 @@
   --red: #d4654d;
   --red-rgb: 212,101,77;
   --yellow: #c8961b;
-  --orange: #e08850;
+  --yellow-rgb: 200,150,27;
   --purple: #9b7bba;
 
   --text-diff-del: #ff9080;
@@ -152,6 +154,7 @@
   --border-panel: rgba(255,255,255,0.08);
   --border-card: rgba(255,255,255,0.06);
   --border-input: rgba(255,255,255,0.10);
+  --border-secondary: rgba(255,255,255,0.08);
   --border-divider: rgba(255,255,255,0.04);
   --border: #3d3d3d;
   --text-primary: #e8e4dd;
@@ -165,7 +168,7 @@
   --red: #c4553d;
   --red-rgb: 196,85,61;
   --yellow: #b8860b;
-  --orange: #d4783c;
+  --yellow-rgb: 184,134,11;
   --purple: #8b6baa;
 
   --text-diff-del: #f09080;

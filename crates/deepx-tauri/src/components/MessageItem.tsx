@@ -2,7 +2,7 @@ import { For, Show, Switch, Match, createMemo } from "solid-js";
 import MarkdownBody from "./MarkdownBody";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolCallCard from "./ToolCallCard";
-import type { Round } from "../store/chat";
+import type { Round, Turn } from "../store/chat";
 import { useI18n } from "../i18n";
 
 interface MessageItemProps {
@@ -11,6 +11,7 @@ interface MessageItemProps {
   rounds?: Round[];
   status?: "streaming" | "complete";
   turn_id?: string;
+  turn?: Turn;
   onUndo?: (turnId: string) => void;
 }
 
@@ -32,14 +33,14 @@ export default function MessageItem(props: MessageItemProps) {
           </Show>
         </div>
         <Show when={props.text}>
-          <div class="bubble-user">{props.text}</div>
+          <div class="msg-text">{props.text}</div>
         </Show>
         <Show when={props.rounds && props.rounds.length > 0}>
           <div class="msg-rounds">
             <For each={props.rounds}>
-              {(round) => {
+              {(round, idx) => {
+                const isLast = () => idx() === (props.rounds?.length ?? 0) - 1;
                 // Merge tool results into tool calls / blocks so <For> re-renders
-                // when toolResults change independently of toolCalls/blocks.
                 const mergedToolCalls = createMemo(() =>
                   round.tool_calls.map((tc) => ({
                     call: tc,
@@ -61,11 +62,13 @@ export default function MessageItem(props: MessageItemProps) {
                       when={round.blocks && round.blocks.length > 0}
                       fallback={
                         <>
-                          <Show when={round.thinking}><ThinkingBlock content={round.thinking!} streaming={props.status === "streaming"} /></Show>
-                          <Show when={round.answer}><MarkdownBody class="md-body bubble-ai" content={round.answer!} final={!!(round.blocks && round.blocks.length > 0)} /></Show>
-                          <For each={mergedToolCalls()}>
-                            {(item) => <ToolCallCard call={item.call} result={item.result} streamingOutput={item.streamOutput} />}
-                          </For>
+                          <Show when={round.thinking}><ThinkingBlock content={round.thinking!} streaming={props.status === "streaming"} elapsedMs={round.thinking_ms} /></Show>
+                          <Show when={round.answer}><MarkdownBody class="md-body" content={round.answer!} final={!!(round.blocks && round.blocks.length > 0) || props.status === "complete"} /></Show>
+                          <div class="tool-capsules-row">
+                            <For each={mergedToolCalls()}>
+                              {(item) => <ToolCallCard call={item.call} result={item.result} streamingOutput={item.streamOutput} />}
+                            </For>
+                          </div>
                         </>
                       }
                     >
@@ -73,10 +76,10 @@ export default function MessageItem(props: MessageItemProps) {
                         {(block: any) => (
                           <Switch>
                             <Match when={block.type === "reasoning"}>
-                              <ThinkingBlock content={block.content!} />
+                              <ThinkingBlock content={block.content!} streaming={props.status === "streaming"} elapsedMs={round.thinking_ms} />
                             </Match>
                             <Match when={block.type === "text"}>
-                              <MarkdownBody class="md-body bubble-ai" content={block.content!} final={true} />
+                              <MarkdownBody class="md-body" content={block.content!} final={true} />
                             </Match>
                             <Match when={block.type === "tool"}>
                               <ToolCallCard call={block.card!} result={block.card._result} streamingOutput={block.card._streamOutput} />
@@ -84,6 +87,12 @@ export default function MessageItem(props: MessageItemProps) {
                           </Switch>
                         )}
                       </For>
+                    </Show>
+                    {/* t/s footer on last round of completed turn */}
+                    <Show when={isLast() && props.status === "complete" && props.turn?.metrics?.tokens_per_sec}>
+                      <div class="tps-footer">
+                        {t().tool.tokenSpeed.replace("{n}", String(props.turn!.metrics!.tokens_per_sec)).replace("{total}", String(props.turn!.metrics!.answer_tokens ?? 0))}
+                      </div>
                     </Show>
                   </div>
                 );

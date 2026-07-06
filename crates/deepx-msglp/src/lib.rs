@@ -279,7 +279,7 @@ impl Loop {
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut writer = std::io::BufWriter::with_capacity(65536, output);
-                let flush_interval = std::time::Duration::from_millis(50);
+                let flush_interval = std::time::Duration::from_millis(10);
                 loop {
                     match event_rx.recv_timeout(flush_interval) {
                         Ok(event) => {
@@ -359,10 +359,10 @@ impl Loop {
         }
     }
 
-    /// Send a delta event (non-blocking — dropped if channel full).
-    /// Use for streaming content that has overlapping successors (RoundDelta, ExecProgress).
+    /// Send a delta event (blocking — waits if channel full, to avoid dropped frames).
+    /// Use for streaming content that must not be lost (RoundDelta, ExecProgress).
     fn emit_delta(&self, event: Agent2Ui) {
-        let _ = self.event_tx.try_send(event);
+        let _ = self.event_tx.send(event);
     }
 
     /// Drain all pending commands from the channel (non-blocking).
@@ -1143,7 +1143,7 @@ You are now in CODE mode. All tools are available. Execute the plan.",
         let mut answer_buf = String::new();
         let mut think_buf = String::new();
         let mut last_flush = std::time::Instant::now();
-        const FLUSH_INTERVAL_MS: u64 = 30;
+        const FLUSH_INTERVAL_MS: u64 = 10;
         const FLUSH_CHAR_THRESHOLD: usize = 20;
 
         loop {

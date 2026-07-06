@@ -7,6 +7,7 @@ import type { ToolCallDef, ToolResultDef, RoundBlock, RoundData, TurnData, TaskI
 export type { ToolCallDef, ToolResultDef, RoundBlock, TaskInfo, SessionMeta };
 export interface Round extends RoundData {
   blocks: RoundBlock[];
+  thinking_ms?: number;
 }
 export interface Turn {
   turn_id: string;
@@ -14,7 +15,8 @@ export interface Turn {
   rounds: Round[];
   status: "streaming" | "complete";
   stop_reason?: string;
-  usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number; completion_tokens?: number };
+  metrics?: { thinking_ms: number; output_ms: number; tokens_per_sec: number; answer_tokens?: number };
 }
 export interface SessionInfo { seed: string; model: string; context_tokens: number; context_limit: number; total_tokens: number; prompt_cache_hit: number; prompt_cache_miss: number; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
@@ -102,9 +104,15 @@ export function createChatStore(seed: string) {
   }
 
   let lastRoundNum = 0;
+  // ── Timing state for metrics ──
+  let turnStartedAt = 0;
+  let roundThinkingStart = 0;   // when current round's thinking started
+  let roundAnswerStart = 0;     // when current round's answering started
+  let cumulativeAnswerMs = 0;   // total time spent in "answering" phases
 
   function handleTurnStart(turn_id: string, user_text: string) {
     lastRoundNum = 0;
+    turnStartedAt = Date.now(); roundThinkingStart = 0; roundAnswerStart = 0; cumulativeAnswerMs = 0;
     resetStreamBuffer();
     setIsStreaming(true); setInputDisabled(true); setError(null);
     // Add new turn at end — but guard against duplicate re-emission (resume race)
@@ -116,10 +124,22 @@ export function createChatStore(seed: string) {
   function handleRoundDelta(turn_id: string, round_num: number, kind: string, delta: string) {
     // Reset stream buffer when entering a new round (e.g. after tool calls)
     if (round_num !== lastRoundNum) {
+      // Close previous round's timing before resetting
+      if (roundAnswerStart > 0) {
+        cumulativeAnswerMs += Date.now() - roundAnswerStart;
+      }
       resetStreamBuffer();
       lastRoundNum = round_num;
+      roundThinkingStart = 0;
+      roundAnswerStart = 0;
     }
-    if (kind === "thinking") streamBuffer.thinking += delta; else if (kind === "answering") streamBuffer.answer += delta;
+    if (kind === "thinking") {
+      streamBuffer.thinking += delta;
+      if (!roundThinkingStart) roundThinkingStart = Date.now();
+    } else if (kind === "answering") {
+      streamBuffer.answer += delta;
+      if (!roundAnswerStart) roundAnswerStart = Date.now();
+    }
     ensureRound(turn_id, round_num);
     // RAF-batched: defer setTurns to next animation frame to coalesce rapid deltas
     pendingTurnId = turn_id;
@@ -168,9 +188,12 @@ export function createChatStore(seed: string) {
 
   function handleRoundComplete(turn_id: string, round_num: number, thinking?: string, answer?: string, tool_calls?: ToolCallDef[], blocks?: RoundBlock[]) {
     flushDeltas(); // flush any pending streaming delta before replacing with final state
+    // Compute thinking elapsed for this round
+    const thinkMs = roundThinkingStart ? Date.now() - roundThinkingStart : 0;
     ensureRound(turn_id, round_num);
     setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
       if (thinking) round.thinking = thinking; if (answer) round.answer = answer; if (tool_calls) round.tool_calls = tool_calls; if (blocks) round.blocks = blocks;
+      if (thinkMs > 0) round.thinking_ms = thinkMs;
     }));
   }
 
@@ -237,7 +260,29 @@ export function createChatStore(seed: string) {
   function handleTurnEnd(turn_id: string, data: Record<string, unknown>) {
     flushDeltas(); flushToolCallPreviews(turn_id, lastRoundNum); flushExecProgress(); // flush all pending state before marking complete
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
-    setTurns((t) => t.turn_id === turn_id, produce((turn) => { turn.status = "complete"; turn.stop_reason = data.stop_reason as string | undefined; if (data.usage) turn.usage = data.usage as Turn["usage"]; }));
+    const now = Date.now();
+    // Close current round's answer timing
+    if (roundAnswerStart > 0) {
+      cumulativeAnswerMs += now - roundAnswerStart;
+      roundAnswerStart = 0;
+    }
+    // Total thinking = sum of per-round thinking_ms (set in handleRoundComplete)
+    setTurns((t) => t.turn_id === turn_id, produce((turn) => {
+      turn.status = "complete";
+      turn.stop_reason = data.stop_reason as string | undefined;
+      if (data.usage) {
+        turn.usage = data.usage as Turn["usage"];
+        const cTok = (data.usage as Record<string, unknown>).completion_tokens as number | undefined;
+        const rTok = (data.usage as Record<string, unknown>).reasoning_tokens as number | undefined;
+        if (cTok) turn.usage!.completion_tokens = cTok;
+        // answer tokens = total completion − reasoning (thinking) tokens
+        const answerTok = cTok ? (cTok - (rTok || 0)) : 0;
+        const tps = answerTok && cumulativeAnswerMs > 0 ? Math.round(answerTok / (cumulativeAnswerMs / 1000)) : 0;
+        // Aggregate thinking across rounds
+        const totalThinking = turn.rounds.reduce((sum, r) => sum + (r.thinking_ms || 0), 0);
+        turn.metrics = { thinking_ms: totalThinking, output_ms: cumulativeAnswerMs, tokens_per_sec: tps, answer_tokens: answerTok };
+      }
+    }));
     const u = data.usage as Record<string, unknown> | undefined;
     if (u) {
       setSessionInfo(produce((s) => {
@@ -275,6 +320,7 @@ export function createChatStore(seed: string) {
 
   function handleCancelled() {
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
+    turnStartedAt = 0; roundThinkingStart = 0; roundAnswerStart = 0; cumulativeAnswerMs = 0;
   }
 
   function handleDone() {
@@ -292,12 +338,14 @@ export function createChatStore(seed: string) {
   function clear() {
     setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]);
     resetStreamBuffer(); setIsStreaming(false); setInputDisabled(false); lastRoundNum = 0;
+    turnStartedAt = 0; roundThinkingStart = 0; roundAnswerStart = 0; cumulativeAnswerMs = 0;
     setSessionInfo({ seed: "", model: "", context_tokens: 0, context_limit: 0, total_tokens: 0, prompt_cache_hit: 0, prompt_cache_miss: 0 });
   }
 
   function clearTurns() {
     cacheCurrentStatus();
     setTurns([]); resetStreamBuffer(); lastRoundNum = 0;
+    turnStartedAt = 0; roundThinkingStart = 0; roundAnswerStart = 0; cumulativeAnswerMs = 0;
     setError(null);
   }
 

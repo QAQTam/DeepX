@@ -6,10 +6,10 @@
 
 use unicode_normalization::UnicodeNormalization;
 
-/// NFKC-normalized blocked keyword patterns (11 pairs).
+/// NFKC-normalized blocked keyword patterns (10 pairs).
 const BLOCKED_PATTERNS: &[&str] = &[
     "心理咨询", "情感陪伴", "自杀", "自残",
-    "密钥", "密码", "token", "api_key",
+    "密钥", "密码", "api_key",
     "色情", "赌博", "毒品",
 ];
 
@@ -106,13 +106,6 @@ mod tests {
     }
 
     #[test]
-    fn test_block_token_word_boundary() {
-        assert!(content_guard("my token is abc").is_err());
-        // "tokenization" should NOT match "token"
-        assert!(content_guard("tokenization in NLP").is_ok());
-    }
-
-    #[test]
     fn test_block_api_key() {
         assert!(content_guard("my api_key is secret").is_err());
     }
@@ -120,7 +113,6 @@ mod tests {
     #[test]
     fn test_nfkc_normalization() {
         // Full-width characters NFKC → ASCII
-        assert!(content_guard("ｔｏｋｅｎ").is_err());
         assert!(content_guard("ａｐｉ_ｋｅｙ").is_err());
     }
 

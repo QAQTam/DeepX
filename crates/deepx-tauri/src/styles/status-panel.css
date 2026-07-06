@@ -205,7 +205,7 @@
 .plan-confirm-dialog {
   background: var(--bg-primary); border: 1px solid var(--border-divider);
   border-radius: var(--radius-lg); padding: 20px; min-width: 320px; max-width: 480px;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-dialog);
 }
 .plan-confirm-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
 .plan-confirm-body { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; max-height: 300px; overflow-y: auto; }

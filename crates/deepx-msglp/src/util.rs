@@ -76,18 +76,18 @@ pub(crate) fn format_tool_args_display(name: &str, input: &serde_json::Value) ->
             .map(|c| c.chars().take(80).collect())
             .unwrap_or(display_name),
         "file" => {
-            let primary = match action {
-                "search" => input.get("pattern"),
-                _ => input.get("path"),
+            let path = match action {
+                "search" => input.get("pattern").and_then(|v| v.as_str()),
+                "move" | "copy" => input.get("dest").and_then(|v| v.as_str()),
+                "diff" => input.get("path_b").and_then(|v| v.as_str()),
+                _ => input.get("path").and_then(|v| v.as_str()),
             };
-            primary.and_then(|v| v.as_str())
-                .map(|p| format!("{} {}", action, p.chars().take(60).collect::<String>()))
+            path.map(|p| p.chars().take(60).collect::<String>())
                 .unwrap_or(display_name)
         }
         "task" => input.get("subject")
-            .or_else(|| input.get("status"))
             .and_then(|v| v.as_str())
-            .map(|s| format!("{}/{}", action, s.chars().take(60).collect::<String>()))
+            .map(|s| s.chars().take(60).collect::<String>())
             .unwrap_or(display_name),
         "web" => input.get("url")
             .or_else(|| input.get("query"))
@@ -97,7 +97,7 @@ pub(crate) fn format_tool_args_display(name: &str, input: &serde_json::Value) ->
             .unwrap_or(display_name),
         "process" => input.get("id")
             .and_then(|v| v.as_u64())
-            .map(|id| format!("{}/{}", action, id))
+            .map(|id| id.to_string())
             .unwrap_or(display_name),
         "explore" => input.get("path")
             .and_then(|v| v.as_str())
