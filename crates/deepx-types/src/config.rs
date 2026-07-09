@@ -55,6 +55,10 @@ pub struct PersistentConfig {
     /// Agent permission level: 1=MaxLockdown, 2=ReadFree, 3=WorkspaceFree, 4=Unrestricted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_level: Option<u8>,
+
+    /// Path to a HuggingFace tokenizer.json for accurate token counting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenizer_path: Option<String>,
 }
 
 /// Persistence-friendly subagent config with all-Option fields.
@@ -77,9 +81,9 @@ pub struct PersistentSubagentConfig {
 /// Persistence-friendly database config mirroring session data to local Turso.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PersistentDatabaseConfig {
-    /// Whether the database mirror is enabled.
-    #[serde(default)]
-    pub enabled: bool,
+    /// Whether the database mirror is enabled. `None` = use default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     /// Path to the local Turso database file. If `None`, a default path is used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,

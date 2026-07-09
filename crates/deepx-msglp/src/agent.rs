@@ -79,7 +79,7 @@ impl AgentState {
                 "<workspace_path>{ws}</workspace_path>"
             ));
         }
-        self.msg.build_context_for_gate("", &annotations)
+        self.msg.build_context_for_gate(&annotations)
     }
 
     pub fn rebind_store(&mut self) {

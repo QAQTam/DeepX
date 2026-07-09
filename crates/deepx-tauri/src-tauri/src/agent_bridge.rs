@@ -402,7 +402,8 @@ impl AgentRegistry {
 
     /// Initialize the global registry and SessionManager. Called once at startup.
     pub fn init(app: &AppHandle) {
-        deepx_session::SessionManager::init(deepx_types::platform::data_dir(), None);
+        let turso_enabled = deepx_config::Config::load().map(|c| c.turso_enabled()).unwrap_or(true);
+        deepx_session::SessionManager::init(deepx_types::platform::data_dir(), turso_enabled);
         let registry = AgentRegistry {
             instances: HashMap::new(),
             app_handle: app.clone(),
@@ -745,6 +746,7 @@ pub fn cmd_save_config(
     subagent_max_tokens: u32,
     subagent_timeout_secs: u64,
     subagent_default_tools: Vec<String>,
+    database_enabled: bool,
 ) -> Result<(), String> {
     let mut cfg = deepx_config::Config::load().unwrap_or_default();
     let set_str = |dest: &mut String, src: &str| { if !src.is_empty() { *dest = src.to_string(); } };
@@ -768,6 +770,7 @@ pub fn cmd_save_config(
     set_u32(&mut cfg.subagent.max_tokens, subagent_max_tokens);
     set_u64(&mut cfg.subagent.timeout_secs, subagent_timeout_secs);
     if !subagent_default_tools.is_empty() { cfg.subagent.default_tools = subagent_default_tools; }
+    cfg.database.enabled = database_enabled;
     cfg.save()?;
     // Broadcast reload to all running agents
     let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
@@ -823,6 +826,9 @@ pub fn cmd_load_config() -> Result<String, String> {
             "timeout_secs": cfg.subagent.timeout_secs,
             "default_tools": cfg.subagent.default_tools,
         },
+        "database": {
+            "enabled": cfg.database.enabled,
+        },
     });
     serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
 }
@@ -831,7 +837,84 @@ pub fn cmd_load_config() -> Result<String, String> {
 #[tauri::command]
 pub fn cmd_list_sessions() -> Result<String, String> {
     let metas = deepx_session::SessionManager::global().list();
-    serde_json::to_string(&metas).map_err(|e| format!("serialize: {e}"))
+    // Inject turso-backed flag
+    let mgr = deepx_session::SessionManager::global();
+    let result: Vec<serde_json::Value> = metas
+        .into_iter()
+        .map(|m| {
+            let mut v = serde_json::to_value(&m).unwrap_or_default();
+            let backed = mgr.is_turso_backed(&m.seed);
+            v["turso_backed"] = serde_json::Value::Bool(backed);
+            v
+        })
+        .collect();
+    serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Count sessions pending JSONL → Turso migration.
+#[tauri::command]
+pub fn cmd_migration_count() -> Result<String, String> {
+    let count = deepx_session::SessionManager::global().count_pending_migration();
+    serde_json::to_string(&serde_json::json!({ "pending": count }))
+        .map_err(|e| format!("serialize: {e}"))
+}
+
+/// Migrate all pending sessions from JSONL to Turso.
+#[tauri::command]
+pub fn cmd_migrate_to_turso() -> Result<String, String> {
+    let (sessions, messages) = deepx_session::SessionManager::global()
+        .migrate_all_to_turso()
+        .map_err(|e| format!("migration failed: {e}"))?;
+    serde_json::to_string(&serde_json::json!({
+        "sessions": sessions,
+        "messages": messages,
+    }))
+    .map_err(|e| format!("serialize: {e}"))
+}
+
+/// Get activity log for a session: tool invocations with args + result.
+#[tauri::command]
+pub fn cmd_get_activity(seed: String) -> Result<String, String> {
+    let mgr = deepx_session::SessionManager::global();
+    let (_meta, messages) = mgr.load(&seed)
+        .ok_or_else(|| "session not found".to_string())?;
+
+    // Build a map: tool_use_id → (name, args)
+    let mut tool_map: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    for msg in &messages {
+        if msg.role == "assistant" {
+            for b in &msg.content {
+                if let deepx_types::ContentBlock::ToolUse { id, name, input } = b {
+                    tool_map.insert(id.clone(), (name.clone(), input.to_string()));
+                }
+            }
+        }
+    }
+
+    let mut activities = Vec::new();
+    for msg in &messages {
+        if msg.role != "tool" { continue; }
+        for b in &msg.content {
+            if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, success } = b {
+                let (tool_name, args) = tool_map.get(tool_use_id)
+                    .map(|(n, a)| (n.clone(), a.clone()))
+                    .unwrap_or_default();
+                let summary = content.lines()
+                    .skip_while(|l| l.starts_with("[timeis:"))
+                    .next().unwrap_or("")
+                    .chars().take(120).collect::<String>();
+                activities.push(serde_json::json!({
+                    "tool_name": tool_name,
+                    "summary": summary,
+                    "success": success,
+                    "time": msg.msg_id.map(|id| id.to_string()).unwrap_or_default(),
+                    "args": args,
+                }));
+            }
+        }
+    }
+    activities.reverse(); // newest first
+    serde_json::to_string(&activities).map_err(|e| format!("serialize: {e}"))
 }
 
 /// Delete a session by seed. Also kills the agent if running for that seed.

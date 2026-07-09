@@ -38,6 +38,9 @@ pub fn run() {
             agent_bridge::cmd_get_dashboard_data,
             agent_bridge::cmd_task_action,
             agent_bridge::cmd_get_context_stats,
+            agent_bridge::cmd_migration_count,
+            agent_bridge::cmd_migrate_to_turso,
+            agent_bridge::cmd_get_activity,
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {

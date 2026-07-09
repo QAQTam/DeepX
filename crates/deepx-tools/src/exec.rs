@@ -87,31 +87,43 @@ pub(crate) fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<m
 
     let _reader_handle = std::thread::spawn(move || {
         use std::io::Read;
-        let mut reader = reader; // take ownership and make mutable
+        let mut reader = reader;
         let mut buf = vec![0u8; 4096];
         let mut pending = String::new();
-        let mut partial = Vec::new(); // trailing incomplete multi-byte bytes
-        let mut line_count = 0u32;
+        let mut partial = Vec::new();
+        let mut last_flush = std::time::Instant::now();
+        const FLUSH_MS: u64 = 50;
+        const FLUSH_BYTES: usize = 512;
+
+        let flush_now = |pending: &mut String, tc_id: &str,
+                         pt_out: &Option<mpsc::Sender<(String, String)>>,
+                         done: &mpsc::Sender<String>| {
+            if !pending.is_empty() {
+                if let Some(tx) = pt_out {
+                    let _ = tx.send((tc_id.to_string(), pending.clone()));
+                }
+                crate::process_registry::ProcessRegistry::append_output(registry_id, pending);
+                let _ = done.send(pending.clone());
+                pending.clear();
+            }
+        };
+
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => {
-                    // EOF — flush any remaining partial bytes + pending line
                     if !partial.is_empty() {
                         pending.push_str(&String::from_utf8_lossy(&partial));
                     }
                     if !pending.is_empty() {
-                        line_count += 1;
-                        if let Some(ref tx) = pt_out {
+                        if let Some(tx) = pt_out {
                             let _ = tx.send((tc_id.clone(), pending.clone()));
                         }
                         crate::process_registry::ProcessRegistry::append_output(registry_id, &pending);
-                        let _ = done_tx_thread.send(pending);
+                        let _ = done_tx_thread.send(std::mem::take(&mut pending));
                     }
                     break;
                 }
                 Ok(n) => {
-                    // Handle CJK split across pipe read boundaries: accumulate
-                    // incomplete trailing bytes from previous read and prepend them.
                     let chunk_bytes: Vec<u8> = if partial.is_empty() {
                         buf[..n].to_vec()
                     } else {
@@ -119,65 +131,35 @@ pub(crate) fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<m
                         merged.extend_from_slice(&buf[..n]);
                         merged
                     };
-                    // Detect incomplete trailing multi-byte sequence.
-                    let decoded_strict = String::from_utf8(chunk_bytes.clone());
-                    match decoded_strict {
-                        Ok(clean) => {
-                            pending.push_str(&clean);
-                        }
+                    match String::from_utf8(chunk_bytes.clone()) {
+                        Ok(clean) => pending.push_str(&clean),
                         Err(utf8_err) => {
-                            // Save the incomplete tail for next read
                             let valid_len = utf8_err.utf8_error().valid_up_to();
-                            let valid = chunk_bytes[..valid_len].to_vec();
                             partial = chunk_bytes[valid_len..].to_vec();
-                            if let Ok(s) = String::from_utf8(valid) {
+                            if let Ok(s) = String::from_utf8(chunk_bytes[..valid_len].to_vec()) {
                                 pending.push_str(&s);
                             }
                         }
                     }
-                    // Emit complete lines (ending with \n) for real-time progress
-                    while let Some(pos) = pending.find('\n') {
-                        let raw_line: String = pending[..=pos].to_string(); // include \n
-                        pending = pending[pos + 1..].to_string();
-                        // Handle \r: CRLF → strip \r; standalone \r → keep last overwrite segment
-                        let clean_line = if raw_line.ends_with("\r\n") {
-                            // Windows CRLF → single LF
-                            raw_line.replacen("\r\n", "\n", 1)
-                        } else if raw_line.contains('\r') {
-                            // Progress-bar style: split on \r, keep final segment
-                            let segments: Vec<&str> = raw_line.rsplit('\r').collect();
-                            let last = segments[0].to_string();
-                            if last.ends_with('\n') { last } else { format!("{}\n", last) }
-                        } else {
-                            raw_line
-                        };
-                        line_count += 1;
-                        // Skip empty lines (just "\n") for progress streaming —
-                        // they add visual noise without information. Full output
-                        // (done_tx + ProcessRegistry) still includes everything.
-                        if clean_line != "\n" {
-                            if let Some(ref tx) = pt_out {
-                                let _ = tx.send((tc_id.clone(), clean_line.clone()));
-                            }
-                        }
-                        crate::process_registry::ProcessRegistry::append_output(registry_id, &clean_line);
-                        let _ = done_tx_thread.send(clean_line);
+                    let elapsed = last_flush.elapsed().as_millis() as u64;
+                    if elapsed >= FLUSH_MS || pending.len() >= FLUSH_BYTES {
+                        flush_now(&mut pending, &tc_id, &pt_out, &done_tx_thread);
+                        last_flush = std::time::Instant::now();
                     }
                 }
                 Err(_) => {
                     if !pending.is_empty() {
-                        line_count += 1;
-                        if let Some(ref tx) = pt_out {
+                        if let Some(tx) = pt_out {
                             let _ = tx.send((tc_id.clone(), pending.clone()));
                         }
                         crate::process_registry::ProcessRegistry::append_output(registry_id, &pending);
-                        let _ = done_tx_thread.send(pending);
+                        let _ = done_tx_thread.send(std::mem::take(&mut pending));
                     }
                     break;
                 }
             }
         }
-        log::info!("[EXEC] reader thread done, {} lines", line_count);
+        log::info!("[EXEC] reader thread done");
     });
     drop(done_tx);
 

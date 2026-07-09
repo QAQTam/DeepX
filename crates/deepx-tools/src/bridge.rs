@@ -497,6 +497,8 @@ pub fn execute_tools_parallel(
                 tool_name: tc_id.clone(),
                 result_summary: summary.chars().take(120).collect(),
                 success: report.success,
+                time: String::new(),
+                args: String::new(),
             });
             tool_defs.push(deepx_proto::ToolResultDef {
                 tool_call_id: tc_id.clone(),

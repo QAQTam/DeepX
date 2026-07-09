@@ -85,7 +85,7 @@
 
 /* ── Thinking Block ── */
 .think-block { margin: 4px 0; }
-.think-header { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; font-size: 12px; color: var(--text-muted); user-select: none; transition: color var(--transition); }
+.think-header { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; font-size: 12px; line-height: 1.4; color: var(--text-muted); user-select: none; transition: color var(--transition); }
 .think-header:hover { color: var(--text-secondary); }
 .think-chevron { transition: transform var(--transition); flex-shrink: 0; }
 .think-header.open .think-chevron { transform: rotate(90deg); }
@@ -145,10 +145,10 @@
 
 .capsule-icon { font-size: 12px; flex-shrink: 0; }
 .capsule-verb { font-weight: 600; flex-shrink: 0; }
-.capsule-args {
-  font-family: var(--font-mono); font-size: 11px;
+.capsule-detail {
+  font-family: var(--font-mono); font-size: 10px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 180px; opacity: 0.75;
+  max-width: 200px; opacity: 0.65;
 }
 .capsule-timer {
   font-family: var(--font-mono); font-size: 10px;
@@ -186,3 +186,28 @@
   animation: capsuleBodyIn 0.2s ease;
 }
 @keyframes capsuleBodyIn { from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; } to { opacity: 1; max-height: 320px; } }
+
+/* ── Inline Tool Rows ── */
+.tool-row { margin: 2px 0; border-radius: 4px; overflow: hidden; font-size: 12px; }
+.tool-row.ok { color: var(--text-secondary); }
+.tool-row.err { color: var(--red); }
+.tool-row-bar {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 6px; cursor: pointer; user-select: none;
+  border-radius: 4px; transition: background 0.15s;
+  line-height: 1.4;
+}
+.tool-row-bar:hover { background: var(--bg-hover); }
+.tool-row-chevron { width: 12px; height: 12px; flex-shrink: 0; transition: transform 0.15s; opacity: 0.5; align-self: center; }
+.tool-row.open .tool-row-chevron { transform: rotate(90deg); }
+.tool-row-verb { font-weight: 600; flex-shrink: 0; line-height: 1.4; }
+.tool-row-detail { font-family: var(--font-sans); font-size: 11px; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; }
+.tool-row-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--yellow, #b8860b); flex-shrink: 0; animation: dot-pulse 1s infinite; margin-left: auto; }
+@keyframes dot-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.tool-row-body {
+  padding: 6px 8px 6px 18px; font-size: 12px; line-height: 1.4;
+  font-family: var(--font-mono); max-height: 280px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--bg-tertiary); border-radius: 0 0 4px 4px;
+  color: var(--text-secondary);
+}

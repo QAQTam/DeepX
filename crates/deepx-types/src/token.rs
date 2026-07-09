@@ -1,4 +1,31 @@
-//! Token counting: CJK heuristic + breakdown types.
+//! Token counting: CJK heuristic + optional HuggingFace tokenizer.
+
+use std::sync::OnceLock;
+
+#[cfg(feature = "tokenizers")]
+static TOKENIZER: OnceLock<tokenizers::Tokenizer> = OnceLock::new();
+
+/// Initialize the tokenizer from a HuggingFace `tokenizer.json` file.
+/// Must be called once at startup. Returns Ok(()) on success.
+#[cfg(feature = "tokenizers")]
+pub fn init_tokenizer(path: &str) -> Result<(), String> {
+    let tok = tokenizers::Tokenizer::from_file(path)
+        .map_err(|e| format!("load tokenizer: {e}"))?;
+    let _ = TOKENIZER.set(tok);
+    Ok(())
+}
+
+/// Count tokens using the loaded tokenizer if available,
+/// otherwise fall back to CJK-aware heuristic.
+pub fn count_tokens(text: &str) -> u32 {
+    #[cfg(feature = "tokenizers")]
+    if let Some(tok) = TOKENIZER.get() {
+        return tok.encode(text, false)
+            .map(|e| e.get_ids().len() as u32)
+            .unwrap_or_else(|_| count_tokens_heuristic(text));
+    }
+    count_tokens_heuristic(text)
+}
 
 // ── Heuristic-only counting (no tokenizer dependency) ──
 
@@ -8,7 +35,7 @@
 /// `count / 1.67`.  These ratios are derived from empirical DeepSeek
 /// tokenizer measurements and serve as a dependency-free fallback when
 /// no `tokenizer.json` is available.
-pub fn count_tokens(text: &str) -> u32 {
+fn count_tokens_heuristic(text: &str) -> u32 {
     let cjk: usize = text
         .chars()
         .filter(|c| {

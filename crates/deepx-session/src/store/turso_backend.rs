@@ -43,10 +43,11 @@ impl TursoBackend {
 
     pub fn init_tables(&self) -> Result<(), String> {
         runtime()?.block_on(async {
+            // PRAGMAs that return rows must run via execute(), not execute_batch().
+            let _ = self.conn.execute("PRAGMA journal_mode=WAL", ()).await;
             self.conn
                 .execute_batch(
-                    "PRAGMA journal_mode=WAL;
-                     CREATE TABLE IF NOT EXISTS sessions (
+                    "CREATE TABLE IF NOT EXISTS sessions (
                         seed TEXT PRIMARY KEY,
                         meta_json TEXT NOT NULL DEFAULT '{}',
                         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -63,7 +64,21 @@ impl TursoBackend {
                     CREATE INDEX IF NOT EXISTS idx_msgs ON messages(session_seed, msg_id);",
                 )
                 .await
-                .map_err(|e| format!("init tables: {e}"))
+                .map_err(|e| format!("init tables: {e}"))?;
+            // Checkpoint flushes WAL → main db file.
+            let _ = self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", ()).await;
+            Ok(())
+        })
+    }
+
+    /// Force-checkpoint the WAL into the main database file.
+    pub fn checkpoint(&self) -> Result<(), String> {
+        runtime()?.block_on(async {
+            self.conn
+                .execute("PRAGMA wal_checkpoint(TRUNCATE)", ())
+                .await
+                .map_err(|e| format!("checkpoint: {e}"))
+                .map(|_| ())
         })
     }
 
@@ -133,6 +148,30 @@ impl TursoBackend {
         })
     }
 
+    pub fn message_count(&self, seed: &str) -> Result<usize, String> {
+        let seed = seed.to_string();
+        runtime()?.block_on(async {
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT COUNT(*) FROM messages WHERE session_seed = ?1",
+                    turso::params![seed],
+                )
+                .await
+                .map_err(|e| format!("count msgs: {e}"))?;
+            if let Some(row) = rows.next().await.map_err(|e| format!("rows: {e}"))? {
+                let count: i64 = row.get_value(0)
+                    .map_err(|e| format!("get: {e}"))?
+                    .as_integer()
+                    .copied()
+                    .unwrap_or(0);
+                Ok(count as usize)
+            } else {
+                Ok(0)
+            }
+        })
+    }
+
     // ── messages ──────────────────────────────────────────────────────
 
     /// Insert a batch of messages in a single transaction (single fsync, 10x+ throughput).
@@ -152,26 +191,27 @@ impl TursoBackend {
                 let json = serde_json::to_string(msg).unwrap_or_default();
                 let mid = msg.msg_id.map(|v| v as i64);
                 let role = msg.role.clone();
-                self.conn
+                if let Err(e) = self.conn
                     .execute(
                         "INSERT OR REPLACE INTO messages (session_seed, msg_id, role, content_json)
                          VALUES (?1, ?2, ?3, ?4)",
                         turso::params![seed.clone(), mid, role, json],
                     )
                     .await
-                    .map_err(|e| {
-                        // Rollback on any error (best-effort)
-                        if let Ok(rt) = runtime() {
-                            let _ = rt.block_on(self.conn.execute_batch("ROLLBACK"));
-                        }
-                        format!("insert msg batch: {e}")
-                    })?;
+                {
+                    // Rollback on error before returning
+                    let _ = self.conn.execute_batch("ROLLBACK").await;
+                    return Err(format!("insert msg batch: {e}"));
+                }
             }
 
             self.conn
                 .execute_batch("COMMIT")
                 .await
                 .map_err(|e| format!("commit tx: {e}"))?;
+
+            // Passive checkpoint — flushes committed WAL pages into main db.
+            let _ = self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)", ()).await;
 
             Ok(())
         })

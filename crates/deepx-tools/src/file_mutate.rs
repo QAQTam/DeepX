@@ -11,17 +11,13 @@ use super::file_shared::{
 
 // ── Shared helpers ──
 
-fn format_diff_result(prefix: &str, path: &str, diff: &str, label: &str, success: bool) -> String {
+fn format_diff_result(prefix: &str, path: &str, diff: &str, label: &str, _success: bool) -> String {
     let (added, removed, first_line) = diff_stats(diff);
     let summary = format!("[{prefix}] {path}:{first_line} +{added} -{removed} | {label}",
         added = added.max(1), removed = removed.max(1));
-    if success {
-        // Omit diff body on success — the LLM already knows what it edited.
-        // Saves ~80-90% of tool result tokens per edit.
-        summary
-    } else {
-        format!("{}\n\n{}", summary, diff.trim_end())
-    }
+    // Always include the diff body — LLM context is truncated later in build_context_for_gate.
+    // The frontend and audit trail need the full diff.
+    format!("{}\n\n{}", summary, diff.trim_end())
 }
 
 // ── Helpers from file_edit ──

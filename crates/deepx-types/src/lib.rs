@@ -38,4 +38,4 @@ pub use arg::{
 };
 
 // ── Shared utilities ──
-pub use token::{TokenBreakdown, count_tokens};
+pub use token::{TokenBreakdown, count_tokens, init_tokenizer};

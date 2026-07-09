@@ -122,7 +122,8 @@ fn run_agent(is_subagent: bool) {
     }
 
     let _ = deepx_msglp::logger::init_agent_logger(&deepx_types::platform::data_dir());
-    deepx_session::SessionManager::init(deepx_types::platform::data_dir(), None);
+    let turso_enabled = deepx_config::Config::load().map(|c| c.turso_enabled()).unwrap_or(true);
+    deepx_session::SessionManager::init(deepx_types::platform::data_dir(), turso_enabled);
 
     let mut agent = if tools_allowlist.is_empty() && model_override.is_none() && base_url_override.is_none() && !ephemeral {
         deepx_msglp::agent::AgentState::init("cli")

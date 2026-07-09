@@ -13,4 +13,13 @@ turn_count: number, last_summary: string,
 /**
  * Number of earliest turns compacted (skipped in LLM context).
  */
-compact_skip: number, };
+compact_skip: number, 
+/**
+ * Agent operating mode: 0=Normal, 1=Plan, 2=Code.
+ */
+mode: number,
+/**
+ * True if this session has messages in the Turso SQLite store.
+ */
+turso_backed: boolean,
+};

@@ -396,6 +396,12 @@ pub enum Agent2Ui {
         tool_name: String,
         result_summary: String,
         success: bool,
+        /// ISO-8601 timestamp of the tool invocation.
+        #[serde(default)]
+        time: String,
+        /// JSON-serialized tool arguments for formatting.
+        #[serde(default)]
+        args: String,
     },
 
     /// Streaming output chunk from a running tool (e.g. exec stdout).

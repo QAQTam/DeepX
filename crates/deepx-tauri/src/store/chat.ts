@@ -19,7 +19,7 @@ export interface Turn {
   metrics?: { thinking_ms: number; output_ms: number; tokens_per_sec: number; answer_tokens?: number };
 }
 export interface SessionInfo { seed: string; model: string; context_tokens: number; context_limit: number; total_tokens: number; prompt_cache_hit: number; prompt_cache_miss: number; }
-export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: number; }
+export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: string; args: string; }
 export interface AskState { question: string; options: string[]; allow_custom: boolean; show: boolean; }
 
 export function createChatStore(seed: string) {
@@ -318,6 +318,16 @@ export function createChatStore(seed: string) {
     });
   }
 
+  async function loadActivityFromBackend() {
+    try {
+      const raw = await invoke<string>("cmd_get_activity", { seed });
+      const list = JSON.parse(raw) as ActivityEntry[];
+      setActivityLog(list);
+    } catch (e) {
+      console.error("loadActivity:", e);
+    }
+  }
+
   function handleCancelled() {
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
     turnStartedAt = 0; roundThinkingStart = 0; roundAnswerStart = 0; cumulativeAnswerMs = 0;
@@ -437,5 +447,5 @@ export function createChatStore(seed: string) {
     setTurns(produce((prev) => { prev.unshift(...loaded); }));
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, loadActivityFromBackend, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

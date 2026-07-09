@@ -51,7 +51,7 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             url: None,
         }
     }
@@ -80,6 +80,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     /// Agent permission level (1-4). Default 4 = Unrestricted.
     pub permission_level: u8,
+    /// Path to tokenizer.json for accurate token counting. Falls back to heuristic if None.
+    pub tokenizer_path: Option<String>,
 }
 
 impl Default for Config {
@@ -110,6 +112,7 @@ impl Default for Config {
             compliance_allowlist: Vec::new(),
             database: DatabaseConfig::default(),
             permission_level: 4, // Unrestricted — backward compat
+            tokenizer_path: None,
         }
     }
 }
@@ -194,12 +197,15 @@ impl Config {
 
             // ── Database (Turso mirror) ──
             if let Some(ref db) = pc.database {
-                cfg.database.enabled = db.enabled;
+                if let Some(enabled) = db.enabled { cfg.database.enabled = enabled; }
                 cfg.database.url = db.url.clone();
             }
 
             // ── Permission ──
             if let Some(pl) = pc.permission_level { cfg.permission_level = pl; }
+
+            // ── Tokenizer ──
+            if let Some(ref tp) = pc.tokenizer_path { cfg.tokenizer_path = Some(tp.clone()); }
         }
 
         if !cfg.profiles.contains_key("default") {
@@ -209,6 +215,11 @@ impl Config {
                 base_url: cfg.base_url.clone(),
                 endpoint: Some(cfg.endpoint.clone()),
             });
+        }
+
+        // Initialize tokenizer if configured
+        if let Some(ref path) = cfg.tokenizer_path {
+            let _ = deepx_types::token::init_tokenizer(path);
         }
 
         Ok(cfg)
@@ -248,10 +259,11 @@ impl Config {
             compliance_extra_keywords: if self.compliance_extra_keywords.is_empty() { None } else { Some(self.compliance_extra_keywords.clone()) },
             compliance_allowlist: if self.compliance_allowlist.is_empty() { None } else { Some(self.compliance_allowlist.clone()) },
             database: Some(PersistentDatabaseConfig {
-                enabled: self.database.enabled,
+                enabled: Some(self.database.enabled),
                 url: self.database.url.clone(),
             }),
             permission_level: Some(self.permission_level),
+            tokenizer_path: self.tokenizer_path.clone(),
         };
         if !store.save(&pc) {
             Err(format!("Failed to save config to {}", deepx_types::platform::config_path().display()))
@@ -299,6 +311,11 @@ impl Config {
     }
 
     pub fn is_ready(&self) -> bool { !self.api_key.is_empty() }
+
+    /// Whether per-session Turso SQLite mirroring is enabled.
+    pub fn turso_enabled(&self) -> bool {
+        self.database.enabled
+    }
 
     /// Protocol derived from (provider_id, endpoint) in the registry.
     pub fn protocol(&self) -> String {

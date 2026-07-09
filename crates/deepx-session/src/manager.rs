@@ -15,6 +15,12 @@ use deepx_types::{Message, SessionMeta};
 use crate::store;
 
 #[cfg(feature = "turso-backend")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "turso-backend")]
+use std::collections::HashMap;
+#[cfg(feature = "turso-backend")]
+use std::sync::Mutex;
+#[cfg(feature = "turso-backend")]
 use crate::store::turso_backend::TursoBackend;
 
 static INSTANCE: OnceLock<SessionManager> = OnceLock::new();
@@ -24,38 +30,34 @@ pub struct SessionManager {
     sessions_dir: PathBuf,
     active_path: PathBuf,
     #[cfg(feature = "turso-backend")]
-    db: Option<TursoBackend>,
+    turso_enabled: AtomicBool,
+    #[cfg(feature = "turso-backend")]
+    dbs: Mutex<HashMap<String, TursoBackend>>,
 }
 
 impl SessionManager {
     /// Initialize the global singleton. Must be called once at startup.
     /// Also triggers automatic migration from legacy TOML format if needed.
-    /// When `db_url` is `Some`, a Turso local database mirror is opened.
-    pub fn init(data_dir: PathBuf, db_url: Option<String>) {
-        #[cfg(feature = "turso-backend")]
-        let db = {
-            let path = db_url.unwrap_or_else(|| {
-                data_dir.join("sessions.db").to_string_lossy().to_string()
-            });
-            TursoBackend::open(&path)
-                .inspect(|_| log::info!("SessionManager: Turso backend at {}", path))
-                .ok()
-                .and_then(|db| {
-                    if let Err(e) = db.init_tables() {
-                        log::warn!("SessionManager: Turso init_tables failed: {e}");
-                    }
-                    Some(db)
-                })
-        };
+    /// When `turso_enabled` is true, per-session SQLite databases are created
+    /// at `{sessions_dir}/{seed}/sessions.db`.
+    pub fn init(data_dir: PathBuf, turso_enabled: bool) {
+        let sessions_dir = data_dir.join("sessions");
+        let _ = std::fs::create_dir_all(&sessions_dir);
 
-        #[cfg(not(feature = "turso-backend"))]
-        let _ = db_url;
+        #[cfg(feature = "turso-backend")]
+        log::info!(
+            "SessionManager: Turso mirroring {} (per-session at {})",
+            if turso_enabled { "ENABLED" } else { "DISABLED" },
+            sessions_dir.join("<seed>").join("sessions.db").display()
+        );
 
         let mgr = Self {
             active_path: data_dir.join(".active_session"),
-            sessions_dir: data_dir.join("sessions"),
+            sessions_dir,
             #[cfg(feature = "turso-backend")]
-            db,
+            turso_enabled: AtomicBool::new(turso_enabled),
+            #[cfg(feature = "turso-backend")]
+            dbs: Mutex::new(HashMap::new()),
         };
         // Migrate old TOML sessions on first startup of v0.4.0
         crate::migrate::run(&mgr.sessions_dir);
@@ -65,6 +67,18 @@ impl SessionManager {
     /// Access the global instance.
     pub fn global() -> &'static Self {
         INSTANCE.get().expect("SessionManager not initialized — call init() first")
+    }
+
+    /// Toggle Turso mirroring at runtime (no restart needed).
+    #[cfg(feature = "turso-backend")]
+    pub fn set_turso_enabled(&self, enabled: bool) {
+        let old = self.turso_enabled.load(Ordering::Relaxed);
+        self.turso_enabled.store(enabled, Ordering::Relaxed);
+        log::info!(
+            "SessionManager: Turso mirroring {} -> {}",
+            if old { "ENABLED" } else { "DISABLED" },
+            if enabled { "ENABLED" } else { "DISABLED" },
+        );
     }
 
     // ── Session listing ──
@@ -101,8 +115,8 @@ impl SessionManager {
         store::remove_from_index(&self.sessions_dir, seed);
 
         #[cfg(feature = "turso-backend")]
-        if let Some(ref db) = self.db {
-            let _ = db.delete_session(seed);
+        {
+            self.dbs.lock().unwrap().remove(seed);
         }
 
         log::info!("SessionManager: deleted session {seed}");
@@ -111,17 +125,121 @@ impl SessionManager {
 
     // ── Load / Save ──
 
-    /// Load session messages from disk. Returns (meta, messages).
+    /// Load session messages from disk. Reads from Turso when enabled,
+    /// falling back to JSONL.
     pub fn load(&self, seed: &str) -> Option<(SessionMeta, Vec<Message>)> {
         let dir = self.session_dir(seed)?;
         let meta = store::read_meta(&dir)?;
-        let messages = store::read_messages(&dir).ok()?;
+        let messages = self.load_messages_inner(seed, &dir)?;
         Some((meta, messages))
+    }
+
+    /// Try Turso first (lazy-open if needed), fall back to JSONL.
+    fn load_messages_inner(&self, seed: &str, dir: &std::path::Path) -> Option<Vec<Message>> {
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Some(dbs) = self.get_or_open_db(seed) {
+                if let Some(db) = dbs.get(seed) {
+                    if let Ok(msgs) = db.load_messages(seed) {
+                        if !msgs.is_empty() {
+                            log::info!("SessionManager: loaded {} msgs from Turso for {seed}", msgs.len());
+                            return Some(msgs);
+                        }
+                    }
+                }
+            }
+        }
+        let _ = seed;
+        store::read_messages(dir).ok()
     }
 
     /// Check whether a session directory exists on disk (fast path).
     pub fn exists(&self, seed: &str) -> bool {
         self.session_dir(seed).is_some()
+    }
+
+    /// Check whether this session has messages in the Turso SQLite store.
+    pub fn is_turso_backed(&self, seed: &str) -> bool {
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Some(dbs) = self.get_or_open_db(seed) {
+                if let Some(db) = dbs.get(seed) {
+                    return db.message_count(seed).unwrap_or(0) > 0;
+                }
+            }
+        }
+        let _ = seed;
+        false
+    }
+
+    /// Count sessions that have JSONL data but not yet migrated to Turso.
+    pub fn count_pending_migration(&self) -> usize {
+        let mut count = 0;
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() { continue; }
+                    if let Some(seed) = path.file_name().and_then(|n| n.to_str()) {
+                        if path.join("messages.jsonl").exists() && !self.is_turso_backed(seed) {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    /// Migrate all pending sessions from JSONL to Turso.
+    /// Returns (migrated_count, total_messages).
+    pub fn migrate_all_to_turso(&self) -> Result<(usize, usize), String> {
+        #[cfg(not(feature = "turso-backend"))]
+        return Err("Turso backend not compiled".into());
+
+        #[cfg(feature = "turso-backend")]
+        {
+            if !self.turso_enabled.load(Ordering::Relaxed) {
+                return Err("Turso is disabled in settings".into());
+            }
+            let mut migrated = 0usize;
+            let mut total_msgs = 0usize;
+            let entries: Vec<_> = std::fs::read_dir(&self.sessions_dir)
+                .map_err(|e| format!("read sessions dir: {e}"))?
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .collect();
+
+            for entry in entries {
+                let path = entry.path();
+                let Some(seed) = path.file_name().and_then(|n| n.to_str()) else { continue };
+                let jsonl = path.join("messages.jsonl");
+                if !jsonl.exists() { continue; }
+                if self.is_turso_backed(seed) { continue; } // already done
+
+                let msgs = store::read_messages(&path)
+                    .map_err(|e| format!("read {}: {e}", seed))?;
+                if msgs.is_empty() { continue; }
+
+                let dbs = self.get_or_open_db(seed)
+                    .ok_or_else(|| "failed to open Turso db".to_string())?;
+                let db = dbs.get(seed).unwrap();
+
+                let count = msgs.len();
+                db.insert_messages_batch(seed, &msgs)
+                    .map_err(|e| format!("batch insert {}: {e}", seed))?;
+                // Also upsert meta to sessions table
+                if let Some(meta) = store::read_meta(&path) {
+                    let _ = db.upsert_meta(seed, &meta);
+                }
+
+                log::info!("SessionManager: migrated {} messages to Turso for {seed}", count);
+                migrated += 1;
+                total_msgs += count;
+            }
+            Ok((migrated, total_msgs))
+        }
     }
 
     /// Load only metadata (fast, no message parsing).
@@ -148,8 +266,8 @@ impl SessionManager {
             log::error!("SessionManager: save_one failed: {e}");
         }
         #[cfg(feature = "turso-backend")]
-        if let Some(ref db) = self.db {
-            let _ = db.insert_message(seed, msg);
+        if let Some(dbs) = self.get_or_open_db(seed) {
+            let _ = dbs.get(seed).unwrap().insert_message(seed, msg);
         }
     }
 
@@ -197,8 +315,10 @@ impl SessionManager {
         store::upsert_index(&self.sessions_dir, &meta);
 
         #[cfg(feature = "turso-backend")]
-        if let Some(ref db) = self.db {
-            let _ = db.upsert_meta(seed, &meta);
+        if let Some(dbs) = self.get_or_open_db(seed) {
+            if let Err(e) = dbs.get(seed).unwrap().upsert_meta(seed, &meta) {
+                log::warn!("SessionManager: Turso upsert_meta failed for {seed}: {e}");
+            }
         }
     }
 
@@ -249,9 +369,14 @@ impl SessionManager {
         store::upsert_index(&self.sessions_dir, &meta);
 
         #[cfg(feature = "turso-backend")]
-        if let Some(ref db) = self.db {
-            let _ = db.upsert_meta(seed, &meta);
-            let _ = db.insert_messages_batch(seed, messages);
+        if let Some(dbs) = self.get_or_open_db(seed) {
+            let db = dbs.get(seed).unwrap();
+            if let Err(e) = db.upsert_meta(seed, &meta) {
+                log::warn!("SessionManager: Turso upsert_meta failed for {seed}: {e}");
+            }
+            if let Err(e) = db.insert_messages_batch(seed, messages) {
+                log::warn!("SessionManager: Turso insert_messages_batch failed for {seed}: {e}");
+            }
         }
     }
 
@@ -308,10 +433,13 @@ impl SessionManager {
         store::upsert_index(&self.sessions_dir, &meta);
 
         #[cfg(feature = "turso-backend")]
-        if let Some(ref db) = self.db {
-            let _ = db.upsert_meta(seed, &meta);
-            for msg in new_messages {
-                let _ = db.insert_message(seed, msg);
+        if let Some(dbs) = self.get_or_open_db(seed) {
+            let db = dbs.get(seed).unwrap();
+            if let Err(e) = db.upsert_meta(seed, &meta) {
+                log::warn!("SessionManager: Turso upsert_meta failed for {seed}: {e}");
+            }
+            if let Err(e) = db.insert_messages_batch(seed, new_messages) {
+                log::warn!("SessionManager: Turso insert_messages_batch failed for {seed}: {e}");
             }
         }
     }
@@ -375,6 +503,31 @@ impl SessionManager {
     }
 
     // ── Private ──
+
+    #[cfg(feature = "turso-backend")]
+    fn get_or_open_db(&self, seed: &str) -> Option<std::sync::MutexGuard<'_, HashMap<String, TursoBackend>>> {
+        if !self.turso_enabled.load(Ordering::Relaxed) { return None; }
+        let mut dbs = self.dbs.lock().unwrap();
+        if !dbs.contains_key(seed) {
+            let dir = self.session_path_dir(seed);
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join("sessions.db");
+            match TursoBackend::open(&path) {
+                Ok(db) => {
+                    log::info!("SessionManager: Turso backend at {}", path.display());
+                    if let Err(e) = db.init_tables() {
+                        log::warn!("SessionManager: Turso init_tables failed: {e}");
+                    }
+                    dbs.insert(seed.to_string(), db);
+                }
+                Err(e) => {
+                    log::warn!("SessionManager: Turso open failed for {seed}: {e}");
+                    return None;
+                }
+            }
+        }
+        Some(dbs)
+    }
 
     fn session_path_dir(&self, seed: &str) -> PathBuf {
         self.sessions_dir.join(seed)

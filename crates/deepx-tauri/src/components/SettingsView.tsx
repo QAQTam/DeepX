@@ -1,5 +1,6 @@
 import { createSignal, createResource, For, Show, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { useI18n, type Lang } from "../i18n";
 
 type ThemeMode = "system" | "light" | "dark" | "dark-gray";
@@ -24,7 +25,14 @@ export default function SettingsView(props: SettingsViewProps) {
   const [reasoningEffort, setReasoningEffort] = createSignal("high");
   const [context7Key, setContext7Key] = createSignal("");
   const [complianceEnabled, setComplianceEnabled] = createSignal(true);
+  const [databaseEnabled, setDatabaseEnabled] = createSignal(true);
+  const [migrationPending, setMigrationPending] = createSignal(0);
+  const [migrating, setMigrating] = createSignal(false);
+  const [migrationResult, setMigrationResult] = createSignal("");
+  const [migrationProgress, setMigrationProgress] = createSignal(0);  // 0-100
+  const [migrationPhase, setMigrationPhase] = createSignal<"idle" | "confirm" | "running" | "done">("idle");
   const [saved, setSaved] = createSignal(false);
+  let dbToggled = false;  // track whether database switch changed
   const [showApiKey, setShowApiKey] = createSignal(false);
   const [showC7Key, setShowC7Key] = createSignal(false);
 
@@ -60,6 +68,7 @@ export default function SettingsView(props: SettingsViewProps) {
     if (data.reasoning_effort) setReasoningEffort(data.reasoning_effort);
     if (data.context7_api_key) setContext7Key(data.context7_api_key === "****" ? "" : data.context7_api_key);
     if (data.compliance_enabled !== undefined) setComplianceEnabled(data.compliance_enabled);
+    if (data.database?.enabled !== undefined) setDatabaseEnabled(data.database.enabled);
     if (data.subagent) {
       if (data.subagent.model) setSubModel(data.subagent.model);
       if (data.subagent.base_url) setSubBaseUrl(data.subagent.base_url);
@@ -105,10 +114,76 @@ export default function SettingsView(props: SettingsViewProps) {
         subagentModel: subModel(), subagentBaseUrl: subBaseUrl(),
         subagentApiKey: subApiKey(), subagentMaxTokens: subMaxTokens(),
         subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
+        databaseEnabled: databaseEnabled(),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+      // Prompt restart if database toggle was changed
+      if (dbToggled) {
+        dbToggled = false;
+        await confirm(t().settings.restartPrompt, {
+          title: t().settings.restartTitle,
+          kind: "info",
+        });
+      }
     } catch (e) { console.error(e); }
+  }
+
+  // ── Migration ──
+
+  createEffect(async () => {
+    if (!databaseEnabled()) return;
+    try {
+      const raw = await invoke<string>("cmd_migration_count");
+      const data = JSON.parse(raw);
+      setMigrationPending(data.pending ?? 0);
+    } catch (_) { setMigrationPending(0); }
+  });
+
+  function startMigrate() {
+    if (migrationPending() === 0) return;
+    setMigrationPhase("confirm");
+  }
+
+  async function doMigrate() {
+    setMigrationPhase("running");
+    setMigrationProgress(0);
+    const start = Date.now();
+    const DURATION = 10_000; // 10 seconds for the progress bar ceremony
+
+    // Animate progress bar: runs independently of actual migration
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const pct = Math.min(100, Math.round((elapsed / DURATION) * 100));
+      setMigrationProgress(pct);
+      if (pct >= 100) clearInterval(interval);
+    }, 80);
+
+    let sessions = 0, messages = 0;
+    try {
+      const raw = await invoke<string>("cmd_migrate_to_turso");
+      const data = JSON.parse(raw);
+      sessions = data.sessions;
+      messages = data.messages;
+    } catch (e) {
+      setMigrationResult("Migration failed: " + String(e));
+      clearInterval(interval);
+      setMigrationPhase("done");
+      return;
+    }
+
+    // Ensure bar shows 100% and wait for the full ceremony duration
+    setMigrationProgress(100);
+    const remain = DURATION - (Date.now() - start);
+    if (remain > 0) await new Promise(r => setTimeout(r, remain));
+    clearInterval(interval);
+
+    setMigrationResult(t().settings.migrateDone
+      .replace("{sessions}", String(sessions))
+      .replace("{messages}", String(messages)));
+    setMigrationPending(0);
+    setMigrationProgress(100);
+    setMigrationPhase("done");
   }
 
   const EyeIcon = (props: { show: boolean }) => (
@@ -301,6 +376,88 @@ export default function SettingsView(props: SettingsViewProps) {
             </div>
           </section>
 
+          {/* ── Database ── */}
+          <section class="settings-card">
+            <h2 class="settings-card-title">{t().settings.sectionDatabase}</h2>
+            <div class="settings-row">
+              <label>{t().settings.databaseEnabled}</label>
+              <div class="settings-input-group">
+                <label class="settings-toggle">
+                  <input type="checkbox" checked={databaseEnabled()} onChange={(e) => { setDatabaseEnabled(e.currentTarget.checked); dbToggled = true; }} />
+                  <span class="settings-toggle-track" />
+                </label>
+                <div class="settings-hint">{t().settings.databaseEnabledHint}</div>
+              </div>
+            </div>
+            <Show when={databaseEnabled()}>
+              <div class="settings-row" style="grid-template-columns:1fr;">
+                <p class="settings-db-desc">{t().settings.databaseDesc}</p>
+              </div>
+              <div class="settings-row">
+                <label>
+                  {migrationPending() > 0
+                    ? t().settings.migrateCount.replace("{n}", String(migrationPending()))
+                    : t().settings.migrateUpToDate}
+                </label>
+                <Show when={migrationPending() > 0}>
+                  <div class="settings-input-group">
+                    <button
+                      class="settings-save-btn"
+                      onClick={startMigrate}
+                    >
+                      {t().settings.migrateBtn}
+                    </button>
+                  </div>
+                </Show>
+              </div>
+            </Show>
+            <Show when={migrationResult()}>
+              <div class="settings-row">
+                <div class="settings-hint" style="color: var(--accent-green)">{migrationResult()}</div>
+              </div>
+            </Show>
+          </section>
+
+        </div>
+      </Show>
+
+      {/* ── Migration Modal ── */}
+      <Show when={migrationPhase() !== "idle"}>
+        <div class="modal-overlay" onClick={() => { if (migrationPhase() === "done") setMigrationPhase("idle"); }}>
+          <div class="modal-card" onClick={(e) => e.stopPropagation()}>
+            <Show when={migrationPhase() === "confirm"}>
+              <h3 style="margin:0 0 12px;font-size:16px;font-weight:600;">{t().settings.migrateWarningTitle}</h3>
+              <p style="margin:0 0 8px;font-size:13px;color:var(--text-secondary);white-space:pre-wrap;">{t().settings.migrateWarningBody}</p>
+              <p style="margin:0 0 16px;font-size:13px;color:var(--text-secondary);white-space:pre-wrap;">
+                {t().settings.migrateConfirmBody.replace("{n}", String(migrationPending()))}
+              </p>
+              <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button class="settings-save-btn" style="background:var(--text-muted);" onClick={() => setMigrationPhase("idle")}>
+                  {t().settings.cancel}
+                </button>
+                <button class="settings-save-btn" onClick={doMigrate}>
+                  {t().settings.migrateBtn}
+                </button>
+              </div>
+            </Show>
+            <Show when={migrationPhase() === "running"}>
+              <h3 style="margin:0 0 4px;font-size:16px;font-weight:600;">{t().settings.migratingTitle}</h3>
+              <p style="margin:0 0 16px;font-size:13px;color:var(--text-secondary);">{t().settings.migratingHint}</p>
+              <div style="width:100%;height:6px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;margin-bottom:8px;">
+                <div style="height:100%;width:{migrationProgress()}%;background:var(--accent);border-radius:3px;transition:width 0.3s ease;" />
+              </div>
+              <p style="margin:0;font-size:12px;color:var(--text-muted);text-align:center;">{migrationProgress()}%</p>
+            </Show>
+            <Show when={migrationPhase() === "done"}>
+              <h3 style="margin:0 0 12px;font-size:16px;font-weight:600;">{t().settings.migrateDoneTitle}</h3>
+              <p style="margin:0 0 16px;font-size:13px;color:var(--text-secondary);white-space:pre-wrap;">{migrationResult()}</p>
+              <div style="display:flex;justify-content:flex-end;">
+                <button class="settings-save-btn" onClick={() => { setMigrationPhase("idle"); setMigrationResult(""); }}>
+                  {t().settings.ok}
+                </button>
+              </div>
+            </Show>
+          </div>
         </div>
       </Show>
     </div>

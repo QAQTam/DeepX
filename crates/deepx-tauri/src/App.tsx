@@ -202,7 +202,7 @@ export default function App() {
         }
         break;
       }
-      case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean, time: Date.now() }); break;
+      case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean, time: (p.time ?? "") as string, args: (p.args ?? "{}") as string }); break;
       case "compact_start": chat.handleCompactStart(p); break;
       case "compact_end": chat.handleCompactEnd(p); break;
       case "tool_notice": chat.handleToolNotice(p); break;
@@ -499,7 +499,7 @@ export default function App() {
             <For each={sessions()}>
               {(s) => (
                 <button class={`sidebar-session-item ${isActive(s.seed) ? "active" : ""}`} onClick={() => resumeSession(s.seed)} title={s.last_summary || s.seed}>
-                  <span class="session-dot" />
+                  <span class={`session-dot ${s.turso_backed ? "turso" : ""}`} title={s.turso_backed ? "SQLite" : "JSONL"} />
                   <span class="session-info">
                     <span class="session-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
                     <span class="session-meta">{formatDate(Number(s.updated_at))} · {s.turn_count || s.message_count} {t().session.turns}</span>
@@ -609,7 +609,7 @@ export default function App() {
               <Show when={hasChosenSession() && activeSeed() && activeChat()}>
                 <div class="chat-area">
                   <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} onSlashCommand={handleSlashCommand} />
-                  <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
+                  <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} loadActivityFromBackend={activeChat()!.loadActivityFromBackend} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
                 </div>
               </Show>
             </Match>

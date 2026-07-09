@@ -1249,7 +1249,7 @@ impl App {
                     format!("Context compacted ({} turns)", turns_compacted)
                 };
             }
-            Agent2Ui::AuditRecord { tool_name, result_summary, success } => {
+            Agent2Ui::AuditRecord { tool_name, result_summary, success, .. } => {
                 self.activity_log.push(ActivityEntry {
                     tool_name,
                     summary: result_summary,

@@ -22,12 +22,56 @@ export default function StatusPanel(props: {
   recentEdits: () => string[];
   activityLog: () => ActivityEntry[];
   seed: string;
+  loadActivityFromBackend?: () => Promise<void>;
   onTaskAction?: (action: "cancel" | "delete" | "ask", taskId: string, subject: string, description: string) => void;
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = createSignal<Section | null>(null);
   const [nowTick, setNowTick] = createSignal(Date.now());
   const timer = setInterval(() => setNowTick(Date.now()), 1000);
+
+  // Load activity from backend when panel mounts
+  onMount(() => {
+    props.loadActivityFromBackend?.();
+  });
+
+  const formatActivity = (e: ActivityEntry): { icon: string; desc: string; detail: string } => {
+    const name = e.tool_name;
+    let args: Record<string, unknown> = {};
+    try { args = JSON.parse(e.args || "{}"); } catch (_) {}
+    const icon = TOOL_ICONS[name] || "?";
+    let desc = name;
+    let detail = e.summary || "";
+
+    if (name.startsWith("file")) {
+      const path = (args.path || args.new_path || args.source || args.dest || "") as string;
+      const action = name === "file_delete" ? "Deleted" : name === "file_write" || name === "file_edit" || name === "file_edit_diff" ? "Modified" : "Read";
+      desc = `${action}`;
+      detail = path ? path.replace(/\\/g, "/").split("/").pop() || path : detail;
+    } else if (name === "exec") {
+      const cmd = (args.command || "") as string;
+      desc = "Executed";
+      detail = cmd || detail;
+    } else if (name.startsWith("web_")) {
+      const q = (args.query || args.url || "") as string;
+      desc = name === "web_fetch" ? "Fetched" : "Searched";
+      detail = String(q).substring(0, 80);
+    } else if (name.startsWith("git_")) {
+      desc = "Git";
+      detail = e.summary || "";
+    } else if (name.startsWith("explore")) {
+      desc = "Explored";
+      detail = "Project structure";
+    } else if (name.startsWith("task_") || name.startsWith("plan_")) {
+      desc = name;
+      detail = e.summary || "";
+    }
+
+    if (detail.startsWith("[OK] ")) detail = detail.slice(4);
+    if (detail.startsWith("[ERROR] ")) detail = detail.slice(8);
+    if (detail.startsWith("[FAIL] ")) detail = detail.slice(7);
+    return { icon, desc, detail };
+  };
 
   // Panel resize
   let panelW = Number(localStorage.getItem("deepx:panel-w")) || 340;
@@ -134,18 +178,20 @@ export default function StatusPanel(props: {
           </div>
           <div class={`status-accordion-body${isOpen("activity") ? " expanded" : ""}`}>
             <Show when={props.activityLog().length > 0} fallback={<div class="status-empty">{t().status.noActivity}</div>}>
-              <For each={props.activityLog()}>
-                {(entry) => (
-                  <div class={`status-row status-${entry.success ? "success" : "fail"}`}>
-                    <span class="status-row-icon activity-icon">{TOOL_ICONS[entry.tool_name] ?? "*"}</span>
-                    <div class="status-row-info">
-                      <span class="status-row-title">{entry.tool_name}</span>
-                      <span class="status-row-desc">{entry.summary}</span>
-                    </div>
-                    <span class="status-row-time">{elapsed(entry.time)}</span>
-                  </div>
-                )}
-              </For>
+               <For each={props.activityLog()}>
+                 {(entry) => {
+                   const fmt = formatActivity(entry);
+                   return (
+                   <div class={`status-row status-${entry.success ? "success" : "fail"}`}>
+                     <span class="status-row-icon activity-icon">{fmt.icon}</span>
+                     <div class="status-row-info">
+                       <span class="status-row-title">{fmt.desc}</span>
+                       <span class="status-row-desc">{fmt.detail}</span>
+                     </div>
+                     <span class="status-row-time">{entry.time ? entry.time.split(" ").pop()?.slice(0, 5) : ""}</span>
+                   </div>
+                 )}}
+               </For>
             </Show>
           </div>
         </div>

@@ -1,4 +1,4 @@
-use deepx_types::Message;
+use deepx_types::{Message, ToolDef};
 use crate::effect::{Effect, PendingTool, ToolExecRequest, ToolExecutorFn};
 use deepx_session::SessionManager;
 
@@ -289,6 +289,21 @@ impl MessageStore {
 
     pub fn push_system(&mut self, msg: Message) -> Effect {
         debug_assert_eq!(msg.role, "system", "push_system requires role=system");
+        // Guard: skip if an identical system message already exists.
+        // This prevents double-injection when lifecycle paths are called
+        // multiple times (e.g. create_session after a failed resume).
+        let new_text = msg.content.iter().find_map(|b| match b {
+            deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        }).unwrap_or("");
+        if !new_text.is_empty() && self.system_messages.iter().any(|m| {
+            m.content.iter().any(|b| match b {
+                deepx_types::ContentBlock::Text { text } => text == new_text,
+                _ => false,
+            })
+        }) {
+            return Effect::None;
+        }
         self.system_messages.push(msg.clone());
         self.save_msg(&msg);
         Effect::None
@@ -375,7 +390,7 @@ impl MessageStore {
 
     fn push_tool_result_inner(&mut self, tool_call_id: &str, result: &str, success: bool) {
         // Look up tool name from any step that owns this tool_call_id.
-        let tool_name: Option<String> = self.turns.iter().rev().find_map(|turn| {
+        let _tool_name: Option<String> = self.turns.iter().rev().find_map(|turn| {
             turn.steps.iter().rev().find_map(|step| {
                 step.assistant.content.iter().find_map(|b| {
                     if let deepx_types::ContentBlock::ToolUse { id, name, .. } = b {
@@ -384,10 +399,7 @@ impl MessageStore {
                 })
             })
         });
-        let final_result = tool_name.as_deref()
-            .map(|name| truncate_tool_result(name, result))
-            .unwrap_or_else(|| result.to_string());
-
+        let final_result = result.to_string();
         let tool_msg = Message::tool(tool_call_id, &final_result, success);
 
         for turn in self.turns.iter_mut().rev() {
@@ -412,7 +424,7 @@ impl MessageStore {
 
     pub fn replace_tool_result(&mut self, tool_call_id: &str, result: &str, success: bool) {
         // Same truncation for replace path.
-        let tool_name: Option<String> = self.turns.iter().rev().find_map(|turn| {
+        let _tool_name: Option<String> = self.turns.iter().rev().find_map(|turn| {
             turn.steps.iter().rev().find_map(|step| {
                 step.assistant.content.iter().find_map(|b| {
                     if let deepx_types::ContentBlock::ToolUse { id, name, .. } = b {
@@ -421,9 +433,7 @@ impl MessageStore {
                 })
             })
         });
-        let final_result = tool_name.as_deref()
-            .map(|name| truncate_tool_result(name, result))
-            .unwrap_or_else(|| result.to_string());
+        let final_result = result.to_string();
 
         for turn in self.turns.iter_mut().rev() {
             if let Some(step) = turn.find_step_for_mut(tool_call_id) {
@@ -441,17 +451,11 @@ impl MessageStore {
 
     pub fn build_context_for_gate(
         &mut self,
-        system_prompt: &str,
         annotations: &[String],
     ) -> Vec<Message> {
         let mut full: Vec<Message> = {
             let mut v = Vec::new();
             v.extend(self.system_messages.clone());
-            // Mode hint at fixed position — right after system messages, before all turns.
-            // Consistent prefix ensures KV-cache hits across rounds.
-            if !system_prompt.is_empty() {
-                v.push(Message::system(system_prompt));
-            }
             let total_turns = self.turns.len();
             for (i, turn) in self.turns.iter().enumerate() {
                 if i < self.compact_skip { continue; }
@@ -462,16 +466,31 @@ impl MessageStore {
                     v.push(step.assistant.clone());
                     let is_last_step_of_last_turn = is_last_turn && si == total_steps - 1;
                     for tr in &step.tool_results {
+                        let tool_name = step.assistant.content.iter().find_map(|b| {
+                            if let deepx_types::ContentBlock::ToolUse { name, .. } = b {
+                                Some(name.as_str())
+                            } else { None }
+                        }).unwrap_or("");
+
                         if is_last_step_of_last_turn {
-                            // Current turn — keep full (truncated to 4KB).
-                            v.push(tr.clone());
+                            // Current turn: fold write/edit tools (LLM doesn't need its own diff),
+                            // truncate read/search/exec (LLM needs the content).
+                            let keep_full = tool_name == "file_read"
+                                || tool_name == "file_search"
+                                || tool_name.starts_with("exec");
+                            let mut msg = tr.clone();
+                            for block in &mut msg.content {
+                                if let deepx_types::ContentBlock::ToolResult { content, .. } = block {
+                                    if keep_full {
+                                        *content = truncate_tool_result(tool_name, content);
+                                    } else {
+                                        *content = fold_completed_tool_result(tool_name, content);
+                                    }
+                                }
+                            }
+                            v.push(msg);
                         } else {
                             // Completed turn — fold to status line.
-                            let tool_name = step.assistant.content.iter().find_map(|b| {
-                                if let deepx_types::ContentBlock::ToolUse { name, .. } = b {
-                                    Some(name.as_str())
-                                } else { None }
-                            }).unwrap_or("");
                             let mut folded = tr.clone();
                             for block in &mut folded.content {
                                 if let deepx_types::ContentBlock::ToolResult { content, .. } = block {
@@ -666,9 +685,17 @@ impl MessageStore {
         let mut repairs = Vec::new();
         let mut i = 0;
 
+        // Only keep the first system message — discarding duplicates from
+        // prior bugs (e.g. from_messages re-persisted in v0.4.1) that left
+        // multiple system entries with different msg_ids.
+        let mut has_system = false;
         while i < msgs.len() && msgs[i].role == "system" {
-            store.system_messages.push(msgs[i].clone());
-            // Restore msg_id tracking without re-persisting
+            if !has_system {
+                store.system_messages.push(msgs[i].clone());
+                has_system = true;
+            } else {
+                repairs.push("dropped duplicate system message (msg_id collision or prior bug)".into());
+            }
             if let Some(mid) = msgs[i].msg_id {
                 store.next_msg_id = store.next_msg_id.max(mid + 1);
             }
@@ -823,14 +850,24 @@ impl MessageStore {
     /// Returns (chat_text_tok, thinking_tok, tool_calls_tok, tool_results_tok, tools_schema_tok, system_prompt_tok, thinking_blocks, tool_call_blocks).
     /// All token fields use `deepx_types::count_tokens` (CJK-aware heuristic), NOT raw char length.
     #[allow(clippy::too_many_arguments)]
-    pub fn compute_context_stats(&self) -> (u64, u64, u64, u64, u64, u64, u64, u64) {
+    pub fn compute_context_stats(&self, tool_defs: Option<&[ToolDef]>) -> (u64, u64, u64, u64, u64, u64, u64, u64) {
         let mut chat_text = 0u64;
         let mut thinking = 0u64;
         let mut tool_calls = 0u64;
         let mut tool_results = 0u64;
+        let mut tools_schema = 0u64;
         let mut system_prompt = 0u64;
         let mut thinking_blocks = 0u64;
         let mut tool_call_blocks = 0u64;
+
+        // Count tool definitions (sent as JSON schema to the LLM)
+        if let Some(defs) = tool_defs {
+            for td in defs {
+                if let Ok(json) = serde_json::to_string(td) {
+                    tools_schema += deepx_types::count_tokens(&json) as u64;
+                }
+            }
+        }
 
         for m in &self.system_messages {
             for b in &m.content {
@@ -841,6 +878,7 @@ impl MessageStore {
         }
         for (i, turn) in self.turns.iter().enumerate() {
             if i < self.compact_skip { continue; }
+            let is_last_turn = i == self.turns.len() - 1;
             for m in [&turn.user] {
                 for b in &m.content {
                     match b {
@@ -863,7 +901,8 @@ impl MessageStore {
                     }
                 }
             }
-            for step in &turn.steps {
+            for (si, step) in turn.steps.iter().enumerate() {
+                let is_last_step_of_last_turn = is_last_turn && si == turn.steps.len() - 1;
                 for b in &step.assistant.content {
                     match b {
                         deepx_types::ContentBlock::Text { text } => {
@@ -883,14 +922,33 @@ impl MessageStore {
                 }
                 for tr in &step.tool_results {
                     for b in &tr.content {
-                        if let deepx_types::ContentBlock::ToolResult { content, .. } = b {
-                            tool_results += deepx_types::count_tokens(content) as u64;
+                        if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = b {
+                            // Match tool name by id
+                            let tool_name = step.assistant.content.iter().find_map(|blk| {
+                                if let deepx_types::ContentBlock::ToolUse { id, name, .. } = blk {
+                                    if id == tool_use_id { Some(name.as_str()) } else { None }
+                                } else { None }
+                            }).unwrap_or("");
+
+                            let effective = if is_last_step_of_last_turn {
+                                let keep_full = tool_name == "file_read"
+                                    || tool_name == "file_search"
+                                    || tool_name.starts_with("exec");
+                                if keep_full {
+                                    truncate_tool_result(tool_name, content)
+                                } else {
+                                    fold_completed_tool_result(tool_name, content)
+                                }
+                            } else {
+                                fold_completed_tool_result(tool_name, content)
+                            };
+                            tool_results += deepx_types::count_tokens(&effective) as u64;
                         }
                     }
                 }
             }
         }
-        (chat_text, thinking, tool_calls, tool_results, 0, system_prompt, thinking_blocks, tool_call_blocks)
+        (chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt, thinking_blocks, tool_call_blocks)
     }
 }
 

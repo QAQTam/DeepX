@@ -783,6 +783,8 @@ impl Loop {
                 }
             }
             deepx_tools::bridge::load_workspace(&self.agent.session.seed);
+            // Hot-reload Turso mirror setting (no restart needed)
+            deepx_session::SessionManager::global().set_turso_enabled(cfg.database.enabled);
         }
     }
 
@@ -1022,7 +1024,7 @@ impl Loop {
         log::info!("[AGENT] handle_compact: {} turns", turns_total);
 
         // Build full message list (excluding system messages) for token-driven split.
-        let all = self.agent.msg.build_context_for_gate("", &[]);
+        let all = self.agent.msg.build_context_for_gate(&[]);
         let msgs: Vec<&deepx_types::Message> = all.iter().filter(|m| m.role != "system").collect();
         if msgs.is_empty() { return; }
 
@@ -1168,15 +1170,15 @@ impl Loop {
 
         // Write post-compact context stats
         {
-            let (chat_text, thinking, tool_calls, tool_results, _, system_prompt, thinking_blocks, tool_call_blocks) =
-                self.agent.msg.compute_context_stats();
+            let (chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt, thinking_blocks, tool_call_blocks) =
+                self.agent.msg.compute_context_stats(Some(&self.agent.tool_defs));
             let stats = serde_json::json!({
                 "messages": self.agent.msg.turn_count(),
                 "chat_text": chat_text,
                 "thinking": thinking,
                 "tool_calls": tool_calls,
                 "tool_results": tool_results,
-                "tools_schema": 0,
+                "tools_schema": tools_schema,
                 "system_prompt": system_prompt,
                 "thinking_blocks": thinking_blocks,
                 "tool_call_blocks": tool_call_blocks,
@@ -1560,6 +1562,7 @@ impl Loop {
 
                     let results = self.agent.msg.last_step_tool_results();
                     let mut tool_defs = Vec::new();
+                    let ts = util::chrono_local_datetime();
                     for (tc_id, tool_name, result_content, success) in &results {
                         tool_defs.push(deepx_proto::ToolResultDef {
                             tool_call_id: tc_id.clone(),
@@ -1567,10 +1570,15 @@ impl Loop {
                             success: *success,
                             file: None,
                         });
+                        let args = self.agent.msg.tool_call_args(tc_id)
+                            .map(|a| a.to_string())
+                            .unwrap_or_default();
                         self.emit_delta(Agent2Ui::AuditRecord {
                             tool_name: tool_name.clone(),
                             result_summary: result_content.lines().next().unwrap_or("").chars().take(120).collect(),
                             success: *success,
+                            time: ts.clone(),
+                            args,
                         });
                     }
                     if !tool_defs.is_empty() {
@@ -1663,14 +1671,14 @@ impl Loop {
         // Write live context stats to disk so ContextPanel always has fresh data.
         // Previously only written during compact, leaving the panel at zero otherwise.
         {
-            let (chat_text, thinking, tool_calls, tool_results, _, system_prompt, thinking_blocks, tool_call_blocks) =
-                self.agent.msg.compute_context_stats();
+            let (chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt, thinking_blocks, tool_call_blocks) =
+                self.agent.msg.compute_context_stats(Some(&self.agent.tool_defs));
             let stats = serde_json::json!({
                 "chat_text": chat_text,
                 "thinking": thinking,
                 "tool_calls": tool_calls,
                 "tool_results": tool_results,
-                "tools_schema": 0,
+                "tools_schema": tools_schema,
                 "system_prompt": system_prompt,
                 "thinking_blocks": thinking_blocks,
                 "tool_call_blocks": tool_call_blocks,

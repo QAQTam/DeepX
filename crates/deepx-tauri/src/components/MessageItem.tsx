@@ -1,7 +1,7 @@
 import { For, Show, Switch, Match, createMemo } from "solid-js";
 import MarkdownBody from "./MarkdownBody";
 import ThinkingBlock from "./ThinkingBlock";
-import ToolCallCard from "./ToolCallCard";
+import ToolRow from "./ToolRow";
 import type { Round, Turn } from "../store/chat";
 import { useI18n } from "../i18n";
 
@@ -66,7 +66,7 @@ export default function MessageItem(props: MessageItemProps) {
                           <Show when={round.answer}><MarkdownBody class="md-body" content={round.answer!} final={!!(round.blocks && round.blocks.length > 0) || props.status === "complete"} /></Show>
                           <div class="tool-capsules-row">
                             <For each={mergedToolCalls()}>
-                              {(item) => <ToolCallCard call={item.call} result={item.result} streamingOutput={item.streamOutput} />}
+                              {(item) => <ToolRow call={item.call} result={item.result} streamingOutput={item.streamOutput} />}
                             </For>
                           </div>
                         </>
@@ -82,7 +82,7 @@ export default function MessageItem(props: MessageItemProps) {
                               <MarkdownBody class="md-body" content={block.content!} final={true} />
                             </Match>
                             <Match when={block.type === "tool"}>
-                              <ToolCallCard call={block.card!} result={block.card._result} streamingOutput={block.card._streamOutput} />
+                              <ToolRow call={block.card!} result={block.card._result} streamingOutput={block.card._streamOutput} />
                             </Match>
                           </Switch>
                         )}
