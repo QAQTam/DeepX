@@ -146,6 +146,12 @@ const zh: I18nStrings = {
     files: "文件",
     noFiles: "无文件",
     gitChanges: "Git 变更",
+    noChanges: "没有变更",
+    commit: "提交",
+    commitPlaceholder: "提交信息...",
+    stashSwitch: "暂存并切换",
+    discardSwitch: "丢弃并切换",
+    switchPrompt: "切换到 {branch} — 存在未提交的更改。",
   },
   toast: {
     agentDisconnected: "Agent 进程已断开 — 正在重连...",

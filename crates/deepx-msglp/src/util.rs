@@ -50,7 +50,9 @@ pub(crate) fn record_token_usage(usage: &deepx_types::UsageInfo, model: &str) {
 }
 
 pub(crate) fn has_xml(s: &str) -> bool {
-    s.contains("<tool_use>") || s.contains("<invoke ") || s.contains("<tool_calls>")
+    // Require <tool_calls> wrapper to avoid false positives from
+    // examples, explanations, or markdown containing bare <invoke> tags.
+    s.contains("<tool_calls>")
 }
 
 #[allow(dead_code)]

@@ -13,12 +13,21 @@
   cursor: pointer;
   user-select: none;
   font-size: 11px; font-weight: 600; color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: 0.05em;
+  letter-spacing: 0.05em;
   border-bottom: 0.5px solid var(--border-divider);
   flex-shrink: 0;
 }
 .git-diff-header:hover { background: var(--bg-hover); }
 .git-diff-title { color: var(--text-secondary); }
+.git-branch-select {
+  background: transparent; border: 0.5px solid var(--border-divider);
+  border-radius: 3px; color: var(--text-secondary);
+  font-size: 11px; font-weight: 600; font-family: var(--font-mono);
+  padding: 1px 4px; cursor: pointer; outline: none;
+  max-width: 140px;
+}
+.git-branch-select:disabled { opacity: 0.5; }
+.git-branch-select option { background: var(--bg-primary); }
 .git-diff-spinner { animation: spin 1s linear infinite; font-size: 12px; }
 .git-diff-summary { display: flex; gap: 6px; margin-left: auto; }
 .git-diff-badge { font-size: 11px; font-family: var(--font-mono); font-weight: 600; }
@@ -56,3 +65,50 @@
 }
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ── Commit ── */
+.git-commit-btn {
+  background: #1e1e1e; color: #ccc;
+  border: none; border-radius: 3px;
+  font-size: 10px; font-weight: 600; font-family: var(--font-sans);
+  padding: 1px 8px; cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.git-commit-btn:hover { filter: brightness(1.15); }
+.git-commit-btn:disabled { opacity: 0.4; cursor: default; }
+.git-commit-inline { display: flex; align-items: center; gap: 4px; }
+.git-commit-input {
+  background: var(--bg-tertiary); border: 0.5px solid var(--border-divider);
+  border-radius: 3px; color: var(--text-primary);
+  font-size: 11px; font-family: var(--font-sans);
+  padding: 2px 6px; outline: none;
+  width: 160px;
+}
+.git-commit-input:focus { border-color: var(--accent); }
+.git-commit-ok, .git-commit-cancel {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 13px; padding: 0 2px;
+}
+.git-commit-ok { color: var(--green); }
+.git-commit-cancel { color: var(--red); }
+
+/* ── Switch-branch prompt ── */
+.git-switch-prompt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; font-size: 11px;
+  background: var(--bg-tertiary);
+  border-bottom: 0.5px solid var(--border-divider);
+  flex-shrink: 0;
+}
+.git-switch-prompt-msg { color: var(--text-secondary); }
+.git-switch-prompt-msg strong { color: var(--text-primary); }
+.git-switch-prompt-btns { display: flex; gap: 6px; margin-left: auto; }
+.git-switch-stash, .git-switch-discard, .git-switch-cancel {
+  border: 0.5px solid var(--border-divider);
+  border-radius: 3px; font-size: 10px; font-weight: 600;
+  padding: 2px 8px; cursor: pointer;
+  font-family: var(--font-sans);
+}
+.git-switch-stash { background: #1e1e1e; color: #ccc; border-color: var(--bg-accent); }
+.git-switch-discard { background: transparent; color: var(--red); border-color: var(--red); }
+.git-switch-cancel { background: transparent; color: var(--text-muted); }

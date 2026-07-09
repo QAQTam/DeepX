@@ -422,6 +422,310 @@ pub(super) fn exec_commit(args: &str) -> String {
     }
 }
 
+pub(super) fn exec_branch(args: &str) -> String {
+    let path = parse_arg(args, "path");
+    let action = parse_arg(args, "action");
+    let name = parse_arg(args, "name");
+    let start_point = parse_arg(args, "start_point");
+    let force = parse_arg_or(args, "force", "false") == "true";
+
+    let repo = match open_repo(&path) {
+        Ok(r) => r,
+        Err(e) => return format!("[ERROR] {e}"),
+    };
+
+    match action.as_str() {
+        "list" => {
+            let mut branches: Vec<serde_json::Value> = Vec::new();
+            let head_name = repo.head().ok().and_then(|h| h.shorthand().ok().map(String::from));
+            if let Ok(iter) = repo.branches(Some(git2::BranchType::Local)) {
+                for b in iter.flatten() {
+                    let bname = b.0.name().ok().flatten().unwrap_or("").to_string();
+                    if bname.is_empty() { continue; }
+                    branches.push(serde_json::json!({
+                        "name": bname,
+                        "is_head": head_name.as_deref() == Some(&bname),
+                    }));
+                }
+            }
+            serde_json::to_string(&branches)
+                .map(|s| format!("[OK]\n{s}"))
+                .unwrap_or_else(|e| format!("[ERROR] serialize: {e}"))
+        }
+        "create" => {
+            if name.is_empty() {
+                return "[ERROR] branch name is required".to_string();
+            }
+            let commit = if start_point.is_empty() {
+                repo.head().ok().and_then(|h| h.peel_to_commit().ok())
+            } else {
+                rev_parse_oid(&repo, &start_point)
+                    .and_then(|oid| repo.find_commit(oid).ok())
+            };
+            let commit = match commit {
+                Some(c) => c,
+                None => return "[ERROR] cannot resolve commit to branch from".to_string(),
+            };
+            match repo.branch(&name, &commit, force) {
+                Ok(_) => format!("[OK] created branch '{name}'"),
+                Err(e) => format!("[ERROR] branch create: {e}"),
+            }
+        }
+        "delete" => {
+            if name.is_empty() {
+                return "[ERROR] branch name is required".to_string();
+            }
+            let mut branch = match repo.find_branch(&name, git2::BranchType::Local) {
+                Ok(b) => b,
+                Err(e) => return format!("[ERROR] find branch '{name}': {e}"),
+            };
+            if branch.is_head() && !force {
+                return "[ERROR] cannot delete current branch without force=true".to_string();
+            }
+            match branch.delete() {
+                Ok(()) => format!("[OK] deleted branch '{name}'"),
+                Err(e) => format!("[ERROR] delete: {e}"),
+            }
+        }
+        _ => format!("[ERROR] unknown action '{action}'. Use 'list', 'create', or 'delete'."),
+    }
+}
+
+pub(super) fn exec_checkout(args: &str) -> String {
+    let path = parse_arg(args, "path");
+    let target = parse_arg(args, "target");
+    let force = parse_arg_or(args, "force", "false") == "true";
+
+    let repo = match open_repo(&path) {
+        Ok(r) => r,
+        Err(e) => return format!("[ERROR] {e}"),
+    };
+
+    // Mode 1: checkout a branch / ref
+    // Try as a branch name first, then as a revspec
+    if repo.find_branch(&target, git2::BranchType::Local).is_ok()
+        || !target.starts_with("--")
+    {
+        // Check if target looks like a file path (contains / or .)
+        // If it's a valid revspec, do branch checkout; otherwise restore file
+        let is_ref = repo.revparse_single(&target).is_ok();
+
+        if is_ref {
+            let (obj, reference) = match repo.revparse_ext(&target) {
+                Ok(r) => r,
+                Err(e) => return format!("[ERROR] revparse '{target}': {e}"),
+            };
+            let mut opts = git2::build::CheckoutBuilder::new();
+            if force { opts.force(); }
+            if let Err(e) = repo.checkout_tree(&obj, Some(&mut opts)) {
+                return format!("[ERROR] checkout tree: {e}");
+            }
+            if let Some(r) = reference {
+                if let Err(e) = repo.set_head(r.name().ok().unwrap_or("")) {
+                    return format!("[ERROR] set HEAD: {e}");
+                }
+            } else {
+                // Detached HEAD — target is a commit, not a branch
+                if let Err(e) = repo.set_head_detached(obj.id()) {
+                    return format!("[ERROR] set detached HEAD: {e}");
+                }
+            }
+            format!("[OK] checked out '{target}'")
+        } else {
+            // Mode 2: restore file from index/HEAD
+            let resolved = crate::resolve_workspace_path(&target);
+            let rel = if let Some(wd) = repo.workdir() {
+                Path::new(&resolved).strip_prefix(wd).unwrap_or(Path::new(&resolved)).to_path_buf()
+            } else {
+                PathBuf::from(&resolved)
+            };
+            let rel_str = rel.to_string_lossy();
+            let mut opts = git2::build::CheckoutBuilder::new();
+            if force { opts.force(); }
+            opts.path(&*rel_str);
+            if let Err(e) = repo.checkout_index(None, Some(&mut opts)) {
+                return format!("[ERROR] restore '{rel_str}': {e}");
+            }
+            format!("[OK] restored '{rel_str}'")
+        }
+    } else {
+        format!("[ERROR] cannot resolve '{target}' as a ref or file")
+    }
+}
+
+pub(super) fn exec_merge(args: &str) -> String {
+    let path = parse_arg(args, "path");
+    let branch = parse_arg(args, "branch");
+    let message = parse_arg_or(args, "message", "");
+
+    if branch.is_empty() {
+        return "[ERROR] branch to merge is required".to_string();
+    }
+
+    let repo = match open_repo(&path) {
+        Ok(r) => r,
+        Err(e) => return format!("[ERROR] {e}"),
+    };
+
+    // Resolve the branch to an annotated commit
+    let refname = format!("refs/heads/{branch}");
+    let (their_obj, _) = match repo.revparse_ext(&refname) {
+        Ok(r) => r,
+        Err(_) => {
+            // Try full ref name
+            match repo.revparse_ext(&branch) {
+                Ok(r) => r,
+                Err(e) => return format!("[ERROR] resolve '{branch}': {e}"),
+            }
+        }
+    };
+
+    let their_commit = match their_obj.peel_to_commit() {
+        Ok(c) => c,
+        Err(e) => return format!("[ERROR] peel to commit: {e}"),
+    };
+
+    let annotated = match repo.find_annotated_commit(their_commit.id()) {
+        Ok(a) => a,
+        Err(e) => return format!("[ERROR] annotated: {e}"),
+    };
+
+    // Attempt merge
+    let mut merge_opts = git2::MergeOptions::new();
+    let mut checkout_opts = git2::build::CheckoutBuilder::new();
+    checkout_opts.force();
+
+    match repo.merge(&[&annotated], Some(&mut merge_opts), Some(&mut checkout_opts)) {
+        Ok(()) => {}
+        Err(e) => {
+            let _ = repo.cleanup_state();
+            return format!("[ERROR] merge: {e}");
+        }
+    }
+
+    // Check for conflicts
+    let mut idx = match repo.index() {
+        Ok(i) => i,
+        Err(e) => {
+            let _ = repo.cleanup_state();
+            return format!("[ERROR] index: {e}");
+        }
+    };
+
+    if idx.has_conflicts() {
+        let mut conflicted = Vec::new();
+        if let Ok(conflicts) = idx.conflicts() {
+            for c in conflicts.flatten() {
+                if let Some(entry) = c.our {
+                    conflicted.push(String::from_utf8_lossy(&entry.path).to_string());
+                }
+            }
+        }
+        let _ = repo.cleanup_state();
+        let list = conflicted.join(", ");
+        return format!("[ERROR] merge conflicts in: {list}");
+    }
+
+    // Auto-commit the merge
+    let tree_id = match idx.write_tree() {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = repo.cleanup_state();
+            return format!("[ERROR] write tree: {e}");
+        }
+    };
+    let tree = match repo.find_tree(tree_id) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = repo.cleanup_state();
+            return format!("[ERROR] find tree: {e}");
+        }
+    };
+
+    let head_commit = match repo.head().ok().and_then(|h| h.peel_to_commit().ok()) {
+        Some(c) => c,
+        None => {
+            let _ = repo.cleanup_state();
+            return "[ERROR] no HEAD commit".to_string();
+        }
+    };
+
+    let parents = [&head_commit, &their_commit];
+    let msg = if message.is_empty() {
+        format!("merge '{branch}'")
+    } else {
+        message.to_string()
+    };
+
+    let sig = repo.signature()
+        .unwrap_or_else(|_| git2::Signature::now("deepx-agent", "agent@deepx").unwrap());
+
+    match repo.commit(Some("HEAD"), &sig, &sig, &msg, &tree, &parents) {
+        Ok(oid) => {
+            let _ = repo.cleanup_state();
+            let s = oid.to_string();
+            let short = &s[..7.min(s.len())];
+            format!("[OK] merged '{branch}', commit {short}")
+        }
+        Err(e) => {
+            let _ = repo.cleanup_state();
+            format!("[ERROR] merge commit: {e}")
+        }
+    }
+}
+
+pub(super) fn exec_restore(args: &str) -> String {
+    let path = parse_arg(args, "path");
+    let files_raw = parse_arg(args, "files");
+    let staged = parse_arg_or(args, "staged", "false") == "true";
+
+    if files_raw.is_empty() {
+        return "[ERROR] files is required".to_string();
+    }
+
+    let repo = match open_repo(&path) {
+        Ok(r) => r,
+        Err(e) => return format!("[ERROR] {e}"),
+    };
+
+    let files: Vec<String> = serde_json::from_str(&files_raw)
+        .unwrap_or_else(|_| vec![files_raw.clone()]);
+
+    let mut restored = Vec::new();
+    for file in &files {
+        let resolved = crate::resolve_workspace_path(file);
+        let rel = if let Some(wd) = repo.workdir() {
+            Path::new(&resolved).strip_prefix(wd).unwrap_or(Path::new(&resolved)).to_path_buf()
+        } else {
+            PathBuf::from(&resolved)
+        };
+        let rel_str = rel.to_string_lossy();
+
+        if staged {
+            // Restore from HEAD (unstage)
+            let head_tree = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
+                Some(t) => t,
+                None => return "[ERROR] no HEAD tree".to_string(),
+            };
+            let mut opts = git2::build::CheckoutBuilder::new();
+            opts.path(&*rel_str);
+            if let Err(e) = repo.checkout_tree(head_tree.as_object(), Some(&mut opts)) {
+                return format!("[ERROR] restore '{rel_str}': {e}");
+            }
+        } else {
+            // Restore working tree from index
+            let mut opts = git2::build::CheckoutBuilder::new();
+            opts.path(&*rel_str);
+            if let Err(e) = repo.checkout_index(None, Some(&mut opts)) {
+                return format!("[ERROR] restore '{rel_str}': {e}");
+            }
+        }
+        restored.push(rel_str.to_string());
+    }
+
+    format!("[OK] restored {}", restored.join(", "))
+}
+
 // ── helpers ──
 
 fn rev_parse_tree<'a>(repo: &'a Repository, spec: &'a str) -> Option<git2::Tree<'a>> {
@@ -444,6 +748,10 @@ handler!(handle_status, exec_status);
 handler!(handle_show, exec_show);
 handler!(handle_add, exec_add);
 handler!(handle_commit, exec_commit);
+handler!(handle_branch, exec_branch);
+handler!(handle_checkout, exec_checkout);
+handler!(handle_merge, exec_merge);
+handler!(handle_restore, exec_restore);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
@@ -505,6 +813,46 @@ pub fn register(mgr: &mut crate::ToolManager) {
         handler: handle_commit,
         risk: ToolRisk::Destructive,
         default_timeout: std::time::Duration::from_secs(15),
+    });
+    mgr.register(ToolHandler {
+        key: ToolKey::new("git", "branch"),
+        description: "List, create, or delete git branches. Parameters: path, action ('list'|'create'|'delete'), name (branch name, required for create/delete), start_point (commit ref for new branch, optional), force (boolean, optional).",
+        input_schema: serde_json::json!({"type":"object","description":"Git branch operations. List local branches, create a new branch, or delete an existing one.",
+        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"action":{"type":"string","description":"Action: 'list', 'create', or 'delete'"},"name":{"type":"string","description":"Branch name (required for create/delete)"},"start_point":{"type":"string","description":"Commit ref to branch from (optional, defaults to HEAD)"},"force":{"type":"string","description":"If 'true', force create or delete"}},
+        "required":["action"],"additionalProperties":false}),
+        handler: handle_branch,
+        risk: ToolRisk::Destructive,
+        default_timeout: std::time::Duration::from_secs(15),
+    });
+    mgr.register(ToolHandler {
+        key: ToolKey::new("git", "checkout"),
+        description: "Switch branches or restore working tree files. Parameters: path, target (branch name or file path), force (boolean, optional). When target is a branch/ref, switches HEAD. When target is a file path prefixed with '--' or not a valid ref, restores the file from index.",
+        input_schema: serde_json::json!({"type":"object","description":"Git checkout: switch branch or restore files. Switches HEAD when target is a valid ref; restores file from index otherwise.",
+        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"target":{"type":"string","description":"Branch name or file path to restore"},"force":{"type":"string","description":"If 'true', force checkout (discard local changes)"}},
+        "required":["target"],"additionalProperties":false}),
+        handler: handle_checkout,
+        risk: ToolRisk::Destructive,
+        default_timeout: std::time::Duration::from_secs(20),
+    });
+    mgr.register(ToolHandler {
+        key: ToolKey::new("git", "merge"),
+        description: "Merge a branch into the current HEAD. Parameters: path, branch (branch name to merge), message (optional merge commit message). Auto-commits on success. Reports conflicted files on failure.",
+        input_schema: serde_json::json!({"type":"object","description":"Git merge: merge a branch into current HEAD. Auto-commits if no conflicts; reports conflicted files otherwise.",
+        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"branch":{"type":"string","description":"Branch name to merge into current HEAD"},"message":{"type":"string","description":"Merge commit message (optional, defaults to 'merge <branch>')"}},
+        "required":["branch"],"additionalProperties":false}),
+        handler: handle_merge,
+        risk: ToolRisk::Destructive,
+        default_timeout: std::time::Duration::from_secs(30),
+    });
+    mgr.register(ToolHandler {
+        key: ToolKey::new("git", "restore"),
+        description: "Restore working tree files to match the index (or HEAD when staged=true). Discards uncommitted changes. Parameters: path, files (single file path or JSON array), staged (boolean, if 'true' restore from HEAD instead of index).",
+        input_schema: serde_json::json!({"type":"object","description":"Git restore: discard changes to files, restoring from index or HEAD. Equivalent to 'git restore <files>'.",
+        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"files":{"type":"string","description":"File path or JSON array of paths to restore"},"staged":{"type":"string","description":"If 'true', restore from HEAD (unstage) instead of index"}},
+        "required":["files"],"additionalProperties":false}),
+        handler: handle_restore,
+        risk: ToolRisk::Destructive,
+        default_timeout: std::time::Duration::from_secs(20),
     });
 }
 

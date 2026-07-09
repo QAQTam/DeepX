@@ -1,11 +1,10 @@
 use deepx_types::{ToolCall, FunctionCall, ToolDef};
 
 pub fn has_dsml(content: &str) -> bool {
+    // Trigger only when <｜DSML｜tool_calls> wrapper is present.
+    // (Parser already requires the wrapper; this just avoids wasted scans.)
     let lower = content.to_lowercase();
-    lower.contains("dsml")
-        && (lower.contains("invoke")
-            || lower.contains("tool_calls")
-            || lower.contains("parameter"))
+    lower.contains("dsml") && lower.contains("tool_calls")
 }
 
 /// Strip markdown code fences from content so tool call examples

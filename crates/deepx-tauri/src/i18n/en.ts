@@ -144,6 +144,12 @@ const en = {
     files: "Files",
     noFiles: "No files",
     gitChanges: "Git Changes",
+    noChanges: "No changes",
+    commit: "Commit",
+    commitPlaceholder: "commit message...",
+    stashSwitch: "Stash & Switch",
+    discardSwitch: "Discard & Switch",
+    switchPrompt: "Switch to {branch} — you have uncommitted changes.",
   },
   toast: {
     agentDisconnected: "Agent process disconnected — reconnecting...",
