@@ -13,6 +13,7 @@ pub enum Screen {
 
 // ── Sub-modules ──
 pub mod setup;
+pub mod event_dispatch;
 pub use setup::SetupState;
 
 // ── App state ──

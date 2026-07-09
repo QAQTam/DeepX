@@ -29,6 +29,11 @@ pub struct ProviderConfig {
     pub cache_field: CacheTokenField,
     pub has_balance: bool,
     pub supports_thinking: bool,
+
+    // ── Stateful proxy mode (e.g. DeepSeek Web CDP proxy) ──
+    /// When true, only send incremental messages (not full history).
+    /// The proxy remembers conversation context.
+    pub stateful: bool,
 }
 
 impl ProviderConfig {
@@ -56,7 +61,14 @@ impl ProviderConfig {
             cache_field,
             has_balance,
             supports_thinking,
+            stateful: false,
         }
+    }
+
+    /// Configure this provider for stateful mode (web proxy).
+    pub fn with_stateful(mut self, stateful: bool) -> Self {
+        self.stateful = stateful;
+        self
     }
 }
 

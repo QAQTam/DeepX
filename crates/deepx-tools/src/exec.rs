@@ -10,14 +10,43 @@
 //! 安全检测逻辑由 safety.rs 集中管理。
 
 use crate::{ToolCallCtx, ToolResult};
+use serde::Serialize;
 use std::sync::mpsc;
 
-pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> String {
-    const MAX_EXEC_OUTPUT: usize = 1024 * 1024;
+/// Structured output from a command execution.
+#[derive(Serialize, Debug, Clone)]
+pub(crate) struct ExecOutput {
+    status: &'static str,
+    command: String,
+    exit_code: Option<i32>,
+    output: String,
+    wall_time_seconds: f64,
+    original_bytes: usize,
+    truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    process_id: Option<u64>,
+}
+
+impl ExecOutput {
+    fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| r#"{"status":"error","output":"serialization failed"}"#.into())
+    }
+}
+
+pub(crate) fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> ExecOutput {
+    let max_output_tokens = parse_opt_u64(args, "max_output_tokens")
+        .filter(|&n| n >= 1000 && n <= 50000)
+        .unwrap_or(10000) as usize;
+    // Rough estimate: 1 token ≈ 4 bytes (UTF-8 English average)
+    let max_output_bytes = (max_output_tokens * 4).min(1024 * 1024);
     let start_time = std::time::Instant::now();
     let command = crate::parse_arg(args, "command");
     if command.trim().is_empty() {
-        return "[ERROR] exec: empty command\n[HINT] Provide a shell command in the `cmd` or `command` parameter.".into();
+        return ExecOutput {
+            status: "error", command: String::new(), exit_code: None,
+            output: "empty command".into(), wall_time_seconds: 0.0,
+            original_bytes: 0, truncated: false, process_id: None,
+        };
     }
     crate::audit::maybe_log_exec(&command);
     let cwd = parse_opt(args, "cwd");
@@ -29,13 +58,21 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     log::info!("[EXEC] spawn start, has_progress_tx={}", progress_tx.is_some());
     let mut proc = match crate::pty::spawn(&command, cwd.as_deref()) {
         Ok(p) => p,
-        Err(e) => return format!("[ERROR] {}   0s   0 bytes [SPAWN FAILED: {}]", command, e),
+        Err(e) => return ExecOutput {
+            status: "error", command, exit_code: None,
+            output: format!("SPAWN FAILED: {}", e), wall_time_seconds: 0.0,
+            original_bytes: 0, truncated: false, process_id: None,
+        },
     };
 
     // ── Reader thread: PTY output → channel ──
     let reader = match proc.take_output() {
         Some(r) => r,
-        None => return format!("[ERROR] {}   0s   0 bytes [NO PIPE]", command),
+        None => return ExecOutput {
+            status: "error", command, exit_code: None,
+            output: "NO PIPE".into(), wall_time_seconds: 0.0,
+            original_bytes: 0, truncated: false, process_id: None,
+        },
     };
 
     // Register in process registry BEFORE starting (so it's findable on timeout)
@@ -158,9 +195,12 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
             crate::process_registry::ProcessRegistry::kill(registry_id);
             let elapsed = start_time.elapsed();
             let n = output_buf.len();
-            return format!("[CANCELLED] {}   {:.1}s   {} bytes [CANCELLED]{}",
-                command, elapsed.as_secs_f64(), n,
-                if n > 0 { format!("\n{}", output_buf.trim()) } else { String::new() });
+            return ExecOutput {
+                status: "cancelled", command, exit_code: None,
+                output: if n > 0 { output_buf.trim().to_string() } else { String::new() },
+                wall_time_seconds: elapsed.as_secs_f64(),
+                original_bytes: n, truncated: false, process_id: None,
+            };
         }
 
         // Timeout — register and keep alive instead of killing
@@ -188,15 +228,14 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
 
             let elapsed = start_time.elapsed();
             let n = output_buf.len();
-            let output = truncate_1mb(&output_buf, MAX_EXEC_OUTPUT);
-            return format!(
-                "[TIMEOUT] {}   {:.1}s   {} bytes   process_id={}\n{}\n\
-                 [HINT] Process still running. Use check_process({}) to inspect, \
-                 wait_process({}) to wait longer, kill_process({}) to terminate.",
-                command, elapsed.as_secs_f64(), n, registry_id,
-                if output.is_empty() { "(no output yet)" } else { &output },
-                registry_id, registry_id, registry_id,
-            );
+            let output = truncate_output(&output_buf, max_output_bytes);
+            let truncated = output.len() < n;
+            return ExecOutput {
+                status: "timeout", command, exit_code: None,
+                output: if output.is_empty() { "(no output yet)".into() } else { output },
+                wall_time_seconds: elapsed.as_secs_f64(),
+                original_bytes: n, truncated, process_id: Some(registry_id as u64),
+            };
         }
 
         // Read output chunk
@@ -238,34 +277,21 @@ pub fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Se
     // ── Format result ──
     let elapsed = start_time.elapsed();
     let total_bytes = output_buf.len();
-    let output = truncate_1mb(&output_buf, MAX_EXEC_OUTPUT);
-    let shown_bytes = output.len();
-    let truncated = total_bytes > MAX_EXEC_OUTPUT;
+    let output = truncate_output(&output_buf, max_output_bytes);
+    let truncated = total_bytes > max_output_bytes;
 
-    // Build first line: [OK] command   elapsed   bytes [TAGS]
-    let mut headline = format!(
-        "[OK] {}   {:.1}s   {} bytes",
-        command, elapsed.as_secs_f64(),
-        if truncated { format!("{}/{}", shown_bytes, total_bytes) } else { shown_bytes.to_string() },
-    );
-    if let Some(ref es) = exit_status {
-        if es.code() != 0 {
-            headline.push_str(&format!(" [EXIT:{}]", es.code()));
-        }
-    }
-    if truncated {
-        headline.push_str(" [TRUNCATED]");
-    }
-    if output.trim().is_empty() {
-        headline.push_str(" [NO OUTPUT]");
-        return headline;
-    }
+    let exit_code = exit_status.as_ref().map(|es| es.code());
 
-    format!("{}\n{}", headline, output.trim())
+    ExecOutput {
+        status: "ok", command, exit_code,
+        output: if output.trim().is_empty() { String::new() } else { output.trim().to_string() },
+        wall_time_seconds: elapsed.as_secs_f64(),
+        original_bytes: total_bytes, truncated, process_id: None,
+    }
 }
 
-/// Truncate output to MAX_EXEC_OUTPUT bytes at a char boundary, appending a truncation note.
-fn truncate_1mb(buf: &str, max: usize) -> String {
+/// Truncate output to max bytes at a char boundary, appending a truncation note.
+fn truncate_output(buf: &str, max: usize) -> String {
     if buf.len() <= max {
         return buf.to_string();
     }
@@ -348,12 +374,58 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
         "timeout_secs": ctx.get_u64("timeout_secs"),
     });
     let result = exec_command(&args.to_string(), &ctx.id, ctx.tx_progress);
-    let success = result.starts_with("[OK]");
-    ToolResult { success, content: result }
+    let success = result.status == "ok";
+    let json = result.to_json();
+    ToolResult { success, content: json }
 }
 
 
 use deepx_types::arg::{parse_opt, parse_opt_u64};
+
+// ── write_stdin handler ──
+
+pub(super) fn handle_write_stdin(ctx: ToolCallCtx) -> ToolResult {
+    let process_id = ctx.get_u64("process_id").unwrap_or(0) as u32;
+    let input = ctx.get_str("input").unwrap_or("").to_string();
+    let yield_ms = ctx.get_u64("yield_time_ms").unwrap_or(5000).min(30000);
+
+    if process_id == 0 {
+        return ToolResult::error("process_id is required");
+    }
+
+    // Clear accumulated output to capture fresh response
+    crate::process_registry::ProcessRegistry::clear_output(process_id);
+
+    // Write to stdin
+    match crate::process_registry::ProcessRegistry::write_to(process_id, &input) {
+        Ok(written) => {
+            // Wait for the process to produce output
+            std::thread::sleep(std::time::Duration::from_millis(yield_ms));
+
+            let info = crate::process_registry::ProcessRegistry::get_info(process_id)
+                .unwrap_or(serde_json::json!({"error": "process not found"}));
+
+            let result = serde_json::json!({
+                "status": "ok",
+                "process_id": process_id,
+                "bytes_written": written,
+                "process": info,
+            });
+            ToolResult { success: true, content: result.to_string() }
+        }
+        Err(e) => {
+            let info = crate::process_registry::ProcessRegistry::get_info(process_id)
+                .unwrap_or(serde_json::json!({"error": "process not found"}));
+            let result = serde_json::json!({
+                "status": "error",
+                "process_id": process_id,
+                "error": e,
+                "process": info,
+            });
+            ToolResult { success: false, content: result.to_string() }
+        }
+    }
+}
 
 // ── 注册入口 ──
 
@@ -362,15 +434,24 @@ use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
     // exec/run
+    let desc = if cfg!(windows) {
+        "Execute a shell command synchronously. Returns JSON with status/exit_code/output/wall_time_seconds/truncated/process_id.\n\
+         On Windows: prefer PowerShell native cmdlets (Remove-Item, Get-Content, Select-String, Test-Path). \
+         Use `rg` for text search. `sed` is available via the `sed` tool, not via shell. \
+         Never mix cmd and pwsh in a single pipeline."
+    } else {
+        "Execute a shell command synchronously. Returns JSON with status/exit_code/output/wall_time_seconds/truncated/process_id."
+    };
     mgr.register(ToolHandler {
         key: ToolKey::new("exec", "run"),
-        description: "Execute a shell command synchronously. Supports timeout_secs and cwd.",
+        description: desc,
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Shell command"},
+                "command": {"type": "string", "description": "Shell command to execute"},
                 "cwd": {"type": "string", "description": "Working directory for the command"},
-                "timeout_secs": {"type": "integer", "description": "Max execution time in seconds (1-3600, default 30)"}
+                "timeout_secs": {"type": "integer", "description": "Max execution time in seconds (1-3600, default 30)"},
+                "max_output_tokens": {"type": "integer", "description": "Max output tokens before truncation (1000-50000, default 10000)"}
             },
             "required": ["command"],
             "additionalProperties": false
@@ -378,6 +459,26 @@ pub fn register(mgr: &mut crate::ToolManager) {
         handler: handle_run,
         risk: ToolRisk::Destructive,
         default_timeout: Duration::from_secs(300),
+    });
+
+    // exec/write_stdin
+    mgr.register(ToolHandler {
+        key: ToolKey::new("exec", "write_stdin"),
+        description: "Write input to a running process's stdin and read subsequent output. \n\
+                      Use after exec/run returns a process_id (timeout status) to interact with long-running processes.",
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "process_id": {"type": "integer", "description": "Process ID from exec/run timeout response"},
+                "input": {"type": "string", "description": "Text to write to stdin (e.g. 'y\\n' to answer yes)"},
+                "yield_time_ms": {"type": "integer", "description": "Wait time in ms before reading output (default 5000, max 30000)"}
+            },
+            "required": ["process_id", "input"],
+            "additionalProperties": false
+        }),
+        handler: handle_write_stdin,
+        risk: ToolRisk::Destructive,
+        default_timeout: Duration::from_secs(60),
     });
 
 }

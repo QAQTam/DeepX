@@ -67,6 +67,13 @@ pub fn chat_stream_openai(
     cancel: Option<&Arc<AtomicBool>>,
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> anyhow::Result<()> {
+    // Stateful 模式：只发增量消息（最后一条 user + 其后的 tool 结果）
+    let messages = if provider.stateful {
+        filter_stateful_messages(messages)
+    } else {
+        messages
+    };
+
     let api_msgs = convert_messages(messages, None);
 
     let openai_tools: Option<Vec<serde_json::Value>> = tools.map(|tds| {
@@ -396,9 +403,26 @@ fn stream_sse(
             reasoning: reasoning_buf,
         });
     }
-    if !text_buf.is_empty() {
-        blocks.push(ContentBlock::text(&text_buf));
-    }
+
+    // ── DSML integration: extract tool calls from text content ──
+    let _final_text = if crate::tool_parser::has_dsml(&text_buf) {
+        let (cleaned, dsml_tcs) = crate::tool_parser::parse_dsml_tool_calls(&text_buf, &[]);
+        // Merge DSML tool calls into tool_acc (with unique ids to avoid collision)
+        let base_idx = tool_acc.len();
+        for (i, tc) in dsml_tcs.iter().enumerate() {
+            let idx = base_idx + i;
+            tool_acc.insert(idx, (tc.id.clone(), tc.function.name.clone(), tc.function.arguments.to_string()));
+        }
+        if !cleaned.is_empty() {
+            blocks.push(ContentBlock::text(&cleaned));
+        }
+        cleaned
+    } else {
+        if !text_buf.is_empty() {
+            blocks.push(ContentBlock::text(&text_buf));
+        }
+        text_buf.clone()
+    };
 
     let mut sorted: Vec<(usize, String, String, String)> = tool_acc
         .into_iter()
@@ -424,6 +448,55 @@ fn stream_sse(
 }
 
 // ── Message conversion ──
+
+/// Stateful 模式：只保留增量消息。
+/// Web 代理端已记住完整上下文。
+/// 规则：
+///   - 首次请求（无 assistant 历史）：发 system + 所有消息
+///   - 后续请求：只发最后一条 assistant 之后的消息
+fn filter_stateful_messages(messages: Vec<Message>) -> Vec<Message> {
+    if messages.is_empty() {
+        return messages;
+    }
+
+    let last_asst_idx = messages.iter().rposition(|m| m.role == "assistant");
+    let start = last_asst_idx.map(|i| i + 1).unwrap_or(0);
+    let is_first = start == 0;
+
+    // Debug: 打印过滤前的消息角色序列
+    let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+    eprintln!("[filter] 输入: {:?} | last_asst={:?} start={}", roles, last_asst_idx, start);
+
+    let mut out: Vec<Message> = Vec::new();
+
+    // system 只在首次请求时发送（web session 已记住）
+    if is_first {
+        for msg in &messages {
+            if msg.role == "system" {
+                out.push(msg.clone());
+            }
+        }
+    }
+
+    // 保留 start 之后的新消息
+    for msg in &messages[start..] {
+        out.push(msg.clone());
+    }
+
+    // 兜底：如果没有任何新消息，且最后一条是 user/tool（非 assistant），保留它
+    if out.is_empty() {
+        if let Some(last) = messages.last() {
+            if last.role != "assistant" {
+                out.push(last.clone());
+            }
+        }
+    }
+
+    let out_roles: Vec<&str> = out.iter().map(|m| m.role.as_str()).collect();
+    eprintln!("[filter] 输出: {:?} (is_first={})", out_roles, is_first);
+
+    out
+}
 
 fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde_json::Value> {
     let mut out: Vec<serde_json::Value> = Vec::new();
@@ -519,6 +592,11 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
 // ── Synchronous (non-streaming) chat ──
 
 pub fn chat_sync_openai(provider: &ProviderConfig, model: &str, messages: Vec<Message>, max_tokens: u32) -> Result<String, String> {
+    let messages = if provider.stateful {
+        filter_stateful_messages(messages)
+    } else {
+        messages
+    };
     let api_msgs = convert_messages(messages, None);
     let url = build_chat_url(&provider.base_url, provider.chat_path.as_deref());
 

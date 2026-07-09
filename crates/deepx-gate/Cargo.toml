@@ -14,6 +14,9 @@ anyhow = "1"
 log = "0.4"
 unicode-normalization = "0.1"
 
+[dev-dependencies]
+tiny_http = "0.12"
+
 [lints.clippy]
 unwrap_used = "deny"
 # All string slices in this crate use indices from find() on ASCII patterns

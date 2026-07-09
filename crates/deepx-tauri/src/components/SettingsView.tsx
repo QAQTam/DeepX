@@ -5,7 +5,7 @@ import { useI18n, type Lang } from "../i18n";
 type ThemeMode = "system" | "light" | "dark" | "dark-gray";
 
 interface Provider { id: string; display: string; endpoints: Endpoint[]; }
-interface Endpoint { id: string; display: string; base_url: string; default_model: string; models: string[]; }
+interface Endpoint { id: string; display: string; base_url: string; default_model: string; models: string[]; stateful?: boolean; }
 
 interface SettingsViewProps {
   lang: () => Lang; onLangChange: (l: Lang) => void;

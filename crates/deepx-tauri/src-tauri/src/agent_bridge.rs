@@ -795,6 +795,7 @@ pub fn cmd_load_config() -> Result<String, String> {
                         "base_url": e.base_url,
                         "default_model": e.default_model,
                         "models": e.models,
+                        "stateful": e.stateful,
                     })
                 }).collect::<Vec<_>>(),
             })

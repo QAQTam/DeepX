@@ -15,8 +15,10 @@ import "./styles/git-diff-panel.css";
 import "./styles/context-panel.css";
 import "./styles/slash-menu.css";
 import "./styles/permission-dialog.css";
+import "./styles/changelog.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
 import PermissionDialog, { type PermissionRequest } from "./components/PermissionDialog";
+import ChangelogModal from "./components/ChangelogModal";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
 
@@ -68,6 +70,7 @@ export default function App() {
   const [theme, setTheme] = createSignal<ThemeMode>("system");
   const [refreshKey, setRefreshKey] = createSignal(0); // bump to refresh TokenChart
   const [permissionRequest, setPermissionRequest] = createSignal<PermissionRequest | null>(null);
+  const [showChangelog, setShowChangelog] = createSignal(false);
 
   // ── Toast notifications (disconnect warnings, errors) ──
   const toastCtrl: ToastCtrl = createToastCtrl();
@@ -534,7 +537,9 @@ export default function App() {
             </div>
           </div>
           <Show when={version()}>
-            <div class="sidebar-version">v{version()}</div>
+            <button class="sidebar-version" onClick={() => setShowChangelog(true)} title="Changelog">
+              v{version()}
+            </button>
           </Show>
           <div
             class="sidebar-resize-handle"
@@ -619,6 +624,9 @@ export default function App() {
           seed={activeSeed()}
           onClose={() => setPermissionRequest(null)}
         />
+      </Show>
+      <Show when={showChangelog()}>
+        <ChangelogModal onClose={() => setShowChangelog(false)} />
       </Show>
     </I18nCtx.Provider>
   );

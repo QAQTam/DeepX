@@ -181,8 +181,31 @@ fn openai() -> ProviderSpec {
     }
 }
 
+fn deepseek_web() -> ProviderSpec {
+    ProviderSpec {
+        id: "deepseek-web".into(),
+        display: "DeepSeek Web (CDP Proxy)".into(),
+        endpoints: vec![
+            EndpointSpec {
+                id: "cdp".into(),
+                display: "CDP Proxy (localhost:8080)".into(),
+                protocol: "openai".into(),
+                base_url: "http://localhost:8080/v1".into(),
+                default_model: "deepseek-v4-pro".into(),
+                models: vec!["deepseek-v4-flash".into(), "deepseek-v4-pro".into()],
+                models_url: Some("http://localhost:8080/v1".into()),
+                user_id_mode: Some(UserSendMode::Body),
+                has_balance: false,
+                supports_thinking: true,
+                stateful: true,
+                ..Default::default()
+            },
+        ],
+    }
+}
+
 fn providers() -> Vec<ProviderSpec> {
-    vec![deepseek(), qwen(), glm(), kimi(), mimo(), minimax(), doubao(), openai()]
+    vec![deepseek(), qwen(), glm(), kimi(), mimo(), minimax(), doubao(), openai(), deepseek_web()]
 }
 
 // ── Lookup ──

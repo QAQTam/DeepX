@@ -231,4 +231,13 @@ impl ProcessRegistry {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
     }
+
+    /// Clear accumulated output for a process (used before write_stdin to capture fresh delta).
+    pub fn clear_output(id: u32) {
+        Self::with(|r| {
+            if let Some(entry) = r.entries.get(&id) {
+                entry.output.lock().unwrap().clear();
+            }
+        });
+    }
 }

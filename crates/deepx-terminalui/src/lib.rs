@@ -4,9 +4,16 @@
 //! Falls back to setup wizard if no config file exists.
 
 mod app;
+#[cfg(feature = "use_new_tui")]
+mod chat_new;
+mod events;
 mod i18n;
 mod markdown;
+mod render;
+mod terminal;
+mod theme;
 mod ui;
+mod widgets;
 
 use app::{App, Screen};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -274,6 +281,9 @@ pub fn run_tui() -> anyhow::Result<()> {
                 let send = |tx: &mut mpsc::Sender<Ui2Agent>, frame: &Ui2Agent| {
                     let _ = tx.send(frame.clone());
                 };
+                #[cfg(feature = "use_new_tui")]
+                let result = chat_new::run_chat_new(terminal, &mut app, &mut tui_tx, &agent_rx, send);
+                #[cfg(not(feature = "use_new_tui"))]
                 let result = run_chat(terminal, &mut app, &mut tui_tx, &agent_rx, send);
                 drop(tui_tx);
                 drop(agent_rx);

@@ -1,6 +1,8 @@
 // ui/mod.rs — Chat UI rendering delegates.
 // Render functions live here; build_chat_lines extracted to ui/lines.rs.
 
+pub mod layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},

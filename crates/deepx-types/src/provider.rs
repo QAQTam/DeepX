@@ -64,6 +64,9 @@ pub struct EndpointSpec {
     pub has_balance: bool,
     /// Whether thinking parameter is supported. Default: true.
     pub supports_thinking: bool,
+    /// Stateful proxy mode (e.g. DeepSeek Web CDP proxy).
+    /// When true, the gate only sends incremental messages instead of full history.
+    pub stateful: bool,
 }
 
 impl Default for EndpointSpec {
@@ -83,6 +86,7 @@ impl Default for EndpointSpec {
             cache_field: CacheTokenField::default(),
             has_balance: true,
             supports_thinking: true,
+            stateful: false,
         }
     }
 }

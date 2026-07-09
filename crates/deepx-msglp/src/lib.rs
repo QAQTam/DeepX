@@ -1258,6 +1258,8 @@ impl Loop {
             ep.as_ref().map(|e| e.cache_field.clone()).unwrap_or_default(),
             ep.as_ref().map(|e| e.has_balance).unwrap_or(true),
             ep.as_ref().map(|e| e.supports_thinking).unwrap_or(true),
+        ).with_stateful(
+            ep.as_ref().map(|e| e.stateful).unwrap_or(false)
         );
 
         let mut round_num = 0u32;
