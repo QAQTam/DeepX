@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::{ToolKey, ToolHandler, CANCEL, SafetyVerdict};
+use crate::{ToolHandler, CANCEL, SafetyVerdict};
 
 // ── Execution metadata ──
 
@@ -39,7 +39,7 @@ pub struct ToolStats {
 }
 
 pub struct ToolManager {
-    pub(crate) handlers: BTreeMap<ToolKey, ToolHandler>,
+    pub(crate) handlers: BTreeMap<String, ToolHandler>,
     allowed: Option<Vec<String>>,
     inflight_tasks: BTreeMap<String, Arc<AtomicBool>>,
     stats_total: u32,
@@ -76,23 +76,8 @@ impl ToolManager {
         self.handlers.insert(handler.key.clone(), handler);
     }
 
-    pub fn lookup(&self, name: &str, action: &str) -> Option<&ToolHandler> {
-        let key = ToolKey::new(name, action);
-        self.handlers.get(&key).or_else(|| {
-            if action.is_empty() {
-                // Try splitting {name}_{action} format
-                if let Some(underscore) = name.rfind('_') {
-                    let name_part = &name[..underscore];
-                    let action_part = &name[underscore + 1..];
-                    self.handlers.get(&ToolKey::new(name_part, action_part))
-                        .or_else(|| self.handlers.get(&ToolKey::new(name_part, "")))
-                } else {
-                    self.handlers.get(&ToolKey::new(name, ""))
-                }
-            } else {
-                self.handlers.get(&ToolKey::new(name, ""))
-            }
-        })
+    pub fn lookup(&self, name: &str) -> Option<&ToolHandler> {
+        self.handlers.get(name)
     }
 
     pub fn apply_init(&mut self, allowed_tools: Vec<String>, session_seed: &str) {
@@ -101,18 +86,7 @@ impl ToolManager {
     }
 
     pub fn all_defs(&self) -> Vec<deepx_types::ToolDef> {
-        let mut defs = Vec::new();
-        for (key, handler) in &self.handlers {
-            let tool_name = if key.action.is_empty() {
-                key.name.clone()
-            } else {
-                format!("{}_{}", key.name, key.action)
-            };
-            let mut def = handler.to_tool_def();
-            def.function.name = tool_name;
-            defs.push(def);
-        }
-        defs
+        self.handlers.values().map(|h| h.to_tool_def()).collect()
     }
 
     pub fn filtered_defs(&self) -> Vec<deepx_types::ToolDef> {
@@ -158,33 +132,11 @@ impl ToolManager {
             }
         }
 
-        let handler = match self.handlers.get(&ToolKey::new(name, action)) {
+        let handler = match self.handlers.get(name) {
             Some(h) => h.clone(),
             None => {
-                // Strategy 2: match by original full name
-                match self.handlers.iter().find(|(k, _)| k.name == name) {
-                    Some((_, h)) => h.clone(),
-                    None => {
-                        // Strategy 3: split "file_read" → name="file", action="read"
-                        let mut found = None;
-                        if let Some(pos) = name.find('_') {
-                            let short = &name[..pos];
-                            let derived = &name[pos + 1..];
-                            // Prefer exact (short, derived) match
-                            found = self.handlers.get(&ToolKey::new(short, derived)).cloned();
-                            // Fallback: match by short name only
-                            if found.is_none() {
-                                found = self.handlers.iter().find(|(k, _)| k.name == short).map(|(_, h)| h.clone());
-                            }
-                        }
-                        if let Some(h) = found {
-                            h
-                        } else {
-                            let msg = format!("[ERROR] Unknown tool: {}/{}", name, action);
-                            return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
-                        }
-                    }
-                }
+                let msg = format!("[ERROR] Unknown tool: {}", name);
+                return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
             }
         };
 

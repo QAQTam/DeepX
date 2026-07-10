@@ -30,7 +30,7 @@ fn exec_architecture(path: &str) -> String {
     let root = std::path::Path::new(path);
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
-        Err(e) => return format!("[ERROR] Cannot determine current directory: {e}"),
+        Err(e) => return crate::json_err("CURRENT_DIR_FAILED", &format!("Cannot determine current directory: {e}"), "Check the working directory."),
     };
     let abs = if root.is_absolute() { root.to_path_buf() } else { cwd.join(root) };
     let abs_str = crate::display_path(&abs.to_string_lossy());
@@ -40,7 +40,7 @@ fn exec_architecture(path: &str) -> String {
     let markers: Vec<&str> = ["Cargo.toml", "package.json", "go.mod", "pyproject.toml"]
         .iter().filter(|m| abs.join(m).exists()).copied().collect();
 
-    let mut out = format!("[OK] [ARCHITECTURE]\npath: {abs_str}\n");
+    let mut out = format!("[ARCHITECTURE]\npath: {abs_str}\n");
     if !markers.is_empty() {
         out.push_str(&format!("type: {}\n", markers.join(", ")));
     }
@@ -54,7 +54,7 @@ fn exec_architecture(path: &str) -> String {
     }
 
     out.push_str(&format!("\n── {} chars, {} .rs files ──", out.len(), count_rs_files(&abs)));
-    out
+    crate::json_ok(serde_json::json!({"content": out}))
 }
 
 // ── Rust architecture ──
@@ -353,13 +353,13 @@ fn count_rs_files(dir: &std::path::Path) -> usize {
 
 // ── Registration ──
 
-use crate::{ToolHandler, ToolKey, ToolRisk};
+use crate::{ToolHandler, ToolRisk};
 use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("explore", "scan"),
-        description: "Analyze project architecture: crate dependencies, public API, entry points, test coverage. Call FIRST to understand project structure. For directory listing, use list_dir.",
+        key: "explore_scan".to_string(),
+        description: "Analyze project architecture: crate dependencies, public API, entry points, test coverage. Call FIRST when entering an unfamiliar project. For directory listing, use file_list.",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

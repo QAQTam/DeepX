@@ -3,7 +3,6 @@
 //!
 //! Persisted to `.deepx/tasks.md` (workspace-scoped).
 
-use super::{parse_opt};
 use std::sync::Mutex;
 
 static TASK_LOCK: Mutex<()> = Mutex::new(());
@@ -89,10 +88,10 @@ pub(super) fn exec_task_create(args: &serde_json::Value) -> String {
     let description = args.s("description");
 
     if subject.is_empty() || subject.chars().count() > 100 {
-        return "[ERROR] task_create: subject must be 1-100 chars\n[HINT] Keep the subject short and imperative, e.g. 'Add login API'".to_string();
+        return crate::json_err("INVALID_INPUT", "task_create: subject must be 1-100 chars", "Keep the subject short and imperative, e.g. 'Add login API'");
     }
     if description.chars().count() > 200 {
-        return "[ERROR] task_create: description max 200 chars\n[HINT] Write a concise 1-sentence description.".to_string();
+        return crate::json_err("INVALID_INPUT", "task_create: description max 200 chars", "Write a concise 1-sentence description.");
     }
 
     let mut lines = read_tasks();
@@ -101,25 +100,35 @@ pub(super) fn exec_task_create(args: &serde_json::Value) -> String {
     lines.push(entry);
     write_tasks(&lines);
 
-    format!("[OK] Task T{} created [pending]: {}\nUse task_update(id={}, status=in_progress) when you start working on it.", id, subject, id)
+    crate::json_ok(serde_json::json!({
+        "task_id": format!("T{}", id),
+        "subject": subject,
+        "content": format!("Task T{} created [pending]: {}. Use task_update(id={}, status=in_progress) when you start working on it.", id, subject, id)
+    }))
 }
 
 pub(super) fn exec_task_update(args: &serde_json::Value) -> String {
     let _guard = TASK_LOCK.lock().expect("TASK_LOCK");
     let id: u32 = match parse_id(args) {
         Ok(n) => n,
-        Err(e) => return format!("[ERROR] task_update: {}", e),
+        Err(e) => {
+            let msg = format!("task_update: {}", e);
+            return crate::json_err("INVALID_INPUT", &msg, "Check the task ID using task_list().");
+        }
     };
     let status = args.s("status");
 
     if !matches!(status.as_str(), "pending" | "in_progress" | "completed" | "cancelled") {
-        return "[ERROR] task_update: status must be pending, in_progress, completed, or cancelled".to_string();
+        return crate::json_err("INVALID_INPUT", "task_update: status must be pending, in_progress, completed, or cancelled", "Use one of these status values: pending, in_progress, completed, cancelled");
     }
 
     let mut lines = read_tasks();
     let idx = match find_task(&lines, id) {
         Some(i) => i,
-        None => return format!("[ERROR] task_update: task T{} not found. Use task_list to see task IDs.", id),
+        None => {
+            let msg = format!("task_update: task T{} not found", id);
+            return crate::json_err("NOT_FOUND", &msg, "Use task_list to see task IDs.");
+        }
     };
 
     let old_markers = ["[pending]", "[in_progress]", "[completed]", "[cancelled]"];
@@ -131,20 +140,26 @@ pub(super) fn exec_task_update(args: &serde_json::Value) -> String {
         }
     }
     write_tasks(&lines);
-    format!("[OK] Task T{} → {}", id, status)
+    crate::json_ok(serde_json::json!({"task_id": format!("T{}", id), "status": status, "content": format!("Task T{} → {}", id, status)}))
 }
 
 pub(super) fn exec_task_delete(args: &serde_json::Value) -> String {
     let _guard = TASK_LOCK.lock().expect("TASK_LOCK");
     let id: u32 = match parse_id(args) {
         Ok(n) => n,
-        Err(e) => return format!("[ERROR] task_delete: {}", e),
+        Err(e) => {
+            let msg = format!("task_delete: {}", e);
+            return crate::json_err("INVALID_INPUT", &msg, "Check the task ID.");
+        }
     };
 
     let mut lines = read_tasks();
     let idx = match find_task(&lines, id) {
         Some(i) => i,
-        None => return format!("[ERROR] task_delete: task T{} not found.", id),
+        None => {
+            let msg = format!("task_delete: task T{} not found", id);
+            return crate::json_err("NOT_FOUND", &msg, "Use task_list to see task IDs.");
+        }
     };
 
     let removed = lines.remove(idx);
@@ -153,7 +168,7 @@ pub(super) fn exec_task_delete(args: &serde_json::Value) -> String {
         .and_then(|s| s.split(": ").nth(1))
         .unwrap_or("?");
     write_tasks(&lines);
-    format!("[OK] Task T{} deleted: {}", id, subject)
+    crate::json_ok(serde_json::json!({"task_id": format!("T{}", id), "subject": subject, "content": format!("Task T{} deleted: {}", id, subject)}))
 }
 
 pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
@@ -161,7 +176,7 @@ pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
 
     let lines = read_tasks();
     if lines.is_empty() {
-        return "[OK] No tasks yet. Use task_create(subject=..., description=...) to create one.".to_string();
+        return crate::json_ok(serde_json::json!({"content": "No tasks yet. Use task_create(subject=..., description=...) to create one."}));
     }
 
     let marker = if filter_status.is_empty() { None } else { Some(format!("[{}]", filter_status)) };
@@ -173,9 +188,9 @@ pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
 
     if filtered.is_empty() {
         return if filter_status.is_empty() {
-            "[OK] No tasks.".to_string()
+            crate::json_ok(serde_json::json!({"content": "No tasks."}))
         } else {
-            format!("[OK] No tasks with status '{}'.", filter_status)
+            crate::json_ok(serde_json::json!({"content": format!("No tasks with status '{}'.", filter_status)}))
         };
     }
 
@@ -187,7 +202,7 @@ pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
         _ => "?",
     };
 
-    let mut result = format!("[OK] Tasks ({}):\n", filtered.len());
+    let mut content = format!("Tasks ({}):\n", filtered.len());
     for line in &filtered {
         let trimmed = line.trim_start_matches("- ");
         let status = if trimmed.contains("[pending]") { "pending" }
@@ -195,14 +210,14 @@ pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
             else if trimmed.contains("[completed]") { "completed" }
             else if trimmed.contains("[cancelled]") { "cancelled" }
             else { "?" };
-        result.push_str(&format!("{} {}\n", icon(status), trimmed));
+        content.push_str(&format!("{} {}\n", icon(status), trimmed));
     }
-    result
+    crate::json_ok(serde_json::json!({"content": content}))
 }
 
 // ── Registration ──
 
-use crate::{ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, JsonArgs};
+use crate::{ToolHandler, ToolRisk, ToolCallCtx, ToolResult, JsonArgs};
 use std::time::Duration;
 
 fn handle_task_create(ctx: ToolCallCtx) -> ToolResult {
@@ -220,7 +235,7 @@ fn handle_task_list(ctx: ToolCallCtx) -> ToolResult {
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("task_create", ""),
+        key: "task_create".to_string(),
         description: "Create a tracked task. Returns a task ID (T1, T2…) for reference.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
@@ -233,7 +248,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("task", "update"),
+        key: "task_update".to_string(),
         description: "Update task status by ID: pending → in_progress → completed | cancelled.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
@@ -246,7 +261,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("task", "delete"),
+        key: "task_delete".to_string(),
         description: "Delete a task",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
@@ -258,7 +273,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("task", "list"),
+        key: "task_list".to_string(),
         description: "List tasks, optionally filtered by status.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {

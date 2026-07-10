@@ -10,7 +10,7 @@ use crate::{ToolCallCtx, ToolResult, ToolRisk};
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("memory", "read"),
+        key: "memory_read".to_string(),
         description: "Read cross-session memory. Returns persisted preferences or project facts. \
             Scope: 'user' (preferences, conventions) or 'project' (architecture, decisions). \
             Call at session start to restore context.",
@@ -28,7 +28,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("memory", "write"),
+        key: "memory_write".to_string(),
         description: "Append one entry to cross-session memory. \
             Entries persist across sessions. Memory is a flat list; \
             each call appends exactly one line. Use '-' prefix for list items. \
@@ -49,7 +49,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("memory", "clear"),
+        key: "memory_clear".to_string(),
         description: "Delete memory entries. If line=N is given, removes only that line (1-based). \
             If omitted, clears all entries in the scope. \
             Use memory read first to see current entries and their line numbers.",
@@ -71,7 +71,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
 fn handle_read(ctx: ToolCallCtx) -> ToolResult {
     let scope = match ctx.args.get("scope").and_then(|v| v.as_str()) {
         Some(s) => s,
-        _ => return ToolResult { success: false, content: "[ERROR] memory read: scope required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_SCOPE", "scope required", "Provide 'user' or 'project'.") },
     };
     let kv_key = format!("memory/{scope}");
     let content = if scope == "project" {
@@ -82,30 +82,26 @@ fn handle_read(ctx: ToolCallCtx) -> ToolResult {
             .unwrap_or_else(|| crate::persistence::read_global_memory(scope))
     };
     if content.trim().is_empty() {
-        ToolResult { success: true, content: format!("[OK] memory/{scope} is empty.") }
+        ToolResult { success: true, content: crate::json_ok(serde_json::json!({"scope":scope,"content":format!("memory/{} is empty.",scope)})) }
     } else {
-        ToolResult {
-            success: true,
-            content: format!("[OK] memory/{scope}:\n{content}"),
-        }
+        ToolResult { success: true, content: crate::json_ok(serde_json::json!({"scope":scope,"content":content})) }
     }
 }
 
 fn handle_write(ctx: ToolCallCtx) -> ToolResult {
     let scope = match ctx.args.get("scope").and_then(|v| v.as_str()) {
         Some(s) => s,
-        _ => return ToolResult { success: false, content: "[ERROR] memory write: scope required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_SCOPE", "scope required", "Provide 'user' or 'project'.") },
     };
     let entry = match ctx.args.get("entry").and_then(|v| v.as_str()) {
         Some(e) if !e.trim().is_empty() => e.trim(),
-        _ => return ToolResult { success: false, content: "[ERROR] memory write: entry required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ENTRY", "entry required", "Provide a non-empty entry string.") },
     };
     if scope == "project" {
         crate::persistence::append_project_memory(entry);
     } else {
         crate::persistence::append_global_memory(scope, entry);
     }
-    // Mirror to AgentFS kv store (best-effort)
     let kv_key = format!("memory/{scope}");
     let full = if scope == "project" {
         crate::persistence::read_project_memory()
@@ -113,13 +109,13 @@ fn handle_write(ctx: ToolCallCtx) -> ToolResult {
         crate::persistence::read_global_memory(scope)
     };
     crate::agentfs_bridge::try_kv_set(&kv_key, &full);
-    ToolResult { success: true, content: format!("[OK] Appended to memory/{scope}: {entry}") }
+    ToolResult { success: true, content: crate::json_ok(serde_json::json!({"scope":scope,"entry":entry,"content":format!("Appended to memory/{}: {}",scope,entry)})) }
 }
 
 fn handle_clear(ctx: ToolCallCtx) -> ToolResult {
     let scope = match ctx.args.get("scope").and_then(|v| v.as_str()) {
         Some(s) => s,
-        _ => return ToolResult { success: false, content: "[ERROR] memory clear: scope required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_SCOPE", "scope required", "Provide 'user' or 'project'.") },
     };
     let kv_key = format!("memory/{scope}");
     if let Some(line) = ctx.args.get("line").and_then(|v| v.as_u64()) {
@@ -133,7 +129,7 @@ fn handle_clear(ctx: ToolCallCtx) -> ToolResult {
         if idx < 1 || idx > lines.len() {
             return ToolResult {
                 success: false,
-                content: format!("[ERROR] memory clear: line {line} out of range (1-{})", lines.len()),
+                content: crate::json_err("LINE_OUT_OF_RANGE", &format!("line {line} out of range (1-{})", lines.len()), "Use memory_read first to see line numbers."),
             };
         }
         let removed = lines[idx - 1];
@@ -148,18 +144,16 @@ fn handle_clear(ctx: ToolCallCtx) -> ToolResult {
         } else {
             crate::persistence::write_global_memory(scope, &new_content);
         }
-        // Mirror to AgentFS
         crate::agentfs_bridge::try_kv_set(&kv_key, &new_content);
-        ToolResult { success: true, content: format!("[OK] Deleted line {line} from memory/{scope}: {removed}") }
+        ToolResult { success: true, content: crate::json_ok(serde_json::json!({"scope":scope,"line":line,"removed":removed,"content":format!("Deleted line {} from memory/{}",line,scope)})) }
     } else {
         if scope == "project" {
             crate::persistence::write_project_memory("");
         } else {
             crate::persistence::write_global_memory(scope, "");
         }
-        // Mirror to AgentFS
         crate::agentfs_bridge::try_kv_set(&kv_key, "");
-        ToolResult { success: true, content: format!("[OK] Cleared memory/{scope}.") }
+        ToolResult { success: true, content: crate::json_ok(serde_json::json!({"scope":scope,"content":format!("Cleared memory/{}.",scope)})) }
     }
 }
 

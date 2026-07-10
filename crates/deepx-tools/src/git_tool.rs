@@ -2,7 +2,7 @@
 //!
 //! Functions take JSON args with optional `path` (repo root, defaults to workspace).
 
-use crate::{JsonArgs, ToolCallCtx, ToolHandler, ToolKey, ToolRisk, ToolResult, handler};
+use crate::{JsonArgs, ToolCallCtx, ToolHandler, ToolRisk, ToolResult, handler};
 use git2::{DiffOptions, Repository, StatusOptions, StatusShow};
 use std::path::{Path, PathBuf};
 
@@ -50,15 +50,15 @@ pub(super) fn exec_log(args: &serde_json::Value) -> String {
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     let mut revwalk = match repo.revwalk() {
         Ok(w) => w,
-        Err(e) => return format!("[ERROR] revwalk: {e}"),
+        Err(e) => return crate::json_err("REVWALK_ERROR", &format!("revwalk: {e}"), "Check the repository state."),
     };
     if revwalk.push_head().is_err() {
-        return "[OK] (no commits yet)".to_string();
+        return crate::json_ok(serde_json::json!({"content": "(no commits yet)"}));
     }
     revwalk.set_sorting(git2::Sort::TIME).ok();
 
@@ -99,9 +99,9 @@ pub(super) fn exec_log(args: &serde_json::Value) -> String {
     }
 
     if out.is_empty() {
-        "[OK] (no matching commits)".to_string()
+        crate::json_ok(serde_json::json!({"content": "(no matching commits)"}))
     } else {
-        format!("[OK]\n{}", out.trim_end())
+        crate::json_ok(serde_json::json!({"content": out.trim_end()}))
     }
 }
 
@@ -113,7 +113,7 @@ pub(super) fn exec_diff(args: &serde_json::Value) -> String {
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     let tree_a = if commit_a.is_empty() {
@@ -137,12 +137,12 @@ pub(super) fn exec_diff(args: &serde_json::Value) -> String {
                 repo.diff_tree_to_workdir(Some(&a), Some(&mut opts))
             }
         }
-        (None, None) | (None, Some(_)) => return "[ERROR] need at least one commit to diff".to_string(),
+        (None, None) | (None, Some(_)) => return crate::json_err("MISSING_COMMIT", "need at least one commit to diff", "Provide commit_a or commit_b."),
     };
 
     let diff = match diff_result {
         Ok(d) => d,
-        Err(e) => return format!("[ERROR] diff: {e}"),
+        Err(e) => return crate::json_err("DIFF_ERROR", &format!("diff: {e}"), "Check the commit references."),
     };
 
     let mut out = String::new();
@@ -157,26 +157,26 @@ pub(super) fn exec_diff(args: &serde_json::Value) -> String {
     });
 
     if out.is_empty() {
-        return "[OK] (no differences)".to_string();
+        return crate::json_ok(serde_json::json!({"content": "(no differences)"}));
     }
     let stats = diff.stats().ok();
-    let summary = match stats {
+    let content = match stats {
         Some(s) => format!(
-            "[OK] {} files changed, {} insertions(+), {} deletions(-)\n",
+            "{} files changed, {} insertions(+), {} deletions(-)\n",
             s.files_changed(),
             s.insertions(),
             s.deletions()
         ),
-        None => "[OK]\n".to_string(),
+        None => String::new(),
     };
-    summary + out.trim_end()
+    crate::json_ok(serde_json::json!({"content": content + &out.trim_end()}))
 }
 
 pub(super) fn exec_status(args: &serde_json::Value) -> String {
     let path = args.s("path");
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     let mut opts = StatusOptions::new();
@@ -186,11 +186,11 @@ pub(super) fn exec_status(args: &serde_json::Value) -> String {
 
     let statuses = match repo.statuses(Some(&mut opts)) {
         Ok(s) => s,
-        Err(e) => return format!("[ERROR] status: {e}"),
+        Err(e) => return crate::json_err("STATUS_ERROR", &format!("status: {e}"), "Check the repository state."),
     };
 
     if statuses.is_empty() {
-        return "[OK] (clean working tree)".to_string();
+        return crate::json_ok(serde_json::json!({"content": "(clean working tree)"}));
     }
 
     let mut staged = Vec::new();
@@ -249,7 +249,7 @@ pub(super) fn exec_status(args: &serde_json::Value) -> String {
         out.push('\n');
     }
 
-    format!("[OK]\n{}", out.trim_end())
+    crate::json_ok(serde_json::json!({"content": out.trim_end()}))
 }
 
 pub(super) fn exec_show(args: &serde_json::Value) -> String {
@@ -258,25 +258,25 @@ pub(super) fn exec_show(args: &serde_json::Value) -> String {
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     let oid = if commit.is_empty() {
         match repo.head() {
             Ok(h) => h.target().unwrap_or(git2::Oid::ZERO_SHA1),
-            Err(e) => return format!("[ERROR] head: {e}"),
+            Err(e) => return crate::json_err("HEAD_ERROR", &format!("head: {e}"), "Check the repository state."),
         }
     } else if let Ok(o) = git2::Oid::from_str(&commit) {
         o
     } else if let Some(o) = rev_parse_oid(&repo, &commit) {
         o
     } else {
-        return format!("[ERROR] unknown revision: {commit}");
+        return crate::json_err("UNKNOWN_REVISION", &format!("unknown revision: {commit}"), "Use a valid commit hash or ref.");
     };
 
     let c = match repo.find_commit(oid) {
         Ok(c) => c,
-        Err(e) => return format!("[ERROR] commit {commit}: {e}"),
+        Err(e) => return crate::json_err("COMMIT_ERROR", &format!("commit {commit}: {e}"), "Check the commit hash."),
     };
 
     let hash = c.id().to_string();
@@ -326,7 +326,7 @@ pub(super) fn exec_show(args: &serde_json::Value) -> String {
         }
     }
 
-    format!("[OK]\n{}", out.trim_end())
+    crate::json_ok(serde_json::json!({"content": out.trim_end()}))
 }
 
 pub(super) fn exec_add(args: &serde_json::Value) -> String {
@@ -335,12 +335,12 @@ pub(super) fn exec_add(args: &serde_json::Value) -> String {
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     let mut index = match repo.index() {
         Ok(i) => i,
-        Err(e) => return format!("[ERROR] index: {e}"),
+        Err(e) => return crate::json_err("INDEX_ERROR", &format!("index: {e}"), "Check the repository index."),
     };
 
     if files_raw == "." {
@@ -356,16 +356,16 @@ pub(super) fn exec_add(args: &serde_json::Value) -> String {
             };
             let rel_path = rel.as_deref().unwrap_or(Path::new(&resolved));
             if let Err(e) = index.add_path(rel_path) {
-                return format!("[ERROR] add {file}: {e}");
+                return crate::json_err("ADD_ERROR", &format!("add {file}: {e}"), "Check the file path.");
             }
         }
     }
 
     if let Err(e) = index.write() {
-        return format!("[ERROR] index write: {e}");
+        return crate::json_err("INDEX_WRITE_ERROR", &format!("index write: {e}"), "Check disk space or permissions.");
     }
 
-    "[OK] staged successfully".to_string()
+    crate::json_ok(serde_json::json!({"content": "staged successfully"}))
 }
 
 pub(super) fn exec_commit(args: &serde_json::Value) -> String {
@@ -373,26 +373,26 @@ pub(super) fn exec_commit(args: &serde_json::Value) -> String {
     let message = args.s("message");
 
     if message.is_empty() {
-        return "[ERROR] commit message is required".to_string();
+        return crate::json_err("MISSING_MESSAGE", "commit message is required", "Provide a commit message.");
     }
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     let mut index = match repo.index() {
         Ok(i) => i,
-        Err(e) => return format!("[ERROR] index: {e}"),
+        Err(e) => return crate::json_err("INDEX_ERROR", &format!("index: {e}"), "Check the repository index."),
     };
     let _ = index.write();
     let tree_id = match index.write_tree() {
         Ok(t) => t,
-        Err(e) => return format!("[ERROR] write tree: {e}"),
+        Err(e) => return crate::json_err("TREE_ERROR", &format!("write tree: {e}"), "Check the repository state."),
     };
     let tree = match repo.find_tree(tree_id) {
         Ok(t) => t,
-        Err(e) => return format!("[ERROR] find tree: {e}"),
+        Err(e) => return crate::json_err("TREE_ERROR", &format!("find tree: {e}"), "Check the repository state."),
     };
 
     let parents = match repo.head() {
@@ -416,9 +416,9 @@ pub(super) fn exec_commit(args: &serde_json::Value) -> String {
         Ok(oid) => {
             let s = oid.to_string();
             let short = &s[..7.min(s.len())];
-            format!("[OK] committed {short}")
+            crate::json_ok(serde_json::json!({"hash": short, "content": format!("committed {}", short)}))
         }
-        Err(e) => format!("[ERROR] commit: {e}"),
+        Err(e) => crate::json_err("COMMIT_ERROR", &format!("commit: {e}"), "Check the commit message and repository state."),
     }
 }
 
@@ -431,7 +431,7 @@ pub(super) fn exec_branch(args: &serde_json::Value) -> String {
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     match action.as_str() {
@@ -448,13 +448,14 @@ pub(super) fn exec_branch(args: &serde_json::Value) -> String {
                     }));
                 }
             }
-            serde_json::to_string(&branches)
-                .map(|s| format!("[OK]\n{s}"))
-                .unwrap_or_else(|e| format!("[ERROR] serialize: {e}"))
+            match serde_json::to_string(&branches) {
+                Ok(s) => crate::json_ok(serde_json::json!({"branches": branches, "content": s})),
+                Err(e) => crate::json_err("SERIALIZE_ERROR", &format!("serialize: {e}"), "Check branch data."),
+            }
         }
         "create" => {
             if name.is_empty() {
-                return "[ERROR] branch name is required".to_string();
+                return crate::json_err("MISSING_NAME", "branch name is required", "Provide a branch name.");
             }
             let commit = if start_point.is_empty() {
                 repo.head().ok().and_then(|h| h.peel_to_commit().ok())
@@ -464,30 +465,30 @@ pub(super) fn exec_branch(args: &serde_json::Value) -> String {
             };
             let commit = match commit {
                 Some(c) => c,
-                None => return "[ERROR] cannot resolve commit to branch from".to_string(),
+                None => return crate::json_err("RESOLVE_ERROR", "cannot resolve commit to branch from", "Check the start_point parameter."),
             };
             match repo.branch(&name, &commit, force) {
-                Ok(_) => format!("[OK] created branch '{name}'"),
-                Err(e) => format!("[ERROR] branch create: {e}"),
+                Ok(_) => crate::json_ok(serde_json::json!({"branch": name, "content": format!("created branch '{}'", name)})),
+                Err(e) => crate::json_err("BRANCH_ERROR", &format!("branch create: {e}"), "Check the branch name."),
             }
         }
         "delete" => {
             if name.is_empty() {
-                return "[ERROR] branch name is required".to_string();
+                return crate::json_err("MISSING_NAME", "branch name is required", "Provide a branch name.");
             }
             let mut branch = match repo.find_branch(&name, git2::BranchType::Local) {
                 Ok(b) => b,
-                Err(e) => return format!("[ERROR] find branch '{name}': {e}"),
+                Err(e) => return crate::json_err("NOT_FOUND", &format!("find branch '{}': {}", name, e), "Check the branch name."),
             };
             if branch.is_head() && !force {
-                return "[ERROR] cannot delete current branch without force=true".to_string();
+                return crate::json_err("CANNOT_DELETE_CURRENT", "cannot delete current branch without force=true", "Use force=true to delete the current branch.");
             }
             match branch.delete() {
-                Ok(()) => format!("[OK] deleted branch '{name}'"),
-                Err(e) => format!("[ERROR] delete: {e}"),
+                Ok(()) => crate::json_ok(serde_json::json!({"branch": name, "content": format!("deleted branch '{}'", name)})),
+                Err(e) => crate::json_err("DELETE_ERROR", &format!("delete: {e}"), "Check if the branch can be deleted."),
             }
         }
-        _ => format!("[ERROR] unknown action '{action}'. Use 'list', 'create', or 'delete'."),
+        _ => crate::json_err("UNKNOWN_ACTION", &format!("unknown action '{}'. Use 'list', 'create', or 'delete'.", action), "Choose one of: list, create, delete."),
     }
 }
 
@@ -498,7 +499,7 @@ pub(super) fn exec_checkout(args: &serde_json::Value) -> String {
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     // Mode 1: checkout a branch / ref
@@ -513,24 +514,24 @@ pub(super) fn exec_checkout(args: &serde_json::Value) -> String {
         if is_ref {
             let (obj, reference) = match repo.revparse_ext(&target) {
                 Ok(r) => r,
-                Err(e) => return format!("[ERROR] revparse '{target}': {e}"),
+                Err(e) => return crate::json_err("REVPARSE_ERROR", &format!("revparse '{}': {}", target, e), "Check the target reference."),
             };
             let mut opts = git2::build::CheckoutBuilder::new();
             if force { opts.force(); }
             if let Err(e) = repo.checkout_tree(&obj, Some(&mut opts)) {
-                return format!("[ERROR] checkout tree: {e}");
+                return crate::json_err("CHECKOUT_ERROR", &format!("checkout tree: {e}"), "Check the repository state.");
             }
             if let Some(r) = reference {
                 if let Err(e) = repo.set_head(r.name().ok().unwrap_or("")) {
-                    return format!("[ERROR] set HEAD: {e}");
+                    return crate::json_err("HEAD_ERROR", &format!("set HEAD: {e}"), "Check the repository state.");
                 }
             } else {
                 // Detached HEAD — target is a commit, not a branch
                 if let Err(e) = repo.set_head_detached(obj.id()) {
-                    return format!("[ERROR] set detached HEAD: {e}");
+                    return crate::json_err("HEAD_ERROR", &format!("set detached HEAD: {e}"), "Check the repository state.");
                 }
             }
-            format!("[OK] checked out '{target}'")
+            crate::json_ok(serde_json::json!({"branch": target, "content": format!("checked out '{}'", target)}))
         } else {
             // Mode 2: restore file from index/HEAD
             let resolved = crate::resolve_workspace_path(&target);
@@ -544,12 +545,12 @@ pub(super) fn exec_checkout(args: &serde_json::Value) -> String {
             if force { opts.force(); }
             opts.path(&*rel_str);
             if let Err(e) = repo.checkout_index(None, Some(&mut opts)) {
-                return format!("[ERROR] restore '{rel_str}': {e}");
+                return crate::json_err("RESTORE_ERROR", &format!("restore '{}': {}", rel_str, e), "Check the file path.");
             }
-            format!("[OK] restored '{rel_str}'")
+            crate::json_ok(serde_json::json!({"file": rel_str.to_string(), "content": format!("restored '{}'", rel_str)}))
         }
     } else {
-        format!("[ERROR] cannot resolve '{target}' as a ref or file")
+        crate::json_err("RESOLVE_ERROR", &format!("cannot resolve '{}' as a ref or file", target), "Use a valid branch name, commit hash, or file path.")
     }
 }
 
@@ -559,12 +560,12 @@ pub(super) fn exec_merge(args: &serde_json::Value) -> String {
     let message = args.s_or("message", "");
 
     if branch.is_empty() {
-        return "[ERROR] branch to merge is required".to_string();
+        return crate::json_err("MISSING_BRANCH", "branch to merge is required", "Provide a branch name.");
     }
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     // Resolve the branch to an annotated commit
@@ -575,19 +576,19 @@ pub(super) fn exec_merge(args: &serde_json::Value) -> String {
             // Try full ref name
             match repo.revparse_ext(&branch) {
                 Ok(r) => r,
-                Err(e) => return format!("[ERROR] resolve '{branch}': {e}"),
+                Err(e) => return crate::json_err("RESOLVE_ERROR", &format!("resolve '{}': {}", branch, e), "Check the branch name."),
             }
         }
     };
 
     let their_commit = match their_obj.peel_to_commit() {
         Ok(c) => c,
-        Err(e) => return format!("[ERROR] peel to commit: {e}"),
+        Err(e) => return crate::json_err("PEEL_ERROR", &format!("peel to commit: {e}"), "Check the branch reference."),
     };
 
     let annotated = match repo.find_annotated_commit(their_commit.id()) {
         Ok(a) => a,
-        Err(e) => return format!("[ERROR] annotated: {e}"),
+        Err(e) => return crate::json_err("ANNOTATED_ERROR", &format!("annotated: {e}"), "Check the branch reference."),
     };
 
     // Attempt merge
@@ -599,7 +600,7 @@ pub(super) fn exec_merge(args: &serde_json::Value) -> String {
         Ok(()) => {}
         Err(e) => {
             let _ = repo.cleanup_state();
-            return format!("[ERROR] merge: {e}");
+            return crate::json_err("MERGE_ERROR", &format!("merge: {e}"), "Check for conflicts.");
         }
     }
 
@@ -608,7 +609,7 @@ pub(super) fn exec_merge(args: &serde_json::Value) -> String {
         Ok(i) => i,
         Err(e) => {
             let _ = repo.cleanup_state();
-            return format!("[ERROR] index: {e}");
+            return crate::json_err("INDEX_ERROR", &format!("index: {e}"), "Check the repository index.");
         }
     };
 
@@ -623,7 +624,7 @@ pub(super) fn exec_merge(args: &serde_json::Value) -> String {
         }
         let _ = repo.cleanup_state();
         let list = conflicted.join(", ");
-        return format!("[ERROR] merge conflicts in: {list}");
+        return crate::json_err("MERGE_CONFLICTS", &format!("merge conflicts in: {list}"), "Resolve conflicts first.");
     }
 
     // Auto-commit the merge
@@ -631,14 +632,14 @@ pub(super) fn exec_merge(args: &serde_json::Value) -> String {
         Ok(t) => t,
         Err(e) => {
             let _ = repo.cleanup_state();
-            return format!("[ERROR] write tree: {e}");
+            return crate::json_err("TREE_ERROR", &format!("write tree: {e}"), "Check the repository state.");
         }
     };
     let tree = match repo.find_tree(tree_id) {
         Ok(t) => t,
         Err(e) => {
             let _ = repo.cleanup_state();
-            return format!("[ERROR] find tree: {e}");
+            return crate::json_err("TREE_ERROR", &format!("find tree: {e}"), "Check the repository state.");
         }
     };
 
@@ -646,7 +647,7 @@ pub(super) fn exec_merge(args: &serde_json::Value) -> String {
         Some(c) => c,
         None => {
             let _ = repo.cleanup_state();
-            return "[ERROR] no HEAD commit".to_string();
+            return crate::json_err("NO_HEAD", "no HEAD commit", "Check the repository state.");
         }
     };
 
@@ -665,11 +666,11 @@ pub(super) fn exec_merge(args: &serde_json::Value) -> String {
             let _ = repo.cleanup_state();
             let s = oid.to_string();
             let short = &s[..7.min(s.len())];
-            format!("[OK] merged '{branch}', commit {short}")
+            crate::json_ok(serde_json::json!({"hash": short, "branch": branch, "content": format!("merged '{}', commit {}", branch, short)}))
         }
         Err(e) => {
             let _ = repo.cleanup_state();
-            format!("[ERROR] merge commit: {e}")
+            crate::json_err("COMMIT_ERROR", &format!("merge commit: {e}"), "Check the commit message.")
         }
     }
 }
@@ -680,12 +681,12 @@ pub(super) fn exec_restore(args: &serde_json::Value) -> String {
     let staged = args.s_or("staged", "false") == "true";
 
     if files_raw.is_empty() {
-        return "[ERROR] files is required".to_string();
+        return crate::json_err("MISSING_FILES", "files is required", "Provide the files parameter.");
     }
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] {e}"),
+        Err(e) => return crate::json_err("REPO_ERROR", &e, "Check the repository path."),
     };
 
     let files: Vec<String> = serde_json::from_str(&files_raw)
@@ -705,25 +706,25 @@ pub(super) fn exec_restore(args: &serde_json::Value) -> String {
             // Restore from HEAD (unstage)
             let head_tree = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
                 Some(t) => t,
-                None => return "[ERROR] no HEAD tree".to_string(),
+                None => return crate::json_err("NO_HEAD_TREE", "no HEAD tree", "Check the repository state."),
             };
             let mut opts = git2::build::CheckoutBuilder::new();
             opts.path(&*rel_str);
             if let Err(e) = repo.checkout_tree(head_tree.as_object(), Some(&mut opts)) {
-                return format!("[ERROR] restore '{rel_str}': {e}");
+                return crate::json_err("RESTORE_ERROR", &format!("restore '{}': {}", rel_str, e), "Check the file path.");
             }
         } else {
             // Restore working tree from index
             let mut opts = git2::build::CheckoutBuilder::new();
             opts.path(&*rel_str);
             if let Err(e) = repo.checkout_index(None, Some(&mut opts)) {
-                return format!("[ERROR] restore '{rel_str}': {e}");
+                return crate::json_err("RESTORE_ERROR", &format!("restore '{}': {}", rel_str, e), "Check the file path.");
             }
         }
         restored.push(rel_str.to_string());
     }
 
-    format!("[OK] restored {}", restored.join(", "))
+    crate::json_ok(serde_json::json!({"files": restored, "content": format!("restored {}", restored.join(", "))}))
 }
 
 // ── helpers ──
@@ -755,7 +756,7 @@ handler!(handle_restore, exec_restore);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "log"),
+        key: "git_log".to_string(),
         description: "Show commit history in current git repository. Parameters: path (optional repo path), max_count (default 20, max 100), author (optional name filter). For branch/checkout/merge, use git/branch, git/checkout, git/merge.",
         input_schema: serde_json::json!({"type":"object","description":"Git commit browser. Read-only. Use git/branch, git/checkout, git/merge, git/restore for mutations.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"max_count":{"type":"string","description":"Max commits to show (default 20)"},"author":{"type":"string","description":"Filter by author name (partial match)"}},
@@ -765,7 +766,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "diff"),
+        key: "git_diff".to_string(),
         description: "Show diff between commits or working tree. Read-only. Parameters: path, commit_a (default HEAD), commit_b (default working tree), cached (boolean string, compare staged vs HEAD).",
         input_schema: serde_json::json!({"type":"object","description":"Git diff viewer. Read-only. Supports tree-to-tree, tree-to-workdir, and tree-to-index (cached) diffs.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"commit_a":{"type":"string","description":"Base commit ref (default HEAD)"},"commit_b":{"type":"string","description":"Target commit ref (default working tree)"},"cached":{"type":"string","description":"If 'true', diff staged vs HEAD instead of working tree"}},
@@ -775,7 +776,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "status"),
+        key: "git_status".to_string(),
         description: "Show working tree status (staged, unstaged, untracked changes). Read-only. Parameters: path.",
         input_schema: serde_json::json!({"type":"object","description":"Git status viewer. Read-only. Does NOT modify repository.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."}},
@@ -785,7 +786,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(10),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "show"),
+        key: "git_show".to_string(),
         description: "Show a commit's details (author, date, message) and its diff. Read-only. Parameters: path, commit (hash or ref like HEAD, HEAD~1, main, default HEAD).",
         input_schema: serde_json::json!({"type":"object","description":"Git commit detail viewer. Read-only. Does NOT modify repository.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"commit":{"type":"string","description":"Commit hash or ref (default HEAD)"}},
@@ -795,7 +796,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "add"),
+        key: "git_add".to_string(),
         description: "Stage files for commit. MUTATES the git index. Parameters: path, files (single file path string like 'src/main.rs' or JSON array of paths). Use files=\".\" to stage all.",
         input_schema: serde_json::json!({"type":"object","description":"Stage files for commit. WARNING: modifies the git index. Does NOT commit.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"files":{"type":"string","description":"File to stage: path string, JSON array, or '.' for all"}},
@@ -805,7 +806,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "commit"),
+        key: "git_commit".to_string(),
         description: "Create a commit with staged changes. MUTATES the repository. Parameters: path, message (required). Only commits staged changes — use git_add first.",
         input_schema: serde_json::json!({"type":"object","description":"Create a commit. WARNING: permanently records changes to git history. Requires staged changes (use git_add first).",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"message":{"type":"string","description":"Commit message (required)"}},
@@ -815,7 +816,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "branch"),
+        key: "git_branch".to_string(),
         description: "List, create, or delete git branches. Parameters: path, action ('list'|'create'|'delete'), name (branch name, required for create/delete), start_point (commit ref for new branch, optional), force (boolean, optional).",
         input_schema: serde_json::json!({"type":"object","description":"Git branch operations. List local branches, create a new branch, or delete an existing one.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"action":{"type":"string","description":"Action: 'list', 'create', or 'delete'"},"name":{"type":"string","description":"Branch name (required for create/delete)"},"start_point":{"type":"string","description":"Commit ref to branch from (optional, defaults to HEAD)"},"force":{"type":"string","description":"If 'true', force create or delete"}},
@@ -825,7 +826,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "checkout"),
+        key: "git_checkout".to_string(),
         description: "Switch branches or restore working tree files. Parameters: path, target (branch name or file path), force (boolean, optional). When target is a branch/ref, switches HEAD. When target is a file path prefixed with '--' or not a valid ref, restores the file from index.",
         input_schema: serde_json::json!({"type":"object","description":"Git checkout: switch branch or restore files. Switches HEAD when target is a valid ref; restores file from index otherwise.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"target":{"type":"string","description":"Branch name or file path to restore"},"force":{"type":"string","description":"If 'true', force checkout (discard local changes)"}},
@@ -835,7 +836,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(20),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "merge"),
+        key: "git_merge".to_string(),
         description: "Merge a branch into the current HEAD. Parameters: path, branch (branch name to merge), message (optional merge commit message). Auto-commits on success. Reports conflicted files on failure.",
         input_schema: serde_json::json!({"type":"object","description":"Git merge: merge a branch into current HEAD. Auto-commits if no conflicts; reports conflicted files otherwise.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"branch":{"type":"string","description":"Branch name to merge into current HEAD"},"message":{"type":"string","description":"Merge commit message (optional, defaults to 'merge <branch>')"}},
@@ -845,7 +846,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("git", "restore"),
+        key: "git_restore".to_string(),
         description: "Restore working tree files to match the index (or HEAD when staged=true). Discards uncommitted changes. Parameters: path, files (single file path or JSON array), staged (boolean, if 'true' restore from HEAD instead of index).",
         input_schema: serde_json::json!({"type":"object","description":"Git restore: discard changes to files, restoring from index or HEAD. Equivalent to 'git restore <files>'.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"files":{"type":"string","description":"File path or JSON array of paths to restore"},"staged":{"type":"string","description":"If 'true', restore from HEAD (unstage) instead of index"}},

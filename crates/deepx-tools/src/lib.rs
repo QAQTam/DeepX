@@ -12,6 +12,8 @@ pub mod bridge;
 pub mod file_mutate;
 pub mod file_query;
 pub mod file_shared;
+pub mod file_cache;
+pub mod file_state;
 pub mod git_tool;
 mod safety;
 mod web;
@@ -47,6 +49,43 @@ pub use web::set_bocha_key;
 pub use safety::SafetyVerdict;
 pub use manager::{ToolManager, ToolExecMeta, ToolExecReport, ToolStats};
 
+/// Return current time as "UTC+8 YYYY-MM-DD HH:MM" (matching the [timeis:] prefix convention).
+pub fn now_utc8() -> String {
+    let dur = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = dur.as_secs() + 8 * 3600;
+    let days = secs / 86400;
+    let day_secs = secs % 86400;
+    let hours = day_secs / 3600;
+    let minutes = (day_secs % 3600) / 60;
+    let (y, m, d) = deepx_types::platform::civil_from_days(days as i64);
+    format!("UTC+8 {y:04}-{m:02}-{d:02} {hours:02}:{minutes:02}")
+}
+
+/// Build a JSON success response for tools that only need a status message.
+/// Extra fields can be added via `extra`.
+pub fn json_ok(extra: serde_json::Value) -> String {
+    let mut v = serde_json::json!({"timeis": now_utc8(), "status": "ok"});
+    if let Some(obj) = v.as_object_mut() {
+        if let Some(ext) = extra.as_object() {
+            for (k, val) in ext { obj.insert(k.clone(), val.clone()); }
+        }
+    }
+    v.to_string()
+}
+
+/// Build a JSON error response.
+pub fn json_err(code: impl Into<String>, message: impl Into<String>, hint: impl Into<String>) -> String {
+    serde_json::json!({
+        "timeis": now_utc8(),
+        "status": "error",
+        "code": code.into(),
+        "message": message.into(),
+        "hint": hint.into(),
+    }).to_string()
+}
+
 /// Risk level for tool operations, replacing per-handler safety functions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolRisk {
@@ -63,10 +102,22 @@ macro_rules! handler {
     ($name:ident, $exec:ident) => {
         fn $name(ctx: ToolCallCtx) -> ToolResult {
             let result = $exec(&ctx.args);
-            ToolResult {
-                success: !result.starts_with("[ERROR"),
-                content: result,
-            }
+            let is_json = result.trim_start().starts_with('{');
+            let success = if is_json {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&result) {
+                    v.get("status").and_then(|s| s.as_str()) != Some("error")
+                } else { false }
+            } else {
+                !result.starts_with("[ERROR")
+            };
+            let content = if is_json {
+                result
+            } else if success {
+                crate::json_ok(serde_json::json!({"content": result}))
+            } else {
+                crate::json_err("TOOL_ERROR", &result, "")
+            };
+            ToolResult { success, content }
         }
     };
 }
@@ -177,25 +228,6 @@ pub fn display_path(abs_path: &str) -> String {
     norm_str.replace('\\', "/")
 }
 
-// ── ToolKey ──
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ToolKey {
-    pub name: String,
-    pub action: String,
-}
-
-impl ToolKey {
-    pub fn new(name: impl Into<String>, action: impl Into<String>) -> Self {
-        Self { name: name.into(), action: action.into() }
-    }
-}
-
-impl std::fmt::Display for ToolKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.name, self.action)
-    }
-}
 
 // ── ToolCallCtx ──
 
@@ -265,7 +297,7 @@ pub fn parse_opt_bool(args: &str, key: &str) -> Option<bool> {
 
 #[derive(Clone)]
 pub struct ToolHandler {
-    pub key: ToolKey,
+    pub key: String,
     pub description: &'static str,
     pub input_schema: serde_json::Value,
     pub handler: fn(ToolCallCtx) -> ToolResult,
@@ -278,7 +310,7 @@ impl ToolHandler {
         ToolDef {
             call_type: "function".into(),
             function: deepx_types::ToolFunction {
-                name: self.key.name.to_string(),
+                name: self.key.clone(),
                 description: self.description.to_string(),
                 parameters: self.input_schema.clone(),
             },

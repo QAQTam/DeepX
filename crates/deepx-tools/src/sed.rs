@@ -6,7 +6,7 @@ use deepx_sed::{RunConfig, errors::ScriptSource};
 pub fn handle_sed(ctx: ToolCallCtx) -> ToolResult {
     let path = ctx.get_str("path").unwrap_or("");
     if path.is_empty() {
-        return ToolResult { success: false, content: "[ERROR] sed: 'path' is required".into() };
+        return ToolResult { success: false, content: crate::json_err("MISSING_PATH", "sed: 'path' is required", "Provide the file path to edit.") };
     }
 
     let resolved = crate::resolve_workspace_path(path);
@@ -29,7 +29,7 @@ pub fn handle_sed(ctx: ToolCallCtx) -> ToolResult {
     }
 
     if scripts.is_empty() {
-        return ToolResult { success: false, content: "[ERROR] sed: 'expression' or 'expressions' is required".into() };
+        return ToolResult { success: false, content: crate::json_err("MISSING_EXPRESSION", "sed: 'expression' or 'expressions' is required", "Provide at least one sed expression.") };
     }
 
     let in_place = ctx.get_bool("in_place").unwrap_or(true);
@@ -42,7 +42,7 @@ pub fn handle_sed(ctx: ToolCallCtx) -> ToolResult {
         Ok(c) => c,
         Err(e) => return ToolResult {
             success: false,
-            content: format!("[ERROR] sed: cannot read {}: {}", resolved, e),
+            content: crate::json_err("READ_FAILED", &format!("sed: cannot read {}: {}", resolved, e), "Check file path and permissions."),
         },
     };
 
@@ -54,7 +54,7 @@ pub fn handle_sed(ctx: ToolCallCtx) -> ToolResult {
         if let Err(e) = std::fs::write(&tp, &original) {
             return ToolResult {
                 success: false,
-                content: format!("[ERROR] sed: cannot create temp file: {}", e),
+                content: crate::json_err("TEMP_FILE_FAILED", &format!("sed: cannot create temp file: {}", e), "Check disk space and permissions."),
             };
         }
         tp.to_string_lossy().to_string()
@@ -94,13 +94,13 @@ pub fn handle_sed(ctx: ToolCallCtx) -> ToolResult {
                     .to_string();
 
                 if diff_str.is_empty() {
-                    ToolResult { success: true, content: format!("[DRY RUN] sed {} — no changes", path) }
+                    ToolResult { success: true, content: crate::json_ok(serde_json::json!({"content": format!("[DRY RUN] sed {} — no changes", path)})) }
                 } else {
                     let (added, removed, _) = crate::file_shared::diff_stats(&diff_str);
                     ToolResult {
                         success: true,
-                        content: format!("[DRY RUN] sed {} +{} -{} | {}\n\n{}",
-                            path, added.max(1), removed.max(1), expr_list.join("; "), diff_str),
+                        content: crate::json_ok(serde_json::json!({"content": format!("[DRY RUN] sed {} +{} -{} | {}\n\n{}",
+                            path, added.max(1), removed.max(1), expr_list.join("; "), diff_str)})),
                     }
                 }
             } else {
@@ -115,31 +115,31 @@ pub fn handle_sed(ctx: ToolCallCtx) -> ToolResult {
                 if diff_str.is_empty() {
                     ToolResult {
                         success: true,
-                        content: format!("[OK] sed {} — no changes (expressions: {})", path, expr_list.join("; ")),
+                        content: crate::json_ok(serde_json::json!({"content": format!("[OK] sed {} — no changes (expressions: {})", path, expr_list.join("; "))})),
                     }
                 } else {
                     let (added, removed, first_line) = crate::file_shared::diff_stats(&diff_str);
                     ToolResult {
                         success: true,
-                        content: format!("[OK] sed {}:{} +{} -{} | {}\n\n{}",
+                        content: crate::json_ok(serde_json::json!({"content": format!("[OK] sed {}:{} +{} -{} | {}\n\n{}",
                             path, first_line,
                             added.max(1), removed.max(1),
                             expr_list.join("; "),
-                            diff_str.trim_end()),
+                            diff_str.trim_end())})),
                     }
                 }
             }
         }
         Err(e) => {
             if dry_run { let _ = std::fs::remove_file(&target_path); }
-            ToolResult { success: false, content: format!("[ERROR] sed {}: {}", path, e) }
+            ToolResult { success: false, content: crate::json_err("SED_FAILED", &format!("sed {}: {}", path, e), "Check the sed expression syntax.") }
         }
     }
 }
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("sed", ""),
+        key: "sed".to_string(),
         description: "Run sed expressions on a file. Use for find-replace (s/old/new/g), line deletion (/pattern/d), or line-range operations (1,5s/x/y/). Supports multiple chained expressions.",
         input_schema: serde_json::json!({
             "type": "object",

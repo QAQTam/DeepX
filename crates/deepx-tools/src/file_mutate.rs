@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler, JsonArgs};
+use crate::{ToolHandler, ToolRisk, ToolCallCtx, ToolResult, handler, JsonArgs};
 use super::file_shared::{
     unified_diff, diff_stats, normalize_newlines, closest_line,
     disambiguate_match, apply_diff_and_format, is_binary_read_error,
@@ -128,6 +128,7 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
         };
         match file.write_all(content.as_bytes()) {
             Ok(_) => {
+                crate::file_state::record_write(&path, line_count);
                 if let Some(ref old) = old_content {
                     let old_line_count = old.lines().count();
                     let first_line = if old_line_count == 0 { 1u32 } else { old_line_count as u32 + 1 };
@@ -141,6 +142,7 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
     } else {
         match std::fs::write(&path, &content) {
             Ok(_) => {
+                crate::file_state::record_write(&path, line_count);
                 if let Some(ref old) = old_content {
                     // Overwrite: show full diff
                     let (old_norm, _) = normalize_newlines(old);
@@ -228,6 +230,7 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
             };
             match std::fs::write(&resolved, &write_content) {
                 Ok(_) => {
+                    crate::file_state::record_edit(path, 0);
                     let diff = unified_diff(&orig, &content, path);
                     results.push(format_diff_result("OK", path, &diff, "edit_file", true));
                 }
@@ -255,13 +258,18 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
     let path = crate::resolve_workspace_path(&args.s("path"));
     let p = std::path::Path::new(&path);
     if !p.exists() {
-        return format!("[ERROR] {} does not exist.", path);
+        return serde_json::json!({
+            "timeis": crate::now_utc8(),
+            "status": "error",
+            "code": "NOT_FOUND",
+            "path": path,
+            "message": format!("{} does not exist", path),
+            "hint": "Use list_dir() to verify."
+        }).to_string();
     }
 
     let trash_root = trash_dir();
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-
-    // Build a safe relative name: relative to workspace root, replace path separators
     let ws = crate::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock").clone();
     let project_root = if !ws.is_empty() && ws != "." { Path::new(&ws) } else { Path::new(".") };
     let rel = if let Ok(stripped) = p.strip_prefix(project_root) {
@@ -279,31 +287,60 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
     }
 
     match std::fs::rename(p, &trash_path) {
-        Ok(_) => format!(
-            "[OK] Moved to trash: .deepx/trash/{}\n[HINT] Restore with exec(\"mv {}\" \"{}\") or exec(\"ls .deepx/trash/\") to list trash.",
-            trash_path.file_name().unwrap_or_default().to_string_lossy(),
-            trash_path.display(), path
-        ),
+        Ok(_) => {
+            crate::file_state::record_delete(&path);
+            serde_json::json!({
+            "timeis": crate::now_utc8(),
+            "status": "ok",
+            "path": path,
+            "trash_path": format!(".deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
+            "content": format!("Moved to trash: .deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
+            "hint": format!("Restore with exec(\"mv {} {}\")", trash_path.display(), path),
+        }).to_string()
+        }
         Err(_e) => {
-            // Cross-device rename fails — for files: copy+delete; for dirs: not supported
             if p.is_dir() {
-                format!("[ERROR] Cannot trash directory across devices: {}\n[HINT] Use exec(\"rm -rf {}\") for cross-device deletion.", path, path)
+                serde_json::json!({
+                    "timeis": crate::now_utc8(),
+                    "status": "error",
+                    "code": "CROSS_DEVICE_DIR",
+                    "path": path,
+                    "message": "Cannot trash directory across devices",
+                    "hint": format!("Use exec(\"rm -rf {}\") for cross-device deletion.", path),
+                }).to_string()
             } else if let Err(e2) = std::fs::copy(p, &trash_path) {
-                format!("[ERROR] Cannot trash {}: copy failed: {}\n[HINT] Check permissions and disk space.", path, e2)
+                serde_json::json!({
+                    "timeis": crate::now_utc8(),
+                    "status": "error",
+                    "code": "COPY_FAILED",
+                    "path": path,
+                    "message": e2.to_string(),
+                    "hint": "Check permissions and disk space."
+                }).to_string()
             } else {
                 match std::fs::remove_file(p) {
-                    Ok(_) => format!(
-                        "[OK] Moved to trash (cross-device): .deepx/trash/{}\n[HINT] Restore with exec(\"cp {}\" \"{}\").",
-                        trash_path.file_name().unwrap_or_default().to_string_lossy(),
-                        trash_path.display(), path
-                    ),
-                    Err(e2) => format!(
-                        "[OK] Copied to trash but could not remove original: {}\n[HINT] The original file still exists at {}.", e2, path
-                    ),
+                    Ok(_) => {
+                        crate::file_state::record_delete(&path);
+                        serde_json::json!({
+                        "timeis": crate::now_utc8(),
+                        "status": "ok",
+                        "path": path,
+                        "trash_path": format!(".deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
+                        "content": format!("Moved to trash (cross-device): .deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
+                        "hint": format!("Restore with exec(\"cp {} {}\")", trash_path.display(), path),
+                }).to_string()
                 }
+                Err(e2) => serde_json::json!({
+                    "timeis": crate::now_utc8(),
+                    "status": "ok",
+                    "path": path,
+                    "warning": format!("Copied to trash but could not remove original: {}", e2),
+                    "content": format!("Copied to trash, original still at {}", path),
+                }).to_string(),
             }
         }
     }
+}
 }
 
 handler!(handle_delete_file, exec_delete_file);
@@ -321,8 +358,25 @@ pub(super) fn exec_move_file(args: &serde_json::Value) -> String {
     let dest = crate::resolve_workspace_path(&args.s("dest"));
     ensure_parent_dir(&dest);
     match std::fs::rename(&source, &dest) {
-        Ok(_) => format!("[OK] Moved {} → {}", source, dest),
-        Err(e) => format!("[ERROR] Cannot move {}: {}\n[HINT] Check source exists and target directory is writable.", source, e),
+        Ok(_) => {
+            crate::file_state::record_move(&source, &dest);
+            serde_json::json!({
+                "timeis": crate::now_utc8(),
+                "status": "ok",
+                "source": source,
+                "dest": dest,
+                "content": format!("Moved {source} → {dest}"),
+            }).to_string()
+        }
+        Err(e) => serde_json::json!({
+            "timeis": crate::now_utc8(),
+            "status": "error",
+            "code": "MOVE_FAILED",
+            "source": source,
+            "dest": dest,
+            "message": e.to_string(),
+            "hint": "Check source exists and target directory is writable."
+        }).to_string(),
     }
 }
 
@@ -333,8 +387,23 @@ pub(super) fn exec_copy_file(args: &serde_json::Value) -> String {
     let dest = crate::resolve_workspace_path(&args.s("dest"));
     ensure_parent_dir(&dest);
     match std::fs::copy(&source, &dest) {
-        Ok(size) => format!("[OK] Copied {} → {} ({} bytes)", source, dest, size),
-        Err(e) => format!("[ERROR] Cannot copy {}: {}\n[HINT] Check source exists and target directory is writable.", source, e),
+        Ok(size) => serde_json::json!({
+            "timeis": crate::now_utc8(),
+            "status": "ok",
+            "source": source,
+            "dest": dest,
+            "bytes": size,
+            "content": format!("Copied {source} → {dest} ({size} bytes)"),
+        }).to_string(),
+        Err(e) => serde_json::json!({
+            "timeis": crate::now_utc8(),
+            "status": "error",
+            "code": "COPY_FAILED",
+            "source": source,
+            "dest": dest,
+            "message": e.to_string(),
+            "hint": "Check source exists and target directory is writable."
+        }).to_string(),
     }
 }
 
@@ -346,7 +415,15 @@ pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
     let path = crate::resolve_workspace_path(
         args.get("path").and_then(|v| v.as_str()).unwrap_or("")
     );
-    if path.is_empty() { return "[ERROR] Missing required field: path".to_string(); }
+    if path.is_empty() {
+        return serde_json::json!({
+            "timeis": crate::now_utc8(),
+            "status": "error",
+            "code": "MISSING_PATH",
+            "message": "path is required",
+            "hint": "Provide a file path to edit."
+        }).to_string();
+    }
     let old_lines: Vec<String> = args.get("old_lines").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
     let new_lines: Vec<String> = args.get("new_lines").and_then(|v| v.as_array())
@@ -357,47 +434,67 @@ pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
     let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
     let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
-    // Line-number addressing: when provided, bypass content matching entirely.
     let start_line: Option<usize> = args.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
     let end_line: Option<usize> = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
 
-    // Require either old_lines (content match) or start_line (line addressing)
+    let err = |code: &str, msg: &str, hint: &str| -> String {
+        serde_json::json!({
+            "timeis": crate::now_utc8(),
+            "status": "error",
+            "code": code,
+            "path": path,
+            "message": msg,
+            "hint": hint,
+        }).to_string()
+    };
+
     if old_lines.is_empty() && start_line.is_none() {
-        return "[ERROR] Missing required field: old_lines or start_line".to_string();
+        return err("MISSING_PARAM", "old_lines or start_line is required",
+            "Provide old_lines for content matching or start_line for line-number editing.");
     }
     if old_lines.len() > 100 && start_line.is_none() {
-        return format!("[ERROR] old_lines too large ({} lines, max 100)\n[HINT] Reduce the diff scope or use write_file for full rewrites.", old_lines.len());
+        return err("TOO_LARGE",
+            &format!("old_lines too large ({} lines, max 100)", old_lines.len()),
+            "Reduce the diff scope or use file_write for full rewrites.");
     }
 
     let raw = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
             if is_binary_read_error(&e.to_string()) {
-                return format!("[PARTIAL] {} — binary file\n[HINT] Use exec with hex dump tool.", path);
+                return serde_json::json!({
+                    "timeis": crate::now_utc8(),
+                    "status": "error",
+                    "code": "BINARY_FILE",
+                    "path": path,
+                    "message": "Binary file, cannot display as text",
+                    "hint": "Use exec with hex dump tool."
+                }).to_string();
             }
-            return format!("[ERROR] Cannot read {}: {}\n[HINT] Use list_dir() first.", path, e);
+            return err("READ_FAILED", &e.to_string(), "Use list_dir() first.");
         }
     };
-    // Normalize CRLF → LF so line matching works
     let (content, was_crlf) = normalize_newlines(&raw);
     if was_crlf {
         log::info!("file_edit_diff: {} had CRLF, normalized to LF for matching", path);
     }
     let file_lines: Vec<&str> = content.lines().collect();
-    // ── Line-number fast path ──
+
     if let Some(start) = start_line {
-        let s = start.saturating_sub(1); // 1-based → 0-based
+        let s = start.saturating_sub(1);
         let e = end_line.map(|n| n.saturating_sub(1)).unwrap_or(s);
         if s >= file_lines.len() {
-            return format!("[ERROR] start_line {start} past end of file ({} lines)", file_lines.len());
+            return err("LINE_OUT_OF_RANGE",
+                &format!("start_line {start} past end of file ({} lines)", file_lines.len()),
+                "Use file_read to check the file length.");
         }
         let e = e.min(file_lines.len().saturating_sub(1));
         if s > e {
-            return format!("[ERROR] start_line {start} > end_line {}", end_line.unwrap_or(start));
+            return err("LINE_RANGE_INVALID",
+                &format!("start_line {start} > end_line {}", end_line.unwrap_or(start)),
+                "end_line must be >= start_line.");
         }
         let win = e - s + 1;
-
-        // Optional validation: if old_lines provided, cross-check them
         if !old_lines.is_empty() {
             let actual: Vec<&str> = file_lines[s..=e].iter().map(|l| *l).collect();
             let norm_actual: Vec<String> = actual.iter().map(|l| l.trim_end().to_string()).collect();
@@ -415,25 +512,23 @@ pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
                 log::warn!("file_edit_diff: {} line-number mismatch at L{}:\n{}", path, start, ctx);
             }
         }
-
         return apply_diff_and_format(&path, &file_lines, s, win, &new_lines, description, false, dry_run, was_crlf);
     }
 
-    // ── Content matching (original path) ──
     let norm_old: Vec<String> = old_lines.iter().map(|l| l.trim_end().to_string()).collect();
     let win = norm_old.len();
     if win > file_lines.len() {
-        return format!("[ERROR] old_lines ({} lines) longer than file ({} lines)", win, file_lines.len());
+        return err("TOO_LARGE",
+            &format!("old_lines ({} lines) longer than file ({} lines)", win, file_lines.len()),
+            "Check the file content with file_read first.");
     }
 
-    // Phase 1: exact match
     let mut candidates: Vec<usize> = Vec::new();
     let mut was_fuzzy = false;
     for i in 0..=file_lines.len() - win {
         let window: Vec<String> = file_lines[i..i+win].iter().map(|l| l.trim_end().to_string()).collect();
         if window == norm_old { candidates.push(i); }
     }
-    // Phase 2: fuzzy match
     if candidates.is_empty() {
         was_fuzzy = true;
         for i in 0..=file_lines.len() - win {
@@ -444,28 +539,28 @@ pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
         }
     }
     if candidates.is_empty() {
-        // Show best-match hint using closest_line on the first line of old_lines
         let first_old = old_lines.first().map(|l| l.trim()).unwrap_or("");
         if let Some((line_num, line_text)) = closest_line(&content, first_old) {
-            return format!(
-                "[PARTIAL] {} — old_lines not found.\n\
-                 Closest match at line {line_num}: {}\n\
-                 [HINT] Use file_read first, then retry with start_line={} or corrected old_lines.",
-                path,
-                line_text,
-                line_num
-            );
+            return serde_json::json!({
+                "timeis": crate::now_utc8(),
+                "status": "error",
+                "code": "NO_MATCH",
+                "path": path,
+                "message": "old_lines not found",
+                "closest_line": line_num,
+                "closest_text": line_text,
+                "hint": format!("Use file_read first, then retry with start_line={line_num} or corrected old_lines."),
+            }).to_string();
         }
-        return format!("[PARTIAL] {} — old_lines not found\n[HINT] Verify current file content or use start_line/end_line for line-number editing.", path);
+        return err("NO_MATCH", "old_lines not found",
+            "Verify current file content or use start_line/end_line for line-number editing.");
     }
 
-    // Disambiguate with context
     let match_idx = match disambiguate_match(&candidates, &context_before, &context_after, &file_lines, &path, win) {
         Ok(idx) => idx,
         Err(msg) => return msg,
     };
 
-    // Apply diff and format result
     apply_diff_and_format(&path, &file_lines, match_idx, win, &new_lines, description, was_fuzzy, dry_run, was_crlf)
 }
 
@@ -475,7 +570,7 @@ handler!(handle_edit_file_diff, exec_edit_file_diff);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("file", "write"),
+        key: "file_write".to_string(),
         description: "Create, overwrite, or append to a file.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false}},"required":["path","content"],"additionalProperties":false}),
         handler: handle_write_file,
@@ -483,15 +578,15 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("file", "edit"),
-        description: "String replacement in files.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"paths":{"type":"array","items":{"type":"string"},"description":"Multiple file paths"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"patterns":{"type":"array","items":{"type":"object","properties":{"old":{"type":"string"},"new":{"type":"string"}},"required":["old","new"]},"description":"Array of {old, new} for batch edits"},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file","default":false}},"required":["path","old_string","new_string"],"additionalProperties":false}),
+        key: "file_edit".to_string(),
+        description: "String replacement in files. Supports exact match, regex, multi-file (paths array), and batch edits (patterns array).",
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"paths":{"type":"array","items":{"type":"string"},"description":"Multiple file paths"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"patterns":{"type":"array","items":{"type":"object","properties":{"old":{"type":"string"},"new":{"type":"string"}},"required":["old","new"]},"description":"Array of {old, new} for batch edits"},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file","default":false}},"required":["path"],"additionalProperties":false}),
         handler: handle_edit_file,
         risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(60),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("file", "edit_diff"),
+        key: "file_edit_diff".to_string(),
         description: "Fuzzy multi-line edit via old_lines+new_lines. Supports line-number addressing with start_line/end_line.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove (not needed when start_line set)"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"start_line":{"type":"integer","description":"1-based line number to start replacement at (bypasses content matching)"},"end_line":{"type":"integer","description":"1-based line number to end replacement at (inclusive, defaults to start_line)"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"description":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
@@ -499,7 +594,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("file", "delete"),
+        key: "file_delete".to_string(),
         description: "Move file to trash (.deepx/trash/) instead of permanent deletion.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path to delete"}},"required":["path"],"additionalProperties":false}),
         handler: handle_delete_file,
@@ -507,7 +602,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("file", "move"),
+        key: "file_move".to_string(),
         description: "Move or rename a file or directory. Creates parent dirs of dest.",
         input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
         handler: handle_move_file,
@@ -515,7 +610,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("file", "copy"),
+        key: "file_copy".to_string(),
         description: "Copy a file. Creates parent dirs of dest.",
         input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
         handler: handle_copy_file,

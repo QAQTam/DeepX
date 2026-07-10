@@ -1,6 +1,6 @@
 //! Web tools: search, fetch, Context7 documentation queries.
 
-use crate::{JsonArgs, ToolCallCtx, ToolResult, ToolHandler, ToolKey, ToolRisk};
+use crate::{JsonArgs, ToolCallCtx, ToolResult, ToolHandler, ToolRisk};
 
 // Context7 REST API v2.
 const C7_BASE: &str = "https://context7.com/api/v2";
@@ -73,7 +73,7 @@ pub(super) fn handle_c7_query(ctx: ToolCallCtx) -> ToolResult {
 fn exec_context7_resolve(args: &serde_json::Value) -> String {
     let name = args.s("name");
     if name.is_empty() {
-        return "[ERROR] context7_resolve: missing 'name'\n[HINT] Provide the 'libraryName' parameter.".into();
+        return crate::json_err("MISSING_NAME", "context7_resolve: missing 'name'", "Provide the 'libraryName' parameter.");
     }
     let q = args.s_or("query", "");
     let mut path = format!("/libs/search?libraryName={}", c7_url_encode(&name));
@@ -82,31 +82,31 @@ fn exec_context7_resolve(args: &serde_json::Value) -> String {
     }
     let resp = match c7_get(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] Context7: {e}"),
+        Err(e) => return crate::json_err("API_ERROR", &format!("Context7: {e}"), "Check the API key or network."),
     };
     let data: serde_json::Value = match serde_json::from_str(&resp) {
         Ok(d) => d,
-        Err(e) => return format!("[ERROR] Context7 parse: {e}"),
+        Err(e) => return crate::json_err("PARSE_ERROR", &format!("Context7 parse: {e}"), "The API returned an unexpected response."),
     };
     let results = match data.get("results").and_then(|r| r.as_array()) {
         Some(arr) if !arr.is_empty() => arr,
-        _ => return format!("[OK] Context7: no results for '{name}'"),
+        _ => return crate::json_ok(serde_json::json!({"name": name, "content": format!("Context7: no results for '{}'", name)})),
     };
-    let mut out = format!("[OK] Context7: {} results for '{}'\n\n", results.len(), name);
+    let mut content = format!("Context7: {} results for '{}'\n\n", results.len(), name);
     for r in results.iter().take(8) {
         let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("");
         let desc = r.get("description").and_then(|v| v.as_str()).unwrap_or("");
         let score = r.get("benchmarkScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        out.push_str(&format!("  {id}  ({score:.1})\n  {title}\n  {desc}\n\n"));
+        content.push_str(&format!("  {id}  ({score:.1})\n  {title}\n  {desc}\n\n"));
     }
-    out
+    crate::json_ok(serde_json::json!({"name": name, "results_count": results.len(), "content": content}))
 }
 
 fn exec_context7_query(args: &serde_json::Value) -> String {
     let library_id = args.s("library_id");
     if library_id.is_empty() {
-        return "[ERROR] context7_query: missing 'library_id' parameter".into();
+        return crate::json_err("MISSING_LIBRARY_ID", "context7_query: missing 'library_id' parameter", "Provide the library ID obtained from context7_resolve.");
     }
     let q = args.s_or("query", "");
     let path = format!(
@@ -116,32 +116,32 @@ fn exec_context7_query(args: &serde_json::Value) -> String {
     );
     let resp = match c7_get(&path) {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] Context7: {e}"),
+        Err(e) => return crate::json_err("API_ERROR", &format!("Context7: {e}"), "Check the API key or network."),
     };
     let data: serde_json::Value = match serde_json::from_str(&resp) {
         Ok(d) => d,
-        Err(e) => return format!("[ERROR] Context7 parse: {e}"),
+        Err(e) => return crate::json_err("PARSE_ERROR", &format!("Context7 parse: {e}"), "The API returned an unexpected response."),
     };
 
-    let mut out = String::from("[OK] Context7:\n");
+    let mut content = String::from("Context7:\n");
 
     if let Some(snippets) = data.get("codeSnippets").and_then(|s| s.as_array()) {
         for s in snippets.iter().take(5) {
             let title = s.get("codeTitle").and_then(|v| v.as_str()).unwrap_or("");
             let desc = s.get("codeDescription").and_then(|v| v.as_str()).unwrap_or("");
             let lang = s.get("codeLanguage").and_then(|v| v.as_str()).unwrap_or("");
-            out.push_str(&format!("\n## {title}\n{desc}\n[{lang}]\n"));
+            content.push_str(&format!("\n## {title}\n{desc}\n[{lang}]\n"));
             if let Some(list) = s.get("codeList").and_then(|l| l.as_array()) {
                 for c in list.iter().take(2) {
                     if let Some(code) = c.get("code").and_then(|v| v.as_str()) {
                         if code.len() > 2000 {
                             let cut = code.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(code.len());
-                            out.push_str(&code[..cut]);
-                            out.push_str("\n... [truncated]");
+                            content.push_str(&code[..cut]);
+                            content.push_str("\n... [truncated]");
                         } else {
-                            out.push_str(code);
+                            content.push_str(code);
                         }
-                        out.push('\n');
+                        content.push('\n');
                     }
                 }
             }
@@ -151,15 +151,15 @@ fn exec_context7_query(args: &serde_json::Value) -> String {
     if let Some(snippets) = data.get("infoSnippets").and_then(|s| s.as_array()) {
         for s in snippets.iter().take(3) {
             let bc = s.get("breadcrumb").and_then(|v| v.as_str()).unwrap_or("");
-            let content = s.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            out.push_str(&format!("\n  {bc}: {content}"));
+            let snippet_content = s.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            content.push_str(&format!("\n  {bc}: {snippet_content}"));
         }
     }
 
-    if out == "[OK] Context7:\n" {
-        format!("[OK] Context7: no results for '{}' in {}", q, library_id)
+    if content == "Context7:\n" {
+        crate::json_ok(serde_json::json!({"library_id": library_id, "query": q, "content": format!("Context7: no results for '{}' in {}", q, library_id)}))
     } else {
-        out
+        crate::json_ok(serde_json::json!({"library_id": library_id, "query": q, "content": content}))
     }
 }
 
@@ -184,26 +184,26 @@ fn exec_web_fetch(args: &serde_json::Value) -> String {
         || url_lower.starts_with("https://192.168.")
         || url.starts_with("file://")
     {
-        return format!("[ERROR] Cannot fetch internal/local URL: {}\n[HINT] web_fetch only supports public URLs.", url);
+        return crate::json_err("LOCAL_URL", &format!("Cannot fetch internal/local URL: {}", url), "web_fetch only supports public URLs.");
     }
     let resp = match ureq::get(&url)
             .header("User-Agent", "deepx/0.2")
         .call()
     {
         Ok(r) => r,
-        Err(e) => return format!("[ERROR] Cannot fetch {}: {}\n[HINT] Check the URL or network.", url, e),
+        Err(e) => return crate::json_err("FETCH_FAILED", &format!("Cannot fetch {}: {}", url, e), "Check the URL or network."),
     };
     let status = resp.status();
     if let Some(len) = resp.headers().get("content-length").and_then(|h| h.to_str().ok()).and_then(|s| s.parse::<u64>().ok()) {
         if len > 5_000_000 {
-            return format!("[ERROR] Response too large: {} bytes > 5MB limit", len);
+            return crate::json_err("TOO_LARGE", &format!("Response too large: {} bytes > 5MB limit", len), "Use a URL that returns smaller content.");
         }
     }
     match resp.into_body().read_to_string() {
         Ok(body) => {
                     let readable = match html2text::from_read(body.as_bytes(), body.len().min(120_000)) {
                         Ok(t) => t,
-                        Err(e) => return format!("[ERROR] html2text: {}\n[HINT] The URL may not return HTML. Check with web_fetch first.", e),
+                        Err(e) => return crate::json_err("HTML_PARSE_ERROR", &format!("html2text: {}", e), "The URL may not return HTML."),
                     };
                     let truncated = readable.len() > 100_000;
                     let display = if truncated {
@@ -220,13 +220,14 @@ fn exec_web_fetch(args: &serde_json::Value) -> String {
                             Err(e) => format!("\n[HINT] Could not save to {}: {}", path, e),
                         }
                     } else { String::new() };
+                    let status_code = status.as_u16();
                     if status == 200 {
-                        format!("[OK] {} ({} chars)\n\n{}{}", status, display.len(), display, saved)
+                        crate::json_ok(serde_json::json!({"url": url, "status": status_code, "content": format!("{} ({} chars)\n\n{}{}", status_code, display.len(), display, saved)}))
                     } else {
-                        format!("[PARTIAL] HTTP {}\n\n{}{}", status, display, saved)
+                        crate::json_ok(serde_json::json!({"url": url, "status": status_code, "content": format!("HTTP {}\n\n{}{}", status_code, display, saved)}))
                     }
                 }
-                Err(e) => format!("[ERROR] Cannot read response body: {}\n[HINT] The URL may not return text.", e),
+                Err(e) => crate::json_err("READ_FAILED", &format!("Cannot read response body: {}", e), "The URL may not return text."),
             }
     }
 
@@ -254,11 +255,11 @@ fn bocha_key() -> String {
 fn exec_web_search(args: &serde_json::Value) -> String {
     let query = args.s("query");
     if query.is_empty() {
-        return "[ERROR] web_search: missing 'query' parameter\n[HINT] Provide a search query string.".into();
+        return crate::json_err("MISSING_QUERY", "web_search: missing 'query' parameter", "Provide a search query string.");
     }
     let api_key = bocha_key();
     if api_key.is_empty() {
-        return "[ERROR] web_search: BOCHA_API_KEY not set\n[HINT] Set the BOCHA_API_KEY environment variable or call set_bocha_key().\n      Get a free key at https://open.bochaai.com".into();
+        return crate::json_err("MISSING_API_KEY", "web_search: BOCHA_API_KEY not set", "Set the BOCHA_API_KEY environment variable or call set_bocha_key(). Get a free key at https://open.bochaai.com");
     }
 
     let body = serde_json::json!({
@@ -281,18 +282,18 @@ fn exec_web_search(args: &serde_json::Value) -> String {
         Ok(text)
     })() {
         Ok(b) => b,
-        Err(e) => return format!("[ERROR] Search failed: {}\n[HINT] Check network or API key.", e),
+        Err(e) => return crate::json_err("SEARCH_FAILED", &format!("Search failed: {}", e), "Check network or API key."),
     };
 
     let parsed: serde_json::Value = match serde_json::from_str(&resp_text) {
         Ok(v) => v,
-        Err(e) => return format!("[ERROR] Failed to parse response: {e}"),
+        Err(e) => return crate::json_err("PARSE_ERROR", &format!("Failed to parse response: {e}"), "The API returned an unexpected response."),
     };
 
     let code = parsed.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
     if code != 200 {
         let msg = parsed.get("msg").and_then(|m| m.as_str()).unwrap_or("unknown");
-        return format!("[ERROR] Bocha API error (code {}): {}", code, msg);
+        return crate::json_err("API_ERROR", &format!("Bocha API error (code {}): {}", code, msg), "The API returned an error.");
     }
 
     let results = parsed["data"]["webPages"]["value"]
@@ -301,10 +302,10 @@ fn exec_web_search(args: &serde_json::Value) -> String {
         .unwrap_or_default();
 
     if results.is_empty() {
-        return format!("[OK] Bocha: {}\n\n(no results)", query);
+        return crate::json_ok(serde_json::json!({"query": query, "content": format!("Bocha: {}\n\n(no results)", query)}));
     }
 
-    let mut out = format!("[OK] Bocha: {}\n", query);
+    let mut content = format!("Bocha: {}\n", query);
     for r in results.iter() {
         let title = r.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let url = r.get("url").and_then(|v| v.as_str()).unwrap_or("");
@@ -314,17 +315,17 @@ fn exec_web_search(args: &serde_json::Value) -> String {
             .or_else(|| r.get("dateLastCrawled"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        out.push_str(&format!("\n[{}]({})", title, url));
+        content.push_str(&format!("\n[{}]({})", title, url));
         if !snippet.is_empty() {
-            out.push_str(&format!("\n  {}", snippet));
+            content.push_str(&format!("\n  {}", snippet));
         }
         if !site.is_empty() || !date.is_empty() {
             let sep = if !site.is_empty() && !date.is_empty() { " · " } else { "" };
-            out.push_str(&format!("\n  ({}{}{})", site, sep, date));
+            content.push_str(&format!("\n  ({}{}{})", site, sep, date));
         }
-        out.push('\n');
+        content.push('\n');
     }
-    out
+    crate::json_ok(serde_json::json!({"query": query, "results_count": results.len(), "content": content}))
 }
 
 // ── 注册入口 ──
@@ -333,7 +334,7 @@ use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: ToolKey::new("web", "fetch"),
+        key: "web_fetch".to_string(),
         description: "Web operations: fetch, search, context7_resolve, context7_query. Use fetch to get URL content, search to query the web.",
         input_schema: serde_json::json!({
             "type": "object",
@@ -349,7 +350,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("web", "search"),
+        key: "web_search".to_string(),
         description: "Search the web",
         input_schema: serde_json::json!({
             "type": "object",
@@ -364,7 +365,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("web", "context7_resolve"),
+        key: "web_context7_resolve".to_string(),
         description: "Resolve library name to Context7 ID",
         input_schema: serde_json::json!({
             "type": "object",
@@ -380,7 +381,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: ToolKey::new("web", "context7_query"),
+        key: "web_context7_query".to_string(),
         description: "Query Context7 docs",
         input_schema: serde_json::json!({
             "type": "object",

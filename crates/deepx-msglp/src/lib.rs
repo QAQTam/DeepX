@@ -1609,7 +1609,13 @@ impl Loop {
                     self.flush_meta_and_stats();
 
                     // ── ask_user: stop loop, wait for user response ──
-                    let has_user_query = results.iter().any(|(_, _, content, _)| content.starts_with("[USER_QUERY]"));
+                    let has_user_query = results.iter().any(|(_, _, content, _)| {
+                        content.starts_with("[USER_QUERY]")
+                            || serde_json::from_str::<serde_json::Value>(content)
+                                .ok()
+                                .and_then(|v| v.get("user_query").and_then(|u| u.as_bool()))
+                                .unwrap_or(false)
+                    });
                     if has_user_query {
                         log::info!("[AGENT] ask_user detected — breaking loop to wait for user input");
                         break;

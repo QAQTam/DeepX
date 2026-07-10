@@ -70,18 +70,8 @@ fn encode_pwsh_command(command: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(&bytes)
 }
 
-pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> {
-    let mut cmd = Command::new("pwsh");
-    // Prepend env-var overrides to the command: conpty discards the parent
-    // environment if ANY explicit env vars are set via Command::env().
-    // See conpty-0.7.0 src/process.rs:302-312 (environment_block_unicode).
-    let full_command = format!(
-        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $env:GIT_PAGER='cat'; $env:PAGER='cat'; $env:SYSTEMD_PAGER='cat'; {}",
-        command
-    );
-    let encoded = encode_pwsh_command(&full_command);
-    cmd.args(["-NoLogo", "-NoProfile", "-EncodedCommand", &encoded]);
-    // Suppress console window flash
+pub fn spawn(command: &str, cwd: Option<&str>, shell: &str) -> io::Result<super::PtyProcess> {
+    let mut cmd = Command::new(shell);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -90,6 +80,24 @@ pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<super::PtyProcess> 
     }
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
+    }
+
+    match shell {
+        "pwsh" | "powershell" => {
+            let full_command = format!(
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $env:GIT_PAGER='cat'; $env:PAGER='cat'; $env:SYSTEMD_PAGER='cat'; {}",
+                command
+            );
+            let encoded = encode_pwsh_command(&full_command);
+            cmd.args(["-NoLogo", "-NoProfile", "-EncodedCommand", &encoded]);
+        }
+        "cmd" => {
+            cmd.args(["/c", command]);
+        }
+        _ => {
+            // bash, zsh, or custom path — use -c
+            cmd.args(["-c", command]);
+        }
     }
 
     let mut proc = conpty::Process::spawn(cmd)

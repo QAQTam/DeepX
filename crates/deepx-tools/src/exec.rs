@@ -13,6 +13,72 @@ use crate::{ToolCallCtx, ToolResult};
 use serde::Serialize;
 use std::sync::mpsc;
 
+/// Direct command execution (Codex-style): argv array, no shell, no PTY.
+/// Returns ExecOutput for compatibility with existing handler.
+fn direct_exec(argv: &[String], cwd: Option<&str>, _timeout_secs: u64, max_output_bytes: usize) -> ExecOutput {
+    let start_time = std::time::Instant::now();
+    let display_name = if argv.len() > 1 {
+        format!("{} ...", argv[0])
+    } else {
+        argv[0].clone()
+    };
+
+    let mut cmd = std::process::Command::new(&argv[0]);
+    if argv.len() > 1 {
+        cmd.args(&argv[1..]);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
+    match cmd.output() {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let mut combined = String::new();
+            if !stderr.is_empty() {
+                combined.push_str(&stderr);
+                if !stdout.is_empty() { combined.push('\n'); }
+            }
+            combined.push_str(&stdout);
+            let original_bytes = combined.len();
+            let truncated = if combined.len() > max_output_bytes {
+                combined = combined[..max_output_bytes].to_string();
+                combined.push_str("\n... [truncated]");
+                true
+            } else {
+                false
+            };
+            ExecOutput {
+                status: if output.status.success() { "ok" } else { "error" },
+                command: display_name,
+                exit_code: output.status.code(),
+                output: combined,
+                wall_time_seconds: start_time.elapsed().as_secs_f64(),
+                original_bytes,
+                truncated,
+                process_id: None,
+            }
+        }
+        Err(e) => ExecOutput {
+            status: "error",
+            command: display_name,
+            exit_code: None,
+            output: format!("SPAWN FAILED: {e}"),
+            wall_time_seconds: 0.0,
+            original_bytes: 0,
+            truncated: false,
+            process_id: None,
+        },
+    }
+}
+
 /// Structured output from a command execution.
 #[derive(Serialize, Debug, Clone)]
 pub(crate) struct ExecOutput {
@@ -56,7 +122,8 @@ pub(crate) fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<m
 
     // ── Spawn via PTY ──
     log::info!("[EXEC] spawn start, has_progress_tx={}", progress_tx.is_some());
-    let mut proc = match crate::pty::spawn(&command, cwd.as_deref()) {
+    let shell = parse_opt(args, "shell").unwrap_or_else(|| "pwsh".to_string());
+    let mut proc = match crate::pty::spawn(&command, cwd.as_deref(), &shell) {
         Ok(p) => p,
         Err(e) => return ExecOutput {
             status: "error", command, exit_code: None,
@@ -348,7 +415,31 @@ fn strip_ansi(s: &str) -> String {
 // ── Handler ──
 
 pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
+    // ── argv mode (Codex-style direct exec) ──
+    if let Some(arr) = ctx.args.get("argv").and_then(|v| v.as_array()) {
+        let argv: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        if argv.is_empty() {
+            return ToolResult::error("argv array is empty");
+        }
+        let max_output_tokens = ctx.get_u64("max_output_tokens")
+            .filter(|&n| n >= 1000 && n <= 50000)
+            .unwrap_or(10000) as usize;
+        let max_output_bytes = (max_output_tokens * 4).min(1024 * 1024);
+        let timeout_secs = ctx.get_u64("timeout_secs")
+            .filter(|&n| n > 0 && n <= 3600)
+            .unwrap_or(30);
+        let cwd = ctx.get_str("cwd");
+        let result = direct_exec(&argv, cwd, timeout_secs, max_output_bytes);
+        let success = result.status == "ok";
+        let json = result.to_json();
+        return ToolResult { success, content: json };
+    }
+
+    // ── command mode (shell string via PTY) ──
     let command = ctx.get_str("command").unwrap_or("").to_string();
+    if command.trim().is_empty() {
+        return ToolResult::error("command is empty (use 'argv' for direct exec or 'command' for shell mode)");
+    }
 
     let args = serde_json::json!({
         "command": command,
@@ -411,31 +502,34 @@ pub(super) fn handle_write_stdin(ctx: ToolCallCtx) -> ToolResult {
 
 // ── 注册入口 ──
 
-use crate::{ToolHandler, ToolKey, ToolRisk};
+use crate::{ToolHandler, ToolRisk};
 use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
     // exec/run
     let desc = if cfg!(windows) {
-        "Execute a shell command synchronously. Returns JSON with status/exit_code/output/wall_time_seconds/truncated/process_id.\n\
-         On Windows: prefer PowerShell native cmdlets (Remove-Item, Get-Content, Select-String, Test-Path). \
-         Use `rg` for text search. `sed` is available via the `sed` tool, not via shell. \
-         Never mix cmd and pwsh in a single pipeline."
+        "Execute a command directly (argv array, preferred) or via shell (command string). Returns JSON with status/exit_code/output/wall_time_seconds.\n\
+         Prefer `argv` for simple commands like [\"cargo\",\"check\"]. Use `command` only when you need shell pipes or redirects."
     } else {
-        "Execute a shell command synchronously. Returns JSON with status/exit_code/output/wall_time_seconds/truncated/process_id."
+        "Execute a command directly (argv array, preferred) or via shell (command string). Returns JSON with status/exit_code/output/wall_time_seconds.\n\
+         Prefer `argv` for simple commands like [\"cargo\",\"check\"]. Use `command` only when you need shell pipes or redirects."
     };
     mgr.register(ToolHandler {
-        key: ToolKey::new("exec", "run"),
+        key: "exec_run".to_string(),
         description: desc,
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Shell command to execute"},
+                "argv": {"type": "array", "items": {"type": "string"}, "description": "Command argv array (direct exec, no shell). Preferred. Example: [\"cargo\",\"check\"]"},
+                "command": {"type": "string", "description": "Shell command string (via pwsh/bash). Use only when you need pipes/redirects."},
                 "cwd": {"type": "string", "description": "Working directory for the command"},
                 "timeout_secs": {"type": "integer", "description": "Max execution time in seconds (1-3600, default 30)"},
                 "max_output_tokens": {"type": "integer", "description": "Max output tokens before truncation (1000-50000, default 10000)"}
             },
-            "required": ["command"],
+            "anyOf": [
+                {"required": ["argv"]},
+                {"required": ["command"]}
+            ],
             "additionalProperties": false
         }),
         handler: handle_run,
@@ -445,7 +539,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
 
     // exec/write_stdin
     mgr.register(ToolHandler {
-        key: ToolKey::new("exec", "write_stdin"),
+        key: "exec_write_stdin".to_string(),
         description: "Write input to a running process's stdin and read subsequent output. \n\
                       Use after exec/run returns a process_id (timeout status) to interact with long-running processes.",
         input_schema: serde_json::json!({

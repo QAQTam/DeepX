@@ -6,19 +6,18 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
-  { tag: "feature", title: "SQLite 消息存储（预览功能）：per-session 数据库、双写启用、设置页开关（实时生效，无需重启）、读路径优先走库回退 JSONL、绿点指示器" },
-  { tag: "feature", title: "JSONL → SQLite 迁移工具：待迁移计数、双弹窗确认、10 秒进度条动画、INSERT OR REPLACE 去重、一键迁移全部历史会话" },
-  { tag: "feature", title: "Activity 面板改造：后端 Turso 查询接口、工具执行记录格式化（时间 + 文件名/命令 + 状态）、刷新不丢失" },
-  { tag: "feature", title: "工具卡片重构：ToolRow 替换 ToolCallCard 胶囊体、i18n 中文化（编辑/写入/执行）、内联单行展开设计、MiSans 字体、12px 对齐" },
-  { tag: "feature", title: "exec 流式输出优化：PTY 定时 + 定长双重 flush（50ms / 512B）、保留空行、ANSI 颜色支持、ExecOutput JSON 自动解析" },
-  { tag: "fix", title: "System prompt 重复回传修复：from_messages 去重、build_context_for_gate 删除双来源注入分支、push_system 增加幂等性检查" },
-  { tag: "fix", title: "截断层修复：truncate_tool_result 从存储层移到对话上下文层，工具结果存储完整版，LLM 按需折叠截断" },
-  { tag: "fix", title: "file_edit/write 编辑完成后始终保留完整 diff body（store 存完整、LLM 看折叠、用户展开看 diff）" },
-  { tag: "fix", title: "Turso tokio runtime 嵌套 panic 修复、PRAGMA execute_batch 行返回值修复、WAL checkpoint 补齐" },
-  { tag: "fix", title: "数据库开关变更后热重载 agents（AtomicBool + ReloadConfig），无需重启程序" },
-  { tag: "fix", title: "前端编辑/执行工具右侧始终显示文件名或命令（args_json→args_display 字段修正）" },
-  { tag: "perf", title: "save_append Turso 写入改为批量 insert_messages_batch，去掉逐条 insert_message 循环" },
-  { tag: "perf", title: "config.toml 旧值覆盖修复：PersistentDatabaseConfig.enabled 改为 Option<bool>" },
+  { tag: "feature", title: "全部工具返回结构化 JSON：file_read/file_write/file_edit/exec/git/web/task/plan/memory/process 统一 JSON 格式，带 timeis/status/content" },
+  { tag: "feature", title: "文件读取缓存去重：file_read 返回 content hash，未变更文件再读直接返回 'unchanged'，连续两次读取自动放行原文" },
+  { tag: "feature", title: "文件状态摘要注入：每轮 [Environment] 注入 <file_state> 块，显示最近 20 个文件路径/行数/操作类型，模型无需重复读取" },
+  { tag: "feature", title: "exec_run 支持 argv 直接执行模式（对标 Codex），绕开 PTY/shell 层，无管道污染，更快更稳；command 字符串模式保留给管道场景" },
+  { tag: "feature", title: "exec_run 支持模型主动选择 shell：pwsh/cmd/bash（Windows），bash/zsh/sh（Unix）" },
+  { tag: "feature", title: "System prompt 重构：THINK_MAX/IDENTITY/TOOLS/PROTOCOL/RULES 五段，融合 Codex 教学式风格，[UserMessage] 标记切分元数据与用户输入" },
+  { tag: "fix", title: "file_read 描述修正：从 'File operations: read,write,edit,search...' 改为 'Read file contents with optional line range'" },
+  { tag: "fix", title: "file_edit required 字段修正：从 [path,old_string,new_string] 改为仅 [path]，接受 patterns 数组或 old_string/new_string 组合" },
+  { tag: "fix", title: "explore_scan 描述修正：引用的 'list_dir' 改为正确工具名 'file_list'" },
+  { tag: "fix", title: "ToolKey 二元组简化为 String 键，删除三层 fallback 查找逻辑（--30行）" },
+  { tag: "perf", title: "file_read 正文去除行号前缀（每行省 5 字符），行号移至 JSON 元数据 start_line/end_line" },
+  { tag: "perf", title: "[PROTOCOL] 段删除冗余工具速查表（与 API schema 重复），省 ~150 tokens" },
 ];
 
 const TAG_ICONS: Record<string, string> = {
@@ -38,7 +37,7 @@ export default function ChangelogModal(props: { onClose: () => void }) {
     <div class="changelog-overlay" onClick={props.onClose}>
       <div class="changelog-dialog" onClick={(e) => e.stopPropagation()}>
         <div class="changelog-header">
-          <span class="changelog-title">v0.7.1 更新日志</span>
+          <span class="changelog-title">v0.7.2 更新日志</span>
           <button class="changelog-close" onClick={props.onClose}>✕</button>
         </div>
         <div class="changelog-body">

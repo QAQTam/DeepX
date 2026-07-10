@@ -6,10 +6,35 @@ use deepx_session::SessionManager;
 /// but long results are trimmed here before storage to keep KV-cache prefixes
 /// stable across turns.
 ///
-/// - `file_*` results snap to the nearest preceding newline so code lines are
-///   never cut in half.
-/// - Other tools cut at a UTF-8 char boundary.
+/// - JSON results: truncates only the `content` field, preserves metadata.
+/// - Plain results: `file_*` snap to preceding newline, others cut at UTF-8 boundary.
 fn truncate_tool_result(tool_name: &str, result: &str) -> String {
+    // ── JSON-aware truncation ──
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(result) {
+        if let Some(content) = v.get("content").and_then(|c| c.as_str()) {
+            let limit = 4000usize;
+            if content.len() > limit {
+                let cut = if tool_name.starts_with("file") {
+                    let head = &content[..content.floor_char_boundary(limit)];
+                    head.rfind('\n').map(|n| n + 1).unwrap_or(head.len())
+                } else {
+                    content.floor_char_boundary(limit)
+                };
+                let truncated = format!(
+                    "{}...\n[truncated: {} total chars]",
+                    &content[..cut],
+                    content.len()
+                );
+                v.as_object_mut().unwrap().insert("content".into(), serde_json::Value::String(truncated));
+                v.as_object_mut().unwrap().insert("truncated".into(), serde_json::Value::Bool(true));
+            }
+            return v.to_string();
+        }
+        // No content field — return as-is
+        return result.to_string();
+    }
+
+    // ── Plain string truncation (legacy) ──
     let limit: Option<usize> = if tool_name.starts_with("file") {
         Some(4000)
     } else if tool_name.starts_with("web") {
@@ -51,13 +76,34 @@ fn truncate_tool_result(tool_name: &str, result: &str) -> String {
 /// Deterministic: same input → same output, preserving KV-cache prefix stability.
 ///
 /// - `file_read` / `file_search`: exempt — code/grep results are essential reference.
-/// - All others: keep only the first non-empty line (status + key metadata).
+/// - JSON results: preserve metadata, replace content with a fold marker.
+/// - Plain results: keep only the first non-empty line (status + key metadata).
 fn fold_completed_tool_result(tool_name: &str, result: &str) -> String {
     // Exempt: code and grep results must stay visible for reference.
     if tool_name == "file_read" || tool_name == "file_search" {
         return result.to_string();
     }
 
+    // ── JSON-aware folding ──
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(result) {
+        let hint = if tool_name.starts_with("web") {
+            "[web content folded]"
+        } else if tool_name.starts_with("exec") {
+            "[stdout folded]"
+        } else if tool_name.starts_with("explore") {
+            "[architecture folded]"
+        } else if tool_name.starts_with("file") {
+            "[output folded]"
+        } else {
+            "[details folded]"
+        };
+        if v.get("content").is_some() {
+            v.as_object_mut().unwrap().insert("content".into(), serde_json::Value::String(hint.to_string()));
+        }
+        return v.to_string();
+    }
+
+    // ── Plain string folding (legacy) ──
     let hint = if tool_name.starts_with("web") {
         " [web content folded]"
     } else if tool_name.starts_with("exec") {
@@ -517,7 +563,7 @@ impl MessageStore {
                 });
                 if let Some(text) = existing {
                     let original = text.clone();
-                    *text = format!("[Environment]\n{}\n\n{}", ann_text, original);
+                    *text = format!("[Environment]\n{}\n\n[UserMessage]\n{}", ann_text, original);
                 } else {
                     last_user.content.push(deepx_types::ContentBlock::text(&ann_text));
                 }

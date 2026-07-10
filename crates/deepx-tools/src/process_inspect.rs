@@ -8,7 +8,7 @@ use crate::{ToolCallCtx, ToolResult, ToolRisk, process_registry::ProcessRegistry
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("process", "check"),
+        key: "process_check".to_string(),
         description: "Process management: check, wait, kill, write. Use check to inspect a running background process (exec or subagent). \
             Returns status, elapsed time, and the last output tail. \
             Use when a previous exec/subagent timed out — you can peek at whether it's \
@@ -27,7 +27,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("process", "wait"),
+        key: "process_wait".to_string(),
         description: "Wait for a background process to complete, with a timeout. \
             Returns the final output when the process exits, or a snapshot if timeout is reached. \
             Use when you want to give a previously-timed-out process more time to finish.",
@@ -46,7 +46,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("process","kill"),
+        key: "process_kill".to_string(),
         description: "Kill a process",
         input_schema: serde_json::json!({
             "type": "object",
@@ -62,7 +62,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(crate::ToolHandler {
-        key: crate::ToolKey::new("process", "write"),
+        key: "process_write".to_string(),
         description: "Write text to the stdin of a running interactive process. \
             Use when a background exec process is waiting for input (e.g. password prompt, [Y/n] confirmation). \
             Append \\n to submit the input.",
@@ -84,17 +84,17 @@ pub fn register(mgr: &mut crate::ToolManager) {
 fn handle_check(ctx: ToolCallCtx) -> ToolResult {
     let id: u32 = match ctx.args.get("id").and_then(|v| v.as_u64()) {
         Some(v) if v <= u32::MAX as u64 => v as u32,
-        _ => return ToolResult { success: false, content: "[ERROR] check_process: id required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ID", "check_process: id required", "Provide the process ID returned by exec or spawn_subagent.") },
     };
 
     match ProcessRegistry::get_info(id) {
         Some(info) => ToolResult {
             success: true,
-            content: format!("[OK]\n{}", serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))),
+            content: crate::json_ok(serde_json::json!({"content": serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))})),
         },
         None => ToolResult {
             success: false,
-            content: format!("[ERROR] check_process: process {id} not found (may have already exited and been cleaned up)"),
+            content: crate::json_err("NOT_FOUND", &format!("check_process: process {id} not found"), "Process may have already exited and been cleaned up."),
         },
     }
 }
@@ -102,7 +102,7 @@ fn handle_check(ctx: ToolCallCtx) -> ToolResult {
 fn handle_wait(ctx: ToolCallCtx) -> ToolResult {
     let id: u32 = match ctx.args.get("id").and_then(|v| v.as_u64()) {
         Some(v) if v <= u32::MAX as u64 => v as u32,
-        _ => return ToolResult { success: false, content: "[ERROR] wait_process: id required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ID", "wait_process: id required", "Provide the process ID returned by exec or spawn_subagent.") },
     };
     let timeout_secs: u64 = ctx.args.get("timeout_secs")
         .and_then(|v| v.as_u64())
@@ -111,11 +111,11 @@ fn handle_wait(ctx: ToolCallCtx) -> ToolResult {
     match ProcessRegistry::wait_for(id, timeout_secs) {
         Some(info) => ToolResult {
             success: true,
-            content: format!("[OK]\n{}", serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))),
+            content: crate::json_ok(serde_json::json!({"content": serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))})),
         },
         None => ToolResult {
             success: false,
-            content: format!("[ERROR] wait_process: process {id} not found"),
+            content: crate::json_err("NOT_FOUND", &format!("wait_process: process {id} not found"), "Check that the process ID is correct."),
         },
     }
 }
@@ -123,18 +123,18 @@ fn handle_wait(ctx: ToolCallCtx) -> ToolResult {
 fn handle_kill(ctx: ToolCallCtx) -> ToolResult {
     let id: u32 = match ctx.args.get("id").and_then(|v| v.as_u64()) {
         Some(v) if v <= u32::MAX as u64 => v as u32,
-        _ => return ToolResult { success: false, content: "[ERROR] kill_process: id required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ID", "kill_process: id required", "Provide the process ID.") },
     };
 
     if ProcessRegistry::kill(id) {
         ToolResult {
             success: true,
-            content: format!("[OK] Process {id} killed."),
+            content: crate::json_ok(serde_json::json!({"content": format!("Process {id} killed.")})),
         }
     } else {
         ToolResult {
             success: false,
-            content: format!("[ERROR] kill_process: process {id} not found or already exited"),
+            content: crate::json_err("NOT_FOUND", &format!("kill_process: process {id} not found or already exited"), "Check the process ID."),
         }
     }
 }
@@ -142,21 +142,21 @@ fn handle_kill(ctx: ToolCallCtx) -> ToolResult {
 fn handle_write(ctx: ToolCallCtx) -> ToolResult {
     let id: u32 = match ctx.args.get("id").and_then(|v| v.as_u64()) {
         Some(v) if v <= u32::MAX as u64 => v as u32,
-        _ => return ToolResult { success: false, content: "[ERROR] process write: id required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ID", "process write: id required", "Provide the process ID.") },
     };
     let text = match ctx.args.get("text").and_then(|v| v.as_str()) {
         Some(t) if !t.is_empty() => t,
-        _ => return ToolResult { success: false, content: "[ERROR] process write: text required".into() },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_TEXT", "process write: text required", "Provide the text to write to stdin.") },
     };
 
     match ProcessRegistry::write_to(id, text) {
         Ok(n) => ToolResult {
             success: true,
-            content: format!("[OK] Wrote {n} bytes to process {id}."),
+            content: crate::json_ok(serde_json::json!({"content": format!("Wrote {n} bytes to process {id}.")})),
         },
         Err(e) => ToolResult {
             success: false,
-            content: format!("[ERROR] process write: {e}"),
+            content: crate::json_err("WRITE_FAILED", &format!("process write: {e}"), "Check that the process is still running."),
         },
     }
 }

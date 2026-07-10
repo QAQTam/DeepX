@@ -124,23 +124,23 @@ fn next_id(items: &[PlanItem]) -> u32 {
 fn handle_plan_list(_ctx: ToolCallCtx) -> ToolResult {
     let content = match read_plan() {
         Ok(c) => c,
-        Err(e) => return ToolResult { success: false, content: format!("[ERROR] {e}") },
+        Err(e) => return ToolResult { success: false, content: crate::json_err("READ_FAILED", &e, "Check PLAN.md permissions.") },
     };
     let items = parse_plan(&content);
-    let json = serde_json::to_string_pretty(&items).unwrap_or_default();
-    ToolResult { success: true, content: json }
+    let json = serde_json::to_string(&items).unwrap_or_default();
+    ToolResult { success: true, content: crate::json_ok(serde_json::json!({"items": items, "content": json})) }
 }
 
 fn handle_plan_create(ctx: ToolCallCtx) -> ToolResult {
     let title = ctx.get_str("title").unwrap_or("");
     let description = ctx.get_str("description").unwrap_or("");
     if title.is_empty() {
-        return ToolResult { success: false, content: "[ERROR] 'title' is required".into() };
+        return ToolResult { success: false, content: crate::json_err("MISSING_TITLE", "title is required", "Provide a short title for this plan item.") };
     }
 
     let _lock = PLAN_LOCK.lock();
     let path = plan_path();
-    let _ = crate::workspace::ensure_deepx_dir(); // ensure .deepx/ and trash/ exist
+    let _ = crate::workspace::ensure_deepx_dir();
 
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     let items = parse_plan(&content);
@@ -157,14 +157,14 @@ fn handle_plan_create(ctx: ToolCallCtx) -> ToolResult {
     let mut file = match std::fs::OpenOptions::new().append(true).create(true)
         .open(&path) {
         Ok(f) => f,
-        Err(e) => return ToolResult { success: false, content: format!("open PLAN.md: {e}") },
+        Err(e) => return ToolResult { success: false, content: crate::json_err("WRITE_FAILED", &format!("open PLAN.md: {e}"), "Check permissions.") },
     };
     if let Err(e) = file.write_all(line.as_bytes()) {
-        return ToolResult { success: false, content: format!("write PLAN.md: {e}") };
+        return ToolResult { success: false, content: crate::json_err("WRITE_FAILED", &format!("write PLAN.md: {e}"), "Check disk space.") };
     }
     file.flush().ok();
 
-    ToolResult { success: true, content: format!("Plan item P{id} created: {title}") }
+    ToolResult { success: true, content: crate::json_ok(serde_json::json!({"plan_id": format!("P{id}"), "title": title, "content": format!("Plan item P{id} created: {title}")})) }
 }
 
 #[allow(dead_code)] // kept for frontend cmd_update_plan via admin server
@@ -173,7 +173,7 @@ fn handle_plan_update(ctx: ToolCallCtx) -> ToolResult {
     let status = ctx.get_str("status").unwrap_or("");
     let comment = ctx.get_str("comment").unwrap_or("");
     if id.is_empty() || status.is_empty() {
-        return ToolResult { success: false, content: "[ERROR] 'id' and 'status' are required".into() };
+        return ToolResult { success: false, content: crate::json_err("MISSING_PARAM", "id and status are required", "Provide the plan ID and new status.") };
     }
 
     let _lock = PLAN_LOCK.lock();
@@ -200,30 +200,27 @@ fn handle_plan_update(ctx: ToolCallCtx) -> ToolResult {
     }).collect();
 
     if !found {
-        return ToolResult { success: false, content: format!("[ERROR] Plan item '{id}' not found in PLAN.md") };
+        return ToolResult { success: false, content: crate::json_err("NOT_FOUND", &format!("Plan item '{id}' not found"), "Check the plan ID with plan_list.") };
     }
 
     if let Err(e) = std::fs::write(&path, lines.join("\n") + "\n") {
-        return ToolResult { success: false, content: format!("write PLAN.md: {e}") };
+        return ToolResult { success: false, content: crate::json_err("WRITE_FAILED", &format!("write PLAN.md: {e}"), "Check permissions.") };
     }
 
-    ToolResult { success: true, content: format!("Plan item {id} updated to {status}") }
+    ToolResult { success: true, content: crate::json_ok(serde_json::json!({"plan_id": id, "status": status, "content": format!("Plan item {id} updated to {status}")})) }
 }
 
 fn handle_plan_submit(_ctx: ToolCallCtx) -> ToolResult {
     let content = match read_plan() {
         Ok(c) => c,
-        Err(e) => return ToolResult { success: false, content: format!("[ERROR] {e}") },
+        Err(e) => return ToolResult { success: false, content: crate::json_err("READ_FAILED", &e, "Check PLAN.md permissions.") },
     };
     if content.trim().is_empty() {
-        return ToolResult { success: false, content: "[INFO] PLAN.md is empty. Use plan_create to add items first.".into() };
+        return ToolResult { success: false, content: crate::json_err("EMPTY", "PLAN.md is empty", "Use plan_create to add items first.") };
     }
     ToolResult {
         success: true,
-        content: format!(
-            "Plan submitted for review. The user will approve/reject items in the Status panel.\n\n{}",
-            content
-        ),
+        content: crate::json_ok(serde_json::json!({"content": format!("Plan submitted for review.\n\n{}", content)})),
     }
 }
 
@@ -231,10 +228,10 @@ fn handle_plan_submit(_ctx: ToolCallCtx) -> ToolResult {
 
 pub fn register(mgr: &mut crate::ToolManager) {
     use std::time::Duration;
-    use crate::{ToolHandler, ToolKey, ToolRisk};
+    use crate::{ToolHandler, ToolRisk};
 
     mgr.register(ToolHandler {
-        key: ToolKey::new("plan_list", ""),
+        key: "plan_list".to_string(),
         description: "List all plan items from PLAN.md with status, dependencies, and effort estimates.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {}, "additionalProperties": false
@@ -245,7 +242,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(ToolHandler {
-        key: ToolKey::new("plan_create", ""),
+        key: "plan_create".to_string(),
         description: "Add a new item to PLAN.md. Returns the assigned plan ID. Each item must be concrete and verifiable.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {
@@ -261,7 +258,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
 
     mgr.register(ToolHandler {
-        key: ToolKey::new("plan_submit", ""),
+        key: "plan_submit".to_string(),
         description: "Submit the current PLAN.md for user review. Call this after all plan_create calls are done. Returns the full plan content.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {}, "additionalProperties": false

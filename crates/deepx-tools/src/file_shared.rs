@@ -84,7 +84,15 @@ pub(super) fn disambiguate_match(
     let norm_after: Vec<String> = context_after.iter().map(|l| l.trim_end().to_string()).collect();
     if norm_before.is_empty() && norm_after.is_empty() {
         let locs: Vec<String> = candidates.iter().take(5).map(|&i| format!("L{}", i+1)).collect();
-        return Err(format!("[PARTIAL] {} — old_lines matches at {} locations: {}\n[HINT] Add context_before/context_after to disambiguate.", path, candidates.len(), locs.join(", ")));
+        return Err(serde_json::json!({
+            "timeis": crate::now_utc8(),
+            "status": "error",
+            "code": "AMBIGUOUS_MATCH",
+            "path": path,
+            "message": format!("old_lines matches at {} locations: {}", candidates.len(), locs.join(", ")),
+            "candidates": candidates.iter().take(5).map(|&i| i+1).collect::<Vec<usize>>(),
+            "hint": "Add context_before/context_after to disambiguate."
+        }).to_string());
     }
     let mut best = candidates[0];
     let mut best_score: i32 = -1000;
@@ -168,6 +176,8 @@ pub(super) fn apply_diff_and_format(
     };
     match std::fs::write(path, &write_content) {
         Ok(_) => {
+            let line_count = write_content.lines().count();
+            crate::file_state::record_edit(path, line_count);
             let line = match_idx + 1;
             let added = new_lines.len() as u32;
             let removed = win as u32;

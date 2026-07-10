@@ -82,11 +82,11 @@ use imp::Imp;
 /// Spawn a command in a PTY.
 ///
 /// `command` is the full shell command line (e.g. `"git log --oneline"`).
-/// On Windows this is executed via `pwsh -Command`. On Unix via `sh -c`.
+/// `shell` is the shell to use: "pwsh", "cmd", or "bash" on Windows; "bash", "zsh", or "sh" on Unix.
 /// `cwd` optionally sets the working directory for the child process.
 ///
 /// Returns a [`PtyProcess`] from which stdout can be read with PTY semantics
 /// (ANSI colors preserved, `isatty()`=true for the child).
-pub fn spawn(command: &str, cwd: Option<&str>) -> io::Result<PtyProcess> {
-    imp::spawn(command, cwd)
+pub fn spawn(command: &str, cwd: Option<&str>, shell: &str) -> io::Result<PtyProcess> {
+    imp::spawn(command, cwd, shell)
 }

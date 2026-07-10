@@ -99,7 +99,8 @@ mod tests {
     fn default_prompt_contains_sections() {
         let p = full_system_prompt();
         assert!(p.contains("[THINK_MAX]"), "missing THINK_MAX");
-        assert!(p.contains("[ROLE]"), "missing ROLE");
+        assert!(p.contains("[IDENTITY]"), "missing IDENTITY");
+        assert!(p.contains("[TOOLS]"), "missing TOOLS");
         assert!(p.contains("[PROTOCOL]"), "missing PROTOCOL");
         assert!(p.contains("[RULES]"), "missing RULES");
         assert!(p.contains("[SESSION]"), "missing SESSION prefix");
@@ -119,7 +120,8 @@ mod tests {
     fn dated_prompt_contains_all_sections() {
         let p = full_system_prompt_with_date("2026-07-07", "Windows 11");
         assert!(p.contains("[THINK_MAX]"));
-        assert!(p.contains("[ROLE]"));
+        assert!(p.contains("[IDENTITY]"));
+        assert!(p.contains("[TOOLS]"));
         assert!(p.contains("[PROTOCOL]"));
         assert!(p.contains("[RULES]"));
         assert!(p.contains("[SESSION]"));

@@ -79,6 +79,10 @@ impl AgentState {
                 "<workspace_path>{ws}</workspace_path>"
             ));
         }
+        let fs = deepx_tools::file_state::summary();
+        if !fs.is_empty() {
+            annotations.push(fs);
+        }
         self.msg.build_context_for_gate(&annotations)
     }
 

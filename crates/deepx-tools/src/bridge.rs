@@ -38,8 +38,9 @@ pub fn init_tools(session_seed: &str, extra_registrars: &[crate::registration::T
     let mut mgr = crate::registration::build_tool_manager(extra_registrars);
     mgr.apply_init(allowed_tools, session_seed);
     let _ = TOOL_MANAGER.set(Mutex::new(mgr));
+    crate::file_cache::clear();
+    crate::file_state::clear();
     log::info!("deepx: tool manager inited ({} tools)", all_tools().len());
-    // Initialise the AgentFS bridge for this session
     crate::agentfs_bridge::init_bridge(session_seed);
 }
 
@@ -102,6 +103,12 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
         action
     };
 
+    let effective_name = if action.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}_{}", name, action)
+    };
+
     let source = if call_id.starts_with("dsml_tc_") {
         "DSML"
     } else if call_id.starts_with("xml_tc_") {
@@ -109,26 +116,26 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     } else {
         "native"
     };
-    log::info!("tool [{source}] call: {name} (id={call_id})");
+    log::info!("tool [{source}] call: {effective_name} (id={call_id})");
 
     if crate::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
         return ToolExecResult {
             content: "[CANCELLED]".to_string(),
             success: false,
-            meta: crate::ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
+            meta: crate::ToolExecMeta { name: effective_name.clone(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
             code_delta: None,
         };
     }
 
     // ── PLAN mode gate: block write/exec/destructive tools ──
     if AGENT_MODE.load(Ordering::SeqCst) == 1 {
-        if crate::PLAN_BLOCKED.contains(&name) {
+        if crate::PLAN_BLOCKED.contains(&effective_name.as_str()) {
             return ToolExecResult {
                 content: format!(
-                    "[BLOCKED] PLAN mode: '{name}' is not allowed. Only explore, search, read_file, grep, and plan tools are available. Switch to CODE mode to write or execute."
+                    "[BLOCKED] PLAN mode: '{effective_name}' is not allowed. Only explore, search, read_file, grep, and plan tools are available. Switch to CODE mode to write or execute."
                 ),
                 success: false,
-                meta: crate::ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
+                meta: crate::ToolExecMeta { name: effective_name.clone(), elapsed_ms: 0, output_size: 0, success: false, args_summary: String::new() },
                 code_delta: None,
             };
         }
@@ -137,7 +144,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
     // Phase 1: prepare (brief lock)
     let args_val_clone = args_val.clone();
     let prepared = with_mgr(|mgr| {
-        mgr.prepare_req(call_id.clone(), name, effective_action, args_val_clone, Some(60), progress_tx)
+        mgr.prepare_req(call_id.clone(), &effective_name, effective_action, args_val_clone, Some(60), progress_tx)
     });
 
     let prepared = match prepared {
@@ -163,7 +170,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
 
     // Compute code delta for file operations
     let code_delta = if success {
-        compute_code_delta(name, &args_val)
+        compute_code_delta(&effective_name, &args_val)
     } else { None };
 
     match report {
@@ -173,7 +180,7 @@ pub fn execute_tool_with_id_full(name: &str, action: &str, args: &str, tool_call
             let audit_entry = crate::audit::AuditEntry {
                 ts: chrono::Utc::now().to_rfc3339(),
                 user: "agent".into(),
-                tool: name.to_string(),
+                tool: effective_name.clone(),
                 action: effective_action.to_string(),
                 args_hash: crate::audit::hash_args(&args_val),
                 result: if exec_result.success { "ok".into() } else { "fail".into() },
