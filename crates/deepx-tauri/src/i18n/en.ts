@@ -173,6 +173,30 @@ const en = {
     code: "CODE",
   },
   chatAttach: "Attach files",
+  permission: {
+    read: "Read",
+    write: "Write",
+    exec: "Execute",
+    net: "Network",
+    level: "Level",
+    targetPaths: "Target paths",
+    trustFolder: "Trust this folder permanently (skip future prompts)",
+    deny: "Deny",
+    allow: "Allow",
+  },
+  slash: {
+    noMatch: "No matching commands",
+  },
+  startup: {
+    activity: "30-day activity",
+    sessions: "sessions",
+    less: "Less",
+    more: "More",
+  },
+  time: {
+    mSuffix: "m ago",
+    hSuffix: "h ago",
+  },
 };
 
 export default en;

@@ -175,6 +175,30 @@ const zh: I18nStrings = {
     code: "执行",
   },
   chatAttach: "添加文件",
+  permission: {
+    read: "读取",
+    write: "写入",
+    exec: "执行",
+    net: "网络",
+    level: "等级",
+    targetPaths: "目标路径",
+    trustFolder: "永久信任此文件夹（跳过后续提醒）",
+    deny: "拒绝",
+    allow: "允许",
+  },
+  slash: {
+    noMatch: "无匹配命令",
+  },
+  startup: {
+    activity: "30 天活动",
+    sessions: "个会话",
+    less: "少",
+    more: "多",
+  },
+  time: {
+    mSuffix: "分钟前",
+    hSuffix: "小时前",
+  },
 };
 
 export default zh;

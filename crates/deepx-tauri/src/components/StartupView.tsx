@@ -72,9 +72,9 @@ export default function StartupView(props: StartupViewProps) {
     const now = new Date();
     const diff = now.getTime() - d.getTime();
     const mins = Math.floor(diff / 60000);
-    if (mins < 60) return mins + "m ago";
+    if (mins < 60) return mins + t().time.mSuffix;
     const hours = Math.floor(mins / 60);
-    if (hours < 24) return hours + "h ago";
+    if (hours < 24) return hours + t().time.hSuffix;
     return d.toLocaleDateString();
   }
 
@@ -91,8 +91,8 @@ export default function StartupView(props: StartupViewProps) {
         <Show when={props.showHeatmap}>
           <div class="heatmap-card">
             <div class="heatmap-header">
-              <span class="heatmap-label">30-day activity</span>
-              <span class="heatmap-total">{props.sessions.length} sessions</span>
+              <span class="heatmap-label">{t().startup.activity}</span>
+              <span class="heatmap-total">{props.sessions.length} {t().startup.sessions}</span>
             </div>
             <div class="heatmap-grid">
               <For each={days30()}>
@@ -108,13 +108,13 @@ export default function StartupView(props: StartupViewProps) {
               </For>
             </div>
             <div class="heatmap-legend">
-              <span>Less</span>
+              <span>{t().startup.less}</span>
               <span class="heatmap-cell hm-l0" />
               <span class="heatmap-cell hm-l1" />
               <span class="heatmap-cell hm-l2" />
               <span class="heatmap-cell hm-l3" />
               <span class="heatmap-cell hm-l4" />
-              <span>More</span>
+              <span>{t().startup.more}</span>
             </div>
           </div>
         </Show>

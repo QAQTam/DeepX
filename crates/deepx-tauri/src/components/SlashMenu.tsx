@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { useI18n } from "../i18n";
 
 export interface SlashCommand {
   id: string;
@@ -17,6 +18,7 @@ export default function SlashMenu(props: {
   onHover: (index: number) => void;
   visible: boolean;
 }) {
+  const { t } = useI18n();
   const filtered = () => {
     const q = props.filter.toLowerCase();
     if (!q) return props.commands;
@@ -88,7 +90,7 @@ export default function SlashMenu(props: {
         )}
       </For>
       <Show when={filtered().length === 0}>
-        <div class="slash-empty">No matching commands</div>
+        <div class="slash-empty">{t().slash.noMatch}</div>
       </Show>
     </div>
   );

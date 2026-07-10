@@ -1,6 +1,14 @@
 /* ── Startup View ── */
 .startup-view { flex: 1; display: flex; align-items: center; justify-content: center; animation: pageIn 0.3s ease; }
-.startup-center { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 520px; width: 100%; padding: 40px 24px; }
+.startup-center { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 680px; width: 100%; padding: 40px 24px; }
+
+/* Wide screen: two-column layout */
+@media (min-width: 960px) {
+  .startup-center { max-width: 880px; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 32px; }
+  .startup-title, .startup-subtitle, .startup-logo { width: 100%; text-align: center; }
+  .startup-input-wrap { width: 100%; max-width: 680px; }
+  .startup-hint { width: 100%; }
+}
 .startup-logo { font-size: 48px; color: var(--accent); font-weight: 700; font-family: var(--font-mono); line-height: 1; }
 .startup-title { font-size: 28px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; }
 .startup-subtitle { font-size: 16px; color: var(--text-secondary); font-weight: 400; margin-top: -8px; }
