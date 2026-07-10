@@ -122,7 +122,43 @@ impl Config {
         let store = ConfigStore::default_location();
         let mut cfg = Self::default();
 
-        if let Some(pc) = store.load() {
+        // Step 1: always read TOML to get database.enabled flag (bootstrap)
+        let pc_toml = store.load();
+
+        // Step 2: if database mirror is enabled, try ConfigDb (which may have newer data)
+        let db_enabled = pc_toml.as_ref()
+            .and_then(|pc| pc.database.as_ref())
+            .and_then(|db| db.enabled)
+            .unwrap_or(true); // default: enabled
+
+        // Clone TOML data before potential move
+        let pc_toml_for_override = pc_toml.clone();
+
+        let pc = if db_enabled {
+            #[cfg(feature = "turso-backend")]
+            {
+                match Self::try_load_from_db() {
+                    Ok(Some(db_pc)) => {
+                        log::info!("[Config] loaded from config.db");
+                        Some(db_pc)
+                    }
+                    Ok(None) => {
+                        // ConfigDb has no data yet (first boot after enabling)
+                        pc_toml
+                    }
+                    Err(e) => {
+                        log::warn!("[Config] config.db load failed: {e}, falling back to TOML");
+                        pc_toml
+                    }
+                }
+            }
+            #[cfg(not(feature = "turso-backend"))]
+            pc_toml
+        } else {
+            pc_toml
+        };
+
+        if let Some(pc) = pc {
             // ── Backward compat: migrate old provider_id → new (provider_id, endpoint) ──
             let raw_pid = pc.provider_id.unwrap_or_default();
             let (provider_id, endpoint) = if raw_pid.is_empty() {
@@ -208,6 +244,15 @@ impl Config {
             if let Some(ref tp) = pc.tokenizer_path { cfg.tokenizer_path = Some(tp.clone()); }
         }
 
+        // TOML is authoritative for database.enabled (prevents stale ConfigDb value)
+        if let Some(ref pc_toml) = pc_toml_for_override {
+            if let Some(ref db) = pc_toml.database {
+                if let Some(enabled) = db.enabled {
+                    cfg.database.enabled = enabled;
+                }
+            }
+        }
+
         if !cfg.profiles.contains_key("default") {
             cfg.profiles.insert("default".into(), deepx_types::ProfileConfig {
                 model: cfg.model.clone(), max_tokens: cfg.max_tokens,
@@ -266,10 +311,64 @@ impl Config {
             tokenizer_path: self.tokenizer_path.clone(),
         };
         if !store.save(&pc) {
-            Err(format!("Failed to save config to {}", deepx_types::platform::config_path().display()))
-        } else {
-            Ok(())
+            return Err(format!("Failed to save config to {}", deepx_types::platform::config_path().display()));
         }
+
+        // Dual-write: mirror to SQLite when database is enabled
+        if self.database.enabled {
+            #[cfg(feature = "turso-backend")]
+            {
+                let json = serde_json::to_string(&pc).unwrap_or_default();
+                if let Err(e) = Self::save_to_db(&json) {
+                    log::warn!("[Config] save to config.db failed: {e}");
+                }
+            }
+            #[cfg(not(feature = "turso-backend"))]
+            let _ = ();
+        }
+
+        Ok(())
+    }
+
+    /// Try loading config from config.db. Returns Ok(None) if db is empty/unavailable.
+    #[cfg(feature = "turso-backend")]
+    fn try_load_from_db() -> Result<Option<PersistentConfig>, String> {
+        let db_path = deepx_types::platform::data_dir().join("config.db");
+        if !db_path.exists() {
+            return Ok(None);
+        }
+        let db = crate::config_db::ConfigDb::open(&db_path)?;
+        if let Err(e) = db.init_table() {
+            log::warn!("[Config] config.db init failed: {e}");
+            return Ok(None);
+        }
+        let json_str = match db.load_config() {
+            Ok(Some(s)) => s,
+            Ok(None) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let pc: PersistentConfig = serde_json::from_str(&json_str)
+            .map_err(|e| format!("deserialize config from db: {e}"))?;
+        Ok(Some(pc))
+    }
+
+    #[cfg(not(feature = "turso-backend"))]
+    fn try_load_from_db() -> Result<Option<PersistentConfig>, String> {
+        Ok(None)
+    }
+
+    /// Write config JSON to config.db.
+    #[cfg(feature = "turso-backend")]
+    fn save_to_db(json: &str) -> Result<(), String> {
+        let db_path = deepx_types::platform::data_dir().join("config.db");
+        let db = crate::config_db::ConfigDb::open(&db_path)?;
+        db.init_table()?;
+        db.save_config(json)
+    }
+
+    #[cfg(not(feature = "turso-backend"))]
+    fn save_to_db(_json: &str) -> Result<(), String> {
+        Ok(())
     }
 
     pub fn apply_profile(&mut self, name: &str) -> Option<String> {

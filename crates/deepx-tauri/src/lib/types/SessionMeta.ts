@@ -22,4 +22,6 @@ mode: number,
  * True if this session has messages in the Turso SQLite store.
  */
 turso_backed: boolean,
+/** True if an agent process is currently running for this session. */
+running: boolean,
 };

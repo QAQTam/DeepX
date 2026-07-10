@@ -1006,17 +1006,20 @@ dependencies = [
 
 [[package]]
 name = "deepx-config"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "deepx-types",
+ "log",
  "serde",
  "serde_json",
+ "tokio",
+ "turso",
  "ureq 2.12.1",
 ]
 
 [[package]]
 name = "deepx-gate"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "deepx-config",
@@ -1031,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-gate-testui"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "deepx-gate",
  "deepx-types",
@@ -1041,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-message"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "deepx-proto",
  "deepx-session",
@@ -1053,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-msglp"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "deepx-config",
  "deepx-gate",
@@ -1072,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-proto"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "deepx-types",
  "serde",
@@ -1082,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-sed"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "encoding_rs",
@@ -1096,7 +1099,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-session"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "deepx-types",
  "log",
@@ -1109,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-subagent"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "deepx-session",
  "deepx-tools",
@@ -1121,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-tauri"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "deepx-config",
  "deepx-msglp",
@@ -1141,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-tools"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1166,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-types"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "serde",
  "serde_json",

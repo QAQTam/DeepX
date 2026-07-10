@@ -1183,9 +1183,10 @@ impl Loop {
                 "thinking_blocks": thinking_blocks,
                 "tool_call_blocks": tool_call_blocks,
             });
-            let stats_path = deepx_types::platform::sessions_dir()
-                .join(&self.agent.session.seed)
-                .join("context_stats.json");
+            let stats_dir = deepx_types::platform::sessions_dir()
+                .join(&self.agent.session.seed);
+            let _ = std::fs::create_dir_all(&stats_dir);
+            let stats_path = stats_dir.join("context_stats.json");
             let _ = std::fs::write(&stats_path, stats.to_string());
         }
 
@@ -1320,6 +1321,7 @@ impl Loop {
                         deepx_gate::StreamEvent::ContentDelta(d) => {
                             if self.cancel.is_set() { return; }
                             content.push_str(&d);
+                            let est_tokens = deepx_types::token::count_tokens(&content) as u32;
                             answer_buf.push_str(&d);
                             if last_flush.elapsed().as_millis() as u64 >= FLUSH_INTERVAL_MS
                                 || answer_buf.len() >= FLUSH_CHAR_THRESHOLD
@@ -1339,6 +1341,30 @@ impl Loop {
                                     });
                                 }
                                 last_flush = std::time::Instant::now();
+                                // Emit estimated token usage for real-time InfoBar update
+                                self.emit_delta(Agent2Ui::Dashboard {
+                                    hp_connected: true,
+                                    session_seed: self.agent.session.seed.clone(),
+                                    context_limit: self.agent.config.context_limit,
+                                    tool_calls_total: 0,
+                                    tool_failures: 0,
+                                    current_phase: "single".into(),
+                                    streaming: true,
+                                    dsml_compat_count: self.agent.dsml_compat_count,
+                                    documents: Vec::new(),
+                                    recent_edits: Vec::new(),
+                                    tasks: Vec::new(),
+                                    session_title: None,
+                                    usage: Some(deepx_types::UsageInfo {
+                                        prompt_tokens: 0,
+                                        completion_tokens: est_tokens,
+                                        total_tokens: est_tokens,
+                                        prompt_cache_hit_tokens: 0,
+                                        prompt_cache_miss_tokens: 0,
+                                        reasoning_tokens: 0,
+                                    }),
+                                    model: Some(self.agent.config.model.clone()),
+                                });
                             }
                         }
                         deepx_gate::StreamEvent::ReasoningDelta(r) => {
@@ -1414,6 +1440,27 @@ impl Loop {
                                 id,
                                 name,
                                 args_so_far,
+                            });
+                        }
+                        deepx_gate::StreamEvent::UsageUpdate(u) => {
+                            // Real-time cache-hit update for InfoBar during streaming
+                            last_usage = Some(u.clone());
+                            self.agent.session.tokens = self.agent.session.tokens.max(u.total_tokens as u64);
+                            self.emit_delta(Agent2Ui::Dashboard {
+                                hp_connected: true,
+                                session_seed: self.agent.session.seed.clone(),
+                                context_limit: self.agent.config.context_limit,
+                                tool_calls_total: 0,
+                                tool_failures: 0,
+                                current_phase: "single".into(),
+                                streaming: true,
+                                dsml_compat_count: self.agent.dsml_compat_count,
+                                documents: Vec::new(),
+                                recent_edits: Vec::new(),
+                                tasks: Vec::new(),
+                                session_title: None,
+                                usage: Some(u),
+                                model: Some(self.agent.config.model.clone()),
                             });
                         }
                         deepx_gate::StreamEvent::Retrying { attempt, max_retries, delay_secs, error } => {
@@ -1690,9 +1737,10 @@ impl Loop {
                 "tool_call_blocks": tool_call_blocks,
                 "messages": 0,
             });
-            let stats_path = deepx_types::platform::sessions_dir()
-                .join(&self.agent.session.seed)
-                .join("context_stats.json");
+            let stats_dir = deepx_types::platform::sessions_dir()
+                .join(&self.agent.session.seed);
+            let _ = std::fs::create_dir_all(&stats_dir);
+            let stats_path = stats_dir.join("context_stats.json");
             let _ = std::fs::write(&stats_path, stats.to_string());
         }
 

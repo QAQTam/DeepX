@@ -13,6 +13,21 @@ function execCmd(argsJson: string): string {
   try { const a = JSON.parse(argsJson); return String(a.command || "").substring(0, 120); } catch (_) { return ""; }
 }
 function diffStats(output: string): string {
+  if (!output) return "";
+  // Try JSON first — pull diff from structured result
+  try {
+    const parsed = JSON.parse(output.trim());
+    const d = parsed.diff || "";
+    if (d && isUnifiedDiff(d)) {
+      let a = 0, r = 0;
+      for (const l of d.split("\n")) {
+        if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) continue;
+        if (l.startsWith("+")) a++; else if (l.startsWith("-")) r++;
+      }
+      return a > 0 || r > 0 ? ` +${a} −${r}` : "";
+    }
+  } catch (_) { /* fall through */ }
+  // Legacy: parse diff from raw string
   if (!isUnifiedDiff(output)) return "";
   let a = 0, r = 0;
   for (const l of output.split("\n")) {
@@ -68,17 +83,26 @@ export default function ToolRow(props: { call: ToolCallDef; result?: ToolResultD
   const expandable = name.startsWith("file_") || name.startsWith("edit_file") || name === "exec" || name === "exec_run" || name === "sed";
   const bodyHtml = (): string => {
     const raw = hasResult ? props.result!.output : (props.streamingOutput || "");
-    // Strip timestamp prefix and [OK]/[PARTIAL]/[DRY RUN] header line
+    // Strip timestamp prefix (legacy format)
     const clean = raw.replace(/^\[timeis:.*?\]\s*/gm, "")
-      .replace(/^\[(OK|PARTIAL|DRY RUN)\].*\n/m, "");
-    // exec results are serialized ExecOutput JSON — extract just the output
-    if (hasResult && (name === "exec" || name === "exec_run")) {
+      .replace(/^\[(OK|PARTIAL|DRY RUN)\].*\n/m, "").trim();
+
+    // ── JSON result (new format): extract diff → styled, or content → plain ──
+    if (hasResult && clean.startsWith("{")) {
       try {
-        const parsed = JSON.parse(clean.trim());
-        const out = parsed.output || "";
-        return `<pre class="diff-plain">${ansi().toHtml(out)}</pre>`;
-      } catch (_) { /* fall through */ }
+        const parsed = JSON.parse(clean);
+        // Diff-style output (file_edit/file_write)
+        if (parsed.diff && isUnifiedDiff(parsed.diff)) return renderDiffHtml(parsed.diff);
+        // exec output
+        if (parsed.output) return `<pre class="diff-plain">${ansi().toHtml(parsed.output)}</pre>`;
+        // file_read / file_search / other content
+        if (parsed.content) return `<pre class="diff-plain">${ansi().toHtml(parsed.content)}</pre>`;
+        // Fallback: show full JSON compactly
+        return `<pre class="diff-plain">${ansi().toHtml(JSON.stringify(parsed, null, 2))}</pre>`;
+      } catch (_) { /* not valid JSON — fall through */ }
     }
+
+    // ── Legacy format ──
     if (isUnifiedDiff(clean)) return renderDiffHtml(clean);
     return `<pre class="diff-plain">${ansi().toHtml(clean)}</pre>`;
   };

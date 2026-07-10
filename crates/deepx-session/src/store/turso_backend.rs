@@ -264,6 +264,71 @@ impl TursoBackend {
 
     // ── delete ────────────────────────────────────────────────────────
 
+    /// Clear all messages for a session (used before rewrite).
+    pub fn clear_messages(&self, seed: &str) -> Result<(), String> {
+        let seed = seed.to_string();
+        runtime()?.block_on(async {
+            self.conn
+                .execute(
+                    "DELETE FROM messages WHERE session_seed = ?1",
+                    turso::params![seed],
+                )
+                .await
+                .map_err(|e| format!("clear msgs: {e}"))?;
+            Ok(())
+        })
+    }
+
+    /// Rewrite all messages for a session: clear then batch insert in a transaction.
+    pub fn rewrite_messages(&self, seed: &str, messages: &[Message]) -> Result<(), String> {
+        let seed = seed.to_string();
+        runtime()?.block_on(async {
+            self.conn
+                .execute_batch("BEGIN IMMEDIATE")
+                .await
+                .map_err(|e| format!("begin tx: {e}"))?;
+
+            // Delete old messages
+            if let Err(e) = self
+                .conn
+                .execute(
+                    "DELETE FROM messages WHERE session_seed = ?1",
+                    turso::params![seed.clone()],
+                )
+                .await
+            {
+                let _ = self.conn.execute_batch("ROLLBACK").await;
+                return Err(format!("rewrite clear msgs: {e}"));
+            }
+
+            // Insert new messages
+            for msg in messages {
+                let json = serde_json::to_string(msg).unwrap_or_default();
+                let mid = msg.msg_id.map(|v| v as i64);
+                let role = msg.role.clone();
+                if let Err(e) = self.conn
+                    .execute(
+                        "INSERT INTO messages (session_seed, msg_id, role, content_json)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        turso::params![seed.clone(), mid, role, json],
+                    )
+                    .await
+                {
+                    let _ = self.conn.execute_batch("ROLLBACK").await;
+                    return Err(format!("rewrite insert: {e}"));
+                }
+            }
+
+            self.conn
+                .execute_batch("COMMIT")
+                .await
+                .map_err(|e| format!("commit tx: {e}"))?;
+
+            let _ = self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)", ()).await;
+            Ok(())
+        })
+    }
+
     pub fn delete_session(&self, seed: &str) -> Result<(), String> {
         let seed = seed.to_string();
         runtime()?.block_on(async {

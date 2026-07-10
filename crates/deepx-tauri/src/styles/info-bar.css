@@ -43,9 +43,26 @@
   height: 100%; background: var(--accent);
   border-radius: 3px;
   transition: width 0.3s ease;
+  position: relative; overflow: hidden;
+}
+.compact-bar-fill::after {
+  content: "";
+  position: absolute; top: 0; left: -100%;
+  width: 60%; height: 100%;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(255,255,255,0.18) 40%,
+    rgba(255,255,255,0.35) 50%,
+    rgba(255,255,255,0.18) 60%,
+    transparent 100%
+  );
+  animation: bar-shimmer 1.6s ease-in-out infinite;
 }
 .compact-bar-fill[style*="100%"] {
   background: var(--green);
+}
+.compact-bar-fill[style*="100%"]::after {
+  animation: none; opacity: 0;
 }
 .compact-label {
   font-size: 12px; font-family: var(--font-mono); color: var(--accent);
@@ -109,3 +126,35 @@
   color: var(--text-primary);
   background: var(--bg-tertiary);
 }
+
+
+/* ── Context panel tabs ── */
+.context-tabs {
+  display: flex; gap: 4px; flex: 1;
+}
+.context-tab {
+  padding: 2px 10px; border: none; border-radius: var(--radius-pill);
+  background: transparent; color: var(--text-muted);
+  font-size: 11px; font-weight: 500; cursor: pointer;
+  transition: all var(--transition);
+}
+.context-tab.active {
+  background: var(--accent); color: #fff;
+}
+.context-tab:hover:not(.active) {
+  background: var(--bg-hover); color: var(--text-primary);
+}
+
+/* ── Stream metrics chart ── */
+.stream-metrics-chart { width: 100%; }
+.context-chart-svg { width: 100%; height: auto; display: block; }
+.context-chart-label { fill: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+.context-chart-legend {
+  display: flex; justify-content: center; gap: 16px; margin-top: 4px;
+}
+.legend-swatch {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+  margin-right: 4px; vertical-align: middle;
+}
+.legend-swatch.accent { background: var(--accent); }
+.legend-swatch.green { background: var(--green); }

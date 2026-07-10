@@ -461,6 +461,11 @@ impl AgentRegistry {
         stdin.flush().map_err(|e| format!("flush: {e}"))
     }
 
+    /// Check if an agent instance is running for a given session seed.
+    pub fn has_instance(&self, seed: &str) -> bool {
+        self.instances.contains_key(seed)
+    }
+
     /// Kill and remove a specific agent instance from the registry.
     /// Returns the removed instance so the caller can wait for process exit
     /// **outside** the registry lock.
@@ -751,6 +756,7 @@ pub fn cmd_save_config(
     subagent_timeout_secs: u64,
     subagent_default_tools: Vec<String>,
     database_enabled: bool,
+    tokenizer_path: String,
 ) -> Result<(), String> {
     let mut cfg = deepx_config::Config::load().unwrap_or_default();
     let set_str = |dest: &mut String, src: &str| { if !src.is_empty() { *dest = src.to_string(); } };
@@ -775,6 +781,11 @@ pub fn cmd_save_config(
     set_u64(&mut cfg.subagent.timeout_secs, subagent_timeout_secs);
     if !subagent_default_tools.is_empty() { cfg.subagent.default_tools = subagent_default_tools; }
     cfg.database.enabled = database_enabled;
+    if !tokenizer_path.is_empty() {
+        cfg.tokenizer_path = Some(tokenizer_path);
+    } else {
+        cfg.tokenizer_path = None;
+    }
     cfg.save()?;
     // Broadcast reload to all running agents
     let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
@@ -849,6 +860,11 @@ pub fn cmd_list_sessions() -> Result<String, String> {
             let mut v = serde_json::to_value(&m).unwrap_or_default();
             let backed = mgr.is_turso_backed(&m.seed);
             v["turso_backed"] = serde_json::Value::Bool(backed);
+            // Check if an agent process is running for this session
+            let running = if let Ok(reg) = AgentRegistry::get().lock() {
+                reg.has_instance(&m.seed)
+            } else { false };
+            v["running"] = serde_json::Value::Bool(running);
             v
         })
         .collect();

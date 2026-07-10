@@ -419,7 +419,8 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     if let Some(arr) = ctx.args.get("argv").and_then(|v| v.as_array()) {
         let argv: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         if argv.is_empty() {
-            return ToolResult::error("argv array is empty");
+            let err = crate::json_err("EMPTY_ARGV", "argv array is empty", "Provide at least one element in the argv array.");
+            return ToolResult { success: false, content: err };
         }
         let max_output_tokens = ctx.get_u64("max_output_tokens")
             .filter(|&n| n >= 1000 && n <= 50000)
@@ -438,7 +439,8 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     // ── command mode (shell string via PTY) ──
     let command = ctx.get_str("command").unwrap_or("").to_string();
     if command.trim().is_empty() {
-        return ToolResult::error("command is empty (use 'argv' for direct exec or 'command' for shell mode)");
+        let err = crate::json_err("EMPTY_COMMAND", "command is empty", "Use 'argv' for direct exec or 'command' for shell mode.");
+        return ToolResult { success: false, content: err };
     }
 
     let args = serde_json::json!({
@@ -458,13 +460,15 @@ use deepx_types::arg::{parse_opt, parse_opt_u64};
 // ── write_stdin handler ──
 
 pub(super) fn handle_write_stdin(ctx: ToolCallCtx) -> ToolResult {
-    let process_id = ctx.get_u64("process_id").unwrap_or(0) as u32;
+    let raw_pid = ctx.get_u64("process_id").unwrap_or(0);
+    // PID values fit in u32 on all supported platforms; reject overflow.
+    if raw_pid == 0 || raw_pid > u32::MAX as u64 {
+        let err = crate::json_err("INVALID_PID", "process_id is required and must be a valid 32-bit PID", "Provide the process_id returned by exec_run timeout.");
+        return ToolResult { success: false, content: err };
+    }
+    let process_id = raw_pid as u32;
     let input = ctx.get_str("input").unwrap_or("").to_string();
     let yield_ms = ctx.get_u64("yield_time_ms").unwrap_or(5000).min(30000);
-
-    if process_id == 0 {
-        return ToolResult::error("process_id is required");
-    }
 
     // Clear accumulated output to capture fresh response
     crate::process_registry::ProcessRegistry::clear_output(process_id);

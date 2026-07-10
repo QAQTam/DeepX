@@ -1,6 +1,6 @@
 import { createSignal, createResource, For, Show, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { useI18n, type Lang } from "../i18n";
 
 type ThemeMode = "system" | "light" | "dark" | "dark-gray";
@@ -31,6 +31,7 @@ export default function SettingsView(props: SettingsViewProps) {
   const [migrationResult, setMigrationResult] = createSignal("");
   const [migrationProgress, setMigrationProgress] = createSignal(0);  // 0-100
   const [migrationPhase, setMigrationPhase] = createSignal<"idle" | "confirm" | "running" | "done">("idle");
+  const [dualWriteChecked, setDualWriteChecked] = createSignal(true);
   const [saved, setSaved] = createSignal(false);
   let dbToggled = false;  // track whether database switch changed
   const [showApiKey, setShowApiKey] = createSignal(false);
@@ -44,6 +45,7 @@ export default function SettingsView(props: SettingsViewProps) {
   const [subTimeout, setSubTimeout] = createSignal(120);
   const [subTools, setSubTools] = createSignal<string[]>(["read_file", "search", "grep", "exec", "list_dir", "glob"]);
   const [showSubApiKey, setShowSubApiKey] = createSignal(false);
+  const [tokenizerPath, setTokenizerPath] = createSignal("");
 
   const [configData] = createResource(async () => {
     try { const raw = await invoke<string>("cmd_load_config"); return JSON.parse(raw); }
@@ -99,6 +101,10 @@ export default function SettingsView(props: SettingsViewProps) {
     const ep = currentEndpoints().find((e: Endpoint) => e.id === id);
     if (ep) { setBaseUrl(ep.base_url); setModel(ep.default_model); }
   }
+  async function browseTokenizer() {
+    const selected = await open({});
+    if (selected && typeof selected === 'string') setTokenizerPath(selected);
+  }
   function toggleTool(name: string) {
     setSubTools(prev => prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name]);
   }
@@ -115,6 +121,7 @@ export default function SettingsView(props: SettingsViewProps) {
         subagentApiKey: subApiKey(), subagentMaxTokens: subMaxTokens(),
         subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
         databaseEnabled: databaseEnabled(),
+        tokenizerPath: tokenizerPath(),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -184,6 +191,31 @@ export default function SettingsView(props: SettingsViewProps) {
     setMigrationPending(0);
     setMigrationProgress(100);
     setMigrationPhase("done");
+    setDualWriteChecked(databaseEnabled()); // default: mirror current toggle state
+  }
+
+  async function finishMigration() {
+    // Apply dual-write preference from checkbox
+    if (dualWriteChecked() !== databaseEnabled()) {
+      setDatabaseEnabled(dualWriteChecked());
+      dbToggled = true;
+      // Save config with new database.enabled
+      await invoke("cmd_save_config", {
+        apiKey: apiKey(), model: model(), baseUrl: baseUrl(),
+        providerId: providerId(), endpoint: endpointId(),
+        maxTokens: maxTokens(), contextLimit: contextLimit(),
+        reasoningEffort: reasoningEffort(), lang: props.lang(),
+        context7ApiKey: context7Key(),
+        subagentModel: subModel(), subagentBaseUrl: subBaseUrl(),
+        subagentApiKey: subApiKey(), subagentMaxTokens: subMaxTokens(),
+        subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
+        databaseEnabled: dualWriteChecked(),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    }
+    setMigrationPhase("idle");
+    setMigrationResult("");
   }
 
   const EyeIcon = (props: { show: boolean }) => (
@@ -208,6 +240,19 @@ export default function SettingsView(props: SettingsViewProps) {
 
       <Show when={!configData.loading} fallback={<Loading />}>
         <div class="settings-page-body">
+
+          
+          <section class="settings-card">
+            <h2 class="settings-card-title">{t().settings.sectionPerformance}</h2>
+            <div class="settings-row">
+              <label>{t().settings.tokenizerPath}</label>
+              <div class="settings-input-group">
+                <input value={tokenizerPath()} onInput={(e) => setTokenizerPath(e.currentTarget.value)} placeholder="path/to/tokenizer.json" />
+                <button class="settings-save-btn" style="margin-top:4px;padding:4px 12px;font-size:12px;" onClick={browseTokenizer}>{t().settings.tokenizerBrowse}</button>
+                <div class="settings-hint">{t().settings.tokenizerPathHint}</div>
+              </div>
+            </div>
+          </section>
 
           {/* ── Provider ── */}
           <section class="settings-card">

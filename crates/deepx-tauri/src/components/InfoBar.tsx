@@ -2,6 +2,7 @@ import { Show, createSignal, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
 import ContextPanel from "./ContextPanel";
+import type { MetricPoint } from "./StreamMetricsChart";
 
 const FMT = (n: number) => n.toLocaleString();
 
@@ -12,6 +13,7 @@ export default function InfoBar(props: {
   context_limit: number;
   prompt_cache_hit: number;
   prompt_cache_miss: number;
+  metricHistory: MetricPoint[];
   isStreaming: boolean;
   error: string | null;
   onDismissError?: () => void;
@@ -97,7 +99,7 @@ export default function InfoBar(props: {
         </Show>
       </div>
       <div class="info-item">
-        <ContextPanel seed={props.seed} />
+        <ContextPanel seed={props.seed} metricHistory={props.metricHistory} contextLimit={props.context_limit} />
         <Show when={props.isCompacting() || compactPct() > 0}
           fallback={
             <button class="info-compact-btn" onClick={handleCompact} title="Compact history">

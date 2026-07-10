@@ -1,5 +1,6 @@
 import { createSignal, createResource, Show, For } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "../i18n";
 
 // ── Types ──
 
@@ -43,6 +44,7 @@ function fmtPct(n: number): string {
 }
 
 export default function TokenChart(props: { refreshKey: number }) {
+  const { t } = useI18n();
   const [range, setRange] = createSignal<7 | 30>(7);
 
   const [stats] = createResource(
@@ -114,13 +116,13 @@ export default function TokenChart(props: { refreshKey: number }) {
   return (
     <div class="token-chart">
       <div class="token-chart-header">
-        <h3 class="token-chart-title">Token Usage</h3>
+        <h3 class="token-chart-title">{t().tokenChart.title}</h3>
         <div class="token-chart-tabs">
           <button class={`token-chart-tab ${range() === 7 ? "active" : ""}`} onClick={() => setRange(7)}>
-            7d
+            {t().tokenChart.tabs.d7}
           </button>
           <button class={`token-chart-tab ${range() === 30 ? "active" : ""}`} onClick={() => setRange(30)}>
-            30d
+            {t().tokenChart.tabs.d30}
           </button>
         </div>
       </div>
@@ -130,15 +132,15 @@ export default function TokenChart(props: { refreshKey: number }) {
         <div class="token-summary">
           <div class="token-summary-card">
             <span class="token-summary-val">{fmtK(totals()!.prompt_tokens + totals()!.completion_tokens)}</span>
-            <span class="token-summary-label">Total Tokens</span>
+            <span class="token-summary-label">{t().tokenChart.totalTokens}</span>
           </div>
           <div class="token-summary-card">
             <span class="token-summary-val">{totals()!.calls}</span>
-            <span class="token-summary-label">API Calls</span>
+            <span class="token-summary-label">{t().tokenChart.apiCalls}</span>
           </div>
           <div class="token-summary-card">
             <span class="token-summary-val">{fmtPct(totals()!.cache_hit_pct)}</span>
-            <span class="token-summary-label">Cache Hit</span>
+            <span class="token-summary-label">{t().tokenChart.cacheHit}</span>
           </div>
         </div>
       </Show>
@@ -200,15 +202,15 @@ export default function TokenChart(props: { refreshKey: number }) {
             </Show>
           </svg>
         }>
-          <div class="token-chart-empty">No data yet — start a conversation!</div>
+          <div class="token-chart-empty">{t().tokenChart.empty}</div>
         </Show>
       </div>
 
       {/* Legend */}
       <div class="token-chart-legend">
-        <span class="token-legend-item"><span class="token-legend-swatch accent" />Prompt</span>
-        <span class="token-legend-item"><span class="token-legend-swatch accent-light" />Completion</span>
-        <span class="token-legend-item"><span class="token-legend-swatch green" />Cache Hit %</span>
+        <span class="token-legend-item"><span class="token-legend-swatch accent" />{t().tokenChart.prompt}</span>
+        <span class="token-legend-item"><span class="token-legend-swatch accent-light" />{t().tokenChart.completion}</span>
+        <span class="token-legend-item"><span class="token-legend-swatch green" />{t().tokenChart.cacheHitPct}</span>
       </div>
     </div>
   );

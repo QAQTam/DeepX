@@ -72,9 +72,6 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
         if count == 0 {
             return (content.to_string(), Match::NoMatch { msg: format!("regex no matches") });
         }
-        // Escape $ in replacement string — regex interprets $1, ${name} as
-        // capture-group backreferences. The LLM intends literal replacement text,
-        // so we double every $ ($$ → literal $).
         let escaped_new = new.replace('$', "$$");
         let new_content = if replace_all {
             re.replace_all(content, &escaped_new).to_string()
@@ -84,12 +81,20 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
         let msg = if replace_all { format!("regex replaced {count} matches") } else { "regex replaced 1 match".into() };
         (new_content, Match::Ok { msg })
     } else if replace_all {
-        if !content.contains(old) {
-            let hint = build_fuzzy_hint(content, old);
-            return (content.to_string(), Match::NoMatch { msg: format!("no occurrences{hint}") });
-        }
-        let count = content.matches(old).count();
-        let new_content = content.replace(old, new);
+        // Exact match first; fallback to trim_end for trailing-whitespace tolerance.
+        let matcher: &str = if content.contains(old) {
+            old
+        } else {
+            let trimmed = old.trim_end();
+            if trimmed != old && content.contains(trimmed) {
+                trimmed
+            } else {
+                let hint = build_fuzzy_hint(content, old);
+                return (content.to_string(), Match::NoMatch { msg: format!("no occurrences{hint}") });
+            }
+        };
+        let count = content.matches(matcher).count();
+        let new_content = content.replace(matcher, new);
         (new_content, Match::Ok { msg: format!("replaced {count} occurrences") })
     } else {
         match content.find(old) {
@@ -99,8 +104,23 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
                 (new_content, Match::Ok { msg: format!("line {line}: +{} -{}", new.len(), old.len()) })
             }
             None => {
-                let hint = build_fuzzy_hint(content, old);
-                (content.to_string(), Match::NoMatch { msg: format!("string not found{hint}") })
+                let trimmed = old.trim_end();
+                if trimmed != old {
+                    match content.find(trimmed) {
+                        Some(pos) => {
+                            let line = content[..pos].lines().count() + 1;
+                            let new_content = content.replacen(trimmed, new, 1);
+                            (new_content, Match::Ok { msg: format!("line {line} [trim-end match]: +{} -{}", new.len(), trimmed.len()) })
+                        }
+                        None => {
+                            let hint = build_fuzzy_hint(content, old);
+                            (content.to_string(), Match::NoMatch { msg: format!("string not found{hint}") })
+                        }
+                    }
+                } else {
+                    let hint = build_fuzzy_hint(content, old);
+                    (content.to_string(), Match::NoMatch { msg: format!("string not found{hint}") })
+                }
             }
         }
     }
@@ -239,6 +259,13 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
                 }
             }
         }
+    }
+
+    // Multi-file summary
+    if paths.len() > 1 {
+        let ok = results.iter().filter(|r| r.starts_with("[OK]") || r.starts_with("[DRY RUN]")).count();
+        let err = results.iter().filter(|r| r.starts_with("[ERROR]") || r.starts_with("[PARTIAL]")).count();
+        results.push(format!("[SUMMARY] {}/{} files ok, {} failed", ok, paths.len(), err));
     }
 
     results.join("\n\n")
@@ -455,7 +482,7 @@ pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
     if old_lines.len() > 100 && start_line.is_none() {
         return err("TOO_LARGE",
             &format!("old_lines too large ({} lines, max 100)", old_lines.len()),
-            "Reduce the diff scope or use file_write for full rewrites.");
+            "Reduce the diff scope, use file_write for full rewrites, or set start_line (no old_lines needed) for line-range replacement.");
     }
 
     let raw = match std::fs::read_to_string(&path) {
@@ -509,7 +536,11 @@ pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
                         }
                     }
                 }
-                log::warn!("file_edit_diff: {} line-number mismatch at L{}:\n{}", path, start, ctx);
+                return crate::json_err(
+                    "LINE_MISMATCH",
+                    &format!("start_line={start}: old_lines do not match actual file content at lines {}-{}", s + 1, e + 1),
+                    &format!("Mismatch:\n{ctx}File content has changed. Use file_read to re-read and retry with corrected old_lines.")
+                );
             }
         }
         return apply_diff_and_format(&path, &file_lines, s, win, &new_lines, description, false, dry_run, was_crlf);

@@ -499,7 +499,7 @@ export default function App() {
             <For each={sessions()}>
               {(s) => (
                 <button class={`sidebar-session-item ${isActive(s.seed) ? "active" : ""}`} onClick={() => resumeSession(s.seed)} title={s.last_summary || s.seed}>
-                  <span class={`session-dot ${s.turso_backed ? "turso" : ""}`} title={s.turso_backed ? "SQLite" : "JSONL"} />
+                  <span class={`session-dot ${s.running ? "running" : ""} ${s.turso_backed ? "turso" : ""}`} title={s.turso_backed ? "SQLite" : "JSONL"} />
                   <span class="session-info">
                     <span class="session-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
                     <span class="session-meta">{formatDate(Number(s.updated_at))} · {s.turn_count || s.message_count} {t().session.turns}</span>
@@ -507,7 +507,7 @@ export default function App() {
                   <span
                     class="session-delete-btn"
                     onClick={(e) => { e.stopPropagation(); deleteSession(s.seed); }}
-                    title="Delete session"
+                    title={t().session.deleteHint}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M18 6L6 18M6 6l12 12" />

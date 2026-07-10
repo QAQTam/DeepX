@@ -50,6 +50,7 @@ export default function ChatView(props: ChatViewProps) {
         context_tokens={chat().sessionInfo.context_tokens}
         context_limit={chat().sessionInfo.context_limit}
         prompt_cache_hit={chat().sessionInfo.prompt_cache_hit}
+        metricHistory={chat().metricHistory()}
         prompt_cache_miss={chat().sessionInfo.prompt_cache_miss}
         isStreaming={chat().isStreaming()}
         error={chat().error()}

@@ -84,6 +84,7 @@ impl SessionManager {
     // ── Session listing ──
 
     /// List all sessions sorted by updated_at descending.
+    /// Index-first; fallback scans directories with Turso-priority meta read.
     pub fn list(&self) -> Vec<SessionMeta> {
         let mut metas = store::read_index(&self.sessions_dir);
 
@@ -93,7 +94,24 @@ impl SessionManager {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if !path.is_dir() { continue; }
-                    if let Some(meta) = store::read_meta(&path) {
+                    let seed = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    // Turso-first meta read, JSON fallback
+                    let meta = {
+                        #[cfg(feature = "turso-backend")]
+                        if self.turso_enabled.load(Ordering::Relaxed) {
+                            if let Some(dbs) = self.get_or_open_db(seed) {
+                                if let Some(db) = dbs.get(seed) {
+                                    if let Ok(Some(m)) = db.load_meta(seed) {
+                                        Some(m)
+                                    } else { None }
+                                } else { None }
+                            } else { None }
+                        } else { None }
+                        #[cfg(not(feature = "turso-backend"))]
+                        None
+                    };
+                    let meta = meta.or_else(|| store::read_meta(&path));
+                    if let Some(meta) = meta {
                         metas.push(meta);
                     }
                 }
@@ -153,9 +171,14 @@ impl SessionManager {
         store::read_messages(dir).ok()
     }
 
-    /// Check whether a session directory exists on disk (fast path).
+    /// Check whether a session exists (directory on disk or Turso DB).
     pub fn exists(&self, seed: &str) -> bool {
-        self.session_dir(seed).is_some()
+        if self.session_dir(seed).is_some() { return true; }
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            return self.is_turso_backed(seed);
+        }
+        false
     }
 
     /// Check whether this session has messages in the Turso SQLite store.
@@ -243,7 +266,20 @@ impl SessionManager {
     }
 
     /// Load only metadata (fast, no message parsing).
+    /// Turso-first when enabled, falling back to JSON.
     pub fn load_meta(&self, seed: &str) -> Option<SessionMeta> {
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Some(dbs) = self.get_or_open_db(seed) {
+                if let Some(db) = dbs.get(seed) {
+                    match db.load_meta(seed) {
+                        Ok(Some(meta)) => return Some(meta),
+                        Ok(None) => {} // fall through to JSON
+                        Err(e) => log::warn!("Turso load_meta failed for {seed}: {e}"),
+                    }
+                }
+            }
+        }
         let dir = self.session_dir(seed)?;
         store::read_meta(&dir)
     }
@@ -252,9 +288,15 @@ impl SessionManager {
     /// Called when the user switches PLAN/CODE mode so it survives agent restart.
     pub fn persist_mode(&self, seed: &str, mode: u8) {
         let dir = self.session_path_dir(seed);
-        let mut meta = store::read_meta(&dir).unwrap_or_default();
+        let mut meta = self.load_meta(seed).unwrap_or_default();
         meta.mode = mode;
         let _ = store::write_meta(&dir, &meta);
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Some(dbs) = self.get_or_open_db(seed) {
+                let _ = dbs.get(seed).unwrap().upsert_meta(seed, &meta);
+            }
+        }
     }
 
     /// Append a single message to JSONL immediately (per-message persistence).
@@ -374,8 +416,8 @@ impl SessionManager {
             if let Err(e) = db.upsert_meta(seed, &meta) {
                 log::warn!("SessionManager: Turso upsert_meta failed for {seed}: {e}");
             }
-            if let Err(e) = db.insert_messages_batch(seed, messages) {
-                log::warn!("SessionManager: Turso insert_messages_batch failed for {seed}: {e}");
+            if let Err(e) = db.rewrite_messages(seed, messages) {
+                log::warn!("SessionManager: Turso rewrite_messages failed for {seed}: {e}");
             }
         }
     }
@@ -449,7 +491,18 @@ impl SessionManager {
     pub fn truncate_messages(&self, seed: &str, keep_lines: usize) -> Result<Vec<Message>, String> {
         let dir = self.session_dir(seed)
             .ok_or_else(|| format!("Session not found: {seed}"))?;
-        store::truncate_messages(&dir, keep_lines)
+        let truncated = store::truncate_messages(&dir, keep_lines)?;
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Some(dbs) = self.get_or_open_db(seed) {
+                if let Some(db) = dbs.get(seed) {
+                    if let Err(e) = db.rewrite_messages(seed, &truncated) {
+                        log::warn!("SessionManager: Turso truncate rewrite failed for {seed}: {e}");
+                    }
+                }
+            }
+        }
+        Ok(truncated)
     }
 
     // ── Active session ──

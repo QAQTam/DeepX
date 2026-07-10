@@ -45,22 +45,22 @@ export default function StatusPanel(props: {
 
     if (name.startsWith("file")) {
       const path = (args.path || args.new_path || args.source || args.dest || "") as string;
-      const action = name === "file_delete" ? "Deleted" : name === "file_write" || name === "file_edit" || name === "file_edit_diff" ? "Modified" : "Read";
+      const action = name === "file_delete" ? t().tool.activityLabel.deleted : name === "file_write" || name === "file_edit" || name === "file_edit_diff" ? t().tool.activityLabel.modified : t().tool.activityLabel.read;
       desc = `${action}`;
       detail = path ? path.replace(/\\/g, "/").split("/").pop() || path : detail;
     } else if (name === "exec") {
       const cmd = (args.command || "") as string;
-      desc = "Executed";
+      desc = t().tool.activityLabel.executed;
       detail = cmd || detail;
     } else if (name.startsWith("web_")) {
       const q = (args.query || args.url || "") as string;
-      desc = name === "web_fetch" ? "Fetched" : "Searched";
+      desc = name === "web_fetch" ? t().tool.activityLabel.fetched : t().tool.activityLabel.searched;
       detail = String(q).substring(0, 80);
     } else if (name.startsWith("git_")) {
-      desc = "Git";
+      desc = t().tool.activityLabel.git;
       detail = e.summary || "";
     } else if (name.startsWith("explore")) {
-      desc = "Explored";
+      desc = t().tool.activityLabel.explored;
       detail = "Project structure";
     } else if (name.startsWith("task_") || name.startsWith("plan_")) {
       desc = name;
@@ -152,12 +152,12 @@ export default function StatusPanel(props: {
                     <Show when={props.onTaskAction}>
                       <div class="status-row-actions">
                         <Show when={task.status === "pending" || task.status === "in_progress"}>
-                          <button class="task-btn task-btn-cancel" onClick={() => props.onTaskAction!("cancel", task.id, task.subject, task.description)} title="Cancel">✕</button>
+                          <button class="task-btn task-btn-cancel" onClick={() => props.onTaskAction!("cancel", task.id, task.subject, task.description)} title={t().status.taskCancel}>✕</button>
                         </Show>
                         <Show when={task.status === "completed" || task.status === "cancelled"}>
-                          <button class="task-btn task-btn-delete" onClick={() => props.onTaskAction!("delete", task.id, task.subject, task.description)} title="Delete">🗑</button>
+                          <button class="task-btn task-btn-delete" onClick={() => props.onTaskAction!("delete", task.id, task.subject, task.description)} title={t().status.taskDelete}>🗑</button>
                         </Show>
-                        <button class="task-btn task-btn-ask" onClick={() => props.onTaskAction!("ask", task.id, task.subject, task.description)} title="Ask about this task">?</button>
+                        <button class="task-btn task-btn-ask" onClick={() => props.onTaskAction!("ask", task.id, task.subject, task.description)} title={t().status.taskAsk}>?</button>
                       </div>
                     </Show>
                   </div>

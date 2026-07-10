@@ -867,17 +867,31 @@ mod tests {
     #[test]
     fn test_status_on_self() {
         let r = exec_status(&val(r#"{"path": "."}"#));
-        assert!(r.starts_with("[OK]") || r.starts_with("[ERROR]"));
-        if r.starts_with("[ERROR]") {
-            assert!(r.contains("not a git repo") || r.contains("cannot open repo"),
-                "unexpected error: {r}");
+        // handler! macro auto-wraps in JSON: {"status":"ok","content":"..."}
+        // or {"status":"error","content":"..."}
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&r) {
+            let status = v["status"].as_str().unwrap_or("");
+            if status == "error" {
+                let content = v["content"].as_str().unwrap_or("");
+                assert!(content.contains("not a git repo") || content.contains("cannot open repo"),
+                    "unexpected error: {r}");
+            }
+        } else {
+            // Legacy fallback — old format
+            assert!(r.starts_with("[OK]") || r.starts_with("[ERROR]"));
         }
     }
 
     #[test]
     fn test_log() {
         let r = exec_log(&val(r#"{"max_count": "3"}"#));
-        if r.starts_with("[OK]") {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&r) {
+            let status = v["status"].as_str().unwrap_or("");
+            if status == "ok" {
+                let content = v["content"].as_str().unwrap_or("");
+                assert!(content.contains("-") || content.contains("(no commits)"), "expected dash or no-commits msg");
+            }
+        } else if r.starts_with("[OK]") {
             assert!(r.contains("-") || r.contains("(no commits)"), "expected dash or no-commits msg");
         }
     }
@@ -891,7 +905,12 @@ mod tests {
     #[test]
     fn test_branch_list() {
         let r = exec_branch(&val(r#"{"action": "list"}"#));
-        assert!(r.starts_with("[OK]") || r.starts_with("[ERROR]"), "unexpected: {r}");
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&r) {
+            let status = v["status"].as_str().unwrap_or("");
+            assert!(status == "ok" || status == "error", "unexpected: {r}");
+        } else {
+            assert!(r.starts_with("[OK]") || r.starts_with("[ERROR]"), "unexpected: {r}");
+        }
     }
 
     #[test]

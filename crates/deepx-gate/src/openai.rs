@@ -382,6 +382,8 @@ fn stream_sse(
                     prompt_cache_miss_tokens: miss,
                     reasoning_tokens: rt,
                 });
+                // Emit real-time usage update so InfoBar can show live cache-hit stats
+                on_event(StreamEvent::UsageUpdate(usage_info.clone().unwrap()));
             }
         }
 

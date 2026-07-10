@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import StreamMetricsChart, { type MetricPoint } from "./StreamMetricsChart";
 
 interface ContextStats {
   /** All values are token counts (CJK-aware heuristic), not character lengths */
@@ -49,9 +50,10 @@ function buildPiePaths(stats: ContextStats): string {
   return paths;
 }
 
-export default function ContextPanel(props: { seed: string }) {
+export default function ContextPanel(props: { seed: string; metricHistory: MetricPoint[]; contextLimit: number }) {
   const [stats, setStats] = createSignal<ContextStats | null>(null);
   const [open, setOpen] = createSignal(false);
+  const [tab, setTab] = createSignal<"breakdown" | "timeline">("breakdown");
 
   async function refresh() {
     if (!props.seed) return;
@@ -93,10 +95,14 @@ export default function ContextPanel(props: { seed: string }) {
       <Show when={open()}>
         <div class="context-dropdown">
           <div class="context-dropdown-hd">
-            <span>Context (~{total_tokens()} tokens)</span>
+            <div class="context-tabs">
+              <button class={`context-tab ${tab() === "breakdown" ? "active" : ""}`} onClick={() => setTab("breakdown")}>Breakdown</button>
+              <button class={`context-tab ${tab() === "timeline" ? "active" : ""}`} onClick={() => setTab("timeline")}>Timeline</button>
+            </div>
             <button class="context-close" onClick={() => setOpen(false)}>×</button>
           </div>
           <div class="context-dropdown-body">
+            <Show when={tab() === "breakdown"}>
             <Show when={stats() && total_tokens() > 0} fallback={<div class="context-empty">No context data yet. Send a message first.</div>}>
               <div class="context-pie-wrap">
                 <svg viewBox="0 0 120 120" class="context-pie" innerHTML={piePaths()} />
@@ -118,6 +124,12 @@ export default function ContextPanel(props: { seed: string }) {
                 <span>Thinking blocks: {stats()?.thinking_blocks}</span>
                 <span>Tool calls: {stats()?.tool_call_blocks}</span>
               </div>
+            </Show>
+            </Show>
+            <Show when={tab() === "timeline"}>
+              <Show when={props.metricHistory.length >= 1} fallback={<div class="context-empty">Waiting for metrics... Chart appears during streaming.</div>}>
+                <StreamMetricsChart history={props.metricHistory} contextLimit={props.contextLimit} width={300} height={150} />
+              </Show>
             </Show>
           </div>
         </div>

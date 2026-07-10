@@ -25,7 +25,9 @@
 .sidebar-session-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .sidebar-session-item.active { background: var(--bg-tertiary); color: var(--text-primary); }
 .sidebar-session-item.active .session-dot { background: var(--accent); }
-.sidebar-session-item.active .session-dot.turso { background: var(--accent-green, #22c55e); }
+.sidebar-session-item.active .session-dot.running { animation: dot-pulse 1.5s ease-in-out infinite; background: var(--green); box-shadow: 0 0 6px var(--green); }
+@keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.session-dot.turso { background: var(--accent-green, #22c55e); }
 .session-dot { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--text-muted); flex-shrink: 0; }
 .session-dot.turso { background: var(--accent-green, #22c55e); box-shadow: 0 0 4px var(--accent-green, #22c55e66); }
 .session-info { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }

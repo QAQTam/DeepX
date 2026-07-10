@@ -2,6 +2,7 @@ import { For, createMemo, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
 import type { SessionMeta } from "../store/chat";
+import SessionCard from "./SessionCard";
 
 interface StartupViewProps {
   sessions: SessionMeta[];
@@ -10,7 +11,6 @@ interface StartupViewProps {
   showHeatmap?: boolean;
 }
 
-/** Compute daily activity counts from sessions. Returns Map<"YYYY-MM-DD", count>. */
 function computeActivity(sessions: SessionMeta[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const s of sessions) {
@@ -21,7 +21,6 @@ function computeActivity(sessions: SessionMeta[]): Map<string, number> {
   return map;
 }
 
-/** Generate the last N days as "YYYY-MM-DD" strings. */
 function lastNDays(n: number): string[] {
   const days: string[] = [];
   const now = new Date();
@@ -33,7 +32,6 @@ function lastNDays(n: number): string[] {
   return days;
 }
 
-/** Map count to a CSS class for color intensity. */
 function levelClass(count: number): string {
   if (count === 0) return "hm-l0";
   if (count <= 3) return "hm-l1";
@@ -67,18 +65,6 @@ export default function StartupView(props: StartupViewProps) {
     textareaRef.style.height = "auto";
     textareaRef.style.height = Math.min(textareaRef.scrollHeight, 160) + "px";
   }
-  function formatDate(epoch: number): string {
-    const d = new Date(epoch * 1000);
-    const now = new Date();
-    const diff = now.getTime() - d.getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return mins + t().time.mSuffix;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return hours + t().time.hSuffix;
-    return d.toLocaleDateString();
-  }
-
-  const recentSessions = () => props.sessions.slice(0, 5);
 
   return (
     <div class="startup-view">
@@ -87,7 +73,31 @@ export default function StartupView(props: StartupViewProps) {
         <h1 class="startup-title">{t().app.title}</h1>
         <p class="startup-subtitle">{t().app.subtitle}</p>
 
-        {/* ── Contribution Heatmap (home page only) ── */}
+        <div class="startup-input-wrap">
+          <textarea
+            ref={textareaRef}
+            rows={2}
+            placeholder={t().chat.placeholder}
+            onKeyDown={handleKeyDown}
+            onInput={autoResize}
+            autofocus
+          />
+          <button class="startup-send" onClick={submit} title={t().chat.send}>
+            <svg width="18" height="18" viewBox="0 0 16 16"><path d="M2 2l12 6-12 6 3-6-3-6z" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <p class="startup-hint">{t().session.startupHint}</p>
+
+        {/* ── Session grid ── */}
+        <Show when={props.sessions.length > 0}>
+          <div class="session-grid">
+            <For each={props.sessions.slice(0, 12)}>
+              {(s) => <SessionCard session={s} onResume={props.onResume} />}
+            </For>
+          </div>
+        </Show>
+
+        {/* ── Heatmap (collapsible placeholder for now) ── */}
         <Show when={props.showHeatmap}>
           <div class="heatmap-card">
             <div class="heatmap-header">
@@ -118,37 +128,6 @@ export default function StartupView(props: StartupViewProps) {
             </div>
           </div>
         </Show>
-
-        <div class="startup-input-wrap">
-          <textarea
-            ref={textareaRef}
-            rows={2}
-            placeholder={t().chat.placeholder}
-            onKeyDown={handleKeyDown}
-            onInput={autoResize}
-            autofocus
-          />
-          <button class="startup-send" onClick={submit} title={t().chat.send}>
-            <svg width="18" height="18" viewBox="0 0 16 16"><path d="M2 2l12 6-12 6 3-6-3-6z" fill="currentColor"/></svg>
-          </button>
-        </div>
-        <p class="startup-hint">{t().session.startupHint}</p>
-
-        {props.sessions.length > 0 && (
-          <div class="startup-recent">
-            <div class="startup-recent-label">{t().session.recent}</div>
-            <div class="startup-recent-list">
-              <For each={recentSessions()}>
-                {(s) => (
-                  <button class="startup-recent-item" onClick={() => props.onResume(s.seed)}>
-                    <span class="startup-recent-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
-                    <span class="startup-recent-meta">{formatDate(Number(s.updated_at))} · {s.turn_count || s.message_count} {t().session.turns}</span>
-                  </button>
-                )}
-              </For>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

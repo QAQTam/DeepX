@@ -89,6 +89,8 @@ pub enum StreamEvent {
         usage: Option<deepx_types::UsageInfo>,
         stop_reason: Option<String>,
     },
+    /// Emitted whenever the API reports updated usage mid-stream (cache hits may appear in any chunk).
+    UsageUpdate(deepx_types::UsageInfo),
     Balance {
         is_available: bool,
         total_balance: String,

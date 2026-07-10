@@ -1,7 +1,8 @@
 import { createStore, produce } from "solid-js/store";
-import { createSignal } from "solid-js";
+import { createSignal, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import type { ToolCallDef, ToolResultDef, RoundBlock, RoundData, TurnData, TaskInfo, SessionMeta } from "@/lib/types";
+import type { MetricPoint } from "@/components/StreamMetricsChart";
 
 // Re-export for other modules
 export type { ToolCallDef, ToolResultDef, RoundBlock, TaskInfo, SessionMeta };
@@ -46,6 +47,34 @@ export function createChatStore(seed: string) {
   const [isCompacting, setIsCompacting] = createSignal(false);
 
   const [compactResult, setCompactResult] = createSignal<string | null>(null);
+  const [metricHistory, setMetricHistory] = createSignal<MetricPoint[]>([]);
+  // Periodic metric sampling during streaming (fills chart even when API doesn't send usage)
+  let samplingInterval: ReturnType<typeof setInterval> | null = null;
+  createEffect(() => {
+    const streaming = isStreaming();
+    if (streaming && !samplingInterval) {
+      // Push initial baseline point so chart has an origin
+      setMetricHistory((prev: MetricPoint[]) => {
+        if (prev.length === 0) {
+          return [{ ts: Date.now(), context_tokens: 0, cache_hit: 0, cache_miss: 0 }];
+        }
+        return prev;
+      });
+      samplingInterval =
+      samplingInterval = setInterval(() => {
+        setMetricHistory((prev: MetricPoint[]) => {
+          const last = prev[prev.length - 1];
+          const now = { ts: Date.now(), context_tokens: sessionInfo.context_tokens, cache_hit: sessionInfo.prompt_cache_hit, cache_miss: sessionInfo.prompt_cache_miss };
+          // Always push to track elapsed time on chart
+          const next = [...prev, now];
+          return next.length > 120 ? next.slice(-120) : next;
+        });
+      }, 2000);
+    } else if (!streaming && samplingInterval) {
+      clearInterval(samplingInterval);
+      samplingInterval = null;
+    }
+  });
   let streamBuffer = { thinking: "", answer: "" };
 
   // ── Per-session status cache ──
@@ -225,11 +254,16 @@ export function createChatStore(seed: string) {
     }));
     const u = data.usage as Record<string, unknown> | undefined;
     if (u) {
-      setSessionInfo(produce((s) => {
-        if (u.prompt_tokens != null) s.context_tokens = u.prompt_tokens as number;
+      setSessionInfo(produce((s: SessionInfo) => {
+        if (u.prompt_tokens != null && (u.prompt_tokens as number) > 0) s.context_tokens = u.prompt_tokens as number;
+        if (u.completion_tokens != null) s.context_tokens = Math.max(s.context_tokens, (u.completion_tokens ?? 0) as number);
         if (u.total_tokens != null) s.total_tokens = (u.total_tokens as number);
         if (u.prompt_cache_hit_tokens != null) s.prompt_cache_hit = u.prompt_cache_hit_tokens as number;
         if (u.prompt_cache_miss_tokens != null) s.prompt_cache_miss = u.prompt_cache_miss_tokens as number;
+        setMetricHistory((prev: MetricPoint[]) => {
+          const next = [...prev, { ts: Date.now(), context_tokens: (u.prompt_tokens ?? 0) as number, cache_hit: (u.prompt_cache_hit_tokens ?? 0) as number, cache_miss: (u.prompt_cache_miss_tokens ?? 0) as number }];
+          return next.length > 120 ? next.slice(-120) : next;
+        });
       }));
     }
   }
@@ -247,6 +281,13 @@ export function createChatStore(seed: string) {
         if (u.prompt_cache_miss_tokens != null) s.prompt_cache_miss = u.prompt_cache_miss_tokens as number;
       }
     }));
+    if (data.usage) {
+      const u = data.usage as Record<string, unknown>;
+      setMetricHistory((prev: MetricPoint[]) => {
+        const next = [...prev, { ts: Date.now(), context_tokens: (u.prompt_tokens ?? 0) as number, cache_hit: (u.prompt_cache_hit_tokens ?? 0) as number, cache_miss: (u.prompt_cache_miss_tokens ?? 0) as number }];
+        return next.length > 120 ? next.slice(-120) : next;
+      });
+    }
     if (data.tasks) setTasks(data.tasks as TaskInfo[]);
     if (data.recent_edits) setRecentEdits(data.recent_edits as string[]);
   }
@@ -387,5 +428,5 @@ export function createChatStore(seed: string) {
     setTurns(produce((prev) => { prev.unshift(...loaded); }));
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, loadActivityFromBackend, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, loadActivityFromBackend, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, metricHistory, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

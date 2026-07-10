@@ -108,7 +108,9 @@ macro_rules! handler {
                     v.get("status").and_then(|s| s.as_str()) != Some("error")
                 } else { false }
             } else {
-                !result.starts_with("[ERROR")
+                // Treat any failure-prefix as error; [PARTIAL] is also a failure.
+                let trimmed = result.trim_start();
+                !(trimmed.starts_with("[ERROR") || trimmed.starts_with("[PARTIAL"))
             };
             let content = if is_json {
                 result

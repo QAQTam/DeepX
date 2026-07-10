@@ -381,7 +381,7 @@ pub fn execute_tool_simple(req: &deepx_message::ToolExecRequest) -> deepx_messag
             let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
                 else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
                 else { "unknown panic".to_string() };
-            crate::ToolResult { success: false, content: format!("[ERROR] Tool panicked: {}", msg) }
+            crate::ToolResult { success: false, content: crate::json_err("TOOL_PANIC", &format!("Tool panicked: {}", msg), "This is an internal error. Retry with different arguments or report the bug.") }
         }
     };
 
