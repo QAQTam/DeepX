@@ -56,26 +56,40 @@ pub enum ToolRisk {
     Administrative,
 }
 
-// ── Macro: handler! ──
+// ── Macro: handler! (v2 — direct Value access, no double serialization) ──
 
 #[macro_export]
 macro_rules! handler {
     ($name:ident, $exec:ident) => {
         fn $name(ctx: ToolCallCtx) -> ToolResult {
-            let args = match serde_json::to_string(&ctx.args) {
-                Ok(a) => a,
-                Err(e) => {
-                    log::error!("handler {}: serialize args failed: {e}", stringify!($name));
-                    return ToolResult { success: false, content: format!("[ERROR] bad arguments: {e}") };
-                }
-            };
-            let result = $exec(&args);
+            let result = $exec(&ctx.args);
             ToolResult {
                 success: !result.starts_with("[ERROR"),
                 content: result,
             }
         }
     };
+}
+
+// ── JsonArgs trait: typed access to tool arguments ──
+
+pub trait JsonArgs {
+    fn s(&self, key: &str) -> String;
+    fn s_or(&self, key: &str, default: &str) -> String;
+    fn opt_bool(&self, key: &str) -> Option<bool>;
+}
+
+impl JsonArgs for serde_json::Value {
+    fn s(&self, key: &str) -> String {
+        self.get(key).and_then(|v| v.as_str()).map(String::from).unwrap_or_default()
+    }
+    fn s_or(&self, key: &str, default: &str) -> String {
+        self.get(key).and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| default.to_string())
+    }
+    fn opt_bool(&self, key: &str) -> Option<bool> {
+        let val = self.get(key)?;
+        val.as_bool().or_else(|| val.as_str().and_then(|s| s.parse::<bool>().ok()))
+    }
 }
 
 use std::sync::atomic::AtomicBool;

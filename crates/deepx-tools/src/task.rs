@@ -3,7 +3,7 @@
 //!
 //! Persisted to `.deepx/tasks.md` (workspace-scoped).
 
-use super::{parse_arg, parse_opt};
+use super::{parse_opt};
 use std::sync::Mutex;
 
 static TASK_LOCK: Mutex<()> = Mutex::new(());
@@ -53,9 +53,8 @@ fn find_task(lines: &[String], id: u32) -> Option<usize> {
     lines.iter().position(|l| l.trim_start().contains(&prefix))
 }
 
-fn parse_id(args: &str) -> Result<u32, String> {
-    let v: serde_json::Value = serde_json::from_str(args).map_err(|e| format!("parse: {e}"))?;
-    let val = v.get("id").ok_or("missing 'id'")?;
+fn parse_id(args: &serde_json::Value) -> Result<u32, String> {
+    let val = args.get("id").ok_or("missing 'id'")?;
     let n = val.as_u64()
         .or_else(|| val.as_str().and_then(|s| s.parse::<u64>().ok()))
         .ok_or("'id' must be a positive integer")?;
@@ -84,10 +83,10 @@ pub fn get_task_infos() -> Vec<deepx_proto::TaskInfo> {
     }).collect()
 }
 
-pub(super) fn exec_task_create(args: &str) -> String {
+pub(super) fn exec_task_create(args: &serde_json::Value) -> String {
     let _guard = TASK_LOCK.lock().expect("TASK_LOCK");
-    let subject = parse_arg(args, "subject");
-    let description = parse_arg(args, "description");
+    let subject = args.s("subject");
+    let description = args.s("description");
 
     if subject.is_empty() || subject.chars().count() > 100 {
         return "[ERROR] task_create: subject must be 1-100 chars\n[HINT] Keep the subject short and imperative, e.g. 'Add login API'".to_string();
@@ -105,13 +104,13 @@ pub(super) fn exec_task_create(args: &str) -> String {
     format!("[OK] Task T{} created [pending]: {}\nUse task_update(id={}, status=in_progress) when you start working on it.", id, subject, id)
 }
 
-pub(super) fn exec_task_update(args: &str) -> String {
+pub(super) fn exec_task_update(args: &serde_json::Value) -> String {
     let _guard = TASK_LOCK.lock().expect("TASK_LOCK");
     let id: u32 = match parse_id(args) {
         Ok(n) => n,
         Err(e) => return format!("[ERROR] task_update: {}", e),
     };
-    let status = parse_arg(args, "status");
+    let status = args.s("status");
 
     if !matches!(status.as_str(), "pending" | "in_progress" | "completed" | "cancelled") {
         return "[ERROR] task_update: status must be pending, in_progress, completed, or cancelled".to_string();
@@ -135,7 +134,7 @@ pub(super) fn exec_task_update(args: &str) -> String {
     format!("[OK] Task T{} → {}", id, status)
 }
 
-pub(super) fn exec_task_delete(args: &str) -> String {
+pub(super) fn exec_task_delete(args: &serde_json::Value) -> String {
     let _guard = TASK_LOCK.lock().expect("TASK_LOCK");
     let id: u32 = match parse_id(args) {
         Ok(n) => n,
@@ -157,8 +156,8 @@ pub(super) fn exec_task_delete(args: &str) -> String {
     format!("[OK] Task T{} deleted: {}", id, subject)
 }
 
-pub(super) fn exec_task_list(args: &str) -> String {
-    let filter_status = parse_opt(args, "status").unwrap_or_default();
+pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
+    let filter_status = args.get("status").and_then(|v| v.as_str()).map(String::from).unwrap_or_default();
 
     let lines = read_tasks();
     if lines.is_empty() {
@@ -203,20 +202,20 @@ pub(super) fn exec_task_list(args: &str) -> String {
 
 // ── Registration ──
 
-use crate::{ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult};
+use crate::{ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, JsonArgs};
 use std::time::Duration;
 
 fn handle_task_create(ctx: ToolCallCtx) -> ToolResult {
-    ToolResult::ok(exec_task_create(&serde_json::to_string(&ctx.args).unwrap_or_default()))
+    ToolResult::ok(exec_task_create(&ctx.args))
 }
 fn handle_task_update(ctx: ToolCallCtx) -> ToolResult {
-    ToolResult::ok(exec_task_update(&serde_json::to_string(&ctx.args).unwrap_or_default()))
+    ToolResult::ok(exec_task_update(&ctx.args))
 }
 fn handle_task_delete(ctx: ToolCallCtx) -> ToolResult {
-    ToolResult::ok(exec_task_delete(&serde_json::to_string(&ctx.args).unwrap_or_default()))
+    ToolResult::ok(exec_task_delete(&ctx.args))
 }
 fn handle_task_list(ctx: ToolCallCtx) -> ToolResult {
-    ToolResult::ok(exec_task_list(&serde_json::to_string(&ctx.args).unwrap_or_default()))
+    ToolResult::ok(exec_task_list(&ctx.args))
 }
 
 pub fn register(mgr: &mut crate::ToolManager) {

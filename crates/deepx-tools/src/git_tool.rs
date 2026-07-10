@@ -2,7 +2,7 @@
 //!
 //! Functions take JSON args with optional `path` (repo root, defaults to workspace).
 
-use crate::{parse_arg, parse_arg_or, ToolCallCtx, ToolHandler, ToolKey, ToolRisk, ToolResult, handler};
+use crate::{JsonArgs, ToolCallCtx, ToolHandler, ToolKey, ToolRisk, ToolResult, handler};
 use git2::{DiffOptions, Repository, StatusOptions, StatusShow};
 use std::path::{Path, PathBuf};
 
@@ -42,11 +42,11 @@ fn fmt_time(t: i64) -> String {
 
 // ── command executors ──
 
-pub(super) fn exec_log(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let max_str = parse_arg_or(args, "max_count", "20");
+pub(super) fn exec_log(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let max_str = args.s_or("max_count", "20");
     let max: usize = max_str.parse().unwrap_or(20);
-    let author = parse_arg(args, "author");
+    let author = args.s("author");
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
@@ -105,11 +105,11 @@ pub(super) fn exec_log(args: &str) -> String {
     }
 }
 
-pub(super) fn exec_diff(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let commit_a = parse_arg(args, "commit_a");
-    let commit_b = parse_arg(args, "commit_b");
-    let cached = parse_arg_or(args, "cached", "false") == "true";
+pub(super) fn exec_diff(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let commit_a = args.s("commit_a");
+    let commit_b = args.s("commit_b");
+    let cached = args.s_or("cached", "false") == "true";
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
@@ -172,8 +172,8 @@ pub(super) fn exec_diff(args: &str) -> String {
     summary + out.trim_end()
 }
 
-pub(super) fn exec_status(args: &str) -> String {
-    let path = parse_arg(args, "path");
+pub(super) fn exec_status(args: &serde_json::Value) -> String {
+    let path = args.s("path");
     let repo = match open_repo(&path) {
         Ok(r) => r,
         Err(e) => return format!("[ERROR] {e}"),
@@ -252,9 +252,9 @@ pub(super) fn exec_status(args: &str) -> String {
     format!("[OK]\n{}", out.trim_end())
 }
 
-pub(super) fn exec_show(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let commit = parse_arg(args, "commit");
+pub(super) fn exec_show(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let commit = args.s("commit");
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
@@ -329,9 +329,9 @@ pub(super) fn exec_show(args: &str) -> String {
     format!("[OK]\n{}", out.trim_end())
 }
 
-pub(super) fn exec_add(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let files_raw = parse_arg_or(args, "files", ".");
+pub(super) fn exec_add(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let files_raw = args.s_or("files", ".");
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
@@ -368,9 +368,9 @@ pub(super) fn exec_add(args: &str) -> String {
     "[OK] staged successfully".to_string()
 }
 
-pub(super) fn exec_commit(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let message = parse_arg(args, "message");
+pub(super) fn exec_commit(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let message = args.s("message");
 
     if message.is_empty() {
         return "[ERROR] commit message is required".to_string();
@@ -422,12 +422,12 @@ pub(super) fn exec_commit(args: &str) -> String {
     }
 }
 
-pub(super) fn exec_branch(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let action = parse_arg(args, "action");
-    let name = parse_arg(args, "name");
-    let start_point = parse_arg(args, "start_point");
-    let force = parse_arg_or(args, "force", "false") == "true";
+pub(super) fn exec_branch(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let action = args.s("action");
+    let name = args.s("name");
+    let start_point = args.s("start_point");
+    let force = args.s_or("force", "false") == "true";
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
@@ -491,10 +491,10 @@ pub(super) fn exec_branch(args: &str) -> String {
     }
 }
 
-pub(super) fn exec_checkout(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let target = parse_arg(args, "target");
-    let force = parse_arg_or(args, "force", "false") == "true";
+pub(super) fn exec_checkout(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let target = args.s("target");
+    let force = args.s_or("force", "false") == "true";
 
     let repo = match open_repo(&path) {
         Ok(r) => r,
@@ -553,10 +553,10 @@ pub(super) fn exec_checkout(args: &str) -> String {
     }
 }
 
-pub(super) fn exec_merge(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let branch = parse_arg(args, "branch");
-    let message = parse_arg_or(args, "message", "");
+pub(super) fn exec_merge(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let branch = args.s("branch");
+    let message = args.s_or("message", "");
 
     if branch.is_empty() {
         return "[ERROR] branch to merge is required".to_string();
@@ -674,10 +674,10 @@ pub(super) fn exec_merge(args: &str) -> String {
     }
 }
 
-pub(super) fn exec_restore(args: &str) -> String {
-    let path = parse_arg(args, "path");
-    let files_raw = parse_arg(args, "files");
-    let staged = parse_arg_or(args, "staged", "false") == "true";
+pub(super) fn exec_restore(args: &serde_json::Value) -> String {
+    let path = args.s("path");
+    let files_raw = args.s("files");
+    let staged = args.s_or("staged", "false") == "true";
 
     if files_raw.is_empty() {
         return "[ERROR] files is required".to_string();
@@ -756,8 +756,8 @@ handler!(handle_restore, exec_restore);
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("git", "log"),
-        description: "Show commit history in current git repository. ONLY supports browsing — no pull/push/branch/reset/clone/merge/rebase/stash operations. Parameters: path (optional repo path), max_count (default 20, max 100), author (optional name filter).",
-        input_schema: serde_json::json!({"type":"object","description":"Git commit browser. Not a full git CLI. Does NOT support: push, pull, branch, checkout, reset, clone, merge, rebase, stash, tag.",
+        description: "Show commit history in current git repository. Parameters: path (optional repo path), max_count (default 20, max 100), author (optional name filter). For branch/checkout/merge, use git/branch, git/checkout, git/merge.",
+        input_schema: serde_json::json!({"type":"object","description":"Git commit browser. Read-only. Use git/branch, git/checkout, git/merge, git/restore for mutations.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"max_count":{"type":"string","description":"Max commits to show (default 20)"},"author":{"type":"string","description":"Filter by author name (partial match)"}},
         "additionalProperties":false}),
         handler: handle_log,
@@ -766,8 +766,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
     mgr.register(ToolHandler {
         key: ToolKey::new("git", "diff"),
-        description: "Show diff between commits or working tree. ONLY git diff equivalent — no merge/rebase conflict resolution. Parameters: path, commit_a (default HEAD), commit_b (default working tree), cached (boolean string, compare staged vs HEAD).",
-        input_schema: serde_json::json!({"type":"object","description":"Git diff viewer. Only read-only diff operations. Does NOT support merge, rebase, apply, or patch.",
+        description: "Show diff between commits or working tree. Read-only. Parameters: path, commit_a (default HEAD), commit_b (default working tree), cached (boolean string, compare staged vs HEAD).",
+        input_schema: serde_json::json!({"type":"object","description":"Git diff viewer. Read-only. Supports tree-to-tree, tree-to-workdir, and tree-to-index (cached) diffs.",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"commit_a":{"type":"string","description":"Base commit ref (default HEAD)"},"commit_b":{"type":"string","description":"Target commit ref (default working tree)"},"cached":{"type":"string","description":"If 'true', diff staged vs HEAD instead of working tree"}},
         "additionalProperties":false}),
         handler: handle_diff,
@@ -807,7 +807,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: ToolKey::new("git", "commit"),
         description: "Create a commit with staged changes. MUTATES the repository. Parameters: path, message (required). Only commits staged changes — use git_add first.",
-        input_schema: serde_json::json!({"type":"object","description":"Create a commit. WARNING: permanently records changes to git history. Requires staged changes (use git_add first). Cannot be undone without git reset (not supported).",
+        input_schema: serde_json::json!({"type":"object","description":"Create a commit. WARNING: permanently records changes to git history. Requires staged changes (use git_add first).",
         "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"message":{"type":"string","description":"Commit message (required)"}},
         "required":["message"],"additionalProperties":false}),
         handler: handle_commit,
@@ -860,10 +860,12 @@ pub fn register(mgr: &mut crate::ToolManager) {
 mod tests {
     use super::*;
 
+    /// Parse a JSON string into a Value for test calls.
+    fn val(s: &str) -> serde_json::Value { serde_json::from_str(s).unwrap() }
+
     #[test]
     fn test_status_on_self() {
-        let r = exec_status(r#"{"path": "."}"#);
-        // Should either succeed (in a git repo) or fail gracefully (not a git repo)
+        let r = exec_status(&val(r#"{"path": "."}"#));
         assert!(r.starts_with("[OK]") || r.starts_with("[ERROR]"));
         if r.starts_with("[ERROR]") {
             assert!(r.contains("not a git repo") || r.contains("cannot open repo"),
@@ -873,19 +875,58 @@ mod tests {
 
     #[test]
     fn test_log() {
-        let r = exec_log(r#"{"max_count": "3"}"#);
+        let r = exec_log(&val(r#"{"max_count": "3"}"#));
         if r.starts_with("[OK]") {
-            // Should have some commit-like output
             assert!(r.contains("-") || r.contains("(no commits)"), "expected dash or no-commits msg");
         }
-        // graceful failure is also OK (non-git-repo)
     }
 
     #[test]
     fn test_status_nonexistent_dir() {
-        let r = exec_status(r#"{"path": "/nonexistent-path"}"#);
-        // May succeed if cwd is a git repo (fallback discovery), or fail gracefully
-        // Either is fine — we just verify it doesn't panic.
+        let r = exec_status(&val(r#"{"path": "/nonexistent-path"}"#));
+        assert!(!r.is_empty(), "should not be empty");
+    }
+
+    #[test]
+    fn test_branch_list() {
+        let r = exec_branch(&val(r#"{"action": "list"}"#));
+        assert!(r.starts_with("[OK]") || r.starts_with("[ERROR]"), "unexpected: {r}");
+    }
+
+    #[test]
+    fn test_branch_create_delete() {
+        let r = exec_branch(&val(r#"{"action": "create", "name": "test-deepx-tmp", "force": "true"}"#));
+        let _ = exec_branch(&val(r#"{"action": "delete", "name": "test-deepx-tmp", "force": "true"}"#));
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn test_branch_bad_action() {
+        let r = exec_branch(&val(r#"{"action": "nope"}"#));
+        assert!(r.contains("unknown action"), "expected unknown action error, got: {r}");
+    }
+
+    #[test]
+    fn test_checkout_invalid() {
+        let r = exec_checkout(&val(r#"{"target": "__nonexistent_branch_xyz__"}"#));
+        assert!(!r.is_empty(), "should not be empty");
+    }
+
+    #[test]
+    fn test_merge_no_branch() {
+        let r = exec_merge(&val(r#"{"branch": ""}"#));
+        assert!(r.contains("branch"), "expected branch-related error, got: {r}");
+    }
+
+    #[test]
+    fn test_restore_no_files() {
+        let r = exec_restore(&val(r#"{"files": ""}"#));
+        assert!(r.contains("files"), "expected files error, got: {r}");
+    }
+
+    #[test]
+    fn test_restore_staged() {
+        let r = exec_restore(&val(r#"{"files": "Cargo.toml", "staged": "true"}"#));
         assert!(!r.is_empty(), "should not be empty");
     }
 }

@@ -1,15 +1,15 @@
-use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler};
+use crate::{ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler, JsonArgs};
 
-pub(super) fn exec_ask_user(args: &str) -> String {
-    let question = parse_arg(args, "question");
+pub(super) fn exec_ask_user(args: &serde_json::Value) -> String {
+    let question = args.s("question");
     if question.is_empty() {
         return "[ERROR] ask_user: question required".into();
     }
-    let options: Vec<String> = serde_json::from_str(args).ok()
-        .and_then(|v: serde_json::Value| v.get("options")?.as_array().cloned())
+    let options: Vec<String> = args.get("options")
+        .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
-    let allow_custom = parse_opt_bool(args, "allow_custom").unwrap_or(true);
+    let allow_custom = args.opt_bool("allow_custom").unwrap_or(true);
 
     let payload = serde_json::json!({
         "question": question,

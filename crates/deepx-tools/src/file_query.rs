@@ -2,17 +2,15 @@
 
 use std::process::Command;
 
-use crate::{parse_arg, parse_opt, parse_arg_or, ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler};
+use crate::{ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler, JsonArgs};
 use super::file_shared::{rust_grep, unified_diff, is_binary_read_error};
 
 // ── exec_read_file (from file_read.rs) ──
 
-pub(super) fn exec_read_file(args: &str) -> String {
-    let path = crate::resolve_workspace_path(&parse_arg(args, "path"));
-    let start: Option<usize> = serde_json::from_str(args).ok()
-        .and_then(|v: serde_json::Value| v.get("start_line")?.as_u64().map(|n| (n as usize).max(1)));
-    let end: Option<usize> = serde_json::from_str(args).ok()
-        .and_then(|v: serde_json::Value| v.get("end_line")?.as_u64().map(|n| n as usize));
+pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
+    let path = crate::resolve_workspace_path(&args.s("path"));
+    let start: Option<usize> = args.get("start_line").and_then(|v| v.as_u64()).map(|n| (n as usize).max(1));
+    let end: Option<usize> = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
 
     const MAX_READ_LINES: usize = 300;
     if let (Some(s), Some(e)) = (start, end) {
@@ -83,8 +81,8 @@ handler!(handle_read_file, exec_read_file);
 
 // ── exec_list_dir (from file_list_dir.rs) ──
 
-pub(super) fn exec_list_dir(args: &str) -> String {
-    let path = crate::resolve_workspace_path(&parse_arg_or(args, "path", "."));
+pub(super) fn exec_list_dir(args: &serde_json::Value) -> String {
+    let path = crate::resolve_workspace_path(&args.s_or("path", "."));
     match std::fs::read_dir(&path) {
         Ok(entries) => {
             const MAX_LIST_DIR_ENTRIES: usize = 200;
@@ -126,10 +124,10 @@ handler!(handle_list_dir, exec_list_dir);
 
 // ── exec_search (from file_search.rs) ──
 
-pub(super) fn exec_search(args: &str) -> String {
-    let pattern = parse_arg(args, "pattern");
-    let glob = parse_opt(args, "glob");
-    let dir = crate::resolve_workspace_path(&parse_arg_or(args, "path", "."));
+pub(super) fn exec_search(args: &serde_json::Value) -> String {
+    let pattern = args.s("pattern");
+    let glob = args.get("glob").and_then(|v| v.as_str()).map(String::from);
+    let dir = crate::resolve_workspace_path(&args.s_or("path", "."));
 
     // Phase 1: try ripgrep (cross-platform, fast)
     let mut cmd = Command::new("rg");
@@ -186,9 +184,9 @@ handler!(handle_search, exec_search);
 
 // ── exec_diff (from file_diff.rs) ──
 
-pub(super) fn exec_diff(args: &str) -> String {
-    let path_a = crate::resolve_workspace_path(&parse_arg(args, "path_a"));
-    let path_b = crate::resolve_workspace_path(&parse_arg(args, "path_b"));
+pub(super) fn exec_diff(args: &serde_json::Value) -> String {
+    let path_a = crate::resolve_workspace_path(&args.s("path_a"));
+    let path_b = crate::resolve_workspace_path(&args.s("path_b"));
 
     let content_a = match std::fs::read_to_string(&path_a) {
         Ok(c) => c,

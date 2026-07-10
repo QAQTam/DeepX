@@ -1,6 +1,6 @@
 //! Web tools: search, fetch, Context7 documentation queries.
 
-use crate::{ToolCallCtx, ToolResult};
+use crate::{JsonArgs, ToolCallCtx, ToolResult, ToolHandler, ToolKey, ToolRisk};
 
 // Context7 REST API v2.
 const C7_BASE: &str = "https://context7.com/api/v2";
@@ -53,41 +53,32 @@ fn c7_url_encode(s: &str) -> String {
 // ── Handler 函数 ──
 
 pub(super) fn handle_fetch(ctx: ToolCallCtx) -> ToolResult {
-    let args = build_args_json(&ctx);
-    ToolResult::ok(exec_web_fetch(&args))
+    ToolResult::ok(exec_web_fetch(&ctx.args))
 }
 
 pub(super) fn handle_search(ctx: ToolCallCtx) -> ToolResult {
-    let args = build_args_json(&ctx);
-    ToolResult::ok(exec_web_search(&args))
+    ToolResult::ok(exec_web_search(&ctx.args))
 }
 
 pub(super) fn handle_c7_resolve(ctx: ToolCallCtx) -> ToolResult {
-    let args = build_args_json(&ctx);
-    ToolResult::ok(exec_context7_resolve(&args))
+    ToolResult::ok(exec_context7_resolve(&ctx.args))
 }
 
 pub(super) fn handle_c7_query(ctx: ToolCallCtx) -> ToolResult {
-    let args = build_args_json(&ctx);
-    ToolResult::ok(exec_context7_query(&args))
-}
-
-fn build_args_json(ctx: &ToolCallCtx) -> String {
-    serde_json::to_string(&ctx.args).unwrap_or_default()
+    ToolResult::ok(exec_context7_query(&ctx.args))
 }
 
 // ── Context7 tools (REST API v2) ──
 
-fn exec_context7_resolve(args: &str) -> String {
-    let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-    let name = v.get("name").and_then(|v| v.as_str()).unwrap_or("");
+fn exec_context7_resolve(args: &serde_json::Value) -> String {
+    let name = args.s("name");
     if name.is_empty() {
         return "[ERROR] context7_resolve: missing 'name'\n[HINT] Provide the 'libraryName' parameter.".into();
     }
-    let q = v.get("query").and_then(|v| v.as_str()).unwrap_or("");
-    let mut path = format!("/libs/search?libraryName={}", c7_url_encode(name));
+    let q = args.s_or("query", "");
+    let mut path = format!("/libs/search?libraryName={}", c7_url_encode(&name));
     if !q.is_empty() {
-        path.push_str(&format!("&query={}", c7_url_encode(q)));
+        path.push_str(&format!("&query={}", c7_url_encode(&q)));
     }
     let resp = match c7_get(&path) {
         Ok(r) => r,
@@ -112,17 +103,16 @@ fn exec_context7_resolve(args: &str) -> String {
     out
 }
 
-fn exec_context7_query(args: &str) -> String {
-    let v: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
-    let library_id = v.get("library_id").and_then(|v| v.as_str()).unwrap_or("");
+fn exec_context7_query(args: &serde_json::Value) -> String {
+    let library_id = args.s("library_id");
     if library_id.is_empty() {
         return "[ERROR] context7_query: missing 'library_id' parameter".into();
     }
-    let q = v.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let q = args.s_or("query", "");
     let path = format!(
         "/context?libraryId={}&query={}&type=json",
-        c7_url_encode(library_id),
-        c7_url_encode(q)
+        c7_url_encode(&library_id),
+        c7_url_encode(&q)
     );
     let resp = match c7_get(&path) {
         Ok(r) => r,
@@ -175,8 +165,8 @@ fn exec_context7_query(args: &str) -> String {
 
 // ── Web fetch ──
 
-fn exec_web_fetch(args: &str) -> String {
-    let url = deepx_types::arg::parse_arg(args, "url").unwrap_or_default();
+fn exec_web_fetch(args: &serde_json::Value) -> String {
+    let url = args.s("url");
     let url_lower = url.to_lowercase();
     if url_lower.starts_with("http://localhost")
         || url_lower.starts_with("https://localhost")
@@ -220,8 +210,8 @@ fn exec_web_fetch(args: &str) -> String {
                         let end = find_char_boundary(&readable, 100_000);
                         format!("{}... [truncated: {} total chars]", &readable[..end], readable.len())
                     } else { readable.clone() };
-                    let output_path = deepx_types::arg::parse_arg(args, "output");
-                    let saved = if let Some(ref path) = output_path {
+                    let output_path = args.s("output");
+                    let saved = if !output_path.is_empty() { let path = &output_path;
                         if let Some(parent) = std::path::Path::new(path).parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
@@ -261,8 +251,8 @@ fn bocha_key() -> String {
         .unwrap_or_default()
 }
 
-fn exec_web_search(args: &str) -> String {
-    let query = deepx_types::arg::parse_arg(args, "query").unwrap_or_default();
+fn exec_web_search(args: &serde_json::Value) -> String {
+    let query = args.s("query");
     if query.is_empty() {
         return "[ERROR] web_search: missing 'query' parameter\n[HINT] Provide a search query string.".into();
     }
@@ -339,7 +329,6 @@ fn exec_web_search(args: &str) -> String {
 
 // ── 注册入口 ──
 
-use crate::{ToolHandler, ToolKey, ToolRisk};
 use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {

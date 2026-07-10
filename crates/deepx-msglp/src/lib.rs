@@ -299,7 +299,7 @@ impl Loop {
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut writer = std::io::BufWriter::with_capacity(65536, output);
-                let flush_interval = std::time::Duration::from_millis(10);
+                let flush_interval = std::time::Duration::from_millis(2);
                 loop {
                     match event_rx.recv_timeout(flush_interval) {
                         Ok(event) => {

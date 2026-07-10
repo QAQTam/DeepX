@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{parse_arg, parse_opt_bool, ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler};
+use crate::{ToolHandler, ToolKey, ToolRisk, ToolCallCtx, ToolResult, handler, JsonArgs};
 use super::file_shared::{
     unified_diff, diff_stats, normalize_newlines, closest_line,
     disambiguate_match, apply_diff_and_format, is_binary_read_error,
@@ -22,30 +22,26 @@ fn format_diff_result(prefix: &str, path: &str, diff: &str, label: &str, _succes
 
 // ── Helpers from file_edit ──
 
-fn parse_paths(args: &str) -> Vec<String> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-        if let Some(arr) = v.get("paths").and_then(|a| a.as_array()) {
-            let paths: Vec<String> = arr.iter().filter_map(|p| p.as_str().map(String::from)).collect();
-            if !paths.is_empty() { return paths; }
-        }
+fn parse_paths(args: &serde_json::Value) -> Vec<String> {
+    if let Some(arr) = args.get("paths").and_then(|a| a.as_array()) {
+        let paths: Vec<String> = arr.iter().filter_map(|p| p.as_str().map(String::from)).collect();
+        if !paths.is_empty() { return paths; }
     }
-    let path = parse_arg(args, "path");
-    if path.is_empty() { vec![] } else { vec![path] }
+    let path = args.s("path");
+    if path.is_empty() { vec![] } else { vec![path.to_string()] }
 }
 
-fn parse_patterns(args: &str) -> Vec<(String, String)> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-        if let Some(arr) = v.get("patterns").and_then(|a| a.as_array()) {
-            let patterns: Vec<(String, String)> = arr.iter().filter_map(|p| {
-                let old = p.get("old").and_then(|o| o.as_str()).unwrap_or("");
-                let new = p.get("new").and_then(|n| n.as_str()).unwrap_or("");
-                if old.is_empty() { None } else { Some((old.to_string(), new.to_string())) }
-            }).collect();
-            if !patterns.is_empty() { return patterns; }
-        }
+fn parse_patterns(args: &serde_json::Value) -> Vec<(String, String)> {
+    if let Some(arr) = args.get("patterns").and_then(|a| a.as_array()) {
+        let patterns: Vec<(String, String)> = arr.iter().filter_map(|p| {
+            let old = p.get("old").and_then(|o| o.as_str()).unwrap_or("");
+            let new = p.get("new").and_then(|n| n.as_str()).unwrap_or("");
+            if old.is_empty() { None } else { Some((old.to_string(), new.to_string())) }
+        }).collect();
+        if !patterns.is_empty() { return patterns; }
     }
-    let old = parse_arg(args, "old_string");
-    let new = parse_arg(args, "new_string");
+    let old = args.s("old_string");
+    let new = args.s("new_string");
     if old.is_empty() { vec![] } else { vec![(old, new)] }
 }
 
@@ -112,10 +108,10 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
 
 // ── exec_write_file (from file_write.rs) ──
 
-pub(super) fn exec_write_file(args: &str) -> String {
-    let path = crate::resolve_workspace_path(&parse_arg(args, "path"));
-    let content = parse_arg(args, "content");
-    let append = parse_opt_bool(args, "append").unwrap_or(false);
+pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
+    let path = crate::resolve_workspace_path(&args.s("path"));
+    let content = args.s("content");
+    let append = args.opt_bool("append").unwrap_or(false);
     if let Some(parent) = std::path::Path::new(&path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -168,7 +164,7 @@ handler!(handle_write_file, exec_write_file);
 
 // ── exec_edit_file (from file_edit.rs) ──
 
-pub(super) fn exec_edit_file(args: &str) -> String {
+pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
     let paths = parse_paths(args);
     if paths.is_empty() {
         return "[ERROR] edit_file: no path specified\n[HINT] Provide 'path' (single) or 'paths' (array).".into();
@@ -177,9 +173,9 @@ pub(super) fn exec_edit_file(args: &str) -> String {
     if patterns.is_empty() {
         return "[ERROR] edit_file: no patterns specified\n[HINT] Provide 'old_string'/'new_string' (single) or 'patterns' (array).".into();
     }
-    let replace_all = parse_opt_bool(args, "replace_all").unwrap_or(false);
-    let use_regex = parse_opt_bool(args, "regex").unwrap_or(false);
-    let dry_run = parse_opt_bool(args, "dry_run").unwrap_or(false);
+    let replace_all = args.opt_bool("replace_all").unwrap_or(false);
+    let use_regex = args.opt_bool("regex").unwrap_or(false);
+    let dry_run = args.opt_bool("dry_run").unwrap_or(false);
 
     let mut results = Vec::new();
 
@@ -255,8 +251,8 @@ fn trash_dir() -> std::path::PathBuf {
     dir
 }
 
-pub(super) fn exec_delete_file(args: &str) -> String {
-    let path = crate::resolve_workspace_path(&parse_arg(args, "path"));
+pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
+    let path = crate::resolve_workspace_path(&args.s("path"));
     let p = std::path::Path::new(&path);
     if !p.exists() {
         return format!("[ERROR] {} does not exist.", path);
@@ -320,9 +316,9 @@ fn ensure_parent_dir(dest: &str) {
     }
 }
 
-pub(super) fn exec_move_file(args: &str) -> String {
-    let source = crate::resolve_workspace_path(&parse_arg(args, "source"));
-    let dest = crate::resolve_workspace_path(&parse_arg(args, "dest"));
+pub(super) fn exec_move_file(args: &serde_json::Value) -> String {
+    let source = crate::resolve_workspace_path(&args.s("source"));
+    let dest = crate::resolve_workspace_path(&args.s("dest"));
     ensure_parent_dir(&dest);
     match std::fs::rename(&source, &dest) {
         Ok(_) => format!("[OK] Moved {} → {}", source, dest),
@@ -332,9 +328,9 @@ pub(super) fn exec_move_file(args: &str) -> String {
 
 handler!(handle_move_file, exec_move_file);
 
-pub(super) fn exec_copy_file(args: &str) -> String {
-    let source = crate::resolve_workspace_path(&parse_arg(args, "source"));
-    let dest = crate::resolve_workspace_path(&parse_arg(args, "dest"));
+pub(super) fn exec_copy_file(args: &serde_json::Value) -> String {
+    let source = crate::resolve_workspace_path(&args.s("source"));
+    let dest = crate::resolve_workspace_path(&args.s("dest"));
     ensure_parent_dir(&dest);
     match std::fs::copy(&source, &dest) {
         Ok(size) => format!("[OK] Copied {} → {} ({} bytes)", source, dest, size),
@@ -346,27 +342,24 @@ handler!(handle_copy_file, exec_copy_file);
 
 // ── exec_edit_file_diff (from file_edit_diff.rs) ──
 
-pub(super) fn exec_edit_file_diff(args: &str) -> String {
-    let v: serde_json::Value = match serde_json::from_str(args) {
-        Ok(v) => v, Err(_) => return "[ERROR] Invalid JSON arguments".to_string(),
-    };
+pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
     let path = crate::resolve_workspace_path(
-        v.get("path").and_then(|v| v.as_str()).unwrap_or("")
+        args.get("path").and_then(|v| v.as_str()).unwrap_or("")
     );
     if path.is_empty() { return "[ERROR] Missing required field: path".to_string(); }
-    let old_lines: Vec<String> = v.get("old_lines").and_then(|v| v.as_array())
+    let old_lines: Vec<String> = args.get("old_lines").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let new_lines: Vec<String> = v.get("new_lines").and_then(|v| v.as_array())
+    let new_lines: Vec<String> = args.get("new_lines").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let context_before: Vec<String> = v.get("context_before").and_then(|v| v.as_array())
+    let context_before: Vec<String> = args.get("context_before").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let context_after: Vec<String> = v.get("context_after").and_then(|v| v.as_array())
+    let context_after: Vec<String> = args.get("context_after").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let description = v.get("description").and_then(|v| v.as_str()).unwrap_or("");
-    let dry_run = v.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
+    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
     // Line-number addressing: when provided, bypass content matching entirely.
-    let start_line: Option<usize> = v.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
-    let end_line: Option<usize> = v.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
+    let start_line: Option<usize> = args.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
+    let end_line: Option<usize> = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
 
     // Require either old_lines (content match) or start_line (line addressing)
     if old_lines.is_empty() && start_line.is_none() {

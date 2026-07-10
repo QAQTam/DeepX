@@ -127,13 +127,16 @@ pub fn chat_stream_openai(
     let url = build_chat_url(&provider.base_url, provider.chat_path.as_deref());
 
     let mut attempt = 0u32;
-    // Use an Agent with a short per-read timeout so that `stream_sse` can
-    // check the cancel flag between reads, even when the server is "thinking"
-    // and not sending data. The overall request timeout remains 900s.
-    let agent = ureq::AgentBuilder::new()
-        .timeout_read(SSE_READ_TIMEOUT)
-        .timeout_write(Duration::from_secs(30))
-        .build();
+    // Reuse a global Agent with a short per-read timeout so that `stream_sse`
+    // can check the cancel flag between reads. Connection pool and DNS cache
+    // are preserved across requests.
+    static GLOBAL_AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
+        ureq::AgentBuilder::new()
+            .timeout_read(SSE_READ_TIMEOUT)
+            .timeout_write(Duration::from_secs(30))
+            .build()
+    });
+    let agent = &*GLOBAL_AGENT;
 
     loop {
         attempt += 1;
@@ -243,7 +246,7 @@ fn stream_sse(
 
         while let Some(pos) = sse_buf.find("\n\n") {
             let raw = sse_buf[..pos].to_string();
-            sse_buf = sse_buf[pos + 2..].to_string();
+            sse_buf.drain(..pos + 2); // drain in-place, no reallocation of tail
 
             let mut data_str = String::new();
             for line in raw.lines() {
@@ -464,8 +467,11 @@ fn filter_stateful_messages(messages: Vec<Message>) -> Vec<Message> {
     let is_first = start == 0;
 
     // Debug: 打印过滤前的消息角色序列
-    let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
-    eprintln!("[filter] 输入: {:?} | last_asst={:?} start={}", roles, last_asst_idx, start);
+    #[cfg(debug_assertions)]
+    {
+        let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        eprintln!("[filter] 输入: {:?} | last_asst={:?} start={}", roles, last_asst_idx, start);
+    }
 
     let mut out: Vec<Message> = Vec::new();
 

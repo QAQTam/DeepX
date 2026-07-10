@@ -345,6 +345,7 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
     let child_for_thread = child_for_check.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
+        let event_label = format!("agent-{}-event", seed_owned);
         for line in reader.lines() {
             let line = match line {
                 Ok(l) => l,
@@ -364,11 +365,14 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
                 }
             };
             let event_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
-            log::info!("[REGISTRY] agent {} got event: {}", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))], event_type);
-            if app_handle.emit(&format!("agent-{}-event", seed_owned), payload.clone()).is_err() {
+            // No per-event log in hot path — it writes to disk synchronously.
+            // Only log non-streaming events (turn_start, round_complete, error, etc.)
+            if event_type != "round_delta" && event_type != "tool_call_preview" && event_type != "exec_progress" {
+                log::info!("[REGISTRY] agent {} got event: {}", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))], event_type);
+            }
+            if app_handle.emit(&event_label, &payload).is_err() {
                 break;
             }
-            let _ = app_handle.emit("agent-event", payload);
         }
         log::warn!("[REGISTRY] agent {} stdout reader thread exiting", seed_owned);
         // Check if the child process actually exited (vs just pipe closed)
@@ -380,7 +384,7 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
             message: format!("Agent process for session {} has exited unexpectedly", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))]),
         };
         let payload = serde_json::to_value(&error_event).unwrap_or_default();
-        let _ = app_handle.emit(&format!("agent-{}-event", seed_owned), payload.clone());
+        let _ = app_handle.emit(&event_label, payload.clone());
         let _ = app_handle.emit("agent-event", payload);
     });
 

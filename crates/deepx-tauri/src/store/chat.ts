@@ -77,18 +77,9 @@ export function createChatStore(seed: string) {
 
   function resetStreamBuffer() { streamBuffer = { thinking: "", answer: "" }; }
 
-  // ── RAF batching: coalesce rapid delta updates into a single setTurns per frame ──
-  let rafPending = false;
-  let pendingTurnId = "";
-  let pendingRoundNum = 0;
-
-  function flushDeltas() {
-    if (!pendingTurnId) return;
-    const tid = pendingTurnId;
-    const rn = pendingRoundNum;
-    pendingTurnId = "";
-    pendingRoundNum = 0;
-    setTurns((t) => t.turn_id === tid, "rounds", (r) => r.round_num === rn, produce((round: Round) => {
+  // ── Direct render (no RAF batching — SolidJS granular updates are cheap) ──
+  function flushDeltas(turn_id: string, round_num: number) {
+    setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
       round.thinking = streamBuffer.thinking;
       round.answer = streamBuffer.answer;
     }));
@@ -104,7 +95,6 @@ export function createChatStore(seed: string) {
   }
 
   let lastRoundNum = 0;
-  // ── Timing state for metrics ──
   let turnStartedAt = 0;
   let roundThinkingStart = 0;   // when current round's thinking started
   let roundAnswerStart = 0;     // when current round's answering started
@@ -141,53 +131,24 @@ export function createChatStore(seed: string) {
       if (!roundAnswerStart) roundAnswerStart = Date.now();
     }
     ensureRound(turn_id, round_num);
-    // RAF-batched: defer setTurns to next animation frame to coalesce rapid deltas
-    pendingTurnId = turn_id;
-    pendingRoundNum = round_num;
-    if (!rafPending) {
-      rafPending = true;
-      requestAnimationFrame(() => {
-        rafPending = false;
-        flushDeltas();
-      });
-    }
-  }
-
-  // ── RAF batching for tool call previews ──
-  let tcRafPending = false;
-  let pendingTcMap = new Map<string, { id: string; name: string; argsSoFar: string }>();
-
-  function flushToolCallPreviews(turn_id: string, round_num: number) {
-    const batch = [...pendingTcMap.values()];
-    pendingTcMap.clear();
-    if (batch.length === 0) return;
-    setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
-      for (const u of batch) {
-        const existing = round.tool_calls.findIndex(tc => tc.id === u.id);
-        if (existing >= 0) {
-          round.tool_calls[existing].args_display = u.argsSoFar.slice(0, 100);
-          round.tool_calls[existing].args_json = u.argsSoFar;
-        } else {
-          round.tool_calls.push({ id: u.id, name: u.name, args_display: u.argsSoFar.slice(0, 100), args_json: u.argsSoFar });
-        }
-      }
-    }));
+    flushDeltas(turn_id, round_num);
   }
 
   function handleToolCallPreview(turn_id: string, round_num: number, index: number, id: string, name: string, argsSoFar: string) {
     ensureRound(turn_id, round_num);
-    pendingTcMap.set(id, { id, name, argsSoFar });
-    if (!tcRafPending) {
-      tcRafPending = true;
-      requestAnimationFrame(() => {
-        tcRafPending = false;
-        flushToolCallPreviews(turn_id, round_num);
-      });
-    }
+    setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
+      const existing = round.tool_calls.findIndex(tc => tc.id === id);
+      if (existing >= 0) {
+        round.tool_calls[existing].args_display = argsSoFar.slice(0, 100);
+        round.tool_calls[existing].args_json = argsSoFar;
+      } else {
+        round.tool_calls.push({ id, name, args_display: argsSoFar.slice(0, 100), args_json: argsSoFar });
+      }
+    }));
   }
 
   function handleRoundComplete(turn_id: string, round_num: number, thinking?: string, answer?: string, tool_calls?: ToolCallDef[], blocks?: RoundBlock[]) {
-    flushDeltas(); // flush any pending streaming delta before replacing with final state
+    flushDeltas(turn_id, round_num); // flush any pending streaming delta before replacing with final state
     // Compute thinking elapsed for this round
     const thinkMs = roundThinkingStart ? Date.now() - roundThinkingStart : 0;
     ensureRound(turn_id, round_num);
@@ -197,48 +158,27 @@ export function createChatStore(seed: string) {
     }));
   }
 
-  // ── RAF batching for exec progress (tool output streaming) ──
-  let execRafPending = false;
-  let pendingExecChunks = new Map<string, string>(); // tool_call_id → accumulated output
-
-  function flushExecProgress() {
-    const batch = [...pendingExecChunks.entries()];
-    pendingExecChunks.clear();
-    if (batch.length === 0) return;
-    setTurns(produce((ts) => {
-      const turn = ts[ts.length - 1];
-      if (!turn || turn.status !== "streaming") return;
-      const round = turn.rounds[turn.rounds.length - 1];
-      if (!round) return;
-      for (const [streamKey, output] of batch) {
-        const existing = round.tool_results.findIndex(tr => tr.tool_call_id === streamKey);
-        if (existing >= 0) {
-          round.tool_results[existing].output += output;
-        } else {
-          round.tool_results.push({ tool_call_id: streamKey, output, success: true });
-        }
-      }
-    }));
-  }
-
+  // ── Direct render for exec progress (tool output streaming) ──
   function handleExecProgress(tool_call_id: string, chunk: string) {
     // Guard: ignore if the last turn is already complete (prevents bleed into next round)
     const lastTurn = turns[turns.length - 1];
     if (!lastTurn || lastTurn.status !== "streaming") return;
 
-    const prev = pendingExecChunks.get(tool_call_id) || "";
-    pendingExecChunks.set(tool_call_id, prev + chunk);
-    if (!execRafPending) {
-      execRafPending = true;
-      requestAnimationFrame(() => {
-        execRafPending = false;
-        flushExecProgress();
-      });
-    }
+    setTurns(produce((ts) => {
+      const turn = ts[ts.length - 1];
+      if (!turn || turn.status !== "streaming") return;
+      const round = turn.rounds[turn.rounds.length - 1];
+      if (!round) return;
+      const existing = round.tool_results.findIndex(tr => tr.tool_call_id === tool_call_id);
+      if (existing >= 0) {
+        round.tool_results[existing].output += chunk;
+      } else {
+        round.tool_results.push({ tool_call_id, output: chunk, success: true });
+      }
+    }));
   }
 
   function handleToolResults(turn_id: string, round_num: number, results: ToolResultDef[]) {
-    flushExecProgress(); // flush any pending exec progress before replacing with final results
     ensureRound(turn_id, round_num);
     setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
       // Remove streaming placeholders matching the final result IDs
@@ -258,7 +198,7 @@ export function createChatStore(seed: string) {
   }
 
   function handleTurnEnd(turn_id: string, data: Record<string, unknown>) {
-    flushDeltas(); flushToolCallPreviews(turn_id, lastRoundNum); flushExecProgress(); // flush all pending state before marking complete
+    flushDeltas(turn_id, lastRoundNum); // flush final streaming state
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
     const now = Date.now();
     // Close current round's answer timing
