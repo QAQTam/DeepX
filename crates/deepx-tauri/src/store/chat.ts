@@ -349,6 +349,7 @@ export function createChatStore(seed: string) {
 
   function handleCompactEnd(data: Record<string, unknown>) {
     setIsCompacting(false);
+    setCompactText("");
     setCompactResult(data.turns_compacted as number);
     setTimeout(() => setCompactResult(null), 4000);
   }

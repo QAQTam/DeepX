@@ -21,7 +21,6 @@ use std::sync::mpsc;
 
 pub mod agent;
 use agent::AgentState;
-mod compact;
 mod conflict;
 mod dashboard;
 mod lifecycle;
@@ -842,7 +841,7 @@ impl Loop {
     }
 
     fn handle_compact(&mut self) {
-        compact::handle_compact(self);
+        // Compact now handled by new::engine_compact
     }
 
     // ── User input handler ──

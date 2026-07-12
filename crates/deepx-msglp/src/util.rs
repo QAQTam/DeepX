@@ -72,18 +72,6 @@ pub(crate) fn has_xml(s: &str) -> bool {
     s.contains("<tool_calls>")
 }
 
-#[allow(dead_code)]
-pub(crate) fn build_compact_prompt(contexts: &[String]) -> String {
-    let conv = contexts.join("\n");
-    format!(
-        "Summarize this conversation history into a compact summary.\n\
-        Keep: user intents, operations performed (tool calls + results), files changed, unfinished tasks.\n\
-        Drop: verbatim code, full tool outputs, thinking details.\n\
-        Use concise bullet points under 1500 characters.\n\n\
-        {}\n\nSummary:", conv
-    )
-}
-
 /// Extract a short human-readable display string from a tool call's arguments.
 pub(crate) fn format_tool_args_display(name: &str, input: &serde_json::Value) -> String {
     let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");

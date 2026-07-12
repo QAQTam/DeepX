@@ -234,10 +234,7 @@ fn serialize_messages(head: &[&deepx_types::Message], kept: &[&deepx_types::Mess
         let role = &m.role;
         let lines: Vec<String> = m.content.iter().filter_map(|b| match b {
             deepx_types::ContentBlock::Text { text } => Some(format!("[{role}]: {text}")),
-            deepx_types::ContentBlock::Reasoning { reasoning } => {
-                let end = reasoning.floor_char_boundary(reasoning.len().min(500));
-                Some(format!("[{role} reasoning]: {}", &reasoning[..end]))
-            }
+            deepx_types::ContentBlock::Reasoning { .. } => None,
             deepx_types::ContentBlock::ToolUse { name, input, .. } => {
                 let args = serde_json::to_string(input).unwrap_or_default();
                 let end = args.floor_char_boundary(args.len().min(120));
