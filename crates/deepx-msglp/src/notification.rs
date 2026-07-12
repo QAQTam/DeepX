@@ -7,7 +7,7 @@
 use std::sync::mpsc;
 
 /// Message sent to the dedicated notification thread.
-pub(crate) enum NotifyMessage {
+pub enum NotifyMessage {
     /// Simple one-way toast.
     Toast(String),
     /// Toast with text input; response sent via the channel.
@@ -81,6 +81,12 @@ impl NotificationThread {
     /// Send a simple one-way toast notification.
     pub(crate) fn notify(&self, body: String) {
         let _ = self.tx.send(NotifyMessage::Toast(body));
+    }
+
+    /// Consume the thread handle and return the sender channel.
+    /// Used by the new Loop architecture to integrate with NotifyHandle.
+    pub(crate) fn into_sender(self) -> mpsc::Sender<NotifyMessage> {
+        self.tx
     }
 
     /// Send an interactive toast with a text input box.

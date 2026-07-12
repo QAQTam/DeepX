@@ -205,6 +205,7 @@ export default function App() {
       case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean, time: (p.time ?? "") as string, args: (p.args ?? "{}") as string }); break;
       case "compact_start": chat.handleCompactStart(p); break;
       case "compact_end": chat.handleCompactEnd(p); break;
+      case "compact_delta": chat.handleCompactDelta(p); break;
       case "tool_notice": chat.handleToolNotice(p); break;
       case "permission_request": {
         setPermissionRequest({
@@ -538,7 +539,7 @@ export default function App() {
           </div>
           <Show when={version()}>
             <button class="sidebar-version" onClick={() => setShowChangelog(true)} title="更新日志">
-              DeepX
+              v{version()}
             </button>
           </Show>
           <div

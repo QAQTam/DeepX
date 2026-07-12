@@ -73,6 +73,8 @@ const zh: I18nStrings = {
     context: "上下文",
     cacheHit: "缓存命中率",
     compactHint: "压缩上下文",
+    compacting: "正在压缩…",
+    compacted: "已压缩 {n} 轮对话",
   },
   settings: {
     title: "设置",

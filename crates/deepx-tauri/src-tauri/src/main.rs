@@ -144,7 +144,7 @@ fn run_agent(is_subagent: bool) {
 
     let stdin = std::io::BufReader::new(std::io::stdin());
     let stdout = std::io::stdout();
-    let mut loop_ = deepx_msglp::Loop::new_ipc(agent, stdin, stdout);
+    let mut loop_ = deepx_msglp::new::loop_core::Loop::new_ipc(agent, stdin, stdout);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         loop_.run();
     }));

@@ -98,3 +98,25 @@ impl AgentState {
         self.msg.flush_meta(&self.config.model, &self.config.reasoning_effort);
     }
 }
+
+// ═══════════════════════════════════════════════════════
+// Permission-related types (shared across old and new Loop)
+// ═══════════════════════════════════════════════════════
+
+/// Tool call suspended while waiting for user permission.
+/// Holds the immutable challenge — only the stored fields are used for
+/// authorization; the approval response must not supply replacement values.
+pub struct PendingApproval {
+    pub challenge: deepx_tools::bridge::PermissionChallenge,
+    pub is_llm_tool: bool,
+}
+
+/// Saved state to resume an LLM turn after all pending permission
+/// approvals have been resolved.
+pub struct TurnResumeState {
+    pub session_id: String,
+    pub turn_id: String,
+    pub round_num: u32,
+    pub pending_call_ids: Vec<String>,
+    pub usage: Option<deepx_types::UsageInfo>,
+}

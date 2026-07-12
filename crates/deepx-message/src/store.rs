@@ -858,6 +858,7 @@ impl MessageStore {
         });
 
         // Build compact summary as a synthetic user turn (no steps).
+        // summary_prefix tells the next LLM that this is a handoff.
         let compact_text = format!(
             "[Compacted {} turns]\n{}\n\n[UserInput]\n{}",
             skip, summary.trim(), last_user

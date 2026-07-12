@@ -69,6 +69,10 @@
   min-width: 30px; text-align: right;
 }
 
+.compact-status {
+  display: flex; align-items: center; gap: 4px; padding: 2px 8px;
+}
+
 .compact-toast {
   position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
   background: var(--bg-secondary);

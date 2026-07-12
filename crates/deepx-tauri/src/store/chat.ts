@@ -46,7 +46,8 @@ export function createChatStore(seed: string) {
   const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], allow_custom: true, show: false });
   const [isCompacting, setIsCompacting] = createSignal(false);
 
-  const [compactResult, setCompactResult] = createSignal<string | null>(null);
+  const [compactResult, setCompactResult] = createSignal<number | null>(null);
+  const [compactText, setCompactText] = createSignal("");
   const [metricHistory, setMetricHistory] = createSignal<MetricPoint[]>([]);
   // Periodic metric sampling during streaming (fills chart even when API doesn't send usage)
   let samplingInterval: ReturnType<typeof setInterval> | null = null;
@@ -343,11 +344,17 @@ export function createChatStore(seed: string) {
   function handleCompactStart(data: Record<string, unknown>) {
     setIsCompacting(true);
     setCompactResult(null);
+    setCompactText("");
   }
 
   function handleCompactEnd(data: Record<string, unknown>) {
     setIsCompacting(false);
-    setCompactResult(`Compacted ${data.turns_compacted} turns`);
+    setCompactResult(data.turns_compacted as number);
+    setTimeout(() => setCompactResult(null), 4000);
+  }
+
+  function handleCompactDelta(data: Record<string, unknown>) {
+    setCompactText((prev) => prev + (data.delta as string));
   }
 
   function handleToolNotice(data: Record<string, unknown>) {
@@ -428,5 +435,5 @@ export function createChatStore(seed: string) {
     setTurns(produce((prev) => { prev.unshift(...loaded); }));
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, loadActivityFromBackend, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, metricHistory, handleCompactStart, handleCompactEnd, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, loadActivityFromBackend, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, compactText, metricHistory, handleCompactStart, handleCompactEnd, handleCompactDelta, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

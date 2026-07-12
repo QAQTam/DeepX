@@ -12,8 +12,8 @@ function fileName(argsJson: string): string {
 function execCmd(argsJson: string): string {
   try { const a = JSON.parse(argsJson); if (a.argv && Array.isArray(a.argv)) return a.argv.join(" ").substring(0, 120); return String(a.command || "").substring(0, 120); } catch (_) { return ""; }
 }
-function diffStats(output: string): string {
-  if (!output) return "";
+function diffStats(output: string) {
+  if (!output) return null;
   // Try JSON first — pull diff from structured result
   try {
     const parsed = JSON.parse(output.trim());
@@ -24,17 +24,33 @@ function diffStats(output: string): string {
         if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) continue;
         if (l.startsWith("+")) a++; else if (l.startsWith("-")) r++;
       }
-      return a > 0 || r > 0 ? ` +${a} −${r}` : "";
+      if (a > 0 || r > 0) {
+        return (
+          <span class="diff-stat-inline">
+            {a > 0 && <span class="diff-stat-add">+{a}</span>}
+            {r > 0 && <span class="diff-stat-del">−{r}</span>}
+          </span>
+        );
+      }
+      return null;
     }
   } catch (_) { /* fall through */ }
   // Legacy: parse diff from raw string
-  if (!isUnifiedDiff(output)) return "";
+  if (!isUnifiedDiff(output)) return null;
   let a = 0, r = 0;
   for (const l of output.split("\n")) {
     if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) continue;
     if (l.startsWith("+")) a++; else if (l.startsWith("-")) r++;
   }
-  return a > 0 || r > 0 ? ` +${a} −${r}` : "";
+  if (a > 0 || r > 0) {
+    return (
+      <span class="diff-stat-inline">
+        {a > 0 && <span class="diff-stat-add">+{a}</span>}
+        {r > 0 && <span class="diff-stat-del">−{r}</span>}
+      </span>
+    );
+  }
+  return null;
 }
 
 /** Map tool name → i18n status key */
@@ -61,13 +77,14 @@ export default function ToolRow(props: { call: ToolCallDef; result?: ToolResultD
   const fileTools = ["read", "write", "edit", "edit_block", "list", "search", "diff", "delete"];
   const execTools = ["exec", "exec_run"];
 
-  const detail = (): string => {
+  const detail = () => {
     if (fileTools.includes(name) || name === "sed") {
       const f = fileName(props.call.args_json);
-      return f + diffStats(props.result?.output || "");
+      const stats = diffStats(props.result?.output || "");
+      return <>{f}{stats}</>;
     }
     if (execTools.includes(name)) return execCmd(props.call.args_json);
-    return "";
+    return null;
   };
 
   const expandable = fileTools.includes(name) || execTools.includes(name) || name === "sed";

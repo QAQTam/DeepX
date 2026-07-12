@@ -7,6 +7,8 @@ import { useI18n } from "../i18n";
 interface MessageListProps {
   turns: Turn[];
   isStreaming: () => boolean;
+  isCompacting: () => boolean;
+  compactText: () => string;
   onUndo: (turnId: string) => void;
   hasMore: boolean;
   onLoadMore: () => void;
@@ -21,16 +23,18 @@ export default function MessageList(props: MessageListProps) {
   let prevTurnsRef: Turn[] | null = null;
 
   const virtualizer = createVirtualizer({
-    get count() { return props.turns.length; },
+    get count() { return props.turns.length + (props.isCompacting() || props.compactText() ? 1 : 0); },
     getScrollElement: () => listRef,
     estimateSize: (index: number) => {
       const tid = props.turns[index]?.turn_id;
-      return tid ? (heightCache.get(tid) ?? 600) : 600;
+      if (tid) return heightCache.get(tid) ?? 600;
+      // Compact item
+      return 300;
     },
     overscan: 50,
     anchorTo: "end",
     followOnAppend: true,
-    getItemKey: (index: number) => props.turns[index]?.turn_id ?? String(index),
+    getItemKey: (index: number) => props.turns[index]?.turn_id ?? (index >= props.turns.length ? "__compact__" : String(index)),
   });
 
   // When turns array reference changes (session switch), reset virtualizer state
@@ -124,7 +128,7 @@ export default function MessageList(props: MessageListProps) {
 
       <div class="msg-list" ref={listRef} onScroll={onScroll}>
         <Show
-          when={props.turns.length === 0}
+          when={props.turns.length === 0 && !props.isCompacting() && !props.compactText()}
           fallback={
             <div
               style={{
@@ -134,6 +138,32 @@ export default function MessageList(props: MessageListProps) {
               }}
             >
               {virtualizer.getVirtualItems().map((vItem) => {
+                const isCompact = vItem.index >= props.turns.length;
+                if (isCompact) {
+                  return (
+                    <div
+                      ref={(el) => {
+                        if (el) {
+                          el.setAttribute("data-index", String(vItem.index));
+                          virtualizer.measureElement(el);
+                        }
+                      }}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        transform: `translateY(${vItem.start}px)`,
+                      }}
+                    >
+                      <MessageItem
+                        role="compact"
+                        text={props.compactText()}
+                        status={props.isCompacting() ? "streaming" : "complete"}
+                      />
+                    </div>
+                  );
+                }
                 const turn = props.turns[vItem.index];
                 return (
                   <div

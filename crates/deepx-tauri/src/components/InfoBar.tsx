@@ -1,4 +1,4 @@
-import { Show, createSignal, createEffect } from "solid-js";
+import { Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
 import ContextPanel from "./ContextPanel";
@@ -18,7 +18,7 @@ export default function InfoBar(props: {
   error: string | null;
   onDismissError?: () => void;
   isCompacting: () => boolean;
-  compactResult: () => string | null;
+  compactResult: () => number | null;
   onCompact?: () => void;
 }) {
   const { t } = useI18n();
@@ -34,30 +34,6 @@ export default function InfoBar(props: {
     if (!props.context_tokens) return "—";
     return `${hitPct()}%`;
   };
-
-  const [compactPct, setCompactPct] = createSignal(0);
-  let compactTimer: ReturnType<typeof setInterval> | null = null;
-
-  createEffect(() => {
-    if (props.isCompacting()) {
-      setCompactPct(0);
-      compactTimer = setInterval(() => {
-        setCompactPct((p) => {
-          if (p >= 90) return 90;
-          const step = Math.max(1, Math.floor((90 - p) * 0.08));
-          return p + step;
-        });
-      }, 200);
-    } else {
-      if (compactTimer) { clearInterval(compactTimer); compactTimer = null; }
-      if (props.compactResult()) {
-        setCompactPct(100);
-        setTimeout(() => setCompactPct(0), 2500);
-      } else {
-        setCompactPct(0);
-      }
-    }
-  });
 
   async function handleCompact() {
     if (props.onCompact) { props.onCompact(); return; }
@@ -100,30 +76,31 @@ export default function InfoBar(props: {
       </div>
       <div class="info-item">
         <ContextPanel seed={props.seed} metricHistory={props.metricHistory} contextLimit={props.context_limit} />
-        <Show when={props.isCompacting() || compactPct() > 0}
+        <Show
+          when={!props.isCompacting() && !props.compactResult()}
           fallback={
-            <button class="info-compact-btn" onClick={handleCompact} title="Compact history">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="17 8 12 3 7 8" />
-                <line x1="12" y1="3" x2="12" y2="15" />
-              </svg>
-            </button>
+            <div class="compact-status">
+              <Show when={props.isCompacting()}>
+                <span class="compact-label">Compacting…</span>
+              </Show>
+              <Show when={props.compactResult()}>
+                <span class="compact-label">✓</span>
+              </Show>
+            </div>
           }
         >
-          <div class="compact-progress">
-            <div class="compact-bar-bg">
-              <div class="compact-bar-fill" style={`width: ${compactPct()}%`} />
-            </div>
-            <span class="compact-label">{props.isCompacting() ? `${compactPct()}%` : "✓"}</span>
-          </div>
+          <button class="info-compact-btn" onClick={handleCompact} title="Compact history">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+          </button>
         </Show>
       </div>
-      <div class="info-item">
-        <Show when={props.compactResult()}>
-          <div class="compact-toast">{props.compactResult()}</div>
-        </Show>
-      </div>
+      <Show when={props.compactResult() !== null}>
+        <div class="compact-toast">{t().infobar.compacted.replace("{n}", String(props.compactResult()!))}</div>
+      </Show>
     </div>
   </div>
   );

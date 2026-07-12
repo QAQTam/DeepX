@@ -6,7 +6,7 @@ import type { Round, Turn } from "../store/chat";
 import { useI18n } from "../i18n";
 
 interface MessageItemProps {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "compact";
   text?: string;
   rounds?: Round[];
   status?: "streaming" | "complete";
@@ -18,8 +18,28 @@ interface MessageItemProps {
 export default function MessageItem(props: MessageItemProps) {
   const { t } = useI18n();
   const isUser = props.role === "user";
+  const isCompact = props.role === "compact";
   return (
-    <div class="msg-item">
+    <div class={`msg-item${isCompact ? " msg-compact" : ""}`}>
+      <Show
+        when={!isCompact}
+        fallback={
+          <div class="compact-msg">
+            <div class="compact-msg-header">
+              <span class="compact-msg-icon">⟳</span>
+              <span class="compact-msg-title">{t().infobar.compacting || "Compacting context…"}</span>
+              <Show when={props.status === "streaming"}>
+                <span class="compact-msg-badge">streaming</span>
+              </Show>
+            </div>
+            <div class="compact-msg-body">
+              <Show when={props.text} fallback={<div class="stream-indicator"><div class="stream-dot" /><div class="stream-dot" /><div class="stream-dot" /></div>}>
+                <MarkdownBody class="md-body" content={props.text!} final={props.status === "complete"} />
+              </Show>
+            </div>
+          </div>
+        }
+      >
       <div class={`msg-avatar ${props.role}`}>{isUser ? "U" : "X"}</div>
       <div class="msg-body">
         <div class="msg-role">
@@ -107,6 +127,7 @@ export default function MessageItem(props: MessageItemProps) {
           </div>
         </Show>
       </div>
+      </Show>
     </div>
   );
 }

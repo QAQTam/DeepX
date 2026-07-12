@@ -71,6 +71,8 @@ const en = {
     context: "Context",
     cacheHit: "Cache Hit",
     compactHint: "Compact history",
+    compacting: "Compacting context…",
+    compacted: "Compacted {n} turns",
   },
   settings: {
     title: "Settings",

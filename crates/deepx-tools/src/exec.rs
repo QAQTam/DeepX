@@ -107,6 +107,7 @@ fn direct_exec(argv: &[String], cwd: Option<&str>, max_output_tokens: u32, timeo
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     if let Some(dir) = cwd { cmd.current_dir(dir); }
+    cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
@@ -265,4 +266,38 @@ pub fn register(mgr: &mut crate::ToolManager) {
         risk: ToolRisk::Destructive,
         default_timeout: Duration::from_secs(300),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_git_status_returns_output() {
+        let argv = vec!["git".to_string(), "status".to_string()];
+        let result = direct_exec(&argv, None, 10000, 10);
+        eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
+            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
+        assert!(!result.timed_out, "timed out");
+        assert!(!result.output.is_empty(), "no output");
+    }
+
+    #[test]
+    fn test_git_diff_returns_output() {
+        let argv = vec!["git".to_string(), "diff".to_string(), "--stat".to_string()];
+        let result = direct_exec(&argv, None, 10000, 10);
+        eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
+            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
+        assert!(!result.timed_out, "timed out");
+    }
+
+    #[test]
+    fn test_cargo_check_returns_output() {
+        let argv = vec!["cargo".to_string(), "check".to_string(), "-p".to_string(), "deepx-types".to_string()];
+        let result = direct_exec(&argv, None, 10000, 60);
+        eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
+            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
+        assert!(!result.timed_out, "timed out");
+        assert!(!result.output.is_empty(), "no output");
+    }
 }

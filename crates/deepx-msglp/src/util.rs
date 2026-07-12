@@ -4,6 +4,14 @@ use crate::agent::AgentState;
 use deepx_proto;
 use deepx_types;
 
+/// Convert epoch seconds to human-readable UTC date.
+pub(crate) fn epoch_to_date(epoch_secs: u64) -> String {
+    use deepx_types::platform::civil_from_days;
+    let total_days = (epoch_secs / 86400) as i64;
+    let (y, m, d) = civil_from_days(total_days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Resolve a legacy `name`/`action` pair before policy evaluation.
 pub(crate) fn resolve_effective_name(
     name: &str,
@@ -252,6 +260,50 @@ pub(crate) fn emit_round_complete(
         }
     }
     let _ = event_tx.send(deepx_proto::Agent2Ui::RoundComplete {
+        turn_id: turn_id.into(),
+        round_num,
+        thinking: if _reasoning.is_empty() { None } else { Some(_reasoning.into()) },
+        answer: if _content.is_empty() { None } else { Some(_content.into()) },
+        tool_calls: tool_calls.clone(),
+        blocks,
+        is_final: tool_calls.is_empty(),
+    });
+}
+
+/// Emitter-trait version of emit_round_complete for the new Loop architecture.
+pub(crate) fn emit_round_complete_via_emitter(
+    emitter: &dyn crate::new::types::Emitter,
+    turn_id: &str, round_num: u32, assistant_msg: &deepx_types::Message,
+    _content: &str, _reasoning: &str, _parsed: &[deepx_types::ToolCall],
+) {
+    use deepx_types::ContentBlock;
+    let mut blocks = Vec::new();
+    let mut tool_calls = Vec::new();
+    for cb in &assistant_msg.content {
+        match cb {
+            ContentBlock::Reasoning { reasoning } if !reasoning.is_empty() => {
+                blocks.push(deepx_proto::RoundBlock::Reasoning { content: reasoning.clone() });
+            }
+            ContentBlock::Text { text } if !text.is_empty() => {
+                blocks.push(deepx_proto::RoundBlock::Text { content: text.clone() });
+            }
+            ContentBlock::ToolUse { id, name, input } => {
+                let display = format_tool_args_display(name, input);
+                tool_calls.push(deepx_proto::ToolCallDef {
+                    id: id.clone(), name: name.clone(),
+                    args_display: display.clone(), args_json: input.to_string(),
+                });
+                blocks.push(deepx_proto::RoundBlock::Tool {
+                    card: deepx_proto::ToolCallDef {
+                        id: id.clone(), name: name.clone(),
+                        args_display: display, args_json: input.to_string(),
+                    },
+                });
+            }
+            _ => {}
+        }
+    }
+    emitter.emit(deepx_proto::Agent2Ui::RoundComplete {
         turn_id: turn_id.into(),
         round_num,
         thinking: if _reasoning.is_empty() { None } else { Some(_reasoning.into()) },

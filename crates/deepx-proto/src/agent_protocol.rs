@@ -61,17 +61,6 @@ pub enum Ui2Agent {
         count: u32,
     },
 
-    #[serde(rename = "subscribe")]
-    Subscribe { seed: String },
-
-    #[serde(rename = "reconnect")]
-    Reconnect { seed: String, last_seq: u64 },
-
-    /// Heartbeat: frontend pings daemon to confirm it's alive (deprecated — daemon removed in v0.7.0).
-    #[serde(rename = "ping")]
-    Ping,
-
-    /// Set agent operating mode (Normal / Plan / Code).
     #[serde(rename = "set_mode")]
     SetMode { mode: String },
 
@@ -297,30 +286,6 @@ pub enum Agent2Ui {
         seed: String,
     },
 
-    /// Full session snapshot sent to a reconnecting frontend.
-    /// Unifies SessionState + BufferedEvents into a single message.
-    #[serde(rename = "snapshot")]
-    Snapshot {
-        seed: String,
-        /// Current turns in this session (from last SessionRestored).
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        turns: Vec<TurnData>,
-        /// Total tokens consumed.
-        #[serde(default)]
-        tokens_used: u32,
-        /// Model context window limit.
-        #[serde(default)]
-        context_limit: u32,
-        /// Events buffered since the frontend's last_seq.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        buffered_events: Vec<Agent2Ui>,
-        /// Current monotonic sequence id (latest event seq).
-        seq_id: u64,
-        /// True if ring buffer wrapped and some events were lost.
-        #[serde(default)]
-        has_more: bool,
-    },
-
     // ── System events ──
 
     #[serde(rename = "error")]
@@ -336,13 +301,6 @@ pub enum Agent2Ui {
     /// PLAN.md changed — frontend should refresh PlanReviewPanel.
     #[serde(rename = "plan_changed")]
     PlanChanged,
-
-    #[serde(rename = "balance")]
-    Balance {
-        is_available: bool,
-        total_balance: String,
-        currency: String,
-    },
 
     #[serde(rename = "dashboard")]
     Dashboard {
@@ -381,6 +339,11 @@ pub enum Agent2Ui {
 
     #[serde(rename = "compact_end")]
     CompactEnd { summary_chars: usize, turns_compacted: u32 },
+
+    /// Streaming delta from the compact LLM call — shown to the user
+    /// so they can see the model's summary being built in real-time.
+    #[serde(rename = "compact_delta")]
+    CompactDelta { delta: String },
 
     #[serde(rename = "cancelled")]
     Cancelled,

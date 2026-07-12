@@ -38,10 +38,10 @@
 .session-delete-btn:hover { color: var(--red); background: var(--bg-hover); }
 
 .sidebar-spacer { flex: 1; min-height: 8px; }
-.sidebar-workspace { padding: 0 8px; display: flex; flex-direction: column; gap: 4px; }
+.sidebar-workspace { padding: 0 8px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
 .sidebar-workspace-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.sidebar-workspace-row { display: flex; gap: 4px; align-items: stretch; }
-.sidebar-workspace-input { flex: 1; padding: 5px 8px; border: 0.5px solid var(--border-card); border-radius: var(--radius); background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; font-family: var(--font-mono); outline: none; transition: border var(--transition); box-sizing: border-box; }
+.sidebar-workspace-row { display: flex; gap: 4px; align-items: stretch; min-width: 0; }
+.sidebar-workspace-input { flex: 1; min-width: 0; padding: 5px 8px; border: 0.5px solid var(--border-card); border-radius: var(--radius); background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; font-family: var(--font-mono); outline: none; transition: border var(--transition); box-sizing: border-box; }
 .sidebar-workspace-input:focus { border-color: var(--accent); }
 .sidebar-workspace-input::placeholder { color: var(--text-muted); }
 .sidebar-workspace-browse { padding: 5px 8px; border: 0.5px solid var(--border-card); border-radius: var(--radius); background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background var(--transition), color var(--transition), border var(--transition); flex-shrink: 0; min-width: 32px; }

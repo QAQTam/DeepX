@@ -59,7 +59,15 @@ export default function ChatView(props: ChatViewProps) {
         compactResult={chat().compactResult}
         onCompact={handleCompact}
       />
-      <MessageList turns={chat().turns} isStreaming={chat().isStreaming} onUndo={(id) => chat().undoTurn(id)} hasMore={props.hasMore} onLoadMore={props.onLoadMore} />
+      <MessageList
+        turns={chat().turns}
+        isStreaming={chat().isStreaming}
+        isCompacting={chat().isCompacting}
+        compactText={chat().compactText}
+        onUndo={(id) => chat().undoTurn(id)}
+        hasMore={props.hasMore}
+        onLoadMore={props.onLoadMore}
+      />
       <InputBar
         onSend={handleSend}
         onStop={handleStop}
