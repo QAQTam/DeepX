@@ -10,7 +10,7 @@ function fileName(argsJson: string): string {
   try { const a = JSON.parse(argsJson); const p = a.path || a.new_path || a.source || a.dest || ""; return String(p).replace(/\\/g, "/").split("/").pop() || ""; } catch (_) { return ""; }
 }
 function execCmd(argsJson: string): string {
-  try { const a = JSON.parse(argsJson); return String(a.command || "").substring(0, 120); } catch (_) { return ""; }
+  try { const a = JSON.parse(argsJson); if (a.argv && Array.isArray(a.argv)) return a.argv.join(" ").substring(0, 120); return String(a.command || "").substring(0, 120); } catch (_) { return ""; }
 }
 function diffStats(output: string): string {
   if (!output) return "";
@@ -39,26 +39,13 @@ function diffStats(output: string): string {
 
 /** Map tool name → i18n status key */
 function statusKey(name: string): string {
-  if (name.startsWith("file_read") || name === "read_file") return "reading";
-  if (name.startsWith("file_write") || name === "write_file") return "writing";
-  if (name.startsWith("file_edit") || name.startsWith("edit_file")) return "editing";
-  if (name === "sed") return "sed";
-  if (name.startsWith("file_delete") || name === "delete_file") return "deleting";
-  if (name === "file_move") return "moving";
-  if (name === "file_copy") return "copying";
-  if (name === "file_diff") return "diffing";
-  if (name.startsWith("file_list") || name === "list_dir") return "listing";
-  if (name.startsWith("file_search") || name === "grep") return "searching";
+  if (name.startsWith("read") || name === "read_file") return "reading";
+  if (name.startsWith("edit") || name.startsWith("edit_file")) return "editing";
   if (name === "exec" || name === "exec_run") return "exec";
   if (name === "web_search") return "web";
   if (name === "web_fetch") return "webFetch";
-  if (name.startsWith("git_")) return "git";
-  if (name.startsWith("task_")) return "task";
-  if (name.startsWith("plan_")) return "plan";
-  if (name === "ask_user") return "ask";
-  if (name.startsWith("memory_")) return "memory";
-  if (name.startsWith("process_")) return "process";
-  if (name === "explore") return "explore";
+  if (name === "web_context7_resolve") return "docResolve";
+  if (name === "web_context7_query") return "docQuery";
   return name;
 }
 
@@ -71,21 +58,24 @@ export default function ToolRow(props: { call: ToolCallDef; result?: ToolResultD
 
   const verb = () => (t().tool.status as Record<string, string>)[statusKey(name)] ?? name;
 
+  const fileTools = ["read", "write", "edit", "edit_block", "list", "search", "diff", "delete"];
+  const execTools = ["exec", "exec_run"];
+
   const detail = (): string => {
-    if (name.startsWith("file_") || name.startsWith("edit_file") || name === "grep" || name === "sed") {
+    if (fileTools.includes(name) || name === "sed") {
       const f = fileName(props.call.args_json);
       return f + diffStats(props.result?.output || "");
     }
-    if (name === "exec" || name === "exec_run") return execCmd(props.call.args_json);
+    if (execTools.includes(name)) return execCmd(props.call.args_json);
     return "";
   };
 
-  const expandable = name.startsWith("file_") || name.startsWith("edit_file") || name === "exec" || name === "exec_run" || name === "sed";
+  const expandable = fileTools.includes(name) || execTools.includes(name) || name === "sed";
   const bodyHtml = (): string => {
     const raw = hasResult ? props.result!.output : (props.streamingOutput || "");
     // Strip timestamp prefix (legacy format)
     const clean = raw.replace(/^\[timeis:.*?\]\s*/gm, "")
-      .replace(/^\[(OK|PARTIAL|DRY RUN)\].*\n/m, "").trim();
+      .replace(/^\[(OK|PARTIAL|DRY RUN)\].*\n/gm, "").trim();
 
     // ── JSON result (new format): extract diff → styled, or content → plain ──
     if (hasResult && clean.startsWith("{")) {

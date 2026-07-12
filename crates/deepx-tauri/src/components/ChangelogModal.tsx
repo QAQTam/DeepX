@@ -1,35 +1,42 @@
 import { For } from "solid-js";
 
 interface ChangelogEntry {
-  tag: "feature" | "fix" | "perf";
+  tag: "feature" | "fix" | "perf" | "remove";
   title: string;
 }
 
 const CHANGELOG: ChangelogEntry[] = [
-  { tag: "feature", title: "全部工具返回结构化 JSON：file_read/file_write/file_edit/exec/git/web/task/plan/memory/process 统一 JSON 格式，带 timeis/status/content" },
-  { tag: "feature", title: "文件读取缓存去重：file_read 返回 content hash，未变更文件再读直接返回 'unchanged'，连续两次读取自动放行原文" },
-  { tag: "feature", title: "文件状态摘要注入：每轮 [Environment] 注入 <file_state> 块，显示最近 20 个文件路径/行数/操作类型，模型无需重复读取" },
-  { tag: "feature", title: "exec_run 支持 argv 直接执行模式（对标 Codex），绕开 PTY/shell 层，无管道污染，更快更稳；command 字符串模式保留给管道场景" },
-  { tag: "feature", title: "exec_run 支持模型主动选择 shell：pwsh/cmd/bash（Windows），bash/zsh/sh（Unix）" },
-  { tag: "feature", title: "System prompt 重构：THINK_MAX/IDENTITY/TOOLS/PROTOCOL/RULES 五段，融合 Codex 教学式风格，[UserMessage] 标记切分元数据与用户输入" },
-  { tag: "fix", title: "file_read 描述修正：从 'File operations: read,write,edit,search...' 改为 'Read file contents with optional line range'" },
-  { tag: "fix", title: "file_edit required 字段修正：从 [path,old_string,new_string] 改为仅 [path]，接受 patterns 数组或 old_string/new_string 组合" },
-  { tag: "fix", title: "explore_scan 描述修正：引用的 'list_dir' 改为正确工具名 'file_list'" },
-  { tag: "fix", title: "ToolKey 二元组简化为 String 键，删除三层 fallback 查找逻辑（--30行）" },
-  { tag: "perf", title: "file_read 正文去除行号前缀（每行省 5 字符），行号移至 JSON 元数据 start_line/end_line" },
-  { tag: "perf", title: "[PROTOCOL] 段删除冗余工具速查表（与 API schema 重复），省 ~150 tokens" },
+  // ── v0.8.0 ──
+  { tag: "feature", title: "工具集精简重组：file_edit 合并三模式（精确匹配 / 模糊匹配 / 行号定位），支持跨文件批量编辑；file_read 支持多文件批量读取" },
+  { tag: "feature", title: "web 工具合并：web_fetch + web_search 统一为 web，URL 抓取与 Bing RSS 搜索自动分流" },
+  { tag: "feature", title: "context7 独立工具：搜库解析 / 文档查询自动分流，修正为官方 v2 API（/libs/search + /context）" },
+  { tag: "feature", title: "exec_run 真实超时控制：try_wait 轮询 + 超时自动 kill 子进程，返回 timed_out 标志" },
+  { tag: "feature", title: "exec 输出按 token 精确截断：count_tokens + 头尾保留策略，替代 char × 4 估算" },
+  { tag: "feature", title: "exec 输出 OOM 防护：spawn + 流式管道读取，硬上限 5MB，超额自动排空" },
+  { tag: "feature", title: "web_search 后端起用 Bing RSS（cn.bing.com/search?format=rss），零 API key 配置，返回结构化 JSON" },
+  { tag: "remove", title: "删除 PTY 子系统：exec 不再支持 shell 模式（command 参数），统一使用 argv 数组" },
+  { tag: "remove", title: "删除余额查询：gate 层 query_balance 及 StreamEvent::Balance 移除" },
+  { tag: "remove", title: "删除 Content delta 批量缓冲：后端不再积攒 10ms/20char 再发送，直接逐帧推送" },
+  { tag: "remove", title: "删除 deepx-sed 整个 crate（已从 workspace 移除）" },
+  { tag: "remove", title: "删除全部旧 prompt 文件（think_max/role/protocol/rules/session），替换为精简版 backend_prompt.md" },
+  { tag: "fix", title: "exec_run 退出码处理修正：非零退出码不再标记为 error，返回 status:completed 由模型自行判断" },
+  { tag: "fix", title: "file_edit_diff 错误返回格式统一为 [ERROR] 前缀纯文本" },
+  { tag: "fix", title: "resolve_workspace_path 路径规范化优化" },
+  { tag: "fix", title: "前端 ToolCard 更新：适配合并后的工具名、新增 web/context7 映射、exec 显示支持 argv 数组" },
 ];
 
 const TAG_ICONS: Record<string, string> = {
   feature: "✨",
   fix: "🐛",
   perf: "⚡",
+  remove: "🗑️",
 };
 
 const TAG_LABELS: Record<string, string> = {
   feature: "新增",
   fix: "修复",
   perf: "优化",
+  remove: "移除",
 };
 
 export default function ChangelogModal(props: { onClose: () => void }) {
@@ -37,7 +44,7 @@ export default function ChangelogModal(props: { onClose: () => void }) {
     <div class="changelog-overlay" onClick={props.onClose}>
       <div class="changelog-dialog" onClick={(e) => e.stopPropagation()}>
         <div class="changelog-header">
-          <span class="changelog-title">v0.7.2 更新日志</span>
+          <span class="changelog-title">DeepX 更新日志</span>
           <button class="changelog-close" onClick={props.onClose}>✕</button>
         </div>
         <div class="changelog-body">

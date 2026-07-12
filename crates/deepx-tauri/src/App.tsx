@@ -537,8 +537,8 @@ export default function App() {
             </div>
           </div>
           <Show when={version()}>
-            <button class="sidebar-version" onClick={() => setShowChangelog(true)} title="Changelog">
-              v{version()}
+            <button class="sidebar-version" onClick={() => setShowChangelog(true)} title="更新日志">
+              DeepX
             </button>
           </Show>
           <div

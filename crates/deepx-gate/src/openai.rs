@@ -203,7 +203,6 @@ fn stream_sse(
     cancel: Option<&Arc<AtomicBool>>,
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> anyhow::Result<()> {
-    let mut balance_queried = false;
     let mut reader = resp.into_reader();
     let mut sse_buf = String::new();
     let mut byte_buf = vec![0u8; 4096];
@@ -387,17 +386,6 @@ fn stream_sse(
             }
         }
 
-        // Query balance lazily after first chunk arrives
-        if !balance_queried && provider.has_balance {
-            balance_queried = true;
-            if let Some(info) = query_balance(&provider.api_key, &provider.base_url, provider.balance_path.as_deref()) {
-                on_event(StreamEvent::Balance {
-                    is_available: info.is_available,
-                    total_balance: info.total_balance,
-                    currency: info.currency,
-                });
-            }
-        }
     }
 
     // Build final message from accumulated content
@@ -655,40 +643,6 @@ fn build_chat_url(base_url: &str, chat_path: Option<&str>) -> String {
     } else {
         format!("{}/chat/completions", base)
     }
-}
-
-// ── Balance query ──
-
-pub fn query_balance(api_key: &str, base_url: &str, balance_path: Option<&str>) -> Option<deepx_types::BalanceInfo> {
-    let balance_url = if let Some(path) = balance_path {
-        if path.starts_with("http") {
-            path.to_string()
-        } else {
-            format!("{}{}", base_url.trim_end_matches('/'), path)
-        }
-    } else {
-        base_url.trim_end_matches('/').trim_end_matches("/v1").to_string() + "/user/balance"
-    };
-    let resp = ureq::get(&balance_url)
-        .set("Authorization", &format!("Bearer {}", api_key))
-        .timeout(Duration::from_secs(10))
-        .call()
-        .ok()?;
-
-    let body: serde_json::Value = resp.into_json().ok()?;
-    let is_available = body.get("is_available").and_then(|v| v.as_bool()).unwrap_or(false);
-    let infos = body.get("balance_infos").and_then(|v| v.as_array())?;
-    let first = infos.first()?;
-    let currency = first.get("currency").and_then(|v| v.as_str()).unwrap_or("CNY").to_string();
-    let total_balance = first.get("total_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
-
-    Some(deepx_types::BalanceInfo {
-        is_available,
-        currency,
-        total_balance,
-        granted_balance: first.get("granted_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-        topped_up_balance: first.get("topped_up_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-    })
 }
 
 // ── Error descriptions ──

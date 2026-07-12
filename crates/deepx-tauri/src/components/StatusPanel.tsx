@@ -9,10 +9,9 @@ const STATUS_ICON: Record<string, string> = {
   pending: "\u25cb", in_progress: "\u25cf", completed: "\u2713", cancelled: "\u2717",
 };
 const TOOL_ICONS: Record<string, string> = {
-  read_file: "R", write_file: "W", edit_file: "E", edit_file_diff: "E",
-  delete_file: "D", exec: ">", explore: "S", search: "Z", glob: "G",
-  web_search: "@", web_fetch: "@", list_dir: "L", diff: "=",
-  task_create: "T", task_update: "T", task_delete: "T", ask_user: "?",
+  file_read: "R", file_edit: "E", file_write: "W", exec_run: ">",
+  web_search: "@", web_fetch: "@",
+  web_context7_resolve: "D", web_context7_query: "D",
 };
 
 type Section = "tasks" | "activity" | "plan" | "git";
@@ -45,26 +44,20 @@ export default function StatusPanel(props: {
 
     if (name.startsWith("file")) {
       const path = (args.path || args.new_path || args.source || args.dest || "") as string;
-      const action = name === "file_delete" ? t().tool.activityLabel.deleted : name === "file_write" || name === "file_edit" || name === "file_edit_diff" ? t().tool.activityLabel.modified : t().tool.activityLabel.read;
+      const action = name === "edit" ? t().tool.activityLabel.modified : t().tool.activityLabel.read;
       desc = `${action}`;
       detail = path ? path.replace(/\\/g, "/").split("/").pop() || path : detail;
-    } else if (name === "exec") {
-      const cmd = (args.command || "") as string;
+    } else if (name === "exec_run") {
+      const cmd = (args.argv ? (args.argv as string[]).join(" ") : args.command || "") as string;
       desc = t().tool.activityLabel.executed;
       detail = cmd || detail;
     } else if (name.startsWith("web_")) {
       const q = (args.query || args.url || "") as string;
       desc = name === "web_fetch" ? t().tool.activityLabel.fetched : t().tool.activityLabel.searched;
       detail = String(q).substring(0, 80);
-    } else if (name.startsWith("git_")) {
-      desc = t().tool.activityLabel.git;
-      detail = e.summary || "";
-    } else if (name.startsWith("explore")) {
-      desc = t().tool.activityLabel.explored;
-      detail = "Project structure";
-    } else if (name.startsWith("task_") || name.startsWith("plan_")) {
-      desc = name;
-      detail = e.summary || "";
+    } else if (name.startsWith("web_context7")) {
+      desc = t().tool.activityLabel.fetched;
+      detail = (args.query || args.name || "") as string;
     }
 
     if (detail.startsWith("[OK] ")) detail = detail.slice(4);

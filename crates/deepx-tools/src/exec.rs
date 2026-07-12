@@ -1,81 +1,174 @@
-//! Command execution via PTY (pseudo-terminal).
+//! Command execution — direct process spawn via argv array.
 //!
-//! Windows: `conpty` (CreatePseudoConsole API) via `pwsh -Command`.
-//! Unix: `libc::forkpty` via `bash -c` or `sh -c`.
-//!
-//! Output is read by a background thread and streamed through a channel,
-//! preserving cancel/timeout responsiveness. PTY provides proper terminal
-//! semantics: ANSI colors, `isatty()`=true for the child process.
-//!
-//! 安全检测逻辑由 safety.rs 集中管理。
+//! No PTY, no shell, no streaming. Uses `std::process::Command`.
+//! Output is read via pipes (not `output()`) to prevent OOM on large outputs,
+//! and truncated by actual token count using `deepx_types::token::count_tokens`.
 
 use crate::{ToolCallCtx, ToolResult};
 use serde::Serialize;
-use std::sync::mpsc;
+use std::io::Read;
 
-/// Direct command execution (Codex-style): argv array, no shell, no PTY.
-/// Returns ExecOutput for compatibility with existing handler.
-fn direct_exec(argv: &[String], cwd: Option<&str>, _timeout_secs: u64, max_output_bytes: usize) -> ExecOutput {
-    let start_time = std::time::Instant::now();
-    let display_name = if argv.len() > 1 {
-        format!("{} ...", argv[0])
+/// Stream read from a pipe, capped at `max_bytes`. Returns (accumulated_string, was_truncated).
+fn read_stream(stream: impl Read, max_bytes: usize) -> (String, bool) {
+    let mut reader = std::io::BufReader::new(stream);
+    let mut buf = vec![0u8; 8192];
+    let mut out = String::new();
+    let mut truncated = false;
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if out.len() + n > max_bytes {
+                    let remaining = max_bytes - out.len();
+                    out.push_str(&String::from_utf8_lossy(&buf[..remaining]));
+                    truncated = true;
+                    std::io::copy(&mut reader, &mut std::io::sink()).ok();
+                    break;
+                }
+                out.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            Err(_) => break,
+        }
+    }
+    (out, truncated)
+}
+
+/// Find byte index for `target` tokens walking forward.
+fn find_token_boundary(text: &str, target_tokens: u32) -> usize {
+    let target_f64 = target_tokens as f64;
+    let mut char_count = 0usize;
+    let mut cjk_count = 0usize;
+    for (i, c) in text.char_indices() {
+        let is_cjk = matches!(c,
+            '\u{4e00}'..='\u{9fff}' | '\u{3400}'..='\u{4dbf}'
+            | '\u{3000}'..='\u{303f}' | '\u{ff00}'..='\u{ffef}'
+            | '\u{3040}'..='\u{30ff}'
+        );
+        if is_cjk { cjk_count += 1; } else { char_count += 1; }
+        let est = char_count as f64 / 3.3 + cjk_count as f64 / 1.67;
+        if est >= target_f64 { return i; }
+    }
+    text.len()
+}
+
+/// Find byte index for `target` tokens walking backward from end.
+fn find_token_boundary_reverse(text: &str, target_tokens: u32) -> usize {
+    let target_f64 = target_tokens as f64;
+    let mut char_count = 0usize;
+    let mut cjk_count = 0usize;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    for (i, c) in chars.iter().rev() {
+        let is_cjk = matches!(c,
+            '\u{4e00}'..='\u{9fff}' | '\u{3400}'..='\u{4dbf}'
+            | '\u{3000}'..='\u{303f}' | '\u{ff00}'..='\u{ffef}'
+            | '\u{3040}'..='\u{30ff}'
+        );
+        if is_cjk { cjk_count += 1; } else { char_count += 1; }
+        let est = char_count as f64 / 3.3 + cjk_count as f64 / 1.67;
+        if est >= target_f64 { return *i; }
+    }
+    0
+}
+
+/// Token-aware smart truncation: keeps head (70%) + tail (30%).
+fn token_truncate(text: &str, max_tokens: u32) -> String {
+    let total = deepx_types::token::count_tokens(text);
+    if total <= max_tokens { return text.to_string(); }
+    let head_tokens = (max_tokens as f64 * 0.7).max(1.0) as u32;
+    let tail_tokens = (max_tokens as f64 * 0.3).max(1.0) as u32;
+    let head_end = find_token_boundary(text, head_tokens);
+    let tail_start = find_token_boundary_reverse(text, tail_tokens);
+    if head_end >= tail_start {
+        let end = find_token_boundary(text, max_tokens);
+        format!("{}\n...[TRUNCATED: {}/{} tokens]", &text[..end], max_tokens, total)
     } else {
-        argv[0].clone()
-    };
+        let tail = &text[tail_start..];
+        format!(
+            "{}\n\n...[TRUNCATED: {}/{} tokens, {} lines dropped]\n\n{}",
+            &text[..head_end], max_tokens, total,
+            text[head_end..tail_start].lines().count(),
+            tail.trim_start(),
+        )
+    }
+}
+
+/// Direct command execution: argv array, no shell.
+/// Uses background threads for pipe reading and poll-based timeout.
+fn direct_exec(argv: &[String], cwd: Option<&str>, max_output_tokens: u32, timeout_secs: u64) -> ExecOutput {
+    let start_time = std::time::Instant::now();
+    let display_name = if argv.len() > 1 { format!("{} ...", argv[0]) } else { argv[0].clone() };
+    const HARD_BYTE_CAP: usize = 5 * 1024 * 1024;
 
     let mut cmd = std::process::Command::new(&argv[0]);
-    if argv.len() > 1 {
-        cmd.args(&argv[1..]);
-    }
-    #[cfg(windows)]
-    {
+    if argv.len() > 1 { cmd.args(&argv[1..]); }
+    #[cfg(windows)] {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
+    if let Some(dir) = cwd { cmd.current_dir(dir); }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return ExecOutput {
+            status: "completed", command: display_name, exit_code: Some(-1),
+            output: format!("SPAWN FAILED: {e}"), wall_time_seconds: 0.0,
+            original_tokens: 0, truncated: false, timed_out: false,
+        },
+    };
+
+    // Start background pipe readers
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+    if let Some(p) = child.stdout.take() {
+        std::thread::spawn(move || { let (s, t) = read_stream(p, HARD_BYTE_CAP); let _ = stdout_tx.send((s, t)); });
+    } else { let _ = stdout_tx.send((String::new(), false)); }
+    if let Some(p) = child.stderr.take() {
+        std::thread::spawn(move || { let (s, t) = read_stream(p, HARD_BYTE_CAP); let _ = stderr_tx.send((s, t)); });
+    } else { let _ = stderr_tx.send((String::new(), false)); }
+
+    // Poll child with timeout
+    let deadline = start_time + std::time::Duration::from_secs(timeout_secs);
+    let mut exit_code: Option<i32> = None;
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => { exit_code = status.code(); break; }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline { let _ = child.kill(); let _ = child.wait(); timed_out = true; break; }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => break,
+        }
     }
 
-    match cmd.output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let mut combined = String::new();
-            if !stderr.is_empty() {
-                combined.push_str(&stderr);
-                if !stdout.is_empty() { combined.push('\n'); }
-            }
-            combined.push_str(&stdout);
-            let original_bytes = combined.len();
-            let truncated = if combined.len() > max_output_bytes {
-                combined = combined[..max_output_bytes].to_string();
-                combined.push_str("\n... [truncated]");
-                true
-            } else {
-                false
-            };
-            ExecOutput {
-                status: if output.status.success() { "ok" } else { "error" },
-                command: display_name,
-                exit_code: output.status.code(),
-                output: combined,
-                wall_time_seconds: start_time.elapsed().as_secs_f64(),
-                original_bytes,
-                truncated,
-                process_id: None,
-            }
-        }
-        Err(e) => ExecOutput {
-            status: "error",
-            command: display_name,
-            exit_code: None,
-            output: format!("SPAWN FAILED: {e}"),
-            wall_time_seconds: 0.0,
-            original_bytes: 0,
-            truncated: false,
-            process_id: None,
-        },
+    // Collect pipe output (threads finish after child exits)
+    let (stdout_out, stdout_trunc) = stdout_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or_else(|_| {
+        (String::from("[WARN] stdout pipe timed out\n"), true)
+    });
+    let (stderr_out, stderr_trunc) = stderr_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or_else(|_| {
+        (String::from("[WARN] stderr pipe timed out\n"), true)
+    });
+
+    let mut combined = String::new();
+    if !stderr_out.is_empty() { combined.push_str(&stderr_out); if !stdout_out.is_empty() { combined.push('\n'); } }
+    combined.push_str(&stdout_out);
+
+    let hard_trunc = stderr_trunc || stdout_trunc;
+    let cleaned = strip_ansi(&combined);
+    let total_tokens = deepx_types::token::count_tokens(&cleaned);
+    let (output_str, truncated) = if total_tokens > max_output_tokens || hard_trunc {
+        (token_truncate(&cleaned, max_output_tokens), true)
+    } else {
+        (cleaned, false)
+    };
+
+    ExecOutput {
+        status: "completed", command: display_name, exit_code,
+        output: output_str, wall_time_seconds: start_time.elapsed().as_secs_f64(),
+        original_tokens: total_tokens, truncated, timed_out,
     }
 }
 
@@ -87,10 +180,9 @@ pub(crate) struct ExecOutput {
     exit_code: Option<i32>,
     output: String,
     wall_time_seconds: f64,
-    original_bytes: usize,
+    original_tokens: u32,
     truncated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    process_id: Option<u64>,
+    timed_out: bool,
 }
 
 impl ExecOutput {
@@ -99,466 +191,78 @@ impl ExecOutput {
     }
 }
 
-pub(crate) fn exec_command(args: &str, tool_call_id: &str, progress_tx: Option<mpsc::Sender<(String, String)>>) -> ExecOutput {
-    let max_output_tokens = parse_opt_u64(args, "max_output_tokens")
-        .filter(|&n| n >= 1000 && n <= 50000)
-        .unwrap_or(10000) as usize;
-    // Rough estimate: 1 token ≈ 4 bytes (UTF-8 English average)
-    let max_output_bytes = (max_output_tokens * 4).min(1024 * 1024);
-    let start_time = std::time::Instant::now();
-    let command = crate::parse_arg(args, "command");
-    if command.trim().is_empty() {
-        return ExecOutput {
-            status: "error", command: String::new(), exit_code: None,
-            output: "empty command".into(), wall_time_seconds: 0.0,
-            original_bytes: 0, truncated: false, process_id: None,
-        };
-    }
-    crate::audit::maybe_log_exec(&command);
-    let cwd = parse_opt(args, "cwd");
-    let timeout_secs = parse_opt_u64(args, "timeout_secs")
-        .filter(|&n| n > 0 && n <= 3600)
-        .unwrap_or(30);
+// ── Tool handler ──
 
-    // ── Spawn via PTY ──
-    log::info!("[EXEC] spawn start, has_progress_tx={}", progress_tx.is_some());
-    let shell = parse_opt(args, "shell").unwrap_or_else(|| "pwsh".to_string());
-    let mut proc = match crate::pty::spawn(&command, cwd.as_deref(), &shell) {
-        Ok(p) => p,
-        Err(e) => return ExecOutput {
-            status: "error", command, exit_code: None,
-            output: format!("SPAWN FAILED: {}", e), wall_time_seconds: 0.0,
-            original_bytes: 0, truncated: false, process_id: None,
-        },
-    };
-
-    // ── Reader thread: PTY output → channel ──
-    let reader = match proc.take_output() {
-        Some(r) => r,
-        None => return ExecOutput {
-            status: "error", command, exit_code: None,
-            output: "NO PIPE".into(), wall_time_seconds: 0.0,
-            original_bytes: 0, truncated: false, process_id: None,
-        },
-    };
-
-    // Register in process registry BEFORE starting (so it's findable on timeout)
-    let registry_id = crate::process_registry::ProcessRegistry::register(
-        &format!("exec:{}", &command[..command.floor_char_boundary(command.len().min(30))])
-    );
-
-    let pt_out = progress_tx.clone();
-    let tc_id = tool_call_id.to_string();
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    let done_tx_thread = done_tx.clone();
-
-    let _reader_handle = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut reader = reader;
-        let mut buf = vec![0u8; 4096];
-        let mut pending = String::new();
-        let mut partial = Vec::new();
-        let mut last_flush = std::time::Instant::now();
-        const FLUSH_MS: u64 = 50;
-        const FLUSH_BYTES: usize = 512;
-
-        let flush_now = |pending: &mut String, tc_id: &str,
-                         pt_out: &Option<mpsc::Sender<(String, String)>>,
-                         done: &mpsc::Sender<String>| {
-            if !pending.is_empty() {
-                if let Some(tx) = pt_out {
-                    let _ = tx.send((tc_id.to_string(), pending.clone()));
-                }
-                crate::process_registry::ProcessRegistry::append_output(registry_id, pending);
-                let _ = done.send(pending.clone());
-                pending.clear();
-            }
-        };
-
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => {
-                    if !partial.is_empty() {
-                        pending.push_str(&String::from_utf8_lossy(&partial));
-                    }
-                    if !pending.is_empty() {
-                        if let Some(tx) = pt_out {
-                            let _ = tx.send((tc_id.clone(), pending.clone()));
-                        }
-                        crate::process_registry::ProcessRegistry::append_output(registry_id, &pending);
-                        let _ = done_tx_thread.send(std::mem::take(&mut pending));
-                    }
-                    break;
-                }
-                Ok(n) => {
-                    let chunk_bytes: Vec<u8> = if partial.is_empty() {
-                        buf[..n].to_vec()
-                    } else {
-                        let mut merged = std::mem::take(&mut partial);
-                        merged.extend_from_slice(&buf[..n]);
-                        merged
-                    };
-                    match String::from_utf8(chunk_bytes.clone()) {
-                        Ok(clean) => pending.push_str(&clean),
-                        Err(utf8_err) => {
-                            let valid_len = utf8_err.utf8_error().valid_up_to();
-                            partial = chunk_bytes[valid_len..].to_vec();
-                            if let Ok(s) = String::from_utf8(chunk_bytes[..valid_len].to_vec()) {
-                                pending.push_str(&s);
-                            }
-                        }
-                    }
-                    let elapsed = last_flush.elapsed().as_millis() as u64;
-                    if elapsed >= FLUSH_MS || pending.len() >= FLUSH_BYTES {
-                        flush_now(&mut pending, &tc_id, &pt_out, &done_tx_thread);
-                        last_flush = std::time::Instant::now();
-                    }
-                }
-                Err(_) => {
-                    if !pending.is_empty() {
-                        if let Some(tx) = pt_out {
-                            let _ = tx.send((tc_id.clone(), pending.clone()));
-                        }
-                        crate::process_registry::ProcessRegistry::append_output(registry_id, &pending);
-                        let _ = done_tx_thread.send(std::mem::take(&mut pending));
-                    }
-                    break;
-                }
-            }
+pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
+    let argv: Vec<String> = match ctx.args.get("argv").and_then(|v| v.as_array()) {
+        Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        None => {
+            return ToolResult { success: false, content: crate::json_err("MISSING_ARGV", "exec_run requires an argv array", "Example: [\"cargo\", \"check\"]") };
         }
-        log::info!("[EXEC] reader thread done");
+    };
+    if argv.is_empty() {
+        return ToolResult { success: false, content: crate::json_err("EMPTY_ARGV", "argv array is empty", "Provide at least one element.") };
+    }
+    let max_output_tokens = ctx.get_u64("max_output_tokens").filter(|&n| n >= 100 && n <= 50000).unwrap_or(10000) as u32;
+    let timeout_secs = ctx.get_u64("timeout_secs").filter(|&n| n > 0 && n <= 3600).unwrap_or(30);
+    // Fall back to workspace root when the caller doesn't supply cwd
+    let cwd: Option<String> = ctx.get_str("cwd").map(String::from).or_else(|| {
+        let ws = crate::CURRENT_WORKSPACE.read().ok()?;
+        if ws.is_empty() || *ws == "." { None } else { Some(ws.clone()) }
     });
-    drop(done_tx);
-
-    // ── Main loop: timeout + cancel + collect ──
-    let mut output_buf = String::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-
-    let _exit_reason = loop {
-        use std::sync::atomic::Ordering;
-        let remaining = deadline.checked_duration_since(std::time::Instant::now()).unwrap_or_default();
-
-        // Cancel
-        if crate::CANCEL.load(Ordering::SeqCst) {
-            let _ = proc.kill();
-            crate::process_registry::ProcessRegistry::kill(registry_id);
-            let elapsed = start_time.elapsed();
-            let n = output_buf.len();
-            return ExecOutput {
-                status: "cancelled", command, exit_code: None,
-                output: if n > 0 { output_buf.trim().to_string() } else { String::new() },
-                wall_time_seconds: elapsed.as_secs_f64(),
-                original_bytes: n, truncated: false, process_id: None,
-            };
-        }
-
-        // Timeout — register and keep alive instead of killing
-        if remaining.is_zero() {
-            // Final drain: capture any output already in the channel
-            while let Ok(chunk) = done_rx.try_recv() {
-                output_buf.push_str(&chunk);
-            }
-            // Take stdin writer for interactive process support
-            if let Some(writer) = proc.take_input() {
-                crate::process_registry::ProcessRegistry::attach_writer(registry_id, writer);
-            }
-            // Detach so background Drop doesn't kill the process
-            proc.detach();
-            // Move proc to background watcher thread
-            std::thread::spawn(move || {
-                let exit = proc.wait(None).ok();
-                if let Some(es) = exit {
-                    crate::process_registry::ProcessRegistry::mark_exited(registry_id, es.code());
-                } else {
-                    crate::process_registry::ProcessRegistry::mark_exited(registry_id, -1);
-                }
-                log::info!("[EXEC] background watcher done for pid={}", registry_id);
-            });
-
-            let elapsed = start_time.elapsed();
-            let n = output_buf.len();
-            let output = truncate_output(&output_buf, max_output_bytes);
-            let truncated = output.len() < n;
-            return ExecOutput {
-                status: "timeout", command, exit_code: None,
-                output: if output.is_empty() { "(no output yet)".into() } else { output },
-                wall_time_seconds: elapsed.as_secs_f64(),
-                original_bytes: n, truncated, process_id: Some(registry_id as u64),
-            };
-        }
-
-        // Read output chunk
-        match done_rx.recv_timeout(remaining.min(std::time::Duration::from_millis(200))) {
-            Ok(chunk) => {
-                output_buf.push_str(&chunk);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if !proc.is_alive() {
-                    break "process_exited";
-                }
-                continue;
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                break "reader_disconnected";
-            }
-        }
+    let cwd_ref: Option<&str> = cwd.as_deref();
+    let result = direct_exec(&argv, cwd_ref, max_output_tokens, timeout_secs);
+    let success = match result.exit_code {
+        Some(0) => true,
+        Some(_) => false,
+        None => !result.timed_out, // killed by timeout / spawn failed is already a signal
     };
-
-    // ── Normal exit: try to capture exit status, then drain ──
-    // On Windows (conpty), wait() always returns code=0; on Unix, we get the real exit code.
-    let exit_status = proc.wait(Some(500)).ok();
-    if let Some(ref es) = exit_status {
-        crate::process_registry::ProcessRegistry::mark_exited(registry_id, es.code());
-    } else {
-        crate::process_registry::ProcessRegistry::mark_exited(registry_id, 0);
-    }
-    drop(proc);
-
-    // Final drain of any remaining lines
-    while let Ok(chunk) = done_rx.try_recv() {
-        output_buf.push_str(&chunk);
-    }
-
-    // Strip ANSI escape sequences — PTY output includes terminal control codes
-    // that are meaningless noise to the model (e.g. \x1b[?9001h, \x1b[2J).
-    let output_buf = strip_ansi(&output_buf);
-
-    // ── Format result ──
-    let elapsed = start_time.elapsed();
-    let total_bytes = output_buf.len();
-    let output = truncate_output(&output_buf, max_output_bytes);
-    let truncated = total_bytes > max_output_bytes;
-
-    let exit_code = exit_status.as_ref().map(|es| es.code());
-
-    ExecOutput {
-        status: "ok", command, exit_code,
-        output: if output.trim().is_empty() { String::new() } else { output.trim().to_string() },
-        wall_time_seconds: elapsed.as_secs_f64(),
-        original_bytes: total_bytes, truncated, process_id: None,
-    }
+    ToolResult { success, content: result.to_json() }
 }
 
-/// Truncate output to max bytes at a char boundary, appending a truncation note.
-fn truncate_output(buf: &str, max: usize) -> String {
-    if buf.len() <= max {
-        return buf.to_string();
-    }
-    let boundary = buf.floor_char_boundary(max);
-    let mut s = buf[..boundary].to_string();
-    s.push_str(&format!("\n...[TRUNCATED: {}/{} bytes shown]", boundary, buf.len()));
-    s
-}
+// ── Output helpers ──
 
-/// Strip ANSI escape sequences from PTY output.
-///
-/// PTY spawn preserves terminal control codes for the TUI's live display,
-/// but they are meaningless noise for the LLM. This strips SGR (colors),
-/// cursor movement, screen clearing, DEC private modes, and other CSI sequences.
+/// Strip ANSI escape sequences from output.
 fn strip_ansi(s: &str) -> String {
-    // CSI sequences: ESC [ ... final byte (0x40–0x7E)
-    // Also handles OSC (ESC ]), DCS (ESC P), and stray ESC not followed by [
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == 0x1b {
             i += 1;
-            if i >= bytes.len() {
-                break;
-            }
+            if i >= bytes.len() { break; }
             match bytes[i] {
-                b'[' => {
-                    // CSI: skip until final byte 0x40–0x7E
-                    i += 1;
-                    while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
-                        i += 1;
-                    }
-                    if i < bytes.len() {
-                        i += 1; // skip the final byte
-                    }
-                }
-                b']' | b'P' | b'_' | b'^' => {
-                    // OSC / DCS / APC / PM: skip until ST (ESC \) or BEL
-                    i += 1;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                _ => {
-                    // Lone ESC or other escape — skip just this byte
-                }
+                b'[' => { i += 1; while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) { i += 1; } if i < bytes.len() { i += 1; } }
+                b']' | b'P' | b'_' | b'^' => { i += 1; while i < bytes.len() { if bytes[i] == 0x07 { i += 1; break; } if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' { i += 2; break; } i += 1; } }
+                _ => {}
             }
-        } else {
-            // Push a run of non-ESC bytes as a &str slice to preserve
-            // multi-byte UTF-8.  Using `bytes[i] as char` would corrupt
-            // CJK / emoji sequences by treating each byte as a separate
-            // Unicode codepoint.
-            let start = i;
-            while i < bytes.len() && bytes[i] != 0x1b {
-                i += 1;
-            }
-            out.push_str(&s[start..i]);
-        }
+        } else { out.push(bytes[i] as char); i += 1; }
     }
     out
 }
 
-// ── Handler ──
-
-pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
-    // ── argv mode (Codex-style direct exec) ──
-    if let Some(arr) = ctx.args.get("argv").and_then(|v| v.as_array()) {
-        let argv: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-        if argv.is_empty() {
-            let err = crate::json_err("EMPTY_ARGV", "argv array is empty", "Provide at least one element in the argv array.");
-            return ToolResult { success: false, content: err };
-        }
-        let max_output_tokens = ctx.get_u64("max_output_tokens")
-            .filter(|&n| n >= 1000 && n <= 50000)
-            .unwrap_or(10000) as usize;
-        let max_output_bytes = (max_output_tokens * 4).min(1024 * 1024);
-        let timeout_secs = ctx.get_u64("timeout_secs")
-            .filter(|&n| n > 0 && n <= 3600)
-            .unwrap_or(30);
-        let cwd = ctx.get_str("cwd");
-        let result = direct_exec(&argv, cwd, timeout_secs, max_output_bytes);
-        let success = result.status == "ok";
-        let json = result.to_json();
-        return ToolResult { success, content: json };
-    }
-
-    // ── command mode (shell string via PTY) ──
-    let command = ctx.get_str("command").unwrap_or("").to_string();
-    if command.trim().is_empty() {
-        let err = crate::json_err("EMPTY_COMMAND", "command is empty", "Use 'argv' for direct exec or 'command' for shell mode.");
-        return ToolResult { success: false, content: err };
-    }
-
-    let args = serde_json::json!({
-        "command": command,
-        "cwd": ctx.get_str("cwd"),
-        "timeout_secs": ctx.get_u64("timeout_secs"),
-    });
-    let result = exec_command(&args.to_string(), &ctx.id, ctx.tx_progress);
-    let success = result.status == "ok";
-    let json = result.to_json();
-    ToolResult { success, content: json }
-}
-
-
-use deepx_types::arg::{parse_opt, parse_opt_u64};
-
-// ── write_stdin handler ──
-
-pub(super) fn handle_write_stdin(ctx: ToolCallCtx) -> ToolResult {
-    let raw_pid = ctx.get_u64("process_id").unwrap_or(0);
-    // PID values fit in u32 on all supported platforms; reject overflow.
-    if raw_pid == 0 || raw_pid > u32::MAX as u64 {
-        let err = crate::json_err("INVALID_PID", "process_id is required and must be a valid 32-bit PID", "Provide the process_id returned by exec_run timeout.");
-        return ToolResult { success: false, content: err };
-    }
-    let process_id = raw_pid as u32;
-    let input = ctx.get_str("input").unwrap_or("").to_string();
-    let yield_ms = ctx.get_u64("yield_time_ms").unwrap_or(5000).min(30000);
-
-    // Clear accumulated output to capture fresh response
-    crate::process_registry::ProcessRegistry::clear_output(process_id);
-
-    // Write to stdin
-    match crate::process_registry::ProcessRegistry::write_to(process_id, &input) {
-        Ok(written) => {
-            // Wait for the process to produce output
-            std::thread::sleep(std::time::Duration::from_millis(yield_ms));
-
-            let info = crate::process_registry::ProcessRegistry::get_info(process_id)
-                .unwrap_or(serde_json::json!({"error": "process not found"}));
-
-            let result = serde_json::json!({
-                "status": "ok",
-                "process_id": process_id,
-                "bytes_written": written,
-                "process": info,
-            });
-            ToolResult { success: true, content: result.to_string() }
-        }
-        Err(e) => {
-            let info = crate::process_registry::ProcessRegistry::get_info(process_id)
-                .unwrap_or(serde_json::json!({"error": "process not found"}));
-            let result = serde_json::json!({
-                "status": "error",
-                "process_id": process_id,
-                "error": e,
-                "process": info,
-            });
-            ToolResult { success: false, content: result.to_string() }
-        }
-    }
-}
-
-// ── 注册入口 ──
+// ── Registration ──
 
 use crate::{ToolHandler, ToolRisk};
 use std::time::Duration;
 
 pub fn register(mgr: &mut crate::ToolManager) {
-    // exec/run
-    let desc = if cfg!(windows) {
-        "Execute a command directly (argv array, preferred) or via shell (command string). Returns JSON with status/exit_code/output/wall_time_seconds.\n\
-         Prefer `argv` for simple commands like [\"cargo\",\"check\"]. Use `command` only when you need shell pipes or redirects."
-    } else {
-        "Execute a command directly (argv array, preferred) or via shell (command string). Returns JSON with status/exit_code/output/wall_time_seconds.\n\
-         Prefer `argv` for simple commands like [\"cargo\",\"check\"]. Use `command` only when you need shell pipes or redirects."
-    };
     mgr.register(ToolHandler {
         key: "exec_run".to_string(),
-        description: desc,
+        description: "Execute a command. Pass {\"argv\": [\"program\", \"arg1\", \"arg2\", ...]}. The first element is the executable, the rest are arguments. No shell — for shell builtins use cmd /c or pwsh -Command as the executable. For pipes or redirects, write a script file and run it. Returns {\"status\": \"completed\", \"exit_code\": 0, \"output\": \"...\", \"wall_time_seconds\": 0.5, \"timed_out\": false}",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "argv": {"type": "array", "items": {"type": "string"}, "description": "Command argv array (direct exec, no shell). Preferred. Example: [\"cargo\",\"check\"]"},
-                "command": {"type": "string", "description": "Shell command string (via pwsh/bash). Use only when you need pipes/redirects."},
-                "cwd": {"type": "string", "description": "Working directory for the command"},
-                "timeout_secs": {"type": "integer", "description": "Max execution time in seconds (1-3600, default 30)"},
-                "max_output_tokens": {"type": "integer", "description": "Max output tokens before truncation (1000-50000, default 10000)"}
+                "argv": { "type": "array", "items": {"type": "string"}, "description": "Command as array of strings. argv[0]=executable, argv[1..]=args. Example: [\"cargo\",\"check\"]" },
+                "cwd": {"type": "string", "description": "Working directory (optional). Defaults to workspace root."},
+                "timeout_secs": {"type": "integer", "description": "Timeout in seconds (1-3600, default 30)"},
+                "max_output_tokens": { "type": "integer", "description": "Max tokens of output before smart truncation (head 70% + tail 30%). Default 10000, min 100, max 50000." }
             },
-            "anyOf": [
-                {"required": ["argv"]},
-                {"required": ["command"]}
-            ],
+            "required": ["argv"],
             "additionalProperties": false
         }),
         handler: handle_run,
         risk: ToolRisk::Destructive,
         default_timeout: Duration::from_secs(300),
     });
-
-    // exec/write_stdin
-    mgr.register(ToolHandler {
-        key: "exec_write_stdin".to_string(),
-        description: "Write input to a running process's stdin and read subsequent output. \n\
-                      Use after exec/run returns a process_id (timeout status) to interact with long-running processes.",
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "process_id": {"type": "integer", "description": "Process ID from exec/run timeout response"},
-                "input": {"type": "string", "description": "Text to write to stdin (e.g. 'y\\n' to answer yes)"},
-                "yield_time_ms": {"type": "integer", "description": "Wait time in ms before reading output (default 5000, max 30000)"}
-            },
-            "required": ["process_id", "input"],
-            "additionalProperties": false
-        }),
-        handler: handle_write_stdin,
-        risk: ToolRisk::Destructive,
-        default_timeout: Duration::from_secs(60),
-    });
-
 }

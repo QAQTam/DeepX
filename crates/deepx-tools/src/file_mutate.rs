@@ -22,29 +22,6 @@ fn format_diff_result(prefix: &str, path: &str, diff: &str, label: &str, _succes
 
 // ── Helpers from file_edit ──
 
-fn parse_paths(args: &serde_json::Value) -> Vec<String> {
-    if let Some(arr) = args.get("paths").and_then(|a| a.as_array()) {
-        let paths: Vec<String> = arr.iter().filter_map(|p| p.as_str().map(String::from)).collect();
-        if !paths.is_empty() { return paths; }
-    }
-    let path = args.s("path");
-    if path.is_empty() { vec![] } else { vec![path.to_string()] }
-}
-
-fn parse_patterns(args: &serde_json::Value) -> Vec<(String, String)> {
-    if let Some(arr) = args.get("patterns").and_then(|a| a.as_array()) {
-        let patterns: Vec<(String, String)> = arr.iter().filter_map(|p| {
-            let old = p.get("old").and_then(|o| o.as_str()).unwrap_or("");
-            let new = p.get("new").and_then(|n| n.as_str()).unwrap_or("");
-            if old.is_empty() { None } else { Some((old.to_string(), new.to_string())) }
-        }).collect();
-        if !patterns.is_empty() { return patterns; }
-    }
-    let old = args.s("old_string");
-    let new = args.s("new_string");
-    if old.is_empty() { vec![] } else { vec![(old, new)] }
-}
-
 enum Match {
     Ok { msg: String },
     NoMatch { msg: String },
@@ -187,88 +164,59 @@ handler!(handle_write_file, exec_write_file);
 // ── exec_edit_file (from file_edit.rs) ──
 
 pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
-    let paths = parse_paths(args);
-    if paths.is_empty() {
-        return "[ERROR] edit_file: no path specified\n[HINT] Provide 'path' (single) or 'paths' (array).".into();
+    let path = crate::resolve_workspace_path(&args.s("path"));
+    if path.is_empty() {
+        return "[ERROR] edit_file: no path specified\n[HINT] Provide 'path' (string) to the file.".into();
     }
-    let patterns = parse_patterns(args);
-    if patterns.is_empty() {
-        return "[ERROR] edit_file: no patterns specified\n[HINT] Provide 'old_string'/'new_string' (single) or 'patterns' (array).".into();
+    let old_str = args.s("old_string");
+    if old_str.is_empty() {
+        return "[ERROR] edit_file: no old_string specified\n[HINT] Provide 'old_string' (text to find).".into();
     }
+    let new_str = args.s("new_string");
     let replace_all = args.opt_bool("replace_all").unwrap_or(false);
     let use_regex = args.opt_bool("regex").unwrap_or(false);
     let dry_run = args.opt_bool("dry_run").unwrap_or(false);
 
-    let mut results = Vec::new();
-
-    for path in &paths {
-        let resolved = crate::resolve_workspace_path(path);
-        let raw = match std::fs::read_to_string(&resolved) {
-            Ok(c) => c,
-            Err(e) => {
-                if is_binary_read_error(&e.to_string()) {
-                    results.push(format!("[PARTIAL] {path} — binary file, edit_file works on text only"));
-                } else {
-                    results.push(format!("[ERROR] Cannot read {path}: {e}"));
-                }
-                continue;
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            if is_binary_read_error(&e.to_string()) {
+                return format!("[PARTIAL] {path} — binary file, edit_file works on text only");
             }
-        };
-
-        let (orig, was_crlf) = normalize_newlines(&raw);
-        if was_crlf { log::info!("edit_file: {path} had CRLF, normalized to LF"); }
-
-        let mut content = orig.clone();
-        let mut msgs: Vec<String> = Vec::new();
-        let mut all_matched = true;
-
-        for (old_raw, new_raw) in &patterns {
-            let old = old_raw.replace("\r\n", "\n").replace('\r', "\n");
-            let new = new_raw.replace("\r\n", "\n").replace('\r', "\n");
-            let (next, m) = apply_one(&content, &old, &new, use_regex, replace_all, path);
-            match m {
-                Match::Ok { msg } => { msgs.push(msg); content = next; }
-                Match::NoMatch { msg } => { msgs.push(format!("[ ] {msg}")); all_matched = false; }
-                Match::Error { msg } => { msgs.push(format!("[ERROR] {msg}")); all_matched = false; break; }
-            }
+            return format!("[ERROR] Cannot read {path}: {e}");
         }
+    };
 
-        if !all_matched {
-            results.push(format!("[PARTIAL] {path} — some patterns did not match\n{}", msgs.join("\n")));
-            continue;
+    let (orig, was_crlf) = normalize_newlines(&raw);
+    if was_crlf { log::info!("edit_file: {path} had CRLF, normalized to LF"); }
+
+    let old = old_str.replace("\r\n", "\n").replace('\r', "\n");
+    let new = new_str.replace("\r\n", "\n").replace('\r', "\n");
+    let (content, m) = apply_one(&orig, &old, &new, use_regex, replace_all, &path);
+    match m {
+        Match::Ok { msg: _ } => {}
+        Match::NoMatch { msg } => {
+            return format!("[PARTIAL] {path} — pattern did not match\n[HINT] {msg}\n       Use file_read to check current content, then retry.");
         }
-
-        if dry_run {
-            let diff = unified_diff(&orig, &content, path);
-            results.push(format_diff_result("DRY RUN", path, &diff, "edit_file", false));
-        } else {
-            // Restore CRLF if original file had Windows line endings
-            let write_content = if was_crlf {
-                content.replace('\n', "\r\n")
-            } else {
-                content.clone()
-            };
-            match std::fs::write(&resolved, &write_content) {
-                Ok(_) => {
-                    crate::file_state::record_edit(path, 0);
-                    let diff = unified_diff(&orig, &content, path);
-                    results.push(format_diff_result("OK", path, &diff, "edit_file", true));
-                }
-                Err(e) => {
-                    results.push(format!("[ERROR] Cannot write {path}: {e}"));
-                }
-            }
+        Match::Error { msg } => {
+            return format!("[ERROR] {path}: {msg}");
         }
     }
 
-    // Multi-file summary
-    if paths.len() > 1 {
-        let ok = results.iter().filter(|r| r.starts_with("[OK]") || r.starts_with("[DRY RUN]")).count();
-        let err = results.iter().filter(|r| r.starts_with("[ERROR]") || r.starts_with("[PARTIAL]")).count();
-        results.push(format!("[SUMMARY] {}/{} files ok, {} failed", ok, paths.len(), err));
+    if dry_run {
+        let diff = unified_diff(&orig, &content, &path);
+        return format_diff_result("DRY RUN", &path, &diff, "edit_file", false);
     }
 
-    results.join("\n\n")
+    let write_content = if was_crlf { content.replace('\n', "\r\n") } else { content.clone() };
+    match std::fs::write(&path, &write_content) {
+        Ok(_) => {
+            crate::file_state::record_edit(&path, 0);
+            let diff = unified_diff(&orig, &content, &path);
+            format_diff_result("OK", &path, &diff, "edit_file", true)
+        }
+        Err(e) => format!("[ERROR] Cannot write {path}: {e}"),
+    }
 }
 
 handler!(handle_edit_file, exec_edit_file);
@@ -372,84 +320,14 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
 
 handler!(handle_delete_file, exec_delete_file);
 
-// ── exec_move_file & exec_copy_file (from file_move.rs) ──
+// ── exec_edit_fuzzy (was file_edit_diff) ──
 
-fn ensure_parent_dir(dest: &str) {
-    if let Some(parent) = std::path::Path::new(dest).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-}
-
-pub(super) fn exec_move_file(args: &serde_json::Value) -> String {
-    let source = crate::resolve_workspace_path(&args.s("source"));
-    let dest = crate::resolve_workspace_path(&args.s("dest"));
-    ensure_parent_dir(&dest);
-    match std::fs::rename(&source, &dest) {
-        Ok(_) => {
-            crate::file_state::record_move(&source, &dest);
-            serde_json::json!({
-                "timeis": crate::now_utc8(),
-                "status": "ok",
-                "source": source,
-                "dest": dest,
-                "content": format!("Moved {source} → {dest}"),
-            }).to_string()
-        }
-        Err(e) => serde_json::json!({
-            "timeis": crate::now_utc8(),
-            "status": "error",
-            "code": "MOVE_FAILED",
-            "source": source,
-            "dest": dest,
-            "message": e.to_string(),
-            "hint": "Check source exists and target directory is writable."
-        }).to_string(),
-    }
-}
-
-handler!(handle_move_file, exec_move_file);
-
-pub(super) fn exec_copy_file(args: &serde_json::Value) -> String {
-    let source = crate::resolve_workspace_path(&args.s("source"));
-    let dest = crate::resolve_workspace_path(&args.s("dest"));
-    ensure_parent_dir(&dest);
-    match std::fs::copy(&source, &dest) {
-        Ok(size) => serde_json::json!({
-            "timeis": crate::now_utc8(),
-            "status": "ok",
-            "source": source,
-            "dest": dest,
-            "bytes": size,
-            "content": format!("Copied {source} → {dest} ({size} bytes)"),
-        }).to_string(),
-        Err(e) => serde_json::json!({
-            "timeis": crate::now_utc8(),
-            "status": "error",
-            "code": "COPY_FAILED",
-            "source": source,
-            "dest": dest,
-            "message": e.to_string(),
-            "hint": "Check source exists and target directory is writable."
-        }).to_string(),
-    }
-}
-
-handler!(handle_copy_file, exec_copy_file);
-
-// ── exec_edit_file_diff (from file_edit_diff.rs) ──
-
-pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
+pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
     let path = crate::resolve_workspace_path(
         args.get("path").and_then(|v| v.as_str()).unwrap_or("")
     );
     if path.is_empty() {
-        return serde_json::json!({
-            "timeis": crate::now_utc8(),
-            "status": "error",
-            "code": "MISSING_PATH",
-            "message": "path is required",
-            "hint": "Provide a file path to edit."
-        }).to_string();
+        return format!("[ERROR] edit_file_diff: MISSING_PATH — path is required\n[HINT] Provide a file path to edit.");
     }
     let old_lines: Vec<String> = args.get("old_lines").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
@@ -460,19 +338,12 @@ pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
     let context_after: Vec<String> = args.get("context_after").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
     let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
-    let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
+    let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
     let start_line: Option<usize> = args.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
     let end_line: Option<usize> = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
 
     let err = |code: &str, msg: &str, hint: &str| -> String {
-        serde_json::json!({
-            "timeis": crate::now_utc8(),
-            "status": "error",
-            "code": code,
-            "path": path,
-            "message": msg,
-            "hint": hint,
-        }).to_string()
+        format!("[ERROR] {path}: {code} — {msg}\n[HINT] {hint}")
     };
 
     if old_lines.is_empty() && start_line.is_none() {
@@ -595,13 +466,13 @@ pub(super) fn exec_edit_file_diff(args: &serde_json::Value) -> String {
     apply_diff_and_format(&path, &file_lines, match_idx, win, &new_lines, description, was_fuzzy, dry_run, was_crlf)
 }
 
-handler!(handle_edit_file_diff, exec_edit_file_diff);
+handler!(handle_edit_file_diff, exec_edit_fuzzy);
 
 // ── Registration ──
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: "file_write".to_string(),
+        key: "write".to_string(),
         description: "Create, overwrite, or append to a file.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false}},"required":["path","content"],"additionalProperties":false}),
         handler: handle_write_file,
@@ -609,43 +480,27 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: "file_edit".to_string(),
-        description: "String replacement in files. Supports exact match, regex, multi-file (paths array), and batch edits (patterns array).",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"paths":{"type":"array","items":{"type":"string"},"description":"Multiple file paths"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"patterns":{"type":"array","items":{"type":"object","properties":{"old":{"type":"string"},"new":{"type":"string"}},"required":["old","new"]},"description":"Array of {old, new} for batch edits"},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file","default":false}},"required":["path"],"additionalProperties":false}),
+        key: "edit".to_string(),
+        description: "String replacement in files. Supports exact match, regex (with capture groups). Default to dry_run=true for complex changes. For fuzzy or line-number addressing use file_edit_diff.",
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file. Use for complex edits; call again with false to apply.","default":false}},"required":["path"],"additionalProperties":false}),
         handler: handle_edit_file,
         risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(60),
     });
     mgr.register(ToolHandler {
-        key: "file_edit_diff".to_string(),
-        description: "Fuzzy multi-line edit via old_lines+new_lines. Supports line-number addressing with start_line/end_line.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to remove (not needed when start_line set)"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert in place of old_lines"},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change for disambiguation"},"start_line":{"type":"integer","description":"1-based line number to start replacement at (bypasses content matching)"},"end_line":{"type":"integer","description":"1-based line number to end replacement at (inclusive, defaults to start_line)"},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file (default true)","default":true},"description":{"type":"string","description":"Why this change is needed (optional)"}},"required":["path","new_lines"],"additionalProperties":false}),
+        key: "edit_block".to_string(),
+        description: "Multi-line edit with fuzzy matching. Provide new_lines to insert; use old_lines for content-based matching or start_line/end_line for line-number addressing. context_before/after disambiguate identical text.",
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to find and replace (not needed when start_line is set)"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert. REQUIRED."},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change, for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change, for disambiguation"},"start_line":{"type":"integer","description":"1-based line to start replacement at (bypasses old_lines matching)"},"end_line":{"type":"integer","description":"1-based line to end replacement at (inclusive, defaults to start_line)"},"dry_run":{"type":"boolean","description":"Preview diff only (default: false)","default":false},"description":{"type":"string","description":"Brief note explaining why this change is needed (optional)"}},"required":["path","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
         risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: "file_delete".to_string(),
+        key: "delete".to_string(),
         description: "Move file to trash (.deepx/trash/) instead of permanent deletion.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path to delete"}},"required":["path"],"additionalProperties":false}),
         handler: handle_delete_file,
         risk: ToolRisk::Destructive,
         default_timeout: std::time::Duration::from_secs(15),
-    });
-    mgr.register(ToolHandler {
-        key: "file_move".to_string(),
-        description: "Move or rename a file or directory. Creates parent dirs of dest.",
-        input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
-        handler: handle_move_file,
-        risk: ToolRisk::Write,
-        default_timeout: std::time::Duration::from_secs(30),
-    });
-    mgr.register(ToolHandler {
-        key: "file_copy".to_string(),
-        description: "Copy a file. Creates parent dirs of dest.",
-        input_schema: serde_json::json!({"type":"object","properties":{"source":{"type":"string","description":"Source path"},"dest":{"type":"string","description":"Destination path"}},"required":["source","dest"],"additionalProperties":false}),
-        handler: handle_copy_file,
-        risk: ToolRisk::Write,
-        default_timeout: std::time::Duration::from_secs(30),
     });
 }

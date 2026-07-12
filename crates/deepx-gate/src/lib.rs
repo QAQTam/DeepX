@@ -15,7 +15,6 @@ pub mod guard;
 pub mod tool_parser;
 
 pub use types::{ProviderConfig, ProviderKind, StreamEvent};
-pub use openai::query_balance;
 
 use deepx_types::{Message, ToolDef};
 use std::sync::atomic::AtomicBool;

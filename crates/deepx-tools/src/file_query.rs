@@ -5,9 +5,24 @@ use std::process::Command;
 use crate::{ToolHandler, ToolRisk, ToolCallCtx, ToolResult, handler, JsonArgs};
 use super::file_shared::{rust_grep, unified_diff, is_binary_read_error};
 
-// ── exec_read_file (from file_read.rs) ──
+// ------ exec_read_file (from file_read.rs) ------
 
 pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
+    // ------ Batch mode: read multiple files ------
+    if let Some(paths) = args.get("paths").and_then(|v| v.as_array()) {
+        let mut results = Vec::new();
+        for p in paths {
+            if let Some(pstr) = p.as_str() {
+                let mut per = serde_json::json!({"path": pstr});
+                if let Some(s) = args.get("start_line") { per["start_line"] = s.clone(); }
+                if let Some(e) = args.get("end_line") { per["end_line"] = e.clone(); }
+                results.push(exec_read_file(&per));
+            }
+        }
+        return format!("[{} files]\n\n{}", paths.len(), results.join("\n\n---\n\n"));
+    }
+
+    // ------ Single file mode ------
     let path = crate::resolve_workspace_path(&args.s("path"));
     let start: Option<usize> = args.get("start_line").and_then(|v| v.as_u64()).map(|n| (n as usize).max(1));
     let end: Option<usize> = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
@@ -29,7 +44,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
         Ok(raw) => {
             let content = raw.replace("\r\n", "\n").replace('\r', "\n");
 
-            // ── Cache check: return "unchanged" if content matches previous read ──
+            // ------ Cache check: return "unchanged" if content matches previous read ------
             if start.is_none() && end.is_none() {
                 if let Some(cached) = crate::file_cache::check(&path, &content) {
                     return cached;
@@ -45,7 +60,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
             let truncated = start.is_some() || end.is_some() || total > 200;
 
             let body: String = if total <= 200 && start.is_none() && end.is_none() {
-                // Small file, full output — no line numbers in body
+                // Small file, full output ---no line numbers in body
                 all_lines.join("\n")
             } else if start.is_some() || end.is_some() {
                 // Range read
@@ -57,7 +72,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
                 let mut s = all_lines[..head].join("\n");
                 if total > head + tail {
                     s.push_str(&format!(
-                        "\n⋮ [{} lines omitted — use start_line to read specific range]",
+                        "\n--?[{} lines omitted --?use start_line to read specific range]",
                         total - head - tail
                     ));
                 }
@@ -68,7 +83,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
                 s
             };
 
-            // ── Cache: store full-file reads for future deduplication ──
+            // ------ Cache: store full-file reads for future deduplication ------
             if start.is_none() && end.is_none() {
                 crate::file_state::record_read(&path, &content, total);
             }
@@ -98,7 +113,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
                 }).to_string()
             } else {
                 let url_hint = if path.contains("://") || path.contains(".com") || path.contains("www.") {
-                    "\n[HINT] This looks like a URL — did you mean to call web_fetch() instead?"
+                    "\n[HINT] This looks like a URL --?did you mean to call web_fetch() instead?"
                 } else { "" };
                 serde_json::json!({
                     "timeis": crate::now_utc8(),
@@ -115,7 +130,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
 
 handler!(handle_read_file, exec_read_file);
 
-// ── exec_list_dir (from file_list_dir.rs) ──
+// ------ exec_list_dir (from file_list_dir.rs) ------
 
 pub(super) fn exec_list_dir(args: &serde_json::Value) -> String {
     let path = crate::resolve_workspace_path(&args.s_or("path", "."));
@@ -158,7 +173,7 @@ pub(super) fn exec_list_dir(args: &serde_json::Value) -> String {
 
 handler!(handle_list_dir, exec_list_dir);
 
-// ── exec_search (from file_search.rs) ──
+// ------ exec_search (from file_search.rs) ------
 
 pub(super) fn exec_search(args: &serde_json::Value) -> String {
     let pattern = args.s("pattern");
@@ -194,7 +209,7 @@ pub(super) fn exec_search(args: &serde_json::Value) -> String {
             };
             return crate::json_ok(serde_json::json!({"pattern": pattern, "matches": all_lines.len(), "content": format!("{}", lines.join("\n")) + &truncated}));
         }
-        _ => {} // rg not installed or errored — fall through to pure Rust
+        _ => {} // rg not installed or errored --?fall through to pure Rust
     }
 
     // Phase 2: pure Rust fallback
@@ -218,7 +233,7 @@ pub(super) fn exec_search(args: &serde_json::Value) -> String {
 
 handler!(handle_search, exec_search);
 
-// ── exec_diff (from file_diff.rs) ──
+// ------ exec_diff (from file_diff.rs) ------
 
 pub(super) fn exec_diff(args: &serde_json::Value) -> String {
     let path_a = crate::resolve_workspace_path(&args.s("path_a"));
@@ -242,19 +257,19 @@ pub(super) fn exec_diff(args: &serde_json::Value) -> String {
 
 handler!(handle_diff, exec_diff);
 
-// ── Registration ──
+// ------ Registration ------
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: "file_read".to_string(),
-        description: "Read file contents with optional line range (start_line/end_line).",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"start_line":{"type":"integer","description":"First line to read (1-based)","default":1},"end_line":{"type":"integer","description":"Last line to read (inclusive). If omitted, reads to end of file."}},"required":["path"],"additionalProperties":false}),
+        key: "read".to_string(),
+        description: "Read file contents. Fails on directories --?use file_list for that. Use start_line/end_line for range reads. Full files auto-truncate to head 50 + tail 30 lines (>200 lines). Use 'paths' array to read multiple files in one call. Returns JSON with path, total_lines, truncated flag, and content.",
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path, NOT a directory (use file_list for directories). Relative to workspace or absolute."},"start_line":{"type":"integer","description":"First line to read (1-based, optional)"},"end_line":{"type":"integer","description":"Last line to read, inclusive (optional). Max range: 300 lines."}},"required":["path"],"additionalProperties":false}),
         handler: handle_read_file,
         risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: "file_list".to_string(),
+        key: "list".to_string(),
         description: "List directory contents with names and sizes.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"Directory path","default":"."}},"additionalProperties":false}),
         handler: handle_list_dir,
@@ -262,7 +277,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(15),
     });
     mgr.register(ToolHandler {
-        key: "file_search".to_string(),
+        key: "search".to_string(),
         description: "Regex search across files. Returns file:line matches.",
         input_schema: serde_json::json!({"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern"},"glob":{"type":"string","description":"File glob filter (e.g. *.rs)"},"path":{"type":"string","description":"Search directory","default":"."}},"required":["pattern"],"additionalProperties":false}),
         handler: handle_search,
@@ -270,7 +285,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         default_timeout: std::time::Duration::from_secs(30),
     });
     mgr.register(ToolHandler {
-        key: "file_diff".to_string(),
+        key: "diff".to_string(),
         description: "Compare two files line by line.",
         input_schema: serde_json::json!({"type":"object","properties":{"path_a":{"type":"string","description":"First file path"},"path_b":{"type":"string","description":"Second file path"}},"required":["path_a","path_b"],"additionalProperties":false}),
         handler: handle_diff,

@@ -6,12 +6,12 @@ use super::ToolManager;
 use super::exec;
 use super::explore;
 use super::web;
+use super::context7;
 use super::file_mutate;
 use super::file_query;
 
 use super::task;
 use super::plan;
-use super::sed;
 use super::ask_user;
 use super::process_inspect;
 use super::memory;
@@ -40,8 +40,8 @@ pub fn build_tool_manager(extra_registrars: &[ToolRegistrar]) -> ToolManager {
     // ── PLAN ──
     plan::register(&mut mgr);
 
-    // ── sed ──
-    sed::register(&mut mgr);
+    // ── Context7 ──
+    context7::register(&mut mgr);
 
     // ── 交互 ──
     ask_user::register(&mut mgr);

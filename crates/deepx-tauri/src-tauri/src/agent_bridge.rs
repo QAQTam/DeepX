@@ -183,24 +183,43 @@ fn reg_read_string(hkey: isize, subkey_str: &str, value_name_str: &str) -> Strin
     }
 }
 
-/// Build an OS info string like "Windows 11 Pro 24H2 26200.5518".
+/// Read a REG_DWORD value from the registry. Returns 0 on failure.
+#[cfg(target_os = "windows")]
+fn reg_read_dword(hkey: isize, subkey_str: &str, value_name_str: &str) -> u32 {
+    unsafe {
+        unsafe extern "system" {
+            fn RegOpenKeyExW(hkey: isize, subkey: *const u16, _uloptions: u32, _samdesired: u32, phkresult: *mut isize) -> i32;
+            fn RegQueryValueExW(hkey: isize, value: *const u16, _reserved: *const u8, pdwtype: *mut u32, pbdata: *mut u8, pcbdata: *mut u32) -> i32;
+            fn RegCloseKey(hkey: isize) -> i32;
+        }
+        const KEY_READ: u32 = 0x20019;
+        let subkey_wide: Vec<u16> = subkey_str.encode_utf16().collect();
+        let value_wide: Vec<u16> = value_name_str.encode_utf16().collect();
+        let mut key_handle: isize = 0;
+        if RegOpenKeyExW(hkey, subkey_wide.as_ptr(), 0, KEY_READ, &mut key_handle) != 0 { return 0; }
+        let mut data_type: u32 = 0;
+        let mut data: u32 = 0;
+        let mut data_size: u32 = 4;
+        if RegQueryValueExW(key_handle, value_wide.as_ptr(), std::ptr::null(), &mut data_type, &mut data as *mut u32 as *mut u8, &mut data_size) != 0 { RegCloseKey(key_handle); return 0; }
+        RegCloseKey(key_handle);
+        data
+    }
+}
+
+/// Build an OS info string like "Windows NT 10.0.26200.8737 (25H2)".
 #[cfg(target_os = "windows")]
 fn windows_os_info() -> String {
-    const HKLM: isize = -2147483646i64 as isize; // 0x80000002
-    let nt = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0";
-    let name = reg_read_string(HKLM, nt, "ProductName\0");
-    if name.is_empty() { return String::new(); }
-    let display = reg_read_string(HKLM, nt, "DisplayVersion\0");
-    let build = reg_read_string(HKLM, nt, "CurrentBuild\0");
-    let ubr = reg_read_string(HKLM, nt, "UBR\0");
-    if build.is_empty() { return name; }
-    let mut s = name;
-    if !display.is_empty() {
-        s.push_str(&format!(" {} ({}.{})", display, build, ubr));
+    let major = reg_read_dword(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0", "CurrentMajorVersionNumber\0");
+    let minor = reg_read_dword(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0", "CurrentMinorVersionNumber\0");
+    let build_str = reg_read_string(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\0", "CurrentBuild\\0");
+    let ubr = reg_read_dword(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0", "UBR\0");
+    if build_str.is_empty() { return String::new(); }
+    let display = reg_read_string(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\0", "DisplayVersion\\0");
+    if display.is_empty() {
+        format!("Windows NT {}.{}.{}.{}", major, minor, build_str, ubr)
     } else {
-        s.push_str(&format!(" ({}.{})", build, ubr));
+        format!("Windows NT {}.{}.{}.{} ({})", major, minor, build_str, ubr, display)
     }
-    s
 }
 
 /// Detect OS info on Unix via uname.

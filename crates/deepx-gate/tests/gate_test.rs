@@ -20,24 +20,9 @@ fn make_provider(mock: &MockServer) -> ProviderConfig {
         "test-model",
         None,  // user_id_mode
         None,  // chat_path
-        None,  // balance_path
         Default::default(),
         Default::default(),
-        false, // has_balance
         false, // supports_thinking
-    )
-}
-
-fn _make_provider_with_balance(mock: &MockServer) -> ProviderConfig {
-    ProviderConfig::openai(
-        &mock.base_url(),
-        "sk-test-key",
-        "test-model",
-        None, None, None,
-        Default::default(),
-        Default::default(),
-        true,  // has_balance
-        false,
     )
 }
 

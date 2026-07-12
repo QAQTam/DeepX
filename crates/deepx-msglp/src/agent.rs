@@ -41,12 +41,17 @@ impl AgentState {
                 Config::default()
             }
         };
-        bridge::init_tools(caller, &[deepx_subagent::register], vec![]);
+        bridge::init_tools(caller, &[], vec![
+            "exec_run".into(),
+            "edit".into(),
+            "read".into(),
+            "web".into(), "context7".into(),
+        ]);
         if let Some(ref key) = config.context7_api_key {
             if !key.is_empty() { bridge::set_context7_key(key); }
         }
         let mut agent = Self::new(config);
-        agent.tool_defs = bridge::all_tools(); // full set — LLM sees all, execution filtered by ToolManager
+        agent.tool_defs = bridge::all_tools(); // filtered by allowlist
         agent
     }
 

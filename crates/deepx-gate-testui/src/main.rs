@@ -546,10 +546,9 @@ fn handle_chat(
         &base_url,
         "sk-test-key",
         "test-model",
-        None, None, None,
+        None, None,
         Default::default(),
         Default::default(),
-        false,
         false,
     );
 
@@ -620,9 +619,7 @@ fn handle_chat(
                         });
                         json!({"type":"done","message":msg_json,"usage":usage,"stop_reason":stop_reason}).to_string()
                     }
-                    StreamEvent::UsageUpdate(u) => { json!({"type":"usage","usage":u}).to_string() } StreamEvent::Balance { is_available, total_balance, currency } => {
-                        json!({"type":"balance","is_available":is_available,"total_balance":total_balance,"currency":currency}).to_string()
-                    }
+                    StreamEvent::UsageUpdate(u) => { json!({"type":"usage","usage":u}).to_string() }
                     StreamEvent::Error(e) => {
                         json!({"type":"error","message":e}).to_string()
                     }

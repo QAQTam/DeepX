@@ -24,10 +24,8 @@ pub struct ProviderConfig {
 
     // ── Multi-provider adaptation fields ──
     pub chat_path: Option<String>,
-    pub balance_path: Option<String>,
     pub thinking_mode: ThinkingParamMode,
     pub cache_field: CacheTokenField,
-    pub has_balance: bool,
     pub supports_thinking: bool,
 
     // ── Stateful proxy mode (e.g. DeepSeek Web CDP proxy) ──
@@ -43,10 +41,8 @@ impl ProviderConfig {
         model: &str,
         user_id_mode: Option<deepx_types::UserSendMode>,
         chat_path: Option<String>,
-        balance_path: Option<String>,
         thinking_mode: ThinkingParamMode,
         cache_field: CacheTokenField,
-        has_balance: bool,
         supports_thinking: bool,
     ) -> Self {
         Self {
@@ -56,10 +52,8 @@ impl ProviderConfig {
             model: model.to_string(),
             user_id_mode,
             chat_path,
-            balance_path,
             thinking_mode,
             cache_field,
-            has_balance,
             supports_thinking,
             stateful: false,
         }
@@ -91,11 +85,6 @@ pub enum StreamEvent {
     },
     /// Emitted whenever the API reports updated usage mid-stream (cache hits may appear in any chunk).
     UsageUpdate(deepx_types::UsageInfo),
-    Balance {
-        is_available: bool,
-        total_balance: String,
-        currency: String,
-    },
     Error(String),
     /// Emitted when the gate is retrying after a retryable error.
     Retrying { attempt: u32, max_retries: u32, delay_secs: u64, error: String },

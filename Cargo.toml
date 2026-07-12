@@ -10,13 +10,12 @@ members = [
     "crates/deepx-tools",
     "crates/deepx-session",
     "crates/deepx-subagent",
-    "crates/deepx-sed",
     "crates/deepx-tauri/src-tauri",
     "crates/deepx-gate-testui",
 ]
 
 [workspace.package]
-version = "0.7.2"
+version = "0.8.0"
 edition = "2024"
 license = "MIT"
 

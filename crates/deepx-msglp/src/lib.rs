@@ -1143,8 +1143,8 @@ impl Loop {
 
         let provider = deepx_gate::ProviderConfig::openai(
             &self.agent.config.base_url, &self.agent.config.api_key,
-            &self.agent.config.model, None, None, None,
-            Default::default(), Default::default(), false, false,
+            &self.agent.config.model, None, None,
+            Default::default(), Default::default(), false,
         );
         let msgs_vec = vec![deepx_types::Message::user(&prompt)];
         let summary = match deepx_gate::chat_sync(&provider, msgs_vec, 4096) {
@@ -1256,10 +1256,8 @@ impl Loop {
             &self.agent.config.model,
             ep.as_ref().and_then(|e| e.user_id_mode.clone()),
             ep.as_ref().and_then(|e| e.chat_path.clone()),
-            ep.as_ref().and_then(|e| e.balance_path.clone()),
             ep.as_ref().map(|e| e.thinking_mode.clone()).unwrap_or_default(),
             ep.as_ref().map(|e| e.cache_field.clone()).unwrap_or_default(),
-            ep.as_ref().map(|e| e.has_balance).unwrap_or(true),
             ep.as_ref().map(|e| e.supports_thinking).unwrap_or(true),
         ).with_stateful(
             ep.as_ref().map(|e| e.stateful).unwrap_or(false)
@@ -1267,13 +1265,6 @@ impl Loop {
 
         let mut round_num = 0u32;
         let mut last_usage: Option<deepx_types::UsageInfo> = None;
-
-        // Delta batching: accumulate deltas and flush every ~30ms
-        let mut answer_buf = String::new();
-        let mut think_buf = String::new();
-        let mut last_flush = std::time::Instant::now();
-        const FLUSH_INTERVAL_MS: u64 = 10;
-        const FLUSH_CHAR_THRESHOLD: usize = 20;
 
         loop {
             // ── Check for interrupt commands between rounds ──
@@ -1321,92 +1312,22 @@ impl Loop {
                         deepx_gate::StreamEvent::ContentDelta(d) => {
                             if self.cancel.is_set() { return; }
                             content.push_str(&d);
-                            let est_tokens = deepx_types::token::count_tokens(&content) as u32;
-                            answer_buf.push_str(&d);
-                            if last_flush.elapsed().as_millis() as u64 >= FLUSH_INTERVAL_MS
-                                || answer_buf.len() >= FLUSH_CHAR_THRESHOLD
-                            {
-                                if !think_buf.is_empty() {
-                                    self.emit_delta(Agent2Ui::RoundDelta {
-                                        turn_id: turn_id.clone(), round_num,
-                                        kind: RoundDeltaKind::Thinking,
-                                        delta: std::mem::take(&mut think_buf),
-                                    });
-                                }
-                                if !answer_buf.is_empty() {
-                                    self.emit_delta(Agent2Ui::RoundDelta {
-                                        turn_id: turn_id.clone(), round_num,
-                                        kind: RoundDeltaKind::Answering,
-                                        delta: std::mem::take(&mut answer_buf),
-                                    });
-                                }
-                                last_flush = std::time::Instant::now();
-                                // Emit estimated token usage for real-time InfoBar update
-                                self.emit_delta(Agent2Ui::Dashboard {
-                                    hp_connected: true,
-                                    session_seed: self.agent.session.seed.clone(),
-                                    context_limit: self.agent.config.context_limit,
-                                    tool_calls_total: 0,
-                                    tool_failures: 0,
-                                    current_phase: "single".into(),
-                                    streaming: true,
-                                    dsml_compat_count: self.agent.dsml_compat_count,
-                                    documents: Vec::new(),
-                                    recent_edits: Vec::new(),
-                                    tasks: Vec::new(),
-                                    session_title: None,
-                                    usage: Some(deepx_types::UsageInfo {
-                                        prompt_tokens: 0,
-                                        completion_tokens: est_tokens,
-                                        total_tokens: est_tokens,
-                                        prompt_cache_hit_tokens: 0,
-                                        prompt_cache_miss_tokens: 0,
-                                        reasoning_tokens: 0,
-                                    }),
-                                    model: Some(self.agent.config.model.clone()),
-                                });
-                            }
+                            self.emit_delta(Agent2Ui::RoundDelta {
+                                turn_id: turn_id.clone(), round_num,
+                                kind: RoundDeltaKind::Answering,
+                                delta: d,
+                            });
                         }
                         deepx_gate::StreamEvent::ReasoningDelta(r) => {
                             if self.cancel.is_set() { return; }
                             reasoning.push_str(&r);
-                            think_buf.push_str(&r);
-                            if last_flush.elapsed().as_millis() as u64 >= FLUSH_INTERVAL_MS
-                                || think_buf.len() >= FLUSH_CHAR_THRESHOLD
-                            {
-                                if !think_buf.is_empty() {
-                                    self.emit_delta(Agent2Ui::RoundDelta {
-                                        turn_id: turn_id.clone(), round_num,
-                                        kind: RoundDeltaKind::Thinking,
-                                        delta: std::mem::take(&mut think_buf),
-                                    });
-                                }
-                                if !answer_buf.is_empty() {
-                                    self.emit_delta(Agent2Ui::RoundDelta {
-                                        turn_id: turn_id.clone(), round_num,
-                                        kind: RoundDeltaKind::Answering,
-                                        delta: std::mem::take(&mut answer_buf),
-                                    });
-                                }
-                                last_flush = std::time::Instant::now();
-                            }
+                            self.emit_delta(Agent2Ui::RoundDelta {
+                                turn_id: turn_id.clone(), round_num,
+                                kind: RoundDeltaKind::Thinking,
+                                delta: r,
+                            });
                         }
                         deepx_gate::StreamEvent::Done { raw_message, usage, .. } => {
-                            // Flush buffered deltas before processing completion
-                            if !think_buf.is_empty() {
-                                self.emit_delta(Agent2Ui::RoundDelta {
-                                    turn_id: turn_id.clone(), round_num,
-                                    kind: RoundDeltaKind::Thinking,
-                                    delta: std::mem::take(&mut think_buf),
-                                });
-                            }
-                            if !answer_buf.is_empty() {
-                                self.emit_delta(Agent2Ui::RoundDelta {
-                                    turn_id: turn_id.clone(), round_num,
-                                    kind: RoundDeltaKind::Answering,
-                                    delta: std::mem::take(&mut answer_buf),
-                                });
-                            }
                             if let Some(ref u) = usage {
                                 self.agent.session.tokens += u.total_tokens as u64;
                                 last_usage = usage.clone();
@@ -1471,7 +1392,6 @@ impl Loop {
                             self.emit(Agent2Ui::Error { message: msg });
                             had_error = true;
                         }
-                        _ => {}
                     }
                 },
             );

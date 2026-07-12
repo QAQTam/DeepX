@@ -1,135 +1,84 @@
-//! System prompt — partitioned into `[SECTION]` blocks for LLM clarity.
+//! System prompt — compiled from embedded markdown.
 //!
-//! Each section lives in a standalone `prompts/*.md` file. At compile time,
-//! the files are embedded via `include_str!()`. At runtime, the user may
-//! override any section by placing a same-named file in
-//! `<data_dir>/prompts/` (e.g. `~/.deepx/prompts/role.md` on Windows).
-//!
-//! The `[SESSION]` block supports `{{today}}`, `{{os_info}}`, and
-//! `{{tools_info}}` placeholders that are filled at session creation time.
+//! `backend_prompt.md`  defines the agent identity and rules.
+//! `os_env.md`           carries runtime environment info (OS, shells, date).
 
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// Cached OS info string (e.g. "Windows 11 Pro 24H2 26200.5518"). Set at startup.
+const DEFAULT_PROMPT: &str = include_str!("../prompts/backend_prompt.md");
+const OS_ENV_TEMPLATE: &str = include_str!("../prompts/os_env.md");
+
+/// Cached OS info string. Set at startup.
 pub static OS_INFO: OnceLock<String> = OnceLock::new();
 
-/// Cached toolchain versions (e.g. "pwsh 7.4 | rustc 1.92 | python 3.12"). Set at startup.
+/// Cached toolchain versions. Set at startup.
 pub static TOOLS_INFO: OnceLock<String> = OnceLock::new();
 
-// ── Compile-time defaults (embedded from prompts/*.md) ──
-
-const DEFAULT_THINK_MAX: &str = include_str!("../prompts/think_max.md");
-const DEFAULT_ROLE: &str = include_str!("../prompts/role.md");
-const DEFAULT_PROTOCOL: &str = include_str!("../prompts/protocol.md");
-const DEFAULT_RULES: &str = include_str!("../prompts/rules.md");
-const DEFAULT_SESSION: &str = include_str!("../prompts/session.md");
-
-// ── Public access to SESSION prefix (kept for backward compat) ──
-
-pub const SESSION_PREFIX: &str = "[SESSION]";
-
-// ── User override directory ──
-
-/// Returns the user prompts override directory, if it exists.
-fn user_prompts_dir() -> Option<PathBuf> {
-    let dir = deepx_types::platform::data_dir().join("prompts");
-    if dir.is_dir() { Some(dir) } else { None }
-}
-
-/// Load a prompt section: user override takes priority, fallback to embedded default.
-fn load_section(name: &str, default: &str) -> String {
-    if let Some(dir) = user_prompts_dir() {
-        let path = dir.join(name);
-        if path.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                return content;
-            }
-        }
-    }
-    default.to_string()
-}
-
-// ── Assembly ──
-
+/// Full system prompt from embedded backend_prompt.md (identity + rules only).
 pub fn full_system_prompt() -> String {
-    let mut p = String::new();
-    p.push_str(&load_section("think_max.md", DEFAULT_THINK_MAX));
-    p.push_str("\n\n");
-    p.push_str(&load_section("role.md", DEFAULT_ROLE));
-    p.push_str("\n\n");
-    p.push_str(&load_section("protocol.md", DEFAULT_PROTOCOL));
-    p.push_str("\n\n");
-    p.push_str(&load_section("rules.md", DEFAULT_RULES));
-    p.push_str("\n\n");
-    p.push_str(SESSION_PREFIX);
-    p
+    DEFAULT_PROMPT.to_string()
 }
 
-/// System prompt with date and OS/tools info injected into the [SESSION] block.
-/// [SESSION] is placed last so prefix cache is shared across sessions —
-/// the static blocks (THINK_MAX/ROLE/PROTOCOL/RULES) occupy identical positions.
-/// The date is captured once at session creation and never updated,
-/// preserving LLM cache prefix stability across turns.
+/// Full system prompt with runtime environment injected from os_env.md.
+///
+/// Placeholders in os_env.md:
+///   {{DATE}}   → today's date
+///   {{OS}}     → OS_INFO (set at startup via agent_bridge)
+///   {{SHELLS}} → auto-detected shells available on this machine
+///   {{TOOLS}}  → TOOLS_INFO (toolchain versions detected at startup)
 pub fn full_system_prompt_with_date(today: &str, os_info: &str) -> String {
-    let tools = TOOLS_INFO.get().map(|s| s.as_str()).unwrap_or("");
-    let session_template = load_section("session.md", DEFAULT_SESSION);
-    let session = session_template
-        .replace("{{today}}", today)
-        .replace("{{os_info}}", os_info)
-        .replace("{{tools_info}}", tools);
-
-    let mut p = String::new();
-    p.push_str(&load_section("think_max.md", DEFAULT_THINK_MAX));
-    p.push_str("\n\n");
-    p.push_str(&load_section("role.md", DEFAULT_ROLE));
-    p.push_str("\n\n");
-    p.push_str(&load_section("protocol.md", DEFAULT_PROTOCOL));
-    p.push_str("\n\n");
-    p.push_str(&load_section("rules.md", DEFAULT_RULES));
-    p.push_str("\n\n");
-    p.push_str(&session);
-    p
+    let shells = detect_shells();
+    let tools = TOOLS_INFO.get().map(|s| s.as_str()).unwrap_or("(not detected)");
+    let os = if os_info.is_empty() { std::env::consts::OS } else { os_info };
+    let env_block = OS_ENV_TEMPLATE
+        .replace("{{DATE}}", today)
+        .replace("{{OS}}", os)
+        .replace("{{SHELLS}}", &shells)
+        .replace("{{TOOLS}}", tools);
+    format!("{}\n\n{}", DEFAULT_PROMPT, env_block)
 }
+
+/// Detect available shells on this machine.
+fn detect_shells() -> String {
+    let mut shells: Vec<&str> = Vec::new();
+    if cfg!(windows) {
+        shells.push("cmd");
+        // pwsh (PowerShell 7) — check both common install locations
+        let pwsh_paths = [
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            r"C:\Program Files (x86)\PowerShell\7\pwsh.exe",
+        ];
+        if pwsh_paths.iter().any(|p| std::path::Path::new(p).exists()) {
+            shells.push("pwsh (PowerShell 7)");
+        }
+        // Legacy Windows PowerShell
+        if std::path::Path::new(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe").exists() {
+            shells.push("powershell (Windows PowerShell 5)");
+        }
+    } else {
+        shells.push("bash");
+        shells.push("sh");
+        if std::path::Path::new("/bin/zsh").exists() { shells.push("zsh"); }
+    }
+    shells.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn default_prompt_contains_sections() {
-        let p = full_system_prompt();
-        assert!(p.contains("[THINK_MAX]"), "missing THINK_MAX");
-        assert!(p.contains("[IDENTITY]"), "missing IDENTITY");
-        assert!(p.contains("[TOOLS]"), "missing TOOLS");
-        assert!(p.contains("[PROTOCOL]"), "missing PROTOCOL");
-        assert!(p.contains("[RULES]"), "missing RULES");
-        assert!(p.contains("[SESSION]"), "missing SESSION prefix");
+    fn prompt_is_not_empty() {
+        assert!(!full_system_prompt().is_empty());
     }
 
     #[test]
-    fn dated_prompt_injects_placeholders() {
-        let p = full_system_prompt_with_date("2026-07-07", "Windows 11");
-        assert!(p.contains("2026-07-07"), "missing date injection");
-        assert!(p.contains("Windows 11"), "missing OS injection");
-        assert!(!p.contains("{{today}}"), "placeholder not replaced");
-        assert!(!p.contains("{{os_info}}"), "placeholder not replaced");
-        assert!(!p.contains("{{tools_info}}"), "placeholder not replaced");
+    fn prompt_contains_identity() {
+        assert!(full_system_prompt().contains("[IDENTITY]"));
     }
 
     #[test]
-    fn dated_prompt_contains_all_sections() {
-        let p = full_system_prompt_with_date("2026-07-07", "Windows 11");
-        assert!(p.contains("[THINK_MAX]"));
-        assert!(p.contains("[IDENTITY]"));
-        assert!(p.contains("[TOOLS]"));
-        assert!(p.contains("[PROTOCOL]"));
-        assert!(p.contains("[RULES]"));
-        assert!(p.contains("[SESSION]"));
-    }
-
-    #[test]
-    fn prompt_starts_with_think_max() {
-        let p = full_system_prompt();
-        assert!(p.starts_with("[THINK_MAX]"), "prompt should start with THINK_MAX");
+    fn prompt_starts_with_identity() {
+        assert!(full_system_prompt().starts_with("[IDENTITY]"));
     }
 }

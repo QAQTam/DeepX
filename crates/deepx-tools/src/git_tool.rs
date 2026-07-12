@@ -743,117 +743,54 @@ fn rev_parse_oid(repo: &Repository, spec: &str) -> Option<git2::Oid> {
 
 // ── handler and registration ──
 
-handler!(handle_log, exec_log);
-handler!(handle_diff, exec_diff);
-handler!(handle_status, exec_status);
-handler!(handle_show, exec_show);
-handler!(handle_add, exec_add);
-handler!(handle_commit, exec_commit);
-handler!(handle_branch, exec_branch);
-handler!(handle_checkout, exec_checkout);
-handler!(handle_merge, exec_merge);
-handler!(handle_restore, exec_restore);
+pub(super) fn exec_git(args: &serde_json::Value) -> String {
+    match args.s("action").as_str() {
+        "log" => exec_log(args),
+        "diff" => exec_diff(args),
+        "status" => exec_status(args),
+        "show" => exec_show(args),
+        "add" => exec_add(args),
+        "commit" => exec_commit(args),
+        "branch" => exec_branch(args),
+        "checkout" => exec_checkout(args),
+        "merge" => exec_merge(args),
+        "restore" => exec_restore(args),
+        other => crate::json_err("UNKNOWN_ACTION", &format!("unknown git action '{}'. Use: log, diff, status, show, add, commit, branch, checkout, merge, restore.", other), ""),
+    }
+}
+
+handler!(handle_git, exec_git);
 
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
-        key: "git_log".to_string(),
-        description: "Show commit history in current git repository. Parameters: path (optional repo path), max_count (default 20, max 100), author (optional name filter). For branch/checkout/merge, use git/branch, git/checkout, git/merge.",
-        input_schema: serde_json::json!({"type":"object","description":"Git commit browser. Read-only. Use git/branch, git/checkout, git/merge, git/restore for mutations.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"max_count":{"type":"string","description":"Max commits to show (default 20)"},"author":{"type":"string","description":"Filter by author name (partial match)"}},
-        "additionalProperties":false}),
-        handler: handle_log,
-        risk: ToolRisk::ReadOnly,
-        default_timeout: std::time::Duration::from_secs(15),
-    });
-    mgr.register(ToolHandler {
-        key: "git_diff".to_string(),
-        description: "Show diff between commits or working tree. Read-only. Parameters: path, commit_a (default HEAD), commit_b (default working tree), cached (boolean string, compare staged vs HEAD).",
-        input_schema: serde_json::json!({"type":"object","description":"Git diff viewer. Read-only. Supports tree-to-tree, tree-to-workdir, and tree-to-index (cached) diffs.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"commit_a":{"type":"string","description":"Base commit ref (default HEAD)"},"commit_b":{"type":"string","description":"Target commit ref (default working tree)"},"cached":{"type":"string","description":"If 'true', diff staged vs HEAD instead of working tree"}},
-        "additionalProperties":false}),
-        handler: handle_diff,
-        risk: ToolRisk::ReadOnly,
-        default_timeout: std::time::Duration::from_secs(15),
-    });
-    mgr.register(ToolHandler {
-        key: "git_status".to_string(),
-        description: "Show working tree status (staged, unstaged, untracked changes). Read-only. Parameters: path.",
-        input_schema: serde_json::json!({"type":"object","description":"Git status viewer. Read-only. Does NOT modify repository.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."}},
-        "additionalProperties":false}),
-        handler: handle_status,
-        risk: ToolRisk::ReadOnly,
-        default_timeout: std::time::Duration::from_secs(10),
-    });
-    mgr.register(ToolHandler {
-        key: "git_show".to_string(),
-        description: "Show a commit's details (author, date, message) and its diff. Read-only. Parameters: path, commit (hash or ref like HEAD, HEAD~1, main, default HEAD).",
-        input_schema: serde_json::json!({"type":"object","description":"Git commit detail viewer. Read-only. Does NOT modify repository.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"commit":{"type":"string","description":"Commit hash or ref (default HEAD)"}},
-        "additionalProperties":false}),
-        handler: handle_show,
-        risk: ToolRisk::ReadOnly,
-        default_timeout: std::time::Duration::from_secs(15),
-    });
-    mgr.register(ToolHandler {
-        key: "git_add".to_string(),
-        description: "Stage files for commit. MUTATES the git index. Parameters: path, files (single file path string like 'src/main.rs' or JSON array of paths). Use files=\".\" to stage all.",
-        input_schema: serde_json::json!({"type":"object","description":"Stage files for commit. WARNING: modifies the git index. Does NOT commit.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"files":{"type":"string","description":"File to stage: path string, JSON array, or '.' for all"}},
-        "required":["files"],"additionalProperties":false}),
-        handler: handle_add,
-        risk: ToolRisk::Destructive,
-        default_timeout: std::time::Duration::from_secs(15),
-    });
-    mgr.register(ToolHandler {
-        key: "git_commit".to_string(),
-        description: "Create a commit with staged changes. MUTATES the repository. Parameters: path, message (required). Only commits staged changes — use git_add first.",
-        input_schema: serde_json::json!({"type":"object","description":"Create a commit. WARNING: permanently records changes to git history. Requires staged changes (use git_add first).",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"message":{"type":"string","description":"Commit message (required)"}},
-        "required":["message"],"additionalProperties":false}),
-        handler: handle_commit,
-        risk: ToolRisk::Destructive,
-        default_timeout: std::time::Duration::from_secs(15),
-    });
-    mgr.register(ToolHandler {
-        key: "git_branch".to_string(),
-        description: "List, create, or delete git branches. Parameters: path, action ('list'|'create'|'delete'), name (branch name, required for create/delete), start_point (commit ref for new branch, optional), force (boolean, optional).",
-        input_schema: serde_json::json!({"type":"object","description":"Git branch operations. List local branches, create a new branch, or delete an existing one.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"action":{"type":"string","description":"Action: 'list', 'create', or 'delete'"},"name":{"type":"string","description":"Branch name (required for create/delete)"},"start_point":{"type":"string","description":"Commit ref to branch from (optional, defaults to HEAD)"},"force":{"type":"string","description":"If 'true', force create or delete"}},
-        "required":["action"],"additionalProperties":false}),
-        handler: handle_branch,
-        risk: ToolRisk::Destructive,
-        default_timeout: std::time::Duration::from_secs(15),
-    });
-    mgr.register(ToolHandler {
-        key: "git_checkout".to_string(),
-        description: "Switch branches or restore working tree files. Parameters: path, target (branch name or file path), force (boolean, optional). When target is a branch/ref, switches HEAD. When target is a file path prefixed with '--' or not a valid ref, restores the file from index.",
-        input_schema: serde_json::json!({"type":"object","description":"Git checkout: switch branch or restore files. Switches HEAD when target is a valid ref; restores file from index otherwise.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"target":{"type":"string","description":"Branch name or file path to restore"},"force":{"type":"string","description":"If 'true', force checkout (discard local changes)"}},
-        "required":["target"],"additionalProperties":false}),
-        handler: handle_checkout,
-        risk: ToolRisk::Destructive,
-        default_timeout: std::time::Duration::from_secs(20),
-    });
-    mgr.register(ToolHandler {
-        key: "git_merge".to_string(),
-        description: "Merge a branch into the current HEAD. Parameters: path, branch (branch name to merge), message (optional merge commit message). Auto-commits on success. Reports conflicted files on failure.",
-        input_schema: serde_json::json!({"type":"object","description":"Git merge: merge a branch into current HEAD. Auto-commits if no conflicts; reports conflicted files otherwise.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"branch":{"type":"string","description":"Branch name to merge into current HEAD"},"message":{"type":"string","description":"Merge commit message (optional, defaults to 'merge <branch>')"}},
-        "required":["branch"],"additionalProperties":false}),
-        handler: handle_merge,
-        risk: ToolRisk::Destructive,
+        key: "git".to_string(),
+        description: "Git operations via libgit2. Required: 'action' selects subcommand (log, diff, status, show, add, commit, branch, checkout, merge, restore). Optional: 'path' (repo root, defaults to workspace). Action-specific params: max_count/author (log), commit_a/commit_b/cached (diff), commit (show), files (add/restore), message (commit/merge), action/name/start_point/force (branch), target/force (checkout), branch (merge), staged (restore).",
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "Git subcommand: log, diff, status, show, add, commit, branch, checkout, merge, restore"},
+                "path": {"type": "string", "description": "Repository path. Defaults to workspace root."},
+                "max_count": {"type": "string", "description": "Max commits for log (default 20)"},
+                "author": {"type": "string", "description": "Filter log by author name"},
+                "commit_a": {"type": "string", "description": "Base commit ref for diff (default HEAD)"},
+                "commit_b": {"type": "string", "description": "Target commit ref for diff (default working tree)"},
+                "cached": {"type": "string", "description": "If 'true', diff staged vs HEAD"},
+                "commit": {"type": "string", "description": "Commit hash or ref for show (default HEAD)"},
+                "files": {"type": "string", "description": "File path, JSON array, or '.' for add/restore"},
+                "staged": {"type": "string", "description": "If 'true', restore from HEAD instead of index"},
+                "message": {"type": "string", "description": "Commit/merge message"},
+                "target": {"type": "string", "description": "Branch name or file path for checkout"},
+                "name": {"type": "string", "description": "Branch name for create/delete"},
+                "start_point": {"type": "string", "description": "Start point for branch create"},
+                "branch": {"type": "string", "description": "Branch to merge"},
+                "force": {"type": "string", "description": "If 'true', force the operation"}
+            },
+            "required": ["action"],
+            "additionalProperties": false
+        }),
+        handler: handle_git,
+        risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),
-    });
-    mgr.register(ToolHandler {
-        key: "git_restore".to_string(),
-        description: "Restore working tree files to match the index (or HEAD when staged=true). Discards uncommitted changes. Parameters: path, files (single file path or JSON array), staged (boolean, if 'true' restore from HEAD instead of index).",
-        input_schema: serde_json::json!({"type":"object","description":"Git restore: discard changes to files, restoring from index or HEAD. Equivalent to 'git restore <files>'.",
-        "properties":{"path":{"type":"string","description":"Repository path. Defaults to workspace root."},"files":{"type":"string","description":"File path or JSON array of paths to restore"},"staged":{"type":"string","description":"If 'true', restore from HEAD (unstage) instead of index"}},
-        "required":["files"],"additionalProperties":false}),
-        handler: handle_restore,
-        risk: ToolRisk::Destructive,
-        default_timeout: std::time::Duration::from_secs(20),
     });
 }
 

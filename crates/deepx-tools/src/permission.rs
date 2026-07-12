@@ -32,29 +32,28 @@ pub enum ToolCategory {
 pub fn categorize_tool(name: &str) -> ToolCategory {
     match name {
         // ── Read ──
-        "file_read" | "file_list" | "file_search" | "file_diff" | "explore"
+        "read" | "list" | "search" | "diff"
         | "explore_scan"
         | "git_diff" | "git_log" | "git_show" | "git_status"
         | "memory_read" | "plan_list" | "plan_submit"
         | "process_check" | "process_wait"
+        | "context7"
         => ToolCategory::Read,
 
         // ── Write ──
-        "file_write" | "file_edit" | "file_edit_diff" | "file_delete"
-        | "file_move" | "file_copy"
+        "write" | "edit" | "edit_block" | "delete"
         | "git_add" | "git_commit"
+        | "git_branch" | "git_checkout" | "git_merge" | "git_restore"
         | "memory_write" | "memory_clear"
-        | "plan_create" | "plan_update"
+        | "plan_create"
         | "task_create" | "task_update" | "task_delete"
-        | "sed"
         => ToolCategory::Write,
 
         // ── Exec ──
         "exec_run" | "spawn_subagent" => ToolCategory::Exec,
 
         // ── Net ──
-        "web_fetch" | "web_search" | "web_context7_query" | "web_context7_resolve"
-        => ToolCategory::Net,
+        "web" => ToolCategory::Net,
 
         // Unknown tools default to Write (conservative: assume mutation).
         _ => ToolCategory::Write,

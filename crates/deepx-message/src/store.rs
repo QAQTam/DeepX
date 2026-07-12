@@ -80,7 +80,7 @@ fn truncate_tool_result(tool_name: &str, result: &str) -> String {
 /// - Plain results: keep only the first non-empty line (status + key metadata).
 fn fold_completed_tool_result(tool_name: &str, result: &str) -> String {
     // Exempt: code and grep results must stay visible for reference.
-    if tool_name == "file_read" || tool_name == "file_search" {
+    if tool_name == "read" || tool_name == "search" {
         return result.to_string();
     }
 
@@ -521,8 +521,8 @@ impl MessageStore {
                         if is_last_step_of_last_turn {
                             // Current turn: fold write/edit tools (LLM doesn't need its own diff),
                             // truncate read/search/exec (LLM needs the content).
-                            let keep_full = tool_name == "file_read"
-                                || tool_name == "file_search"
+                            let keep_full = tool_name == "read"
+                                || tool_name == "search"
                                 || tool_name.starts_with("exec");
                             let mut msg = tr.clone();
                             for block in &mut msg.content {
@@ -977,8 +977,8 @@ impl MessageStore {
                             }).unwrap_or("");
 
                             let effective = if is_last_step_of_last_turn {
-                                let keep_full = tool_name == "file_read"
-                                    || tool_name == "file_search"
+                                let keep_full = tool_name == "read"
+                                    || tool_name == "search"
                                     || tool_name.starts_with("exec");
                                 if keep_full {
                                     truncate_tool_result(tool_name, content)

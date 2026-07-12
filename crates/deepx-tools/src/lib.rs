@@ -4,7 +4,6 @@
 
 
 pub mod exec;
-pub mod pty;
 
 pub mod explore;
 
@@ -23,7 +22,6 @@ pub mod ask_user;
 pub mod task;
 
 pub mod plan;
-pub mod sed;
 
 pub mod workspace;
 
@@ -43,9 +41,9 @@ pub mod permission;
 pub mod audit;
 pub mod auth;
 pub mod agentfs_bridge;
+pub mod context7;
 
-pub use web::set_c7_key;
-pub use web::set_bocha_key;
+pub use context7::set_c7_key;
 pub use safety::SafetyVerdict;
 pub use manager::{ToolManager, ToolExecMeta, ToolExecReport, ToolStats};
 
@@ -114,10 +112,8 @@ macro_rules! handler {
             };
             let content = if is_json {
                 result
-            } else if success {
-                crate::json_ok(serde_json::json!({"content": result}))
             } else {
-                crate::json_err("TOOL_ERROR", &result, "")
+                result // plain text — pass through directly, [OK]/[PARTIAL]/[ERROR] speak for themselves
             };
             ToolResult { success, content }
         }
@@ -171,9 +167,8 @@ pub static CURRENT_WORKSPACE: RwLock<String> = RwLock::new(String::new());
 
 /// Tools blocked in PLAN mode. Keep in sync with permission::categorize_tool.
 pub const PLAN_BLOCKED: &[&str] = &[
-    "file_write", "file_edit", "file_edit_diff", "file_delete", "file_move", "file_copy",
-    "exec_run", "sed",
-    "git_commit", "git_push", "git_add",
+    "edit", "edit_block", "write", "delete",
+    "exec_run", "git",
 ];
 
 pub fn set_workspace(path: &str) {

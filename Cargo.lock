@@ -122,7 +122,7 @@ dependencies = [
  "libloading 0.8.9",
  "linkme",
  "once_cell",
- "rand 0.8.6",
+ "rand 0.8.7",
  "rustc_version_runtime",
  "serde",
  "serde_json",
@@ -276,26 +276,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bindgen"
-version = "0.72.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
-dependencies = [
- "bitflags 2.13.0",
- "cexpr",
- "clang-sys",
- "itertools 0.13.0",
- "log",
- "prettyplease",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash 2.1.3",
- "shlex 1.3.0",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -436,18 +416,18 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytemuck"
-version = "1.25.0"
+version = "1.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+checksum = "d6aedf8ae72766347502cf3cb4f41cf5e9cc37d28bee90f1fdaaae15f9cf9424"
 dependencies = [
  "bytemuck_derive",
 ]
 
 [[package]]
 name = "bytemuck_derive"
-version = "1.10.2"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
+checksum = "f65693059b6b9c588b9f62fed1cedbf0a8b805631457ea162d68f0de186f3de5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -547,9 +527,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.66"
+version = "1.2.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5d6cac793997bd970000024b2934968efe83b382de4fdcf4fcb46b6ee4ad996"
+checksum = "e17dd265a7d0f31ef544e1b20e03add05d3b45b491b633b10d67145d2acc1a38"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -690,15 +670,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
-]
-
-[[package]]
-name = "conpty"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b64e80ea07c05b0216af7d81e1bba05060bf8eda00bfbcbae41ceb5d26b4c783"
-dependencies = [
- "windows 0.54.0",
 ]
 
 [[package]]
@@ -1006,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-config"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "deepx-types",
  "log",
@@ -1019,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-gate"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "deepx-config",
@@ -1034,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-gate-testui"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "deepx-gate",
  "deepx-types",
@@ -1044,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-message"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "deepx-proto",
  "deepx-session",
@@ -1056,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-msglp"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "deepx-config",
  "deepx-gate",
@@ -1075,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-proto"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "deepx-types",
  "serde",
@@ -1084,22 +1055,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepx-sed"
-version = "0.7.2"
-dependencies = [
- "anyhow",
- "encoding_rs",
- "lazy_static",
- "libc",
- "rustc-hash 2.1.3",
- "selinux",
- "selinux-sys",
- "signal-hook",
-]
-
-[[package]]
 name = "deepx-session"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "deepx-types",
  "log",
@@ -1112,7 +1069,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-subagent"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "deepx-session",
  "deepx-tools",
@@ -1124,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-tauri"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "deepx-config",
  "deepx-msglp",
@@ -1144,19 +1101,15 @@ dependencies = [
 
 [[package]]
 name = "deepx-tools"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
- "base64 0.22.1",
  "chrono",
- "conpty",
  "deepx-message",
  "deepx-proto",
- "deepx-sed",
  "deepx-types",
  "git2",
  "hex",
  "html2text",
- "libc",
  "log",
  "regex",
  "serde",
@@ -1164,12 +1117,11 @@ dependencies = [
  "sha2",
  "similar",
  "ureq 3.3.0",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "deepx-types"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2533,15 +2485,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -3855,9 +3798,9 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "rand"
-version = "0.8.6"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
+checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -3866,9 +3809,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.5",
@@ -4324,33 +4267,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "selinux"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f6af114a661557df02e60c25e5cb40779d295ec2e4ae0fd903fe414578b6191"
-dependencies = [
- "bitflags 2.13.0",
- "errno",
- "libc",
- "once_cell",
- "parking_lot",
- "selinux-sys",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "selinux-sys"
-version = "0.6.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "debaba5832b4831ffe0ba9118b526c752c960f41c46c4ef197d9a15f5179d6fd"
-dependencies = [
- "bindgen 0.72.1",
- "cc",
- "dunce",
- "walkdir",
-]
-
-[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4579,7 +4495,7 @@ dependencies = [
  "generator",
  "hex",
  "owo-colors",
- "rand 0.8.6",
+ "rand 0.8.7",
  "rand_core 0.6.4",
  "rand_pcg",
  "scoped-tls",
@@ -5459,9 +5375,9 @@ dependencies = [
 
 [[package]]
 name = "thread_local"
-version = "1.1.9"
+version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
 ]
@@ -5521,9 +5437,9 @@ dependencies = [
 
 [[package]]
 name = "tinyvec"
-version = "1.11.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e61e67053d25a4e82c844e8424039d9745781b3fc4f32b8d55ed50f5f667ef3"
+checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
 dependencies = [
  "tinyvec_macros",
 ]
@@ -5554,7 +5470,7 @@ dependencies = [
  "monostate",
  "onig",
  "paste",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rayon",
  "rayon-cond",
  "regex",
@@ -5942,7 +5858,7 @@ dependencies = [
  "parking_lot",
  "pastey",
  "polling",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rapidhash",
  "regex",
  "regex-syntax",
@@ -6013,7 +5929,7 @@ version = "0.7.0-pre.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebb7f13561dadb97fb576e3a05f8cc072b81f8cbb5336103d49ebda38089e273"
 dependencies = [
- "bindgen 0.69.5",
+ "bindgen",
  "env_logger",
  "parking_lot",
  "tracing",
@@ -6063,7 +5979,7 @@ version = "0.7.0-pre.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "722ecf45be0c3a988fe31c9a8c5832b7eeda05b531a838b77fd1d3c70633b8f1"
 dependencies = [
- "bindgen 0.69.5",
+ "bindgen",
  "env_logger",
  "genawaiter",
  "parking_lot",
@@ -6082,7 +5998,7 @@ version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 dependencies = [
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]

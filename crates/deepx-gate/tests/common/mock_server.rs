@@ -169,16 +169,6 @@ fn run_server(
 
         let url = req.url().to_string();
 
-        // Balance endpoint
-        if url.contains("/balance") {
-            let resp = Response::from_string(
-                r#"{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"100","granted_balance":"50","topped_up_balance":"50"}]}"#,
-            )
-            .with_header("Content-Type: application/json".parse::<Header>().unwrap());
-            let _ = req.respond(resp);
-            continue;
-        }
-
         // Get the scenario for this request
         let scenario = {
             let mut src = source.lock().unwrap();

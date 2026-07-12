@@ -184,10 +184,10 @@ impl ToolManager {
         let files_affected = extract_files_affected(&prepared.name, &prepared.audit_args);
         if success {
             match prepared.name.as_str() {
-                "file_read" | "file_search" | "file_list" | "file_diff" | "explore" | "explore_scan" => {
+                "read" | "search" | "list" | "diff" | "explore" | "explore_scan" => {
                     for f in &files_affected { if !self.files_read.contains(f) { self.files_read.push(f.clone()); } }
                 }
-                "file_write" | "file_edit" | "file_edit_diff" | "file_delete" | "file_move" | "file_copy" => {
+                "edit" | "edit_block" | "write" | "delete" => {
                     for f in &files_affected { if !self.files_written.contains(f) { self.files_written.push(f.clone()); } }
                 }
                 "exec_run" | "git_commit" | "git_add" => {

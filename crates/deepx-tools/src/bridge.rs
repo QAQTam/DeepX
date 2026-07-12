@@ -48,10 +48,6 @@ pub fn set_context7_key(key: &str) {
     crate::set_c7_key(key);
 }
 
-pub fn set_bocha_key(key: &str) {
-    crate::set_bocha_key(key);
-}
-
 fn with_mgr<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&mut crate::ToolManager) -> R,
@@ -63,10 +59,10 @@ where
 // ── Tool definition accessors ──
 
 pub fn all_tools() -> Vec<ToolDef> {
-    with_mgr(|mgr| mgr.all_defs()).unwrap_or_default()
+    with_mgr(|mgr| mgr.filtered_defs()).unwrap_or_default()
 }
 
-/// Return all registered tool names (e.g. "file_read", "exec_run").
+/// Return all registered tool names (e.g. "read", "exec_run").
 /// Used by the frontend Settings page for subagent default tools.
 pub fn all_tool_names() -> Vec<String> {
     with_mgr(|mgr| mgr.all_defs().iter().map(|d| d.function.name.clone()).collect()).unwrap_or_default()
@@ -239,7 +235,7 @@ fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx
                 file: file_path.map(String::from),
             })
         }
-        ("file", "edit") => {
+        ("edit", _) => {
             let old_s = args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
             let new_s = args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
             Some(deepx_proto::CodeDeltaRecord {
@@ -251,7 +247,7 @@ fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx
                 file: file_path.map(String::from),
             })
         }
-        ("file", "delete") => {
+        ("delete", _) => {
             Some(deepx_proto::CodeDeltaRecord {
                 timestamp: now,
                 lines_added: 0,
@@ -261,7 +257,7 @@ fn compute_code_delta(tool_name: &str, args: &serde_json::Value) -> Option<deepx
                 file: file_path.map(String::from),
             })
         }
-        ("file", "edit_diff") => {
+        ("edit_block", _) => {
             let old_count = args.get("old_lines").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
             let new_count = args.get("new_lines").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
             Some(deepx_proto::CodeDeltaRecord {
@@ -394,8 +390,8 @@ pub fn execute_tool_simple(req: &deepx_message::ToolExecRequest) -> deepx_messag
 
 pub fn execute_tools_parallel(
     tools: Vec<deepx_message::ToolExecRequest>,
-    progress_tx: Option<&std::sync::mpsc::Sender<(String, String)>>,
-    agent_tx: Option<&std::sync::mpsc::Sender<deepx_proto::Agent2Ui>>,
+    _progress_tx: Option<&std::sync::mpsc::Sender<(String, String)>>,
+    _agent_tx: Option<&std::sync::mpsc::Sender<deepx_proto::Agent2Ui>>,
 ) -> Vec<(String, deepx_message::ToolExecReport)> {
     if tools.len() <= 1 {
         return tools.into_iter().map(|req| {
@@ -432,18 +428,9 @@ pub fn execute_tools_parallel(
 
     // Phase 2: execute all in parallel threads (no lock)
     let handles: Vec<_> = prepared.into_iter().map(|(tc_id, pcall)| {
-        let agent_tx = agent_tx.cloned();
-        let _progress_tx = progress_tx.cloned();
         let req_id = tc_id.clone();
         thread::spawn(move || {
             let t0 = std::time::Instant::now();
-            let (ptx, prx) = if pcall.name == "exec" {
-                let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
-                (Some(tx), Some(rx))
-            } else { (None, None) };
-            // ptx would be passed to prepare_req in a full implementation;
-            // currently progress streaming is handled via the channel pair.
-            drop(ptx); // close sender so rx.recv() won't block forever
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 (pcall.handler_fn)(pcall.ctx.clone())
@@ -471,15 +458,6 @@ pub fn execute_tools_parallel(
                 },
             };
 
-            // Stream exec output to UI
-            if let (Some(rx), Some(atx)) = (prx, agent_tx) {
-                while let Ok((_id, delta)) = rx.recv() {
-                    let _ = atx.send(deepx_proto::Agent2Ui::ToolExecDelta {
-                        tool_call_id: req_id.clone(), delta,
-                    });
-                }
-            }
-
             (req_id, report)
         })
     }).collect();
@@ -496,7 +474,7 @@ pub fn execute_tools_parallel(
     reports.append(&mut errors);
 
     // Emit AuditRecord + ToolResults directly to frontend
-    if let Some(atx) = agent_tx {
+    if let Some(atx) = _agent_tx {
         let mut tool_defs = Vec::new();
         for (tc_id, report) in &reports {
             let summary = report.content.lines().next().unwrap_or(&report.content);
