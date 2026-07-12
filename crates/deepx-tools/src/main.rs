@@ -9,11 +9,12 @@
 use std::env;
 
 fn main() {
-    let mut mgr = deepx_tools::registration::build_tool_manager(&[]);
+    deepx_tools::bridge::init_tools("cli", &[], vec![]);
+    deepx_tools::bridge::set_runtime_context("cli", 4);
     let cwd = env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".into());
-    deepx_tools::set_workspace(&cwd);
+    deepx_tools::bridge::set_workspace(&cwd);
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -24,7 +25,7 @@ fn main() {
 
     let tool = &args[1];
     if tool == "list" {
-        let defs = mgr.all_defs();
+        let defs = deepx_tools::bridge::all_tools();
         println!("Available tools:");
         for def in &defs {
             println!("  {} — {}", def.function.name, def.function.description);
@@ -39,12 +40,11 @@ fn main() {
         std::process::exit(1);
     });
 
-    let r = mgr.handle_req(
-        "cli_0".into(),
+    let r = deepx_tools::bridge::execute_tool_with_id_full(
         tool,
         "",
-        parsed_args,
-        None,
+        &parsed_args.to_string(),
+        "cli_0",
         None,
     );
 

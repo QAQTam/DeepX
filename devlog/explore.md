@@ -25,6 +25,10 @@
 13. [前端架构](#13-前端架构)
 14. [生产力特性](#14-生产力特性)
 15. [测试与质量保障](#15-测试与质量保障)
+16. [抽样核验与已知偏差](#16-抽样核验与已知偏差)
+17. [Crate Debug 总控看板](#17-crate-debug-总控看板)
+18. [Codex 与 DeepSeek 协作规范](#18-codex-与-deepseek-协作规范)
+19. [任务 Prompt 模板](#19-任务-prompt-模板)
 
 ---
 
@@ -35,11 +39,11 @@ DeepX-Fork 是一个 **AI 编程代理**（类似 Claude Code），采用 **Taur
 ### 关键数据
 | 项目 | 值 |
 |------|-----|
-| 总 Rust 代码量 | ~10,000+ 行 |
+| 总 Rust 代码量 | ~19,352 行（2026-07-12 按 `*.rs` 物理行抽样统计） |
 | Crate 数量 | 11 |
-| 工具数量 | 25+ |
+| 工具数量 | 28 个内置注册项 + 1 个可注入的 `spawn_subagent`；部分工具通过 `action` 暴露多项能力 |
 | 支持 Provider | DeepSeek, Qwen, GLM, Kimi, MiMo, MiniMax, Doubao, OpenAI 等 8+ |
-| 前端组件 | 25+ React 组件 |
+| 前端组件 | `components/` 下 23 个 TSX；前端共 25 个 TSX 文件 |
 | 国际化 | 中/英双语 |
 
 ---
@@ -68,19 +72,21 @@ DeepX-Fork 是一个 **AI 编程代理**（类似 Claude Code），采用 **Taur
 
 ### 每个 Crate 的职责
 
-| Crate | 行数(估) | 核心职责 |
+| Crate | Rust 行数快照 | 核心职责 |
 |-------|---------|---------|
-| **deepx-types** | ~500 | `Message`, `ToolDef`, `ConfigStore`, `SessionMeta`, `ProviderSpec`, 令牌计数 |
-| **deepx-proto** | ~620 | JSON-LP 帧定义 (`Ui2Agent`, `Agent2Ui`), `Redacted` 密钥保护 |
-| **deepx-gate** | ~1,400 | HTTP SSE 流式客户端, 重试逻辑, 工具调用解析 (XML/DSML), 内容审查 |
-| **deepx-config** | ~850 | `Config` 加载/保存双写 (TOML + SQLite), 系统提示词注入, Provider 注册表 |
-| **deepx-session** | ~860 | 会话 CRUD, meta.json + messages.jsonl + index.json, Turso 镜像 |
-| **deepx-message** | ~1,070 | `MessageStore` 状态机, 截断/折叠, Turn/Step 模型 |
-| **deepx-msglp** | ~1,685 | `Loop` 事件循环, 用户输入处理, 压缩, 权限门, 仪表板 |
-| **deepx-tools** | ~4,500+ | 25+ 工具实现, `ToolManager` 注册/执行, 权限引擎, AgentFS 桥接 |
-| **deepx-subagent** | ~228 | `spawn_subagent` 工具, 子进程管理 |
-| **deepx-tauri** | ~1,800 | `AgentRegistry` 多会话管理, 30+ Tauri commands, 前端事件桥接 |
-| **deepx-gate-testui** | ~小 | 本地 HTTP mock 测试 UI |
+| **deepx-types** | 661 | `Message`, `ToolDef`, `ConfigStore`, `SessionMeta`, `ProviderSpec`, 令牌计数 |
+| **deepx-proto** | 532 | JSON-LP 帧定义 (`Ui2Agent`, `Agent2Ui`), `Redacted` 密钥保护 |
+| **deepx-gate** | 1,887 | HTTP SSE 流式客户端, 重试逻辑, 工具调用解析 (XML/DSML), 内容审查 |
+| **deepx-config** | 843 | `Config` 加载/保存双写 (TOML + SQLite), 系统提示词注入, Provider 注册表 |
+| **deepx-session** | 1,208 | 会话 CRUD, meta.json + messages.jsonl + index.json, Turso 镜像 |
+| **deepx-message** | 983 | `MessageStore` 状态机, 截断/折叠, Turn/Step 模型 |
+| **deepx-msglp** | 2,746 | `Loop` 事件循环, 用户输入处理, 压缩, 权限门, 仪表板 |
+| **deepx-tools** | 5,876 | 工具实现, `ToolManager` 注册/执行, 权限引擎, AgentFS 桥接 |
+| **deepx-subagent** | 209 | `spawn_subagent` 工具, 子进程管理 |
+| **deepx-tauri** | 1,823 | `AgentRegistry` 多会话管理, 30+ Tauri commands, 前端事件桥接 |
+| **deepx-gate-testui** | 584 | 本地 HTTP mock 测试 UI |
+
+> 行数仅用于估算维护规模，不代表复杂度或测试覆盖率；新增代码后应重新统计。
 
 ---
 
@@ -774,7 +780,9 @@ pub fn finalize_req(&mut self, prepared, tool_result, elapsed_ms) -> ToolExecRep
 }
 ```
 
-### 9.4 已注册工具列表
+### 9.4 工具能力列表（含 action 展开）
+
+下表是面向用户/模型的能力视图，不等同于 `ToolManager` 的注册 key 数量。例如 Git 实际注册为 `git`，通过 `action=log|diff|...` 分发；Web 实际注册为 `web`，通过 action 分发。文件、task、plan、memory、process 等多数能力则各自注册独立 key。调试“Unknown tool”时必须先核对 `registration.rs` 和各模块 `register()`，不能直接把下表名称当作 handler key。
 
 | 工具名 | 分类 | 风险 | 功能 |
 |--------|------|------|------|
@@ -815,6 +823,7 @@ pub fn finalize_req(&mut self, prepared, tool_result, elapsed_ms) -> ToolExecRep
 | `process_check` | process | ReadOnly | 检查后台进程 |
 | `process_wait` | process | ReadOnly | 等待进程完成 |
 | `process_kill` | process | Destructive | 终止进程 |
+| `process_write` | process | Write | 向后台进程 stdin 写入内容 |
 | `spawn_subagent` | subagent | Administrative | 生成子代理 |
 
 ### 9.5 Git 工具实现 (`deepx-tools/src/git_tool.rs`)
@@ -1125,9 +1134,9 @@ impl AgentRegistry {
 |------|----|------|
 | Normal | 0 | 标准模式：读+写+执行 |
 | Plan | 1 | 只读模式：阻止写入/执行/破坏性工具 |
-| Code | 2 | 代码模式（待实现） |
+| Code | 2 | 已可读写和执行；当前 bridge 层与 Normal 的差异很小 |
 
-模式通过 `permission_level` 在 bridge 层控制。
+Agent 模式与 `permission_level` 是两个维度：模式由 bridge 的全局 `AGENT_MODE` 控制，当前仅 Plan 模式有额外阻断；权限等级由权限引擎决定某项操作是否需要用户确认。两者不能混为同一开关。
 
 ### 14.4 工作区管理
 
@@ -1187,17 +1196,17 @@ string_slice = "deny"      # 整个工作区强制: 不允许字符串切片
 - `deepx-gate/Cargo.toml`: `string_slice = "allow"` (所有切片在 ASCII 模式上)
 - `deepx-session/Cargo.toml`: `string_slice = "allow"` (使用 is_char_boundary 检查)
 
-### 15.2 测试覆盖
+### 15.2 测试资产与当前基线
 
-| Crate | 测试文件 | 测试内容 |
+“存在测试”不代表测试当前通过。以下结果是 2026-07-12 的抽样基线：11 个 crate 均通过 `cargo check -p <crate> --all-targets`；测试只对重点 crate 做了抽样，不能推断整个 workspace 全绿。
+
+| Crate | 测试资产 | 2026-07-12 抽样结果 |
 |-------|---------|---------|
-| deepx-gate | `tests/gate_test.rs` + `tests/common/mod.rs` | 流式 + 非流式 API 调用, 使用 mock HTTP 服务器 |
-| deepx-gate | `src/guard.rs` (内联) | 合规过滤: 白名单, 黑名单, NFKC, 词边界 |
-| deepx-gate | `src/tool_parser.rs` (内联) | DSML/XML 工具调用解析, markdown 围栏剥离 |
-| deepx-config | `src/prompt.rs` (内联) | 提示词非空, 包含 [IDENTITY] |
-| deepx-tools | 同源文件内联 | 多个文件包含 `#[cfg(test)] mod tests` |
-| deepx-tools | `src/git_tool.rs` (内联, ~90行) | Git 操作测试 |
-| deepx-tauri | Cargo 测试 | 通过 `cargo test` |
+| deepx-gate | `tests/gate_test.rs`、`guard.rs`、`tool_parser.rs` | **失败**：`test_has_dsml_detection` 的期望与 wrapper-only 检测实现冲突 |
+| deepx-config | `prompt.rs` 内联测试 | **通过**：3 passed |
+| deepx-tools | Git/workspace 单测、CJK 与并发读取集成测试 | **失败**：`ten_parallel_reads` 使用旧式 `file/read`，当前解析为未注册的 `file_read` |
+| deepx-msglp | `tests/concurrent_read_stress.rs` | 已编译，尚未在本轮形成完整运行结论 |
+| deepx-tauri | 当前未发现 `#[test]` | `cargo check --all-targets` 通过，但缺少有效 Rust 测试基线 |
 
 ### 15.3 错误处理模式
 
@@ -1224,6 +1233,230 @@ lto = true           # 链接时优化
 strip = true         # 剥离调试符号
 codegen-units = 1    # 单代码生成单元 (更好的优化)
 ```
+
+---
+
+## 16. 抽样核验与已知偏差
+
+本节记录已经通过源码或命令核对的结论，作为后续 debug 的事实基线。未列出的章节仍属于架构调查结果，进入对应 crate 时应再次以当前源码验证。
+
+### 16.1 已确认结论
+
+- Workspace 确有 11 个 crate，版本为 0.8.0，edition 为 2024。
+- `deepx-gate` 使用同步 `ureq` 和 SSE，重试、取消及工具调用解析均位于网关层。
+- `deepx-proto` 定义 JSON 行协议的 `Ui2Agent`、`Agent2Ui` 和日志脱敏类型 `Redacted`。
+- 配置和会话的 Turso 后端默认 feature 已启用；关闭 feature 时相关路径会退化或返回未编译提示。
+- Git 能力由 `git2`/libgit2 实现，不依赖 shell `git` 命令。
+- 11 个 crate 的 `cargo check -p <crate> --all-targets` 在本次抽样中均成功。
+
+### 16.2 已知偏差与风险
+
+| 编号 | 范围 | 事实 | Debug 影响 |
+|------|------|------|------------|
+| A-01 | 规模统计 | 原报告多项行数低估，现已更新为 2026-07-12 快照 | 排期应按实际规模评估，尤其是 msglp/tools |
+| A-02 | 工具命名 | 能力名、注册 key、`name + action` 合成名并不总是一致 | 权限、Plan allowlist、历史调用兼容都可能出现 Unknown tool |
+| A-03 | Agent 模式 | 当前只有 Plan 在 bridge 层被额外阻断；Code 与 Normal 基本同路 | 不应把 mode 和 permission level 当成同一状态机 |
+| A-04 | gate 测试 | `has_dsml` 只认 `tool_calls` wrapper，但测试也期待裸 invoke 被识别 | 必须先确定协议契约，再决定改实现还是改测试 |
+| A-05 | tools 测试 | 并发测试调用旧式 `file/read`，当前注册 key 为 `read` | 需决定保留兼容层还是迁移调用方，不能只为绿测硬改 |
+| A-06 | 测试分布 | types/proto/message/session/subagent/tauri 等测试较少或没有 | 上层绿测不能替代协议、持久化和边界测试 |
+
+### 16.3 工作树保护
+
+开始任何 crate 修复前必须执行 `git status --short` 和目标文件的 `git diff`。本次调查时 `crates/deepx-msglp/src/agent.rs` 已存在用户修改，后续窗口不得覆盖、回退或顺手格式化该修改。
+
+---
+
+## 17. Crate Debug 总控看板
+
+### 17.1 推荐顺序
+
+依赖层顺序为：
+
+```text
+deepx-types
+  └─ deepx-proto
+deepx-gate / deepx-config / deepx-session
+  └─ deepx-message
+      └─ deepx-tools
+          └─ deepx-subagent
+              └─ deepx-msglp
+                  └─ deepx-tauri
+
+deepx-gate-testui：随 deepx-gate 或最后单独核验
+```
+
+实际开工优先级可以先处理已有稳定失败的 `deepx-gate` 和 `deepx-tools`，但修改公共类型或协议前必须回到依赖层顺序进行影响分析。
+
+### 17.2 状态看板
+
+状态枚举：`未开始`、`调查中`、`待实现`、`实现中`、`待复核`、`已验收`、`阻塞`。
+
+| Crate | 风险 | 当前基线 | 首要检查点 | 状态/窗口 |
+|-------|------|----------|------------|-----------|
+| deepx-types | 中 | check 通过；缺测试 | serde/TS 兼容、token 与 platform 边界 | 未开始 |
+| deepx-proto | 高 | check 通过；缺测试 | 帧兼容、未知字段、密钥脱敏 | 未开始 |
+| deepx-gate | 高 | check 通过；1 个单测失败 | SSE、重试/取消、DSML/XML、usage | **待实现；建议本窗口认领** |
+| deepx-config | 中 | check/test 通过（3 tests） | TOML/DB 优先级、原子保存、profile 覆盖 | 未开始 |
+| deepx-session | 高 | check 通过；缺测试 | JSONL/Turso 一致性、迁移、截断恢复 | 未开始 |
+| deepx-message | 高 | check 通过；缺测试 | Turn/Step 状态机、不变量、截断折叠 | 未开始 |
+| deepx-tools | 最高 | check 通过；1 个集成测试失败 | 名称兼容、权限、路径安全、并发/取消 | 待实现；独立窗口 |
+| deepx-subagent | 高 | check 通过；缺测试 | 进程生命周期、工具 allowlist、超时 | 未开始 |
+| deepx-msglp | 最高 | check 通过；有用户未提交修改 | 主循环、并发、取消、权限等待、压缩 | 未开始；独立窗口 |
+| deepx-tauri | 高 | check 通过；缺 Rust 测试 | 子进程桥接、多会话、事件顺序、关闭 | 未开始 |
+| deepx-gate-testui | 低 | check 通过 | mock 与 gate 协议一致性 | 未开始 |
+
+### 17.3 单 crate 完成定义
+
+每个窗口只负责一个 crate。满足以下条件才能从“待复核”变为“已验收”：
+
+1. 写清 crate 的输入、输出、公共接口和至少三条关键不变量。
+2. 保存修复前的稳定复现命令和失败输出摘要。
+3. 修改范围最小，不夹带无关重构、依赖升级或全仓格式化。
+4. 正常、错误、边界路径均有测试；并发/持久化 crate 还需覆盖中断或恢复。
+5. 至少运行：
+
+   ```powershell
+   cargo fmt --check
+   cargo check -p <crate> --all-targets
+   cargo test -p <crate>
+   cargo clippy -p <crate> --all-targets
+   ```
+
+6. Codex 审查最终 diff，核对错误处理、兼容性、安全性和测试有效性。
+7. 记录实际执行结果；未执行、超时和环境失败不得写成通过。
+
+---
+
+## 18. Codex 与 DeepSeek 协作规范
+
+### 18.1 职责边界
+
+| 角色 | 负责 | 不负责 |
+|------|------|--------|
+| Codex | 源码调查、根因假设、方案设计、任务切分、Prompt、检查点、diff 审查、最终验收 | 把未经验证的架构判断直接交给实现方 |
+| DeepSeek | 在白名单文件内做最小实现、补测试、运行指定命令、如实报告结果 | 自行扩大范围、改协议、升级依赖、删除断言、宣称未运行的检查通过 |
+
+### 18.2 一窗口一 Crate
+
+- 每个 Codex 窗口只认领一个 crate，避免长上下文中混入其它 crate 的实现细节。
+- `explore.md` 是跨窗口共享的总控文档，不等于任何窗口可以修改所有 crate。
+- 公共类型、IPC 或跨 crate API 变更必须先在总控文档记录影响面，再分别交给受影响窗口。
+- 当前窗口完成本报告后建议固定认领 `deepx-gate`；`deepx-tools`、`deepx-msglp` 等另开窗口。
+
+### 18.3 标准流水线
+
+```text
+Codex 调查与复现
+  → 明确契约和非目标
+  → 提供最小上下文、参考片段、检查点和 Prompt
+  → DeepSeek 实现并自测
+  → Codex 审查 diff 与测试有效性
+  → 不通过则给出定点返工 Prompt
+  → 通过后更新 crate 看板
+```
+
+### 18.4 Codex 审查检查点
+
+- 根因：修改是否解决根因，而非仅改断言或吞掉错误。
+- 范围：是否只触及允许文件；是否覆盖用户已有修改。
+- 契约：serde 字段、IPC 帧、工具名/action、持久化格式是否保持兼容。
+- 错误：是否保留错误上下文；是否把失败伪装成成功或默认值。
+- 安全：路径边界、命令执行、权限判断、密钥日志是否退化。
+- 并发：锁是否跨慢操作持有；取消、超时、线程退出是否完整。
+- 测试：测试能否在修复前失败、修复后通过；是否覆盖负例和边界。
+- 验证：命令输出是否与代码状态一致，是否存在 warning 或未运行目标。
+
+---
+
+## 19. 任务 Prompt 模板
+
+### 19.1 DeepSeek 实现 Prompt
+
+````text
+你负责 DeepX-Fork 的单 crate 受限修复，不得扩大任务范围。
+
+【目标 crate】
+{crate}
+
+【问题与复现证据】
+{错误输出、失败测试、调用链}
+
+【已确认根因/待验证假设】
+{Codex 的调查结论；明确哪些仍是假设}
+
+【目标】
+{一句话完成条件}
+
+【非目标】
+- {本任务不处理的相邻问题}
+- 不升级依赖，不改 Cargo.lock
+- 不进行无关重构或全仓格式化
+
+【允许修改】
+- {文件白名单}
+
+【禁止修改】
+- {公共协议、其它 crate、用户已有修改等}
+- 不得删除、ignore 或弱化失败测试
+- 不得通过吞错、硬编码返回值或放宽安全检查来通过测试
+
+【关键不变量】
+1. {兼容性不变量}
+2. {状态/并发不变量}
+3. {安全或错误处理不变量}
+
+【相关代码片段】
+```rust
+{Codex 提取的最小相关代码；仅作定位，修改前仍需读取当前文件}
+```
+
+【实现要求】
+1. 先用不超过 5 句话说明根因和最小方案。
+2. 只修改白名单文件。
+3. 新增或调整能证明根因已修复的测试，至少覆盖正常、错误和边界输入。
+4. 依次实际运行：
+   cargo fmt --check
+   cargo check -p {crate} --all-targets
+   cargo test -p {crate}
+   cargo clippy -p {crate} --all-targets
+5. 任何命令失败时保留关键错误，不得声称通过。
+
+【最终输出格式】
+- 根因
+- 修改文件
+- 行为变化
+- 测试与命令结果
+- 尚存风险
+````
+
+### 19.2 Codex 返工 Prompt
+
+````text
+本次实现暂不验收，只修正以下审查问题：
+
+1. {具体问题，附文件和代码位置}
+2. {违反的不变量或失败用例}
+
+保持上一版允许/禁止范围不变。不要重写整个方案，只提交解决上述问题的最小 diff，并重新运行失败命令及 crate 全部测试。最终按“修改点、验证结果、尚存风险”输出。
+````
+
+### 19.3 Gate 首个任务的输入草案
+
+```rust
+pub fn has_dsml(content: &str) -> bool {
+    // 当前实现只在 wrapper 存在时触发扫描
+    let lower = content.to_lowercase();
+    lower.contains("dsml") && lower.contains("tool_calls")
+}
+
+#[test]
+fn test_has_dsml_detection() {
+    // 当前失败：测试还要求裸 invoke 被检测
+    assert!(has_dsml("use <|DSML|invoke name=\"read\">"));
+}
+```
+
+在交给 DeepSeek 前，Codex 必须先回答：`has_dsml` 的契约是“检测任意 DSML 痕迹”还是“检测可执行且带 wrapper 的完整调用”。还要核对 fenced code、半角/全角分隔符、混合格式和普通文本误判。没有完成契约判断前，不允许直接修改实现或测试。
 
 ---
 
@@ -1263,4 +1496,4 @@ deepx-tauri
 
 ---
 
-> **报告结束** — 此文档覆盖了 DeepX-Fork v0.8.0 的全部核心组件，每个章节均引用具体源文件路径和关键代码片段。
+> **报告结束** — 本文档是 DeepX-Fork v0.8.0 的架构调查与 crate debug 总控基线。源码持续变化；进入每个 crate 前必须重新验证对应结论。

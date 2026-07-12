@@ -1041,6 +1041,7 @@ dependencies = [
  "os_pipe",
  "serde_json",
  "tempfile",
+ "tiny_http",
  "windows 0.54.0",
 ]
 

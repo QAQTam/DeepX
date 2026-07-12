@@ -4,6 +4,15 @@ use crate::agent::AgentState;
 use deepx_proto;
 use deepx_types;
 
+/// Resolve a legacy `name`/`action` pair before policy evaluation.
+pub(crate) fn resolve_effective_name(
+    name: &str,
+    action: &str,
+    _args: &serde_json::Value,
+) -> String {
+    if action.is_empty() { name.to_string() } else { format!("{name}_{action}") }
+}
+
 /// Return today's date as "YYYY-MM-DD" (UTC+8).
 pub(crate) fn chrono_local_date() -> String {
     let dur = std::time::SystemTime::now()

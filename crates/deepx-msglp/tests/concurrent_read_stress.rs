@@ -2,12 +2,12 @@
 //! Designed to trigger any deadlock, panic, or lock poisoning in the
 //! multi-tool parallel execution path.
 
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use deepx_msglp::agent::AgentState;
 use deepx_msglp::Loop;
+use deepx_msglp::agent::AgentState;
 use deepx_proto::{Agent2Ui, Ui2Agent};
 
 #[test]
@@ -35,16 +35,31 @@ fn ten_parallel_reads_same_file() {
     let (input_reader, mut input_writer) = os_pipe::pipe().unwrap();
     let (output_reader, output_writer) = os_pipe::pipe().unwrap();
 
-    let mut loop_ = Loop::new_ipc(
-        agent,
-        BufReader::new(input_reader),
-        output_writer,
-    );
+    let mut loop_ = Loop::new_ipc(agent, BufReader::new(input_reader), output_writer);
 
     // ── Spawn a thread that feeds commands and collects events ──
     let cmd_tx = cmd_tx_to_agent.clone();
     let event_rx = event_rx_to_test;
-    
+    let event_tx = event_tx_from_agent;
+
+    // Background thread: forward agent output pipe → event channel
+    std::thread::spawn(move || {
+        let reader = BufReader::new(output_reader);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => match serde_json::from_str::<Agent2Ui>(&line) {
+                    Ok(event) => {
+                        if event_tx.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => {}
+                },
+                Err(_) => break,
+            }
+        }
+    });
+
     let handle = std::thread::spawn(move || {
         // Feed CreateSession first
         use std::io::Write;
@@ -63,7 +78,9 @@ fn ten_parallel_reads_same_file() {
                 Ok(_) => {}
                 Err(_) => break,
             }
-            if ready && !seed.is_empty() { break; }
+            if ready && !seed.is_empty() {
+                break;
+            }
         }
         assert!(!seed.is_empty(), "SessionCreated not received");
 
@@ -73,13 +90,13 @@ fn ten_parallel_reads_same_file() {
         // Actually, we simulate the agent's internal flow: send a
         // UserInput that the gate would normally process. But we
         // bypass the gate and directly inject tool calls.
-        
+
         // Send 10 ToolCall frames with incrementing IDs
         for i in 0..10 {
             let tc = Ui2Agent::ToolCall {
                 id: format!("tc_{}", i),
-                name: "file".into(),
-                action: "read".into(),
+                name: "read".into(),
+                action: String::new(),
                 args: serde_json::json!({
                     "path": file_path.to_string_lossy(),
                 }),

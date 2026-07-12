@@ -12,6 +12,8 @@ fn ten_parallel_reads() {
 
     // Init tool manager
     deepx_tools::bridge::init_tools("test", &[], vec![]);
+    // Set permission context so the compat wrapper can pass admission
+    deepx_tools::bridge::set_runtime_context("test", 4);
 
     let file_path_str = file_path.to_string_lossy().to_string();
     let args = serde_json::json!({"path": file_path_str}).to_string();
@@ -24,7 +26,11 @@ fn ten_parallel_reads() {
         let done_tx = done_tx.clone();
         handles.push(std::thread::spawn(move || {
             let result = deepx_tools::bridge::execute_tool_with_id_full(
-                "file", "read", &args, &format!("tc_{}", i), None,
+                "read",
+                "",
+                &args,
+                &format!("tc_{}", i),
+                None,
             );
             done_tx.send((i, result.success, result.content)).unwrap();
         }));
@@ -40,11 +46,22 @@ fn ten_parallel_reads() {
     }
 
     let mut results = Vec::new();
-    while let Ok(r) = done_rx.try_recv() { results.push(r); }
-    assert_eq!(results.len(), 10, "Expected 10 results, got {}", results.len());
+    while let Ok(r) = done_rx.try_recv() {
+        results.push(r);
+    }
+    assert_eq!(
+        results.len(),
+        10,
+        "Expected 10 results, got {}",
+        results.len()
+    );
     for (_i, success, content) in &results {
         assert!(success, "Tool failed: {}", content);
-        assert!(content.contains("0123456789"), "Missing content: {}", content);
+        assert!(
+            content.contains("0123456789"),
+            "Missing content: {}",
+            content
+        );
     }
 
     // Cleanup

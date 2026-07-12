@@ -51,12 +51,12 @@ pub struct ToolManager {
 // ── Three-phase execution for parallel tool support ──
 
 /// Prepared tool call, ready for execution without holding the manager lock.
-pub struct PreparedCall {
-    pub id: String,
-    pub name: String,
-    pub handler_fn: fn(crate::ToolCallCtx) -> crate::ToolResult,
-    pub ctx: crate::ToolCallCtx,
-    pub audit_args: serde_json::Value,
+pub(crate) struct PreparedCall {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) handler_fn: fn(crate::ToolCallCtx) -> crate::ToolResult,
+    pub(crate) ctx: crate::ToolCallCtx,
+    pub(crate) audit_args: serde_json::Value,
 }
 
 impl ToolManager {
@@ -98,33 +98,11 @@ impl ToolManager {
         }
     }
 
-    pub fn handle_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> ToolExecReport {
-        let t0 = std::time::Instant::now();
-        let prepared = match self.prepare_req(id, name, action, args, timeout_secs, progress_tx) {
-            Ok(p) => p,
-            Err(report) => return report,
-        };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            (prepared.handler_fn)(prepared.ctx.clone())
-        }));
-        let elapsed_ms = t0.elapsed().as_millis() as u64;
-        let tool_result = match result {
-            Ok(tr) => tr,
-            Err(panic_info) => {
-                let msg = if let Some(s) = panic_info.downcast_ref::<String>() { s.clone() }
-                    else if let Some(s) = panic_info.downcast_ref::<&str>() { s.to_string() }
-                    else { "unknown panic".to_string() };
-                crate::ToolResult { success: false, content: format!("[ERROR] Tool panicked: {}", msg) }
-            }
-        };
-        self.finalize_req(prepared, tool_result, elapsed_ms)
-    }
-
     // ── Three-phase execution for parallel tool support ──
 
     /// Phase 1: validate, safety-check, register inflight. Returns a [`PreparedCall`]
     /// that can be executed without the manager lock.
-    pub fn prepare_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> Result<PreparedCall, ToolExecReport> {
+    pub(crate) fn prepare_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> Result<PreparedCall, ToolExecReport> {
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
                 let msg = format!("[ERROR] Tool '{}' is not in the allowed list for this subagent. Allowed tools: [{}]", name, allowed.join(", "));
@@ -172,7 +150,7 @@ impl ToolManager {
     }
 
     /// Phase 3: deregister inflight, accumulate stats, build report.
-    pub fn finalize_req(&mut self, prepared: PreparedCall, result: crate::ToolResult, elapsed_ms: u64) -> ToolExecReport {
+    pub(crate) fn finalize_req(&mut self, prepared: PreparedCall, result: crate::ToolResult, elapsed_ms: u64) -> ToolExecReport {
         self.inflight_tasks.remove(&prepared.id);
 
         let output_size = result.content.len();
