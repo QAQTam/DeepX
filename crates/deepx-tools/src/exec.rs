@@ -1,36 +1,183 @@
 //! Command execution — direct process spawn via argv array.
 //!
-//! No PTY, no shell, no streaming. Uses `std::process::Command`.
+//! No PTY and no shell. Uses `std::process::Command` and streams pipe chunks
+//! to the UI while retaining a bounded final result for the LLM.
 //! Output is read via pipes (not `output()`) to prevent OOM on large outputs,
 //! and truncated by actual token count using `deepx_types::token::count_tokens`.
 
-use crate::{ToolCallCtx, ToolResult};
+use crate::{ExecOutputStream, ExecProgressEvent, ExecProgressSender, ToolCallCtx, ToolResult};
 use serde::Serialize;
 use std::io::Read;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
-/// Stream read from a pipe, capped at `max_bytes`. Returns (accumulated_string, was_truncated).
-fn read_stream(stream: impl Read, max_bytes: usize) -> (String, bool) {
+/// Stream read from a pipe, capped at `max_bytes`.
+///
+/// Every retained chunk is also forwarded to the UI progress channel. Once the
+/// cap is reached, the rest of the pipe is drained without forwarding so the
+/// child cannot block on a full OS pipe.
+fn read_stream(
+    stream: impl Read,
+    max_bytes: usize,
+    progress_tx: Option<ExecProgressSender>,
+    tool_call_id: String,
+    output_stream: ExecOutputStream,
+    progress_seq: Arc<AtomicU64>,
+) -> (Vec<u8>, bool) {
     let mut reader = std::io::BufReader::new(stream);
     let mut buf = vec![0u8; 8192];
-    let mut out = String::new();
+    let mut out = Vec::new();
+    let mut pending_utf8 = Vec::new();
     let mut truncated = false;
     loop {
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                if out.len() + n > max_bytes {
-                    let remaining = max_bytes - out.len();
-                    out.push_str(&String::from_utf8_lossy(&buf[..remaining]));
+                let retained = n.min(max_bytes.saturating_sub(out.len()));
+                if retained > 0 {
+                    let chunk = &buf[..retained];
+                    out.extend_from_slice(chunk);
+                    forward_progress(
+                        &mut pending_utf8,
+                        chunk,
+                        progress_tx.as_ref(),
+                        &tool_call_id,
+                        output_stream,
+                        &progress_seq,
+                    );
+                }
+                if retained < n {
                     truncated = true;
                     std::io::copy(&mut reader, &mut std::io::sink()).ok();
                     break;
                 }
-                out.push_str(&String::from_utf8_lossy(&buf[..n]));
             }
             Err(_) => break,
         }
     }
+    if !pending_utf8.is_empty() {
+        send_progress(
+            progress_tx.as_ref(),
+            &tool_call_id,
+            output_stream,
+            &progress_seq,
+            String::from_utf8_lossy(&pending_utf8).into_owned(),
+        );
+    }
     (out, truncated)
+}
+
+/// Forward only complete text units. A command may split one Chinese character
+/// across pipe reads; keeping its suffix here avoids replacement glyphs in UI.
+/// On Windows, non-UTF-8 console output falls back to the active OEM code page.
+fn forward_progress(
+    pending: &mut Vec<u8>,
+    bytes: &[u8],
+    tx: Option<&ExecProgressSender>,
+    tool_call_id: &str,
+    stream: ExecOutputStream,
+    seq: &Arc<AtomicU64>,
+) {
+    pending.extend_from_slice(bytes);
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(valid) => {
+                send_progress(tx, tool_call_id, stream, seq, valid.to_owned());
+                pending.clear();
+                return;
+            }
+            Err(error) if error.valid_up_to() > 0 => {
+                let valid_up_to = error.valid_up_to();
+                let prefix = String::from_utf8(pending[..valid_up_to].to_vec())
+                    .expect("valid UTF-8 prefix");
+                pending.drain(..valid_up_to);
+                send_progress(tx, tool_call_id, stream, seq, prefix);
+            }
+            Err(error) if error.error_len().is_some() => {
+                #[cfg(windows)]
+                if let Some(decoded) = decode_windows_oem(pending) {
+                    pending.clear();
+                    send_progress(tx, tool_call_id, stream, seq, decoded);
+                    return;
+                }
+                let invalid_len = error.error_len().expect("checked above");
+                let replacement = String::from_utf8_lossy(&pending[..invalid_len]).into_owned();
+                pending.drain(..invalid_len);
+                send_progress(tx, tool_call_id, stream, seq, replacement);
+            }
+            Err(_) => return, // incomplete character at end; wait for next read.
+        }
+    }
+}
+
+/// Decode the final capture using UTF-8 first, then the Windows console OEM
+/// code page (for example GBK/936 on Simplified-Chinese Windows).
+fn decode_captured(bytes: &[u8]) -> String {
+    if let Ok(utf8) = std::str::from_utf8(bytes) {
+        return utf8.to_owned();
+    }
+    #[cfg(windows)]
+    if let Some(oem) = decode_windows_oem(bytes) {
+        return oem;
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+#[cfg(windows)]
+fn decode_windows_oem(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() { return Some(String::new()); }
+    if bytes.len() > i32::MAX as usize { return None; }
+
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn GetOEMCP() -> u32;
+        fn MultiByteToWideChar(
+            code_page: u32,
+            flags: u32,
+            multi_byte: *const u8,
+            multi_byte_len: i32,
+            wide_char: *mut u16,
+            wide_char_len: i32,
+        ) -> i32;
+    }
+
+    // MB_ERR_INVALID_CHARS lets a split GBK/DBCS sequence wait for the next
+    // read instead of emitting a replacement glyph mid-stream.
+    const MB_ERR_INVALID_CHARS: u32 = 0x0000_0008;
+    let code_page = unsafe { GetOEMCP() };
+    let byte_len = bytes.len() as i32;
+    let wide_len = unsafe {
+        MultiByteToWideChar(
+            code_page, MB_ERR_INVALID_CHARS, bytes.as_ptr(), byte_len,
+            std::ptr::null_mut(), 0,
+        )
+    };
+    if wide_len <= 0 { return None; }
+    let mut wide = vec![0u16; wide_len as usize];
+    let written = unsafe {
+        MultiByteToWideChar(
+            code_page, MB_ERR_INVALID_CHARS, bytes.as_ptr(), byte_len,
+            wide.as_mut_ptr(), wide_len,
+        )
+    };
+    (written == wide_len).then(|| String::from_utf16_lossy(&wide))
+}
+
+fn send_progress(
+    tx: Option<&ExecProgressSender>,
+    tool_call_id: &str,
+    stream: ExecOutputStream,
+    seq: &Arc<AtomicU64>,
+    chunk: String,
+) {
+    if chunk.is_empty() { return; }
+    if let Some(tx) = tx {
+        tx.try_send(ExecProgressEvent {
+            tool_call_id: tool_call_id.to_string(),
+            stream,
+            seq: seq.fetch_add(1, Ordering::Relaxed),
+            chunk,
+        });
+    }
 }
 
 /// Find byte index for `target` tokens walking forward.
@@ -80,11 +227,14 @@ fn token_truncate(text: &str, max_tokens: u32) -> String {
     let tail_start = find_token_boundary_reverse(text, tail_tokens);
     if head_end >= tail_start {
         let end = find_token_boundary(text, max_tokens);
-        format!("{}\n...[TRUNCATED: {}/{} tokens]", &text[..end], max_tokens, total)
+        format!(
+            "{}\n...[TRUNCATED: {}/{} tokens. Call exec_run again with narrower argv or a filtering command.]",
+            &text[..end], max_tokens, total
+        )
     } else {
         let tail = &text[tail_start..];
         format!(
-            "{}\n\n...[TRUNCATED: {}/{} tokens, {} lines dropped]\n\n{}",
+            "{}\n\n...[TRUNCATED: {}/{} tokens, {} lines dropped. Call exec_run again with narrower argv or a filtering command.]\n\n{}",
             &text[..head_end], max_tokens, total,
             text[head_end..tail_start].lines().count(),
             tail.trim_start(),
@@ -94,7 +244,15 @@ fn token_truncate(text: &str, max_tokens: u32) -> String {
 
 /// Direct command execution: argv array, no shell.
 /// Uses background threads for pipe reading and poll-based timeout.
-fn direct_exec(argv: &[String], cwd: Option<&str>, max_output_tokens: u32, timeout_secs: u64) -> ExecOutput {
+fn direct_exec(
+    argv: &[String],
+    cwd: Option<&str>,
+    max_output_tokens: u32,
+    timeout_secs: u64,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    progress_tx: Option<ExecProgressSender>,
+    tool_call_id: &str,
+) -> ExecOutput {
     let start_time = std::time::Instant::now();
     let display_name = if argv.len() > 1 { format!("{} ...", argv[0]) } else { argv[0].clone() };
     const HARD_BYTE_CAP: usize = 5 * 1024 * 1024;
@@ -116,28 +274,51 @@ fn direct_exec(argv: &[String], cwd: Option<&str>, max_output_tokens: u32, timeo
         Err(e) => return ExecOutput {
             status: "completed", command: display_name, exit_code: Some(-1),
             output: format!("SPAWN FAILED: {e}"), wall_time_seconds: 0.0,
-            original_tokens: 0, truncated: false, timed_out: false,
+            original_tokens: 0, truncated: false, timed_out: false, cancelled: false,
+            stdout_bytes: 0, stderr_bytes: 0, ui_dropped_bytes: 0,
         },
     };
 
     // Start background pipe readers
     let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
     let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+    let progress_seq = Arc::new(AtomicU64::new(0));
     if let Some(p) = child.stdout.take() {
-        std::thread::spawn(move || { let (s, t) = read_stream(p, HARD_BYTE_CAP); let _ = stdout_tx.send((s, t)); });
-    } else { let _ = stdout_tx.send((String::new(), false)); }
+        let progress_tx = progress_tx.clone();
+        let tool_call_id = tool_call_id.to_string();
+        let progress_seq = progress_seq.clone();
+        std::thread::spawn(move || {
+            let (s, t) = read_stream(p, HARD_BYTE_CAP, progress_tx, tool_call_id, ExecOutputStream::Stdout, progress_seq);
+            let _ = stdout_tx.send((s, t));
+        });
+    } else { let _ = stdout_tx.send((Vec::new(), false)); }
     if let Some(p) = child.stderr.take() {
-        std::thread::spawn(move || { let (s, t) = read_stream(p, HARD_BYTE_CAP); let _ = stderr_tx.send((s, t)); });
-    } else { let _ = stderr_tx.send((String::new(), false)); }
+        let progress_tx = progress_tx.clone();
+        let tool_call_id = tool_call_id.to_string();
+        let progress_seq = progress_seq.clone();
+        std::thread::spawn(move || {
+            let (s, t) = read_stream(p, HARD_BYTE_CAP, progress_tx, tool_call_id, ExecOutputStream::Stderr, progress_seq);
+            let _ = stderr_tx.send((s, t));
+        });
+    } else { let _ = stderr_tx.send((Vec::new(), false)); }
 
     // Poll child with timeout
     let deadline = start_time + std::time::Duration::from_secs(timeout_secs);
     let mut exit_code: Option<i32> = None;
     let mut timed_out = false;
+    let mut cancelled = false;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => { exit_code = status.code(); break; }
             Ok(None) => {
+                if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+                    || crate::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    cancelled = true;
+                    break;
+                }
                 if std::time::Instant::now() >= deadline { let _ = child.kill(); let _ = child.wait(); timed_out = true; break; }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
@@ -147,11 +328,17 @@ fn direct_exec(argv: &[String], cwd: Option<&str>, max_output_tokens: u32, timeo
 
     // Collect pipe output (threads finish after child exits)
     let (stdout_out, stdout_trunc) = stdout_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or_else(|_| {
-        (String::from("[WARN] stdout pipe timed out\n"), true)
+        (b"[WARN] stdout pipe timed out\n".to_vec(), true)
     });
     let (stderr_out, stderr_trunc) = stderr_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or_else(|_| {
-        (String::from("[WARN] stderr pipe timed out\n"), true)
+        (b"[WARN] stderr pipe timed out\n".to_vec(), true)
     });
+
+    let stdout_bytes = stdout_out.len() as u64;
+    let stderr_bytes = stderr_out.len() as u64;
+    let ui_dropped_bytes = progress_tx.as_ref().map_or(0, ExecProgressSender::dropped_bytes);
+    let stdout_out = decode_captured(&stdout_out);
+    let stderr_out = decode_captured(&stderr_out);
 
     let mut combined = String::new();
     if !stderr_out.is_empty() { combined.push_str(&stderr_out); if !stdout_out.is_empty() { combined.push('\n'); } }
@@ -167,9 +354,10 @@ fn direct_exec(argv: &[String], cwd: Option<&str>, max_output_tokens: u32, timeo
     };
 
     ExecOutput {
-        status: "completed", command: display_name, exit_code,
+        status: if cancelled { "cancelled" } else { "completed" }, command: display_name, exit_code,
         output: output_str, wall_time_seconds: start_time.elapsed().as_secs_f64(),
-        original_tokens: total_tokens, truncated, timed_out,
+        original_tokens: total_tokens, truncated, timed_out, cancelled,
+        stdout_bytes, stderr_bytes, ui_dropped_bytes,
     }
 }
 
@@ -184,6 +372,11 @@ pub(crate) struct ExecOutput {
     original_tokens: u32,
     truncated: bool,
     timed_out: bool,
+    cancelled: bool,
+    stdout_bytes: u64,
+    stderr_bytes: u64,
+    /// Bytes not sent to the UI because its bounded event queue was full.
+    ui_dropped_bytes: u64,
 }
 
 impl ExecOutput {
@@ -205,18 +398,27 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
         return ToolResult { success: false, content: crate::json_err("EMPTY_ARGV", "argv array is empty", "Provide at least one element.") };
     }
     let max_output_tokens = ctx.get_u64("max_output_tokens").filter(|&n| n >= 100 && n <= 50000).unwrap_or(10000) as u32;
-    let timeout_secs = ctx.get_u64("timeout_secs").filter(|&n| n > 0 && n <= 3600).unwrap_or(30);
+    let timeout_secs = ctx.get_u64("timeout_secs").filter(|&n| n > 0 && n <= 3600)
+        .unwrap_or_else(|| ctx.timeout_secs.unwrap_or(30).clamp(1, 3600));
     // Fall back to workspace root when the caller doesn't supply cwd
     let cwd: Option<String> = ctx.get_str("cwd").map(String::from).or_else(|| {
         let ws = crate::CURRENT_WORKSPACE.read().ok()?;
         if ws.is_empty() || *ws == "." { None } else { Some(ws.clone()) }
     });
     let cwd_ref: Option<&str> = cwd.as_deref();
-    let result = direct_exec(&argv, cwd_ref, max_output_tokens, timeout_secs);
+    let result = direct_exec(
+        &argv,
+        cwd_ref,
+        max_output_tokens,
+        timeout_secs,
+        Some(ctx.cancel.as_ref()),
+        ctx.tx_progress.clone(),
+        &ctx.id,
+    );
     let success = match result.exit_code {
         Some(0) => true,
         Some(_) => false,
-        None => !result.timed_out, // killed by timeout / spawn failed is already a signal
+        None => !result.timed_out && !result.cancelled,
     };
     ToolResult { success, content: result.to_json() }
 }
@@ -226,18 +428,29 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
 /// Strip ANSI escape sequences from output.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            i += 1;
-            if i >= bytes.len() { break; }
-            match bytes[i] {
-                b'[' => { i += 1; while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) { i += 1; } if i < bytes.len() { i += 1; } }
-                b']' | b'P' | b'_' | b'^' => { i += 1; while i < bytes.len() { if bytes[i] == 0x07 { i += 1; break; } if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' { i += 2; break; } i += 1; } }
-                _ => {}
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                while let Some(next) = chars.next() {
+                    if ('@'..='~').contains(&next) { break; }
+                }
             }
-        } else { out.push(bytes[i] as char); i += 1; }
+            Some(']' | 'P' | '_' | '^') => {
+                while let Some(next) = chars.next() {
+                    if next == '\x07' { break; }
+                    if next == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
     out
 }
@@ -264,7 +477,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
         }),
         handler: handle_run,
         risk: ToolRisk::Destructive,
-        default_timeout: Duration::from_secs(300),
+        default_timeout: Duration::from_secs(30),
     });
 }
 
@@ -275,7 +488,7 @@ mod tests {
     #[test]
     fn test_git_status_returns_output() {
         let argv = vec!["git".to_string(), "status".to_string()];
-        let result = direct_exec(&argv, None, 10000, 10);
+        let result = direct_exec(&argv, None, 10000, 10, None, None, "test");
         eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
             result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
         assert!(!result.timed_out, "timed out");
@@ -285,7 +498,7 @@ mod tests {
     #[test]
     fn test_git_diff_returns_output() {
         let argv = vec!["git".to_string(), "diff".to_string(), "--stat".to_string()];
-        let result = direct_exec(&argv, None, 10000, 10);
+        let result = direct_exec(&argv, None, 10000, 10, None, None, "test");
         eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
             result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
         assert!(!result.timed_out, "timed out");
@@ -294,10 +507,112 @@ mod tests {
     #[test]
     fn test_cargo_check_returns_output() {
         let argv = vec!["cargo".to_string(), "check".to_string(), "-p".to_string(), "deepx-types".to_string()];
-        let result = direct_exec(&argv, None, 10000, 60);
+        let result = direct_exec(&argv, None, 10000, 60, None, None, "test");
         eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
             result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
         assert!(!result.timed_out, "timed out");
         assert!(!result.output.is_empty(), "no output");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn per_call_cancel_stops_only_the_running_command() {
+        let argv = vec![
+            "cmd".to_string(),
+            "/C".to_string(),
+            "ping -n 6 127.0.0.1 >NUL".to_string(),
+        ];
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let signal = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            signal.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let result = direct_exec(&argv, None, 100, 10, Some(cancel.as_ref()), None, "test");
+        assert!(result.cancelled, "per-call cancellation should stop the child");
+    }
+
+    #[test]
+    fn truncated_output_instructs_the_model_to_retry_narrowly() {
+        let text = "token ".repeat(1_000);
+        let truncated = token_truncate(&text, 10);
+        assert!(truncated.contains("Call exec_run again with narrower argv or a filtering command."));
+    }
+
+    #[test]
+    fn pipe_reader_forwards_retained_chunks_with_the_call_id() {
+        let (tx, rx) = crate::bounded_exec_progress_channel();
+        let (output, truncated) = read_stream(
+            std::io::Cursor::new(b"first\nsecond\n".to_vec()),
+            1024,
+            Some(tx),
+            "call-stream-1".to_string(),
+            ExecOutputStream::Stdout,
+            Arc::new(AtomicU64::new(0)),
+        );
+
+        let chunks: Vec<_> = rx.try_iter().collect();
+        assert_eq!(output, b"first\nsecond\n");
+        assert!(!truncated);
+        assert_eq!(chunks, vec![ExecProgressEvent {
+            tool_call_id: "call-stream-1".to_string(),
+            stream: ExecOutputStream::Stdout,
+            seq: 0,
+            chunk: "first\nsecond\n".to_string(),
+        }]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exec_forwards_stdout_to_the_progress_channel_before_returning() {
+        let argv = vec!["cmd".to_string(), "/C".to_string(), "echo streamed-output".to_string()];
+        let (tx, rx) = crate::bounded_exec_progress_channel();
+
+        let result = direct_exec(&argv, None, 100, 10, None, Some(tx), "call-stream-2");
+        let chunks: Vec<_> = rx.try_iter().collect();
+
+        assert!(result.output.contains("streamed-output"));
+        assert!(chunks.iter().any(|event| {
+            event.tool_call_id == "call-stream-2"
+                && event.stream == ExecOutputStream::Stdout
+                && event.chunk.contains("streamed-output")
+        }));
+    }
+
+    #[test]
+    fn pipe_reader_keeps_split_utf8_characters_intact_for_the_ui() {
+        let (tx, rx) = crate::bounded_exec_progress_channel();
+        let mut input = vec![b'a'; 8191];
+        input.extend_from_slice("中".as_bytes());
+        let (_output, truncated) = read_stream(
+            std::io::Cursor::new(input), 16 * 1024, Some(tx), "utf8".to_string(),
+            ExecOutputStream::Stdout, Arc::new(AtomicU64::new(0)),
+        );
+        assert!(!truncated);
+        let text: String = rx.try_iter().map(|event| event.chunk).collect();
+        assert!(text.ends_with('中'));
+        assert!(!text.contains('\u{fffd}'));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_oem_output_is_decoded_without_utf8_beta_mode() {
+        // GBK/936 for "正在", representative of cmd.exe ping output.
+        assert_eq!(decode_captured(&[0xD5, 0xFD, 0xD4, 0xDA]), "正在");
+    }
+
+    #[test]
+    fn bounded_progress_queue_drops_updates_without_blocking_pipe_readers() {
+        let (tx, _rx) = crate::bounded_exec_progress_channel();
+        for seq in 0..=crate::EXEC_PROGRESS_CHANNEL_CAPACITY {
+            tx.try_send(ExecProgressEvent {
+                tool_call_id: "bounded".to_string(),
+                stream: ExecOutputStream::Stdout,
+                seq: seq as u64,
+                chunk: "x".to_string(),
+            });
+        }
+        assert_eq!(tx.dropped_bytes(), 1);
     }
 }

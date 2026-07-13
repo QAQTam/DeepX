@@ -72,7 +72,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
                 let mut s = all_lines[..head].join("\n");
                 if total > head + tail {
                     s.push_str(&format!(
-                        "\n--?[{} lines omitted --?use start_line to read specific range]",
+                        "\n[truncated: {} lines omitted. Call read again with start_line/end_line for the omitted range.]",
                         total - head - tail
                     ));
                 }
@@ -109,11 +109,11 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
                     "path": path,
                     "code": "BINARY_FILE",
                     "message": format!("Binary file ({}B), cannot display as text", size),
-                    "hint": format!("Use exec(\"file '{}'\") to identify format, or exec(\"xxd '{}'\") for hex dump.", path, path),
+                    "hint": format!("Use exec_run with argv [\"file\", \"{}\"] to identify format, or [\"xxd\", \"{}\"] for a hex dump.", path, path),
                 }).to_string()
             } else {
                 let url_hint = if path.contains("://") || path.contains(".com") || path.contains("www.") {
-                    "\n[HINT] This looks like a URL --?did you mean to call web_fetch() instead?"
+                    "\n[HINT] This looks like a URL — did you mean to call web with {\"url\": ...} instead?"
                 } else { "" };
                 serde_json::json!({
                     "timeis": crate::now_utc8(),
@@ -121,7 +121,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
                     "path": path,
                     "code": "NOT_FOUND",
                     "message": e.to_string(),
-                    "hint": format!("Use list_dir() on the parent directory to verify the file exists.{url_hint}"),
+                    "hint": format!("Use list on the parent directory to verify the file exists.{url_hint}"),
                 }).to_string()
             }
         },
@@ -163,7 +163,10 @@ pub(super) fn exec_list_dir(args: &serde_json::Value) -> String {
                 }
             }
             if total > MAX_LIST_DIR_ENTRIES {
-                content.push_str(&format!("... [truncated: {} more entries]\n", total - MAX_LIST_DIR_ENTRIES));
+                content.push_str(&format!(
+                    "... [truncated: {} more entries. Call list again on a narrower directory.]\n",
+                    total - MAX_LIST_DIR_ENTRIES
+                ));
             }
             crate::json_ok(serde_json::json!({"path": path, "content": content}))
         }
@@ -203,7 +206,10 @@ pub(super) fn exec_search(args: &serde_json::Value) -> String {
                 return crate::json_ok(serde_json::json!({"pattern": pattern, "content": format!("No matches for '{}'", pattern)}));
             }
             let truncated = if all_lines.len() > 100 {
-                format!("\n... ({} more matches)", all_lines.len() - 100)
+                format!(
+                    "\n... [truncated: {} more matches. Call search again with a narrower pattern, glob, or path.]",
+                    all_lines.len() - 100
+                )
             } else {
                 String::new()
             };
@@ -220,7 +226,10 @@ pub(super) fn exec_search(args: &serde_json::Value) -> String {
             } else {
                 let result: Vec<&str> = lines.iter().take(100).map(|s| s.as_str()).collect();
                 let truncated = if lines.len() > 100 {
-                    format!("\n... ({} more matches)", lines.len() - 100)
+                    format!(
+                        "\n... [truncated: {} more matches. Call search again with a narrower pattern, glob, or path.]",
+                        lines.len() - 100
+                    )
                 } else {
                     String::new()
                 };
@@ -241,11 +250,11 @@ pub(super) fn exec_diff(args: &serde_json::Value) -> String {
 
     let content_a = match std::fs::read_to_string(&path_a) {
         Ok(c) => c,
-        Err(e) => return crate::json_err("READ_FAILED", &format!("Cannot read {}: {}", path_a, e), "Verify the file exists. Use list_dir() to check."),
+        Err(e) => return crate::json_err("READ_FAILED", &format!("Cannot read {}: {}", path_a, e), "Verify the file exists. Use list to check."),
     };
     let content_b = match std::fs::read_to_string(&path_b) {
         Ok(c) => c,
-        Err(e) => return crate::json_err("READ_FAILED", &format!("Cannot read {}: {}", path_b, e), "Verify the file exists. Use list_dir() to check."),
+        Err(e) => return crate::json_err("READ_FAILED", &format!("Cannot read {}: {}", path_b, e), "Verify the file exists. Use list to check."),
     };
 
     if content_a == content_b {
@@ -262,8 +271,8 @@ handler!(handle_diff, exec_diff);
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: "read".to_string(),
-        description: "Read file contents. Fails on directories --?use file_list for that. Use start_line/end_line for range reads. Full files auto-truncate to head 50 + tail 30 lines (>200 lines). Use 'paths' array to read multiple files in one call. Returns JSON with path, total_lines, truncated flag, and content.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path, NOT a directory (use file_list for directories). Relative to workspace or absolute."},"start_line":{"type":"integer","description":"First line to read (1-based, optional)"},"end_line":{"type":"integer","description":"Last line to read, inclusive (optional). Max range: 300 lines."}},"required":["path"],"additionalProperties":false}),
+        description: "Read one or more files. Use path for one file or paths for a batch. Use list for directories and start_line/end_line for a range. Full files auto-truncate to head 50 + tail 30 lines (>200 lines); when truncated, call read again with a smaller range.",
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"One file path, not a directory. Relative to workspace or absolute."},"paths":{"type":"array","items":{"type":"string"},"description":"Multiple file paths; cannot be combined with path."},"start_line":{"type":"integer","description":"First line to read (1-based, optional)"},"end_line":{"type":"integer","description":"Last line to read, inclusive (optional). Max range: 300 lines."}},"anyOf":[{"required":["path"]},{"required":["paths"]}],"additionalProperties":false}),
         handler: handle_read_file,
         risk: ToolRisk::ReadOnly,
         default_timeout: std::time::Duration::from_secs(15),

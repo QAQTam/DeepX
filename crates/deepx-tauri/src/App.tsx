@@ -219,7 +219,12 @@ export default function App() {
         break;
       }
 
-      case "exec_progress": chat.handleExecProgress((p.tool_call_id ?? "") as string, (p.chunk ?? "") as string); break;
+      case "exec_progress": chat.handleExecProgress(
+        (p.tool_call_id ?? "") as string,
+        (p.stream ?? "stdout") as "stdout" | "stderr",
+        (p.seq ?? 0) as number,
+        (p.chunk ?? "") as string,
+      ); break;
     }
   }
 

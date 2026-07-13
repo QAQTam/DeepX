@@ -189,7 +189,7 @@ export function createChatStore(seed: string) {
   }
 
   // ── Direct render for exec progress (tool output streaming) ──
-  function handleExecProgress(tool_call_id: string, chunk: string) {
+  function handleExecProgress(tool_call_id: string, stream: "stdout" | "stderr", _seq: number, chunk: string) {
     // Guard: ignore if the last turn is already complete (prevents bleed into next round)
     const lastTurn = turns[turns.length - 1];
     if (!lastTurn || lastTurn.status !== "streaming") return;
@@ -199,11 +199,13 @@ export function createChatStore(seed: string) {
       if (!turn || turn.status !== "streaming") return;
       const round = turn.rounds[turn.rounds.length - 1];
       if (!round) return;
-      const existing = round.tool_results.findIndex(tr => tr.tool_call_id === tool_call_id);
+      const streamingId = `${tool_call_id}_stream`;
+      const existing = round.tool_results.findIndex(tr => tr.tool_call_id === streamingId);
       if (existing >= 0) {
-        round.tool_results[existing].output += chunk;
+        const result = round.tool_results[existing];
+        result.output += stream === "stderr" ? `\n[stderr]\n${chunk}` : chunk;
       } else {
-        round.tool_results.push({ tool_call_id, output: chunk, success: true });
+        round.tool_results.push({ tool_call_id: streamingId, output: stream === "stderr" ? `[stderr]\n${chunk}` : chunk, success: true });
       }
     }));
   }
@@ -213,7 +215,9 @@ export function createChatStore(seed: string) {
     setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
       // Remove streaming placeholders matching the final result IDs
       const finalIds = new Set(results.map(r => r.tool_call_id));
-      round.tool_results = round.tool_results.filter(tr => !finalIds.has(tr.tool_call_id) || tr.success === undefined);
+      round.tool_results = round.tool_results.filter(tr =>
+        (!finalIds.has(tr.tool_call_id) && !finalIds.has(tr.tool_call_id.replace(/_stream$/, ""))) || tr.success === undefined
+      );
       // Append final results
       round.tool_results.push(...results);
     }));

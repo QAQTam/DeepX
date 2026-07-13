@@ -7,24 +7,43 @@ use deepx_session::SessionManager;
 /// stable across turns.
 ///
 /// - JSON results: truncates only the `content` field, preserves metadata.
-/// - Plain results: `file_*` snap to preceding newline, others cut at UTF-8 boundary.
+/// - Truncation markers tell the model how to retrieve the omitted portion.
+/// - Line-oriented tools snap to a preceding newline; others cut at a UTF-8 boundary.
+fn is_line_oriented_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "read" | "search" | "list" | "diff") || tool_name.starts_with("file")
+}
+
+fn truncation_hint(tool_name: &str) -> &'static str {
+    match tool_name {
+        "read" => "Call read again with the same path and a later start_line/end_line range.",
+        "search" => "Call search again with a narrower pattern, glob, or path.",
+        "list" => "Call list again on a narrower directory.",
+        "exec_run" => "Call exec_run again with narrower argv or a filtering command.",
+        "web" => "Call web again with a narrower URL or query.",
+        _ => "Call this tool again with narrower arguments to retrieve the omitted portion.",
+    }
+}
+
+fn truncation_marker(tool_name: &str, total_chars: usize) -> String {
+    format!(
+        "[truncated: {total_chars} total chars. {}]",
+        truncation_hint(tool_name)
+    )
+}
+
 fn truncate_tool_result(tool_name: &str, result: &str) -> String {
     // ── JSON-aware truncation ──
     if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(result) {
         if let Some(content) = v.get("content").and_then(|c| c.as_str()) {
             let limit = 4000usize;
             if content.len() > limit {
-                let cut = if tool_name.starts_with("file") {
+                let cut = if is_line_oriented_tool(tool_name) {
                     let head = &content[..content.floor_char_boundary(limit)];
                     head.rfind('\n').map(|n| n + 1).unwrap_or(head.len())
                 } else {
                     content.floor_char_boundary(limit)
                 };
-                let truncated = format!(
-                    "{}...\n[truncated: {} total chars]",
-                    &content[..cut],
-                    content.len()
-                );
+                let truncated = format!("{}...\n{}", &content[..cut], truncation_marker(tool_name, content.len()));
                 v.as_object_mut().unwrap().insert("content".into(), serde_json::Value::String(truncated));
                 v.as_object_mut().unwrap().insert("truncated".into(), serde_json::Value::Bool(true));
             }
@@ -35,7 +54,7 @@ fn truncate_tool_result(tool_name: &str, result: &str) -> String {
     }
 
     // ── Plain string truncation (legacy) ──
-    let limit: Option<usize> = if tool_name.starts_with("file") {
+    let limit: Option<usize> = if is_line_oriented_tool(tool_name) {
         Some(4000)
     } else if tool_name.starts_with("web") {
         Some(4000)
@@ -59,7 +78,7 @@ fn truncate_tool_result(tool_name: &str, result: &str) -> String {
         return result.to_string();
     }
 
-    let cut = if tool_name.starts_with("file") {
+    let cut = if is_line_oriented_tool(tool_name) {
         // Snap to previous newline so code lines stay intact.
         let head = &result[..result.floor_char_boundary(limit)];
         head.rfind('\n').map(|n| n + 1).unwrap_or(head.len())
@@ -68,7 +87,7 @@ fn truncate_tool_result(tool_name: &str, result: &str) -> String {
     };
 
     let mut out = result[..cut].to_string();
-    out.push_str(&format!("\n... [truncated: {} total chars]", result.len()));
+    out.push_str(&format!("\n... {}", truncation_marker(tool_name, result.len())));
     out
 }
 
@@ -180,6 +199,16 @@ impl Step {
                 }
             })
             .collect()
+    }
+
+    fn tool_name_for_result(&self, tool_call_id: &str) -> Option<&str> {
+        self.assistant.content.iter().find_map(|block| {
+            if let deepx_types::ContentBlock::ToolUse { id, name, .. } = block {
+                (id == tool_call_id).then_some(name.as_str())
+            } else {
+                None
+            }
+        })
     }
 
     fn has_tool_use(&self) -> bool {
@@ -512,21 +541,16 @@ impl MessageStore {
                     v.push(step.assistant.clone());
                     let is_last_step_of_last_turn = is_last_turn && si == total_steps - 1;
                     for tr in &step.tool_results {
-                        let tool_name = step.assistant.content.iter().find_map(|b| {
-                            if let deepx_types::ContentBlock::ToolUse { name, .. } = b {
-                                Some(name.as_str())
-                            } else { None }
-                        }).unwrap_or("");
-
                         if is_last_step_of_last_turn {
                             // Current turn: fold write/edit tools (LLM doesn't need its own diff),
                             // truncate read/search/exec (LLM needs the content).
-                            let keep_full = tool_name == "read"
-                                || tool_name == "search"
-                                || tool_name.starts_with("exec");
                             let mut msg = tr.clone();
                             for block in &mut msg.content {
-                                if let deepx_types::ContentBlock::ToolResult { content, .. } = block {
+                                if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = block {
+                                    let tool_name = step.tool_name_for_result(tool_use_id).unwrap_or("");
+                                    let keep_full = tool_name == "read"
+                                        || tool_name == "search"
+                                        || tool_name.starts_with("exec");
                                     if keep_full {
                                         *content = truncate_tool_result(tool_name, content);
                                     } else {
@@ -539,7 +563,8 @@ impl MessageStore {
                             // Completed turn — fold to status line.
                             let mut folded = tr.clone();
                             for block in &mut folded.content {
-                                if let deepx_types::ContentBlock::ToolResult { content, .. } = block {
+                                if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = block {
+                                    let tool_name = step.tool_name_for_result(tool_use_id).unwrap_or("");
                                     *content = fold_completed_tool_result(tool_name, content);
                                 }
                             }
@@ -1021,5 +1046,103 @@ fn auto_complete_unfulfilled(step: &mut Step, reason: &str) {
                 "{} Tool \"{name}\" was not executed.", reason
             ), false));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use deepx_types::ContentBlock;
+
+    fn assistant_with_tools(tools: &[(&str, &str)]) -> Message {
+        Message {
+            msg_id: None,
+            role: "assistant".to_string(),
+            name: None,
+            content: tools
+                .iter()
+                .map(|(id, name)| ContentBlock::ToolUse {
+                    id: (*id).to_string(),
+                    name: (*name).to_string(),
+                    input: serde_json::json!({}),
+                })
+                .collect(),
+        }
+    }
+
+    fn context_result(context: &[Message], id: &str) -> String {
+        context
+            .iter()
+            .flat_map(|message| &message.content)
+            .find_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id, content, ..
+                } if tool_use_id == id => Some(content.clone()),
+                _ => None,
+            })
+            .expect("tool result must be present in gate context")
+    }
+
+    #[test]
+    fn current_step_projects_each_result_using_its_own_tool_name() {
+        let mut store = MessageStore::new_ephemeral("test");
+        store.push_user("inspect files");
+        store.push_assistant(assistant_with_tools(&[
+            ("write-1", "write"),
+            ("read-1", "read"),
+            ("exec-1", "exec_run"),
+        ]));
+        store.push_tool_result_direct("write-1", "WRITE_RESULT", true);
+        store.push_tool_result_direct("read-1", "READ_RESULT", true);
+        store.push_tool_result_direct("exec-1", "EXEC_RESULT", true);
+
+        let context = store.build_context_for_gate(&[]);
+
+        assert_eq!(
+            context_result(&context, "write-1"),
+            "WRITE_RESULT [details folded]"
+        );
+        assert_eq!(context_result(&context, "read-1"), "READ_RESULT");
+        assert_eq!(context_result(&context, "exec-1"), "EXEC_RESULT");
+    }
+
+    #[test]
+    fn completed_step_projects_each_result_using_its_own_tool_name() {
+        let mut store = MessageStore::new_ephemeral("test");
+        store.push_user("first turn");
+        store.push_assistant(assistant_with_tools(&[("write-1", "write"), ("read-1", "read")]));
+        store.push_tool_result_direct("write-1", "WRITE_RESULT", true);
+        store.push_tool_result_direct("read-1", "READ_RESULT", true);
+        store.push_user("second turn");
+
+        let context = store.build_context_for_gate(&[]);
+
+        assert_eq!(
+            context_result(&context, "write-1"),
+            "WRITE_RESULT [details folded]"
+        );
+        assert_eq!(context_result(&context, "read-1"), "READ_RESULT");
+    }
+
+    #[test]
+    fn truncated_read_result_explicitly_instructs_follow_up_range() {
+        let content = "line\n".repeat(1_100);
+        let raw = serde_json::json!({"content": content}).to_string();
+
+        let truncated: serde_json::Value =
+            serde_json::from_str(&truncate_tool_result("read", &raw)).expect("valid JSON result");
+        let content = truncated["content"].as_str().expect("content string");
+
+        assert!(truncated["truncated"].as_bool().unwrap_or(false));
+        assert!(content.contains("Call read again with the same path and a later start_line/end_line range."));
+    }
+
+    #[test]
+    fn plain_read_result_is_truncated_at_line_boundary_with_follow_up_hint() {
+        let result = "line\n".repeat(1_100);
+        let truncated = truncate_tool_result("read", &result);
+
+        assert!(truncated.len() < result.len());
+        assert!(truncated.contains("Call read again with the same path and a later start_line/end_line range."));
     }
 }

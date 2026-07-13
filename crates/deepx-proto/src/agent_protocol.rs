@@ -367,10 +367,13 @@ pub enum Agent2Ui {
         args: String,
     },
 
-    /// Streaming output chunk from a running tool (e.g. exec stdout).
+    /// Structured streaming output from a running command.
+    /// `seq` is monotonic per command and `stream` is either stdout or stderr.
     #[serde(rename = "exec_progress")]
     ExecProgress {
         tool_call_id: String,
+        stream: String,
+        seq: u64,
         chunk: String,
     },
 

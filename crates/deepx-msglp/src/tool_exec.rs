@@ -3,8 +3,6 @@
 //! Handles UI-initiated tool calls and LLM-initiated tool calls through
 //! a unified permission→execute→emit pipeline.
 
-use std::collections::HashMap;
-
 use crate::Loop;
 use deepx_proto::Agent2Ui;
 
@@ -12,10 +10,9 @@ use deepx_proto::Agent2Ui;
 /// Returns true if cancelled during drain.
 pub(crate) fn drain_tool_progress(
     loop_ref: &mut Loop,
-    progress_rx: std::sync::mpsc::Receiver<(String, String)>,
+    progress_rx: std::sync::mpsc::Receiver<deepx_tools::ExecProgressEvent>,
 ) -> bool {
     log::info!("[AGENT] drain loop start");
-    let mut batches: HashMap<String, String> = HashMap::new();
     let batch_interval = std::time::Duration::from_millis(50);
     loop {
         if loop_ref.cancel.is_set() || deepx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
@@ -23,37 +20,22 @@ pub(crate) fn drain_tool_progress(
             return true;
         }
         match progress_rx.recv_timeout(batch_interval) {
-            Ok((tc_id, chunk)) => {
-                batches.entry(tc_id).or_default().push_str(&chunk);
-                while let Ok((tid, c)) = progress_rx.try_recv() {
-                    batches.entry(tid).or_default().push_str(&c);
-                }
-                for (tid, merged) in batches.drain() {
-                    log::info!("[AGENT] ExecProgress batch: {} {} chars", tid, merged.len());
+            Ok(first) => {
+                let mut events = vec![first];
+                while let Ok(event) = progress_rx.try_recv() { events.push(event); }
+                for event in events {
+                    log::info!("[AGENT] ExecProgress: {} {} {} chars", event.tool_call_id, event.stream.as_str(), event.chunk.len());
                     loop_ref.emit_delta(Agent2Ui::ExecProgress {
-                        tool_call_id: tid,
-                        chunk: merged,
+                        tool_call_id: event.tool_call_id,
+                        stream: event.stream.as_str().to_string(),
+                        seq: event.seq,
+                        chunk: event.chunk,
                     });
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if !batches.is_empty() {
-                    for (tid, merged) in batches.drain() {
-                        loop_ref.emit_delta(Agent2Ui::ExecProgress {
-                            tool_call_id: tid,
-                            chunk: merged,
-                        });
-                    }
-                }
-            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 log::info!("[AGENT] drain loop disconnected");
-                for (tid, merged) in batches.drain() {
-                    loop_ref.emit_delta(Agent2Ui::ExecProgress {
-                        tool_call_id: tid,
-                        chunk: merged,
-                    });
-                }
                 return false;
             }
         }
@@ -215,10 +197,9 @@ pub(crate) fn emit_tool_result(
         is_final: false,
     });
 
-    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(String, String)>();
+    let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
     let tool_id = id.to_string();
     let tool_id_for_result = tool_id.clone();
-    let tool_id_progress = tool_id.clone();
     let handle = std::thread::Builder::new()
         .stack_size(4 * 1024 * 1024)
         .spawn(move || {
@@ -227,27 +208,17 @@ pub(crate) fn emit_tool_result(
         })
         .expect("failed to spawn tool thread");
 
-    let mut pending_chunk = String::new();
     loop {
         match progress_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-            Ok((tc_id, chunk)) => {
-                pending_chunk.push_str(&chunk);
-                while let Ok((_, c)) = progress_rx.try_recv() {
-                    pending_chunk.push_str(&c);
-                }
+            Ok(event) => {
                 loop_ref.emit_delta(Agent2Ui::ExecProgress {
-                    tool_call_id: tc_id,
-                    chunk: std::mem::take(&mut pending_chunk),
+                    tool_call_id: event.tool_call_id,
+                    stream: event.stream.as_str().to_string(),
+                    seq: event.seq,
+                    chunk: event.chunk,
                 });
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if !pending_chunk.is_empty() {
-                    loop_ref.emit_delta(Agent2Ui::ExecProgress {
-                        tool_call_id: tool_id_progress.clone(),
-                        chunk: std::mem::take(&mut pending_chunk),
-                    });
-                }
-            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

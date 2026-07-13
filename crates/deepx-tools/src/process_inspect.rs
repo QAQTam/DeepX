@@ -11,12 +11,12 @@ pub fn register(mgr: &mut crate::ToolManager) {
         key: "process_check".to_string(),
         description: "Process management: check, wait, kill, write. Use check to inspect a running background process (exec or subagent). \
             Returns status, elapsed time, and the last output tail. \
-            Use when a previous exec/subagent timed out — you can peek at whether it's \
+            Use when a previous exec_run/subagent timed out — you can peek at whether it's \
             still making progress or has stalled.",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "id": {"type": "integer", "description": "Process ID returned by the timed-out exec/subagent call."}
+                "id": {"type": "integer", "description": "Process ID returned by the timed-out exec_run/subagent call."}
             },
             "required": ["id"],
             "additionalProperties": false
@@ -64,7 +64,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(crate::ToolHandler {
         key: "process_write".to_string(),
         description: "Write text to the stdin of a running interactive process. \
-            Use when a background exec process is waiting for input (e.g. password prompt, [Y/n] confirmation). \
+            Use when a background exec_run process is waiting for input (e.g. password prompt, [Y/n] confirmation). \
             Append \\n to submit the input.",
         input_schema: serde_json::json!({
             "type": "object",
@@ -84,7 +84,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
 fn handle_check(ctx: ToolCallCtx) -> ToolResult {
     let id: u32 = match ctx.args.get("id").and_then(|v| v.as_u64()) {
         Some(v) if v <= u32::MAX as u64 => v as u32,
-        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ID", "check_process: id required", "Provide the process ID returned by exec or spawn_subagent.") },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ID", "check_process: id required", "Provide the process ID returned by exec_run or spawn_subagent.") },
     };
 
     match ProcessRegistry::get_info(id) {
@@ -102,7 +102,7 @@ fn handle_check(ctx: ToolCallCtx) -> ToolResult {
 fn handle_wait(ctx: ToolCallCtx) -> ToolResult {
     let id: u32 = match ctx.args.get("id").and_then(|v| v.as_u64()) {
         Some(v) if v <= u32::MAX as u64 => v as u32,
-        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ID", "wait_process: id required", "Provide the process ID returned by exec or spawn_subagent.") },
+        _ => return ToolResult { success: false, content: crate::json_err("MISSING_ID", "wait_process: id required", "Provide the process ID returned by exec_run or spawn_subagent.") },
     };
     let timeout_secs: u64 = ctx.args.get("timeout_secs")
         .and_then(|v| v.as_u64())

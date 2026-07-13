@@ -657,7 +657,7 @@ impl Loop {
     /// Returns true if cancelled during drain.
     fn drain_tool_progress(
         &mut self,
-        progress_rx: std::sync::mpsc::Receiver<(String, String)>,
+        progress_rx: std::sync::mpsc::Receiver<deepx_tools::ExecProgressEvent>,
     ) -> bool {
         tool_exec::drain_tool_progress(self, progress_rx)
     }

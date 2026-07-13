@@ -31,12 +31,12 @@ enum Match {
 fn build_fuzzy_hint(content: &str, old: &str) -> String {
     if let Some((line_no, line)) = closest_line(content, old) {
         return format!(
-            "\n[HINT] String not found exactly. Closest match at line {line_no}: \"{}\"\n       Retry with file_edit_diff start_line={} and old_lines set to the actual lines from the file.",
+            "\n[HINT] String not found exactly. Closest match at line {line_no}: \"{}\"\n       Retry with edit_block start_line={} and old_lines set to the actual lines from the file.",
             line.chars().take(120).collect::<String>(),
             line_no
         );
     }
-    "\n[HINT] String not found. Use file_read to check current file content, then retry.".to_string()
+    "\n[HINT] String not found. Use read to check current file content, then retry.".to_string()
 }
 
 fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: bool, _path: &str) -> (String, Match) {
@@ -121,7 +121,7 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
         use std::io::Write;
         let mut file = match std::fs::OpenOptions::new().append(true).create(true).open(&path) {
             Ok(f) => f,
-            Err(e) => return format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
+            Err(e) => return format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.", path, e),
         };
         match file.write_all(content.as_bytes()) {
             Ok(_) => {
@@ -134,7 +134,7 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
                     format!("[OK] {} — appended {} bytes, {} lines (new file)", path, content.len(), line_count)
                 }
             }
-            Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
+            Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.", path, e),
         }
     } else {
         match std::fs::write(&path, &content) {
@@ -154,7 +154,7 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
                     format!("[OK] {} — {} bytes, {} lines (new file)", path, content.len(), line_count)
                 }
             }
-            Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use exec(\"ls -la\") or explore() to check.", path, e),
+            Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.", path, e),
         }
     }
 }
@@ -196,7 +196,7 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
     match m {
         Match::Ok { msg: _ } => {}
         Match::NoMatch { msg } => {
-            return format!("[PARTIAL] {path} — pattern did not match\n[HINT] {msg}\n       Use file_read to check current content, then retry.");
+            return format!("[PARTIAL] {path} — pattern did not match\n[HINT] {msg}\n       Use read to check current content, then retry.");
         }
         Match::Error { msg } => {
             return format!("[ERROR] {path}: {msg}");
@@ -239,7 +239,7 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
             "code": "NOT_FOUND",
             "path": path,
             "message": format!("{} does not exist", path),
-            "hint": "Use list_dir() to verify."
+            "hint": "Use list to verify."
         }).to_string();
     }
 
@@ -270,7 +270,7 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
             "path": path,
             "trash_path": format!(".deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
             "content": format!("Moved to trash: .deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
-            "hint": format!("Restore with exec(\"mv {} {}\")", trash_path.display(), path),
+            "hint": format!("Restore with exec_run argv [\"mv\", \"{}\", \"{}\"]", trash_path.display(), path),
         }).to_string()
         }
         Err(_e) => {
@@ -281,7 +281,7 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
                     "code": "CROSS_DEVICE_DIR",
                     "path": path,
                     "message": "Cannot trash directory across devices",
-                    "hint": format!("Use exec(\"rm -rf {}\") for cross-device deletion.", path),
+                    "hint": format!("Use exec_run with argv [\"rm\", \"-rf\", \"{}\"] for cross-device deletion.", path),
                 }).to_string()
             } else if let Err(e2) = std::fs::copy(p, &trash_path) {
                 serde_json::json!({
@@ -302,7 +302,7 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
                         "path": path,
                         "trash_path": format!(".deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
                         "content": format!("Moved to trash (cross-device): .deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
-                        "hint": format!("Restore with exec(\"cp {} {}\")", trash_path.display(), path),
+                        "hint": format!("Restore with exec_run argv [\"cp\", \"{}\", \"{}\"]", trash_path.display(), path),
                 }).to_string()
                 }
                 Err(e2) => serde_json::json!({
@@ -327,7 +327,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
         args.get("path").and_then(|v| v.as_str()).unwrap_or("")
     );
     if path.is_empty() {
-        return format!("[ERROR] edit_file_diff: MISSING_PATH — path is required\n[HINT] Provide a file path to edit.");
+        return format!("[ERROR] edit_block: MISSING_PATH — path is required\n[HINT] Provide a file path to edit.");
     }
     let old_lines: Vec<String> = args.get("old_lines").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
@@ -353,7 +353,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
     if old_lines.len() > 100 && start_line.is_none() {
         return err("TOO_LARGE",
             &format!("old_lines too large ({} lines, max 100)", old_lines.len()),
-            "Reduce the diff scope, use file_write for full rewrites, or set start_line (no old_lines needed) for line-range replacement.");
+            "Reduce the diff scope, use write for full rewrites, or set start_line (no old_lines needed) for line-range replacement.");
     }
 
     let raw = match std::fs::read_to_string(&path) {
@@ -369,7 +369,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
                     "hint": "Use exec with hex dump tool."
                 }).to_string();
             }
-            return err("READ_FAILED", &e.to_string(), "Use list_dir() first.");
+            return err("READ_FAILED", &e.to_string(), "Use list first.");
         }
     };
     let (content, was_crlf) = normalize_newlines(&raw);
@@ -384,7 +384,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
         if s >= file_lines.len() {
             return err("LINE_OUT_OF_RANGE",
                 &format!("start_line {start} past end of file ({} lines)", file_lines.len()),
-                "Use file_read to check the file length.");
+                "Use read to check the file length.");
         }
         let e = e.min(file_lines.len().saturating_sub(1));
         if s > e {
@@ -410,7 +410,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
                 return crate::json_err(
                     "LINE_MISMATCH",
                     &format!("start_line={start}: old_lines do not match actual file content at lines {}-{}", s + 1, e + 1),
-                    &format!("Mismatch:\n{ctx}File content has changed. Use file_read to re-read and retry with corrected old_lines.")
+                    &format!("Mismatch:\n{ctx}File content has changed. Use read to re-read and retry with corrected old_lines.")
                 );
             }
         }
@@ -422,7 +422,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
     if win > file_lines.len() {
         return err("TOO_LARGE",
             &format!("old_lines ({} lines) longer than file ({} lines)", win, file_lines.len()),
-            "Check the file content with file_read first.");
+            "Check the file content with read first.");
     }
 
     let mut candidates: Vec<usize> = Vec::new();
@@ -451,7 +451,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
                 "message": "old_lines not found",
                 "closest_line": line_num,
                 "closest_text": line_text,
-                "hint": format!("Use file_read first, then retry with start_line={line_num} or corrected old_lines."),
+                "hint": format!("Use read first, then retry with start_line={line_num} or corrected old_lines."),
             }).to_string();
         }
         return err("NO_MATCH", "old_lines not found",
@@ -481,7 +481,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
     mgr.register(ToolHandler {
         key: "edit".to_string(),
-        description: "String replacement in files. Supports exact match, regex (with capture groups). Default to dry_run=true for complex changes. For fuzzy or line-number addressing use file_edit_diff.",
+        description: "String replacement in files. Supports exact match, regex (with capture groups). Default to dry_run=true for complex changes. For fuzzy or line-number addressing use edit_block.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file. Use for complex edits; call again with false to apply.","default":false}},"required":["path"],"additionalProperties":false}),
         handler: handle_edit_file,
         risk: ToolRisk::Write,

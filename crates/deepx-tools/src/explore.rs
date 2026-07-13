@@ -50,7 +50,7 @@ fn exec_architecture(path: &str) -> String {
     } else if is_go {
         out.push_str(&architecture_go(&abs));
     } else {
-        out.push_str("[HINT] Unknown project type. Use list_dir to browse, read_file to inspect.\n");
+        out.push_str("[HINT] Unknown project type. Use list to browse and read to inspect files.\n");
     }
 
     out.push_str(&format!("\n── {} chars, {} .rs files ──", out.len(), count_rs_files(&abs)));
@@ -359,7 +359,7 @@ use std::time::Duration;
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: "explore_scan".to_string(),
-        description: "Analyze project architecture: crate dependencies, public API, entry points, test coverage. Call FIRST when entering an unfamiliar project. For directory listing, use file_list.",
+        description: "Analyze project architecture: crate dependencies, public API, entry points, test coverage. Call FIRST when entering an unfamiliar project. For directory listing, use list.",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
