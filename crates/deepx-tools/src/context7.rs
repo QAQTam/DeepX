@@ -104,7 +104,11 @@ fn norm_id(raw: &str) -> String {
 /// GET /api/v2{path}, return body on success (200). On non-200, parse error
 /// JSON from body for a better message. On 301, include redirectUrl in error.
 fn c7_get(path: &str) -> Result<String, String> {
-    let resp = ureq::get(&format!("https://context7.com/api/v2{path}"))
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .build()
+        .into();
+    let resp = agent.get(&format!("https://context7.com/api/v2{path}"))
         .header("Authorization", &format!("Bearer {}", c7_key()))
         .call()
         .map_err(|e| format!("request: {e}"))?;

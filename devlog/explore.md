@@ -29,6 +29,7 @@
 17. [Crate Debug 总控看板](#17-crate-debug-总控看板)
 18. [Codex 与 DeepSeek 协作规范](#18-codex-与-deepseek-协作规范)
 19. [任务 Prompt 模板](#19-任务-prompt-模板)
+20. [工具调用修复追踪](#20-工具调用修复追踪)
 
 ---
 
@@ -367,7 +368,7 @@ pub enum Agent2Ui {
     RoundComplete { turn_id, round_num, blocks, ... }, // 轮次完成
     ToolResults { turn_id, round_num, results },    // 工具执行结果
     TurnEnd { turn_id, stop_reason, usage },        // 一轮结束
-    ExecProgress { tool_call_id, chunk },           // 工具执行流式输出
+    ExecProgress { tool_call_id, stream, seq, chunk }, // 工具执行流式输出
     CodeDelta { lines_added, lines_removed, ... },  // 代码变更统计
     TokenInfo { turn_id, tokens_used, ... },        // token 使用统计
     Cancelled,                                       // 操作已取消
@@ -748,7 +749,7 @@ pub struct ToolCallCtx {
     pub name: String,
     pub action: String,                     // "file" 工具的 action 参数
     pub args: serde_json::Value,
-    pub tx_progress: Option<mpsc::Sender<(String, String)>>,  // 流式输出通道
+    pub tx_progress: Option<ExecProgressSender>,  // 有界、非阻塞流式输出通道
     pub timeout_secs: Option<u64>,
 }
 
@@ -1299,7 +1300,7 @@ deepx-gate-testui：随 deepx-gate 或最后单独核验
 | deepx-config | 中 | check/test 通过（3 tests） | TOML/DB 优先级、原子保存、profile 覆盖 | 未开始 |
 | deepx-session | 高 | check 通过；缺测试 | JSONL/Turso 一致性、迁移、截断恢复 | 未开始 |
 | deepx-message | 高 | check 通过；缺测试 | Turn/Step 状态机、不变量、截断折叠 | 未开始 |
-| deepx-tools | 最高 | check 通过；1 个集成测试失败 | 名称兼容、权限、路径安全、并发/取消 | 待实现；独立窗口 |
+| deepx-tools | 最高 | `cargo test -p deepx-tools`：40 passed、2 个测试受全局状态并发污染而失败；并发读取集成测试单独通过 | 名称/Schema、超时、取消、全局状态 | 调查完成；独立窗口 |
 | deepx-subagent | 高 | check 通过；缺测试 | 进程生命周期、工具 allowlist、超时 | 未开始 |
 | deepx-msglp | 最高 | check 通过；有用户未提交修改 | 主循环、并发、取消、权限等待、压缩 | 未开始；独立窗口 |
 | deepx-tauri | 高 | check 通过；缺 Rust 测试 | 子进程桥接、多会话、事件顺序、关闭 | 未开始 |
@@ -1495,5 +1496,54 @@ deepx-tauri
 ```
 
 ---
+
+## 20. 工具调用修复追踪
+
+> 2026-07-13 源码核验。每项只由对应 crate 窗口实现；跨 crate 任务按依赖顺序交付。
+
+| ID | 优先级 | 归属 crate / 窗口 | 修复目标 | 完成检查点 |
+|----|--------|-------------------|----------|------------|
+| TOOL-01 ✅ | P0 | `deepx-message` | 已按每个 `ToolResult.tool_use_id` 查找对应 `ToolUse.name` 后再截断/折叠。 | 已验证当前步骤与已完成步骤的混合 `write + read + exec_run` 回灌；`cargo test -p deepx-message`、`cargo check -p deepx-message --all-targets` 通过。 |
+| TOOL-02 ✅ | P0 | `deepx-msglp` | 写冲突检测已覆盖扁平工具名 `write/edit/edit_block/delete`；后续同资源写只串行执行一次。 | `conflict` 单测验证同文件严格串行、不同文件仍可并发；`cargo test -p deepx-msglp` 通过。 |
+| TOOL-03 ✅ | P1 | `deepx-tools` | 已对齐注册 key、schema、描述和错误 hint；`read` 同时接受 `path`/`paths`，移除 LLM 可见旧工具名。 | `cargo check -p deepx-tools --all-targets` 通过。 |
+| TOOL-04 ✅ | P1 | `deepx-tools` | handler 默认 deadline 已注入上下文；Web/Context7 采用显式 HTTP deadline，Web body 限制 512 KiB；`exec_run` 默认 30 s，超时或 per-call cancel 会杀掉 child 并返回结构化状态。 | `exec` 的 timeout/cancel 回归用例通过；`cargo test -p deepx-tools --lib` 通过。 |
+| TOOL-05 ✅ | P1 | `deepx-tools` | 测试态 `RUNTIME_CTX` 改为线程本地；所有 bridge 测试由 guard 串行保护全局 manager/mode/counter。 | 默认并行调度下 `cargo test -p deepx-tools --lib` 通过（44 tests）。 |
+| TOOL-06 ✅ | P1 | `deepx-message` + `deepx-tools` | read/list/search/exec 的截断都包含总量和可执行续读指令；LLM 上下文截断按真实 tool name 处理。 | `deepx-message` 续读提示回归用例通过；`exec` 输出截断回归用例通过。 |
+| TOOL-07 ✅ | P2 | `deepx-msglp` | 单轮最多 16 个 call，独立调用最多 4 worker 并发；超出调用返回带 call ID 的可恢复错误。 | `cargo check -p deepx-msglp --all-targets`、`cargo test -p deepx-msglp` 通过。 |
+
+### 20.1 推荐执行顺序
+
+`TOOL-01 → TOOL-02 → TOOL-03/TOOL-04/TOOL-05/TOOL-06 → TOOL-07 → EXEC-RESEARCH-01`。
+
+先修正“LLM 看见什么”和写入竞态，再调整工具表面契约与运行治理；最后才评估执行输出流式化，避免为错误调用链增加复杂度。
+
+### 20.2 EXEC-RESEARCH-01：Exec v2 流式路径已实现
+
+**前置条件**：TOOL-01、02、04、05、06 全部验收。
+
+**已实现（2026-07-13）**：在不恢复 PTY 的前提下，`exec_run` 的 stdout/stderr pipe reader 产生结构化 `ExecProgress { tool_call_id, stream, seq, chunk }`；前端按独立临时卡即时渲染，最终 `ToolResults` 原子替换临时输出。并行和串行工具路径均保留每个 call ID 与 stream 的事件归属，不再跨调用合并。
+
+**运行保证**：保留 `Command + piped stdout/stderr`。进度通道为 256 条有界 `sync_channel`，reader 用 `try_send`，UI 慢时丢弃实时副本而继续 drain OS pipe；丢弃字节数写入最终 JSON 的 `ui_dropped_bytes`。pipe 保留 5 MiB，保留上限后仍 drain；UTF-8 跨块字符在 reader 内拼接，不向 UI 注入替换字符。最终给 LLM 的仍是 token 截断后的单份结果，不回灌实时 chunk。
+
+**Windows/前端补充（2026-07-13）**：卡片列表使用稳定位置的 Solid `Index`，流式更新不再重建 `ToolRow` 并重置展开状态。输出解码采取 UTF-8 优先、失败时 `GetOEMCP + MultiByteToWideChar` 回退；简体中文 Windows 的 cmd/ping GBK（936）输出无需开启“Beta: 使用 Unicode UTF-8 提供全球语言支持”。
+
+**非目标**：交互式 stdin、终端仿真、颜色/光标协议、shell 兼容层；这些属于 PTY 复杂度，不应在本研究恢复。
+
+**验收指标**：
+
+1. 前端在命令运行中可按 call ID 观察合并后的 stdout/stderr，最终结果不重复、不丢尾部。
+2. 大输出受硬字节上限、前端合并和 LLM 上下文截断三层约束，且三层状态可区分。
+3. timeout/cancel 在 Windows 下不遗留 child 或 pipe-reader 线程。
+4. 同轮并行命令的进度不会串到错误 tool_call_id。
+
+**未纳入本阶段**：Windows Job Object 的进程树终止、显式 `ExecStarted/ExecFinished` 前端事件，以及可写 stdin 的 terminal session。这些属于后续 `ExecutionService` 与 terminal API 立项，不能通过恢复 PTY 替代。
+
+### 20.3 架构评价
+
+当前架构的优点是进程内 handler、显式授权令牌、call ID 贯通、以及“执行期不持有 ToolManager 锁”。提升空间集中在三点：
+
+1. **建立唯一的 Tool Invocation Contract**：注册名、schema、权限类别、冲突资源、deadline、截断/续读提示应由同一声明生成，避免描述、旧 name/action 兼容层和运行时逻辑漂移。
+2. **让调度层拥有并发与生命周期**：`deepx-msglp` 应提供有界 worker、资源锁、取消和结果聚合；`deepx-tools` 仅执行单次 handler，不能各层各自补一套“parallel”。
+3. **把 LLM 视图建模为显式投影**：`raw_result`、`ui_result`、`llm_context_result` 分开带版本/截断元数据，按 call ID 变换并可测试；不再依赖字符串折叠约定。
 
 > **报告结束** — 本文档是 DeepX-Fork v0.8.0 的架构调查与 crate debug 总控基线。源码持续变化；进入每个 crate 前必须重新验证对应结论。

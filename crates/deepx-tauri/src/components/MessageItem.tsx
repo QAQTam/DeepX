@@ -1,4 +1,4 @@
-import { For, Show, Switch, Match, createMemo } from "solid-js";
+import { For, Index, Show, Switch, Match, createMemo } from "solid-js";
 import MarkdownBody from "./MarkdownBody";
 import ThinkingBlock from "./ThinkingBlock";
 import ToolRow from "./ToolRow";
@@ -85,28 +85,28 @@ export default function MessageItem(props: MessageItemProps) {
                           <Show when={round.thinking}><ThinkingBlock content={round.thinking!} streaming={props.status === "streaming"} elapsedMs={round.thinking_ms} /></Show>
                           <Show when={round.answer}><MarkdownBody class="md-body" content={round.answer!} final={!!(round.blocks && round.blocks.length > 0) || props.status === "complete"} /></Show>
                           <div class="tool-capsules-row">
-                            <For each={mergedToolCalls()}>
-                              {(item) => <ToolRow call={item.call} result={item.result} streamingOutput={item.streamOutput} />}
-                            </For>
+                            <Index each={mergedToolCalls()}>
+                              {(item) => <ToolRow call={item().call} result={item().result} streamingOutput={item().streamOutput} />}
+                            </Index>
                           </div>
                         </>
                       }
                     >
-                      <For each={mergedBlocks()}>
-                        {(block: any) => (
+                      <Index each={mergedBlocks()}>
+                        {(block: () => any) => (
                           <Switch>
-                            <Match when={block.type === "reasoning"}>
-                              <ThinkingBlock content={block.content!} streaming={props.status === "streaming"} elapsedMs={round.thinking_ms} />
+                            <Match when={block().type === "reasoning"}>
+                              <ThinkingBlock content={block().content!} streaming={props.status === "streaming"} elapsedMs={round.thinking_ms} />
                             </Match>
-                            <Match when={block.type === "text"}>
-                              <MarkdownBody class="md-body" content={block.content!} final={true} />
+                            <Match when={block().type === "text"}>
+                              <MarkdownBody class="md-body" content={block().content!} final={true} />
                             </Match>
-                            <Match when={block.type === "tool"}>
-                              <ToolRow call={block.card!} result={block.card._result} streamingOutput={block.card._streamOutput} />
+                            <Match when={block().type === "tool"}>
+                              <ToolRow call={block().card!} result={block().card._result} streamingOutput={block().card._streamOutput} />
                             </Match>
                           </Switch>
                         )}
-                      </For>
+                      </Index>
                     </Show>
                     {/* t/s footer on last round of completed turn */}
                     <Show when={isLast() && props.status === "complete" && props.turn?.metrics?.tokens_per_sec}>

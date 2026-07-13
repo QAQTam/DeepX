@@ -228,14 +228,72 @@ pub fn display_path(abs_path: &str) -> String {
 
 // ── ToolCallCtx ──
 
+/// A single non-blocking execution-output update for the frontend.
+///
+/// `seq` is monotonic per execution and represents the order in which pipe
+/// reader threads observed chunks.  Cross-stream ordering is therefore local
+/// observation order, while ordering within a stream is exact.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecProgressEvent {
+    pub tool_call_id: String,
+    pub stream: ExecOutputStream,
+    pub seq: u64,
+    pub chunk: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecOutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl ExecOutputStream {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+/// Bounded, lossy progress sender. Pipe readers must never wait for a slow UI.
+#[derive(Clone)]
+pub struct ExecProgressSender {
+    tx: std::sync::mpsc::SyncSender<ExecProgressEvent>,
+    dropped_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl ExecProgressSender {
+    pub fn try_send(&self, event: ExecProgressEvent) {
+        let bytes = event.chunk.len() as u64;
+        if self.tx.try_send(event).is_err() {
+            self.dropped_bytes.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    pub fn dropped_bytes(&self) -> u64 {
+        self.dropped_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+pub const EXEC_PROGRESS_CHANNEL_CAPACITY: usize = 256;
+
+pub fn bounded_exec_progress_channel() -> (ExecProgressSender, std::sync::mpsc::Receiver<ExecProgressEvent>) {
+    let (tx, rx) = std::sync::mpsc::sync_channel(EXEC_PROGRESS_CHANNEL_CAPACITY);
+    let dropped_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    (ExecProgressSender { tx, dropped_bytes }, rx)
+}
+
 #[derive(Clone)]
 pub struct ToolCallCtx {
     pub id: String,
     pub name: String,
     pub action: String,
     pub args: serde_json::Value,
-    pub tx_progress: Option<std::sync::mpsc::Sender<(String, String)>>,
+    pub tx_progress: Option<ExecProgressSender>,
     pub timeout_secs: Option<u64>,
+    /// Per-invocation cancellation signal owned by ToolManager.
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ToolCallCtx {

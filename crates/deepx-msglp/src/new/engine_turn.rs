@@ -223,7 +223,7 @@ impl TurnEngine {
                     // ── Execute tools ──
                     *ctx.phase = LoopPhase::ToolsRunning;
 
-                    let pending = ctx.agent.msg.get_last_step_pending();
+                    let mut pending = ctx.agent.msg.get_last_step_pending();
                     if !pending.is_empty() {
                         // Duplicate tool-call ID check
                         let mut seen = HashSet::new();
@@ -235,16 +235,41 @@ impl TurnEngine {
                             return Outcome::Handled;
                         }
 
-                        // Admit all tools via ToolEngine
-                        let (serial_groups, _serial_after) = conflict::resolve_write_conflicts(&pending);
-                        let (authorized, round_pending_ids) = tool.admit_batch(ctx, &pending);
+                        // A model response must not create unbounded work. Rejected
+                        // calls still receive a result so the next round can recover.
+                        const MAX_TOOL_CALLS_PER_ROUND: usize = 16;
+                        if pending.len() > MAX_TOOL_CALLS_PER_ROUND {
+                            let rejected = pending.split_off(MAX_TOOL_CALLS_PER_ROUND);
+                            for call in rejected {
+                                ctx.agent.msg.push_tool_result_direct(
+                                    &call.id,
+                                    "[ERROR] Tool-call limit exceeded for this round (max 16). Retry the remaining calls in a later round.",
+                                    false,
+                                );
+                            }
+                        }
 
-                        // Execute authorized tools in parallel
-                        if !authorized.is_empty() {
-                            let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+                        // Admit all tools via ToolEngine, then keep later writers
+                        // out of the parallel worker batches.
+                        const MAX_PARALLEL_TOOL_WORKERS: usize = 4;
+                        let (_serial_groups, serial_after) = conflict::resolve_write_conflicts(&pending);
+                        let serial_call_ids: HashSet<String> = serial_after
+                            .iter()
+                            .map(|index| pending[*index].id.clone())
+                            .collect();
+                        let (authorized, round_pending_ids) = tool.admit_batch(ctx, &pending);
+                        let (mut parallel_authorized, serial_authorized): (Vec<_>, Vec<_>) = authorized
+                            .into_iter()
+                            .partition(|admitted| !serial_call_ids.contains(&admitted.call_id));
+
+                        // Execute independent tools in bounded parallel batches.
+                        while !parallel_authorized.is_empty() {
+                            let batch_len = parallel_authorized.len().min(MAX_PARALLEL_TOOL_WORKERS);
+                            let batch: Vec<_> = parallel_authorized.drain(..batch_len).collect();
+                            let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
                             let mut handles: Vec<(String, std::thread::JoinHandle<_>)> = Vec::new();
 
-                            for admitted in authorized {
+                            for admitted in batch {
                                 let tx = progress_tx.clone();
                                 let call_id = admitted.call_id.clone();
                                 let handle = std::thread::Builder::new()
@@ -297,21 +322,44 @@ impl TurnEngine {
                             }
                         }
 
-                        // Execute serial follow-up tools (write conflicts)
-                        if !serial_groups.is_empty() {
-                            let ts = util::chrono_local_datetime();
-                            for group in &serial_groups {
-                                for &idx in &group[1..] {
-                                    let t = &pending[idx];
-                                    let result = deepx_tools::bridge::execute_tool_with_id_full(
-                                        &t.name, "", &t.args.to_string(), &t.id, None,
-                                    );
-                                    ctx.agent.msg.push_tool_result_direct(
-                                        &t.id,
-                                        &format!("[timeis: {ts}]\n{}", result.content),
-                                        result.success,
-                                    );
+                        // Execute later same-file writers exactly once, after the
+                        // first writer from their conflict group has completed.
+                        for admitted in serial_authorized {
+                            if ctx.cancel.is_set() {
+                                break;
+                            }
+                            let call_id = admitted.call_id;
+                            let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
+                            let handle = std::thread::Builder::new()
+                                .stack_size(4 * 1024 * 1024)
+                                .spawn({
+                                    let auth = admitted.auth;
+                                    move || {
+                                        let result = deepx_tools::bridge::execute_authorized(*auth, Some(progress_tx));
+                                        (result.content, result.success, result.code_delta)
+                                    }
+                                })
+                                .expect("tool thread spawn");
+                            tool.drain_progress_external(ctx, progress_rx, &call_id);
+                            match handle.join() {
+                                Ok((content, success, code_delta)) => {
+                                    ctx.agent.msg.push_tool_result_direct(&call_id, &content, success);
+                                    if let Some(ref delta) = code_delta {
+                                        ctx.stats.push_delta(delta.clone());
+                                        ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
+                                            lines_added: delta.lines_added,
+                                            lines_removed: delta.lines_removed,
+                                            files_created: delta.files_created,
+                                            files_deleted: delta.files_deleted,
+                                            file: delta.file.clone(),
+                                        });
+                                    }
                                 }
+                                Err(_) => ctx.agent.msg.push_tool_result_direct(
+                                    &call_id,
+                                    "[ERROR] tool thread panicked",
+                                    false,
+                                ),
                             }
                         }
 

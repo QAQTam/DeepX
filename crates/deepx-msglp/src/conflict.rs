@@ -10,24 +10,16 @@ use serde_json;
 /// Extract file paths that a tool writes to (mutates).
 /// Returns empty vec for read-only and non-file tools.
 pub(crate) fn file_write_paths(tool_name: &str, args: &serde_json::Value) -> Vec<String> {
-    if tool_name != "file" {
-        return Vec::new();
-    }
-    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
     let mut paths = Vec::new();
-    // All actions that modify files
+    let action = if tool_name == "file" {
+        args.get("action").and_then(|v| v.as_str()).unwrap_or("")
+    } else {
+        tool_name
+    };
+
     match action {
-        "write" | "edit" | "edit_diff" | "delete" => {
-            if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
-                paths.push(p.to_string());
-            }
-            if let Some(arr) = args.get("paths").and_then(|v| v.as_array()) {
-                for v in arr {
-                    if let Some(s) = v.as_str() {
-                        paths.push(s.to_string());
-                    }
-                }
-            }
+        "write" | "edit" | "edit_block" | "edit_diff" | "delete" => {
+            collect_paths(args, &mut paths);
         }
         "move" | "copy" => {
             // Both source and dest are affected; dest is the write target
@@ -41,6 +33,19 @@ pub(crate) fn file_write_paths(tool_name: &str, args: &serde_json::Value) -> Vec
         _ => {}
     }
     paths
+}
+
+fn collect_paths(args: &serde_json::Value, paths: &mut Vec<String>) {
+    if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
+        paths.push(p.to_string());
+    }
+    if let Some(arr) = args.get("paths").and_then(|v| v.as_array()) {
+        for value in arr {
+            if let Some(path) = value.as_str() {
+                paths.push(path.to_string());
+            }
+        }
+    }
 }
 
 /// Detect same-file write conflicts among pending tools and group them
@@ -96,4 +101,45 @@ pub(crate) fn resolve_write_conflicts(
         }
     }
     (serial_groups, serial_after)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use deepx_message::PendingTool;
+
+    fn tool(id: &str, name: &str, path: &str) -> PendingTool {
+        PendingTool {
+            id: id.to_string(),
+            name: name.to_string(),
+            args: serde_json::json!({"path": path}),
+        }
+    }
+
+    #[test]
+    fn flat_file_mutations_on_same_path_are_serialized() {
+        let pending = vec![
+            tool("write-1", "write", "src/lib.rs"),
+            tool("edit-1", "edit", "src/lib.rs"),
+            tool("delete-1", "delete", "src/other.rs"),
+        ];
+
+        let (groups, serial_after) = resolve_write_conflicts(&pending);
+
+        assert_eq!(groups, vec![vec![0, 1]]);
+        assert_eq!(serial_after, HashSet::from([1]));
+    }
+
+    #[test]
+    fn independent_file_mutations_remain_parallel() {
+        let pending = vec![
+            tool("write-1", "write", "src/a.rs"),
+            tool("edit-1", "edit_block", "src/b.rs"),
+        ];
+
+        let (groups, serial_after) = resolve_write_conflicts(&pending);
+
+        assert!(groups.is_empty());
+        assert!(serial_after.is_empty());
+    }
 }

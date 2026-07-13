@@ -102,7 +102,7 @@ impl ToolManager {
 
     /// Phase 1: validate, safety-check, register inflight. Returns a [`PreparedCall`]
     /// that can be executed without the manager lock.
-    pub(crate) fn prepare_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<std::sync::mpsc::Sender<(String, String)>>) -> Result<PreparedCall, ToolExecReport> {
+    pub(crate) fn prepare_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<crate::ExecProgressSender>) -> Result<PreparedCall, ToolExecReport> {
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
                 let msg = format!("[ERROR] Tool '{}' is not in the allowed list for this subagent. Allowed tools: [{}]", name, allowed.join(", "));
@@ -118,9 +118,12 @@ impl ToolManager {
             }
         };
 
+        let timeout_secs = timeout_secs.unwrap_or_else(|| handler.default_timeout.as_secs());
+        let cancel_flag = Arc::new(AtomicBool::new(false));
         let ctx = crate::ToolCallCtx {
             id: id.clone(), name: name.to_string(), action: action.to_string(),
-            args: args.clone(), tx_progress: progress_tx.clone(), timeout_secs,
+            args: args.clone(), tx_progress: progress_tx.clone(), timeout_secs: Some(timeout_secs),
+            cancel: cancel_flag.clone(),
         };
         let in_workspace = is_path_in_workspace(&ctx);
         match crate::safety::SafetyPolicy::evaluate(handler.risk.clone(), in_workspace) {
@@ -131,13 +134,12 @@ impl ToolManager {
             SafetyVerdict::Allow => {}
         }
 
-        let cancel_flag = Arc::new(AtomicBool::new(false));
         self.inflight_tasks.insert(id.clone(), cancel_flag.clone());
 
         let audit_args = args.clone();
         let ctx = crate::ToolCallCtx {
             id: id.clone(), name: name.to_string(), action: action.to_string(),
-            args, tx_progress: progress_tx, timeout_secs,
+            args, tx_progress: progress_tx, timeout_secs: Some(timeout_secs), cancel: cancel_flag,
         };
 
         Ok(PreparedCall {

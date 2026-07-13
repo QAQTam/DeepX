@@ -1,26 +1,48 @@
 //! Web tool — fetch URLs and search the web (Bing RSS).
 
 use crate::{JsonArgs, ToolCallCtx, ToolResult, ToolHandler, ToolRisk};
+use std::time::Duration;
+
+fn http_agent(timeout_secs: u64) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(timeout_secs)))
+        .build()
+        .into()
+}
 
 pub(super) fn handle_web(ctx: ToolCallCtx) -> ToolResult {
+    let timeout_secs = ctx.timeout_secs.unwrap_or(30);
     if ctx.args.s("url").starts_with("http") {
-        ToolResult::ok(&web_fetch(&ctx.args))
+        ToolResult::ok(&web_fetch(&ctx.args, timeout_secs))
     } else {
-        ToolResult::ok(&web_search(&ctx.args))
+        ToolResult::ok(&web_search(&ctx.args, timeout_secs))
     }
 }
 
-fn web_fetch(args: &serde_json::Value) -> String {
+fn web_fetch(args: &serde_json::Value, timeout_secs: u64) -> String {
+    const MAX_WEB_BODY_BYTES: u64 = 512 * 1024;
     let url = args.s("url");
     if url.is_empty() || !url.starts_with("http") {
         return crate::json_err("INVALID_URL", "web: url must start with http", "");
     }
-    let resp = match ureq::get(&url).header("User-Agent", "Mozilla/5.0 (compatible; DeepX/0.7)").call() {
+    let resp = match http_agent(timeout_secs).get(&url).header("User-Agent", "Mozilla/5.0 (compatible; DeepX/0.7)").call() {
         Ok(r) => r, Err(e) => return crate::json_err("FETCH_ERROR", &format!("{e}"), ""),
     };
+    if resp.body().content_length().is_some_and(|len| len > MAX_WEB_BODY_BYTES) {
+        return crate::json_err(
+            "RESPONSE_TOO_LARGE",
+            &format!("Response exceeds the {} byte limit", MAX_WEB_BODY_BYTES),
+            "Fetch a narrower URL or use a source with a paginated API.",
+        );
+    }
     let is_html = resp.headers().get("Content-Type").and_then(|v| v.to_str().ok()).map(|s| s.contains("html")).unwrap_or(false);
-    let body = match resp.into_body().read_to_string() {
-        Ok(b) => b, Err(_) => return crate::json_err("READ_ERROR", "read failed", ""),
+    let body = match resp.into_body().with_config().limit(MAX_WEB_BODY_BYTES).read_to_string() {
+        Ok(b) => b,
+        Err(_) => return crate::json_err(
+            "READ_ERROR",
+            "Response could not be read within the body limit",
+            "Fetch a narrower URL or use a source with a paginated API.",
+        ),
     };
     let readable = if is_html || body.trim_start().starts_with("<") {
         html2text::from_read(body.as_bytes(), body.len().min(120_000)).unwrap_or(body)
@@ -33,10 +55,10 @@ fn web_fetch(args: &serde_json::Value) -> String {
 
 const BING: &str = "https://cn.bing.com/search?format=rss&q=";
 
-fn web_search(args: &serde_json::Value) -> String {
+fn web_search(args: &serde_json::Value, timeout_secs: u64) -> String {
     let q = args.s("query");
     if q.is_empty() { return crate::json_err("MISSING_QUERY", "web: 'query' or 'url' required", ""); }
-    let resp = match ureq::get(&format!("{BING}{}", urlenc(&q))).header("User-Agent", "Mozilla/5.0 (compatible; DeepX/0.7)").call() {
+    let resp = match http_agent(timeout_secs).get(&format!("{BING}{}", urlenc(&q))).header("User-Agent", "Mozilla/5.0 (compatible; DeepX/0.7)").call() {
         Ok(r) => r, Err(e) => return crate::json_err("BING_ERROR", &format!("{e}"), ""),
     };
     let body = match resp.into_body().read_to_string() {

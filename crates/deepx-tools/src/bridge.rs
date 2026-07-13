@@ -15,7 +15,7 @@ use deepx_types::ToolDef;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Return type for tool execution with interrupt support.
@@ -213,9 +213,26 @@ pub struct RuntimeContext {
     pub permission_level: u8,
 }
 
+#[cfg(not(test))]
 static RUNTIME_CTX: Mutex<Option<RuntimeContext>> = Mutex::new(None);
 
+#[cfg(test)]
+thread_local! {
+    static RUNTIME_CTX: std::cell::RefCell<Option<RuntimeContext>> = const { std::cell::RefCell::new(None) };
+}
+
 pub fn set_runtime_context(session: &str, level: u8) {
+    #[cfg(test)]
+    {
+        RUNTIME_CTX.with(|ctx| {
+            *ctx.borrow_mut() = Some(RuntimeContext {
+                active_session: session.to_string(),
+                permission_level: level,
+            });
+        });
+        return;
+    }
+    #[cfg(not(test))]
     if let Ok(mut guard) = RUNTIME_CTX.lock() {
         *guard = Some(RuntimeContext {
             active_session: session.to_string(),
@@ -225,12 +242,23 @@ pub fn set_runtime_context(session: &str, level: u8) {
 }
 
 pub fn clear_runtime_context() {
+    #[cfg(test)]
+    {
+        RUNTIME_CTX.with(|ctx| *ctx.borrow_mut() = None);
+        return;
+    }
+    #[cfg(not(test))]
     if let Ok(mut guard) = RUNTIME_CTX.lock() {
         *guard = None;
     }
 }
 
 pub fn runtime_context() -> Option<RuntimeContext> {
+    #[cfg(test)]
+    {
+        return RUNTIME_CTX.with(|ctx| ctx.borrow().clone());
+    }
+    #[cfg(not(test))]
     RUNTIME_CTX.lock().ok()?.clone()
 }
 
@@ -238,6 +266,22 @@ pub fn runtime_context() -> Option<RuntimeContext> {
 ///
 /// Fails closed on every error condition: poisoned mutex, missing context,
 /// empty session, or mismatch.
+#[cfg(test)]
+pub fn verify_active_session(auth_session_id: &str) -> Result<(), String> {
+    RUNTIME_CTX.with(|runtime| {
+        let ctx = runtime.borrow();
+        let ctx = ctx.as_ref().ok_or_else(|| "no active session".to_string())?;
+        if auth_session_id.is_empty() {
+            return Err("missing session in authorization".to_string());
+        }
+        if auth_session_id != ctx.active_session {
+            return Err("session mismatch".to_string());
+        }
+        Ok(())
+    })
+}
+
+#[cfg(not(test))]
 pub fn verify_active_session(auth_session_id: &str) -> Result<(), String> {
     let guard = RUNTIME_CTX
         .lock()
@@ -260,7 +304,7 @@ pub fn verify_active_session(auth_session_id: &str) -> Result<(), String> {
 /// admission gate.  It consumes `call` — the authorization cannot be reused.
 pub fn execute_authorized(
     call: AuthorizedToolCall,
-    progress_tx: Option<mpsc::Sender<(String, String)>>,
+    progress_tx: Option<crate::ExecProgressSender>,
 ) -> ToolExecResult {
     let t0 = Instant::now();
 
@@ -332,7 +376,7 @@ pub fn execute_authorized(
         if crate::PLAN_BLOCKED.contains(&name.as_str()) {
             return ToolExecResult {
                 content: format!(
-                    "[BLOCKED] PLAN mode: '{name}' is not allowed. Only explore, search, read_file, grep, and plan tools are available. Switch to CODE mode to write or execute."
+                    "[BLOCKED] PLAN mode: '{name}' is not allowed. Only explore, list, read, search, and plan tools are available. Switch to CODE mode to write or execute."
                 ),
                 success: false,
                 meta: crate::ToolExecMeta {
@@ -354,7 +398,7 @@ pub fn execute_authorized(
             &name,
             &action,
             args.clone(),
-            Some(60),
+            None,
             progress_tx,
         )
     });
@@ -532,7 +576,7 @@ pub fn execute_tool_with_id_full(
     action: &str,
     args: &str,
     tool_call_id: &str,
-    progress_tx: Option<mpsc::Sender<(String, String)>>,
+    progress_tx: Option<crate::ExecProgressSender>,
 ) -> ToolExecResult {
     let args_val: serde_json::Value = match serde_json::from_str(args) {
         Ok(v) => v,
@@ -850,7 +894,7 @@ pub fn execute_tool_simple(req: &deepx_message::ToolExecRequest) -> deepx_messag
 /// batch execution.
 pub fn execute_tools_parallel(
     tools: Vec<deepx_message::ToolExecRequest>,
-    _progress_tx: Option<&std::sync::mpsc::Sender<(String, String)>>,
+    _progress_tx: Option<&crate::ExecProgressSender>,
     _agent_tx: Option<&std::sync::mpsc::Sender<deepx_proto::Agent2Ui>>,
 ) -> Vec<(String, deepx_message::ToolExecReport)> {
     if tools.len() <= 1 {
@@ -944,16 +988,20 @@ pub fn shutdown_tools() {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use std::sync::atomic::AtomicU32;
+    use std::sync::{atomic::AtomicU32, LazyLock, Mutex, MutexGuard};
 
     static TEST_HANDLER_COUNT: AtomicU32 = AtomicU32::new(0);
+    static TEST_SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn test_counter_handler(_ctx: crate::ToolCallCtx) -> crate::ToolResult {
         TEST_HANDLER_COUNT.fetch_add(1, Ordering::SeqCst);
         crate::ToolResult::ok("counter incremented")
     }
 
-    fn setup_test_manager() {
+    fn setup_test_manager() -> MutexGuard<'static, ()> {
+        let test_guard = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::set_workspace(".");
         let allowed: Vec<String> = vec![];
         crate::bridge::init_tools("test", &[], allowed);
@@ -977,6 +1025,7 @@ mod tests {
             });
         }
         TEST_HANDLER_COUNT.store(0, Ordering::SeqCst);
+        test_guard
     }
 
     fn make_invocation(tool_name: &str, call_id: &str) -> ToolInvocation {
@@ -993,7 +1042,7 @@ mod tests {
 
     #[test]
     fn auto_approved_call_executes_normally() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test_session", 4);
         let inv = make_invocation("test_counter", "call-1");
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -1016,7 +1065,7 @@ mod tests {
 
     #[test]
     fn max_lockdown_requires_approval() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         let inv = make_invocation("test_counter", "call-2");
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let trusted = HashSet::new();
@@ -1036,7 +1085,7 @@ mod tests {
 
     #[test]
     fn approved_call_executes_exactly_once() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test_session", 4);
         let inv = make_invocation("test_counter", "call-3-once");
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -1064,7 +1113,7 @@ mod tests {
 
     #[test]
     fn rejected_approval_does_not_execute() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         let inv = make_invocation("test_counter", "call-4");
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let trusted = HashSet::new();
@@ -1090,7 +1139,7 @@ mod tests {
 
     #[test]
     fn expired_approval_fails() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         let inv = make_invocation("test_counter", "call-5-exp");
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let trusted = HashSet::new();
@@ -1110,7 +1159,7 @@ mod tests {
 
     #[test]
     fn challenge_cannot_be_replayed() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test_session", 4);
         let inv = make_invocation("test_counter", "call-6");
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -1136,7 +1185,7 @@ mod tests {
 
     #[test]
     fn mismatched_call_id_detected_at_loop_level() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         // Create challenge for call-7a
         let inv = make_invocation("test_counter", "call-7a");
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -1159,7 +1208,7 @@ mod tests {
 
     #[test]
     fn authorization_bound_to_call_identity() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test_session", 4);
         let inv1 = make_invocation("test_counter", "bound-1");
         let inv2 = make_invocation("test_counter", "bound-2");
@@ -1184,7 +1233,7 @@ mod tests {
 
     #[test]
     fn compat_wrapper_delegates_to_secured_path() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test_session", 4);
         TEST_HANDLER_COUNT.store(0, Ordering::SeqCst);
         // With Level 4 permission context, auto-approve should work
@@ -1201,7 +1250,7 @@ mod tests {
 
     #[test]
     fn structured_success_propagates_correctly() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test_session", 4);
         TEST_HANDLER_COUNT.store(0, Ordering::SeqCst);
 
@@ -1226,7 +1275,7 @@ mod tests {
 
     #[test]
     fn plan_mode_blocks_destructive_but_not_reads() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test_session", 4);
         let prev_mode = AGENT_MODE.swap(1, Ordering::SeqCst); // PLAN mode
 
@@ -1260,7 +1309,7 @@ mod tests {
 
     #[test]
     fn ui_and_llm_same_permission_decision() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test_session", 2); // ReadFree: reads auto, writes need approval
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let trusted = HashSet::new();
@@ -1295,7 +1344,7 @@ mod tests {
 
     #[test]
     fn missing_context_fails_closed() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         clear_runtime_context();
         TEST_HANDLER_COUNT.store(0, Ordering::SeqCst);
         let result = execute_tool_with_id_full("test_counter", "", "{}", "miss-ctx-1", None);
@@ -1314,7 +1363,7 @@ mod tests {
 
     #[test]
     fn invalid_json_does_not_execute() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test", 4);
         TEST_HANDLER_COUNT.store(0, Ordering::SeqCst);
         let result =
@@ -1335,7 +1384,7 @@ mod tests {
 
     #[test]
     fn resources_bound_in_authorization() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         let inv = make_invocation("test_counter", "res-bound-1");
         let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let trusted = HashSet::new();
@@ -1357,7 +1406,7 @@ mod tests {
 
     #[test]
     fn session_mismatch_rejected() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("session-A", 4);
         TEST_HANDLER_COUNT.store(0, Ordering::SeqCst);
         let inv = ToolInvocation {
@@ -1388,7 +1437,7 @@ mod tests {
 
     #[test]
     fn resource_mismatch_rejected() {
-        setup_test_manager();
+        let _test_guard = setup_test_manager();
         set_runtime_context("test", 4);
         TEST_HANDLER_COUNT.store(0, Ordering::SeqCst);
 

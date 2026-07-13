@@ -422,7 +422,7 @@ pub(crate) fn run_llm_turn(
 
                     // ── Execute parallel authorized tools ──
                     let (progress_tx, progress_rx) =
-                        std::sync::mpsc::channel::<(String, String)>();
+                        deepx_tools::bounded_exec_progress_channel();
                     let mut handles: Vec<(
                         String,
                         std::thread::JoinHandle<(

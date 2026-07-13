@@ -7,7 +7,7 @@
 //! Key design: a single admit() entry point for both UI and LLM paths.
 //! The old code had two separate code paths; now they converge here.
 
-use std::collections::HashMap;
+    use std::collections::HashMap;
 
 use deepx_proto::Agent2Ui;
 use crate::agent::PendingApproval;
@@ -270,7 +270,7 @@ impl ToolEngine {
         });
 
         // Spawn tool thread
-        let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+        let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
         let tool_id = id.to_string();
         let handle = std::thread::Builder::new().stack_size(4*1024*1024).spawn(move || {
             let result = deepx_tools::bridge::execute_authorized(authorized, Some(progress_tx));
@@ -308,26 +308,24 @@ impl ToolEngine {
     /// Unlike the internal drain_progress, this takes RingContext directly.
     pub fn drain_progress_external(
         &self, ctx: &mut RingContext,
-        rx: std::sync::mpsc::Receiver<(String, String)>,
-        default_id: &str,
+        rx: std::sync::mpsc::Receiver<deepx_tools::ExecProgressEvent>,
+        _default_id: &str,
     ) {
-        let mut chunk = String::new();
         loop {
             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                Ok((tc_id, c)) => {
-                    chunk.push_str(&c);
-                    while let Ok((_, c2)) = rx.try_recv() { chunk.push_str(&c2); }
-                    ctx.emitter.emit_delta(Agent2Ui::ExecProgress {
-                        tool_call_id: tc_id, chunk: std::mem::take(&mut chunk),
-                    });
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if !chunk.is_empty() {
+                Ok(first) => {
+                    let mut events = vec![first];
+                    while let Ok(event) = rx.try_recv() { events.push(event); }
+                    for event in events {
                         ctx.emitter.emit_delta(Agent2Ui::ExecProgress {
-                            tool_call_id: default_id.to_string(), chunk: std::mem::take(&mut chunk),
+                            tool_call_id: event.tool_call_id,
+                            stream: event.stream.as_str().to_string(),
+                            seq: event.seq,
+                            chunk: event.chunk,
                         });
                     }
                 }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
@@ -335,26 +333,24 @@ impl ToolEngine {
 
     fn drain_progress(
         &self, ctx: &mut RingContext,
-        rx: std::sync::mpsc::Receiver<(String, String)>,
-        default_id: &str,
+        rx: std::sync::mpsc::Receiver<deepx_tools::ExecProgressEvent>,
+        _default_id: &str,
     ) {
-        let mut chunk = String::new();
         loop {
             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                Ok((tc_id, c)) => {
-                    chunk.push_str(&c);
-                    while let Ok((_, c2)) = rx.try_recv() { chunk.push_str(&c2); }
-                    ctx.emitter.emit_delta(Agent2Ui::ExecProgress {
-                        tool_call_id: tc_id, chunk: std::mem::take(&mut chunk),
-                    });
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if !chunk.is_empty() {
+                Ok(first) => {
+                    let mut events = vec![first];
+                    while let Ok(event) = rx.try_recv() { events.push(event); }
+                    for event in events {
                         ctx.emitter.emit_delta(Agent2Ui::ExecProgress {
-                            tool_call_id: default_id.to_string(), chunk: std::mem::take(&mut chunk),
+                            tool_call_id: event.tool_call_id,
+                            stream: event.stream.as_str().to_string(),
+                            seq: event.seq,
+                            chunk: event.chunk,
                         });
                     }
                 }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
