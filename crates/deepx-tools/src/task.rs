@@ -1,14 +1,24 @@
 //! Task management: create, update, delete, list tasks.
 //! Format: "- [status] T{id}: subject — description"
 //!
-//! Persisted to `.deepx/tasks.md` (workspace-scoped).
+//! Persisted to `sessions/{seed}/tasks.md` (session-scoped).
 
 use std::sync::Mutex;
 
 static TASK_LOCK: Mutex<()> = Mutex::new(());
 
 fn tasks_path() -> std::path::PathBuf {
-    crate::workspace::deepx_dir().join("tasks.md")
+    let session = crate::bridge::runtime_context()
+        .map(|ctx| ctx.active_session)
+        .unwrap_or_default();
+    if session.is_empty() {
+        // No active session — fall back to workspace .deepx/ for standalone tool use
+        crate::workspace::deepx_dir().join("tasks.md")
+    } else {
+        deepx_types::platform::sessions_dir()
+            .join(&session)
+            .join("tasks.md")
+    }
 }
 
 fn read_tasks() -> Vec<String> {
