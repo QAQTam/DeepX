@@ -725,6 +725,36 @@ pub fn cmd_ask_response(seed: String, text: String) -> Result<(), String> {
     send_to_agent(&seed, Ui2Agent::AskResponse { answer: text })
 }
 
+/// Unload an explicitly-activated skill from the agent's context.
+#[tauri::command]
+pub fn cmd_unload_skill(seed: String, name: String) -> Result<(), String> {
+    log::info!(
+        "[REGISTRY] cmd_unload_skill seed={} name={name}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
+    send_to_agent(&seed, Ui2Agent::UnloadSkill { name })
+}
+
+/// Explicitly activate a skill by name (equivalent to $skill-name mention).
+#[tauri::command]
+pub fn cmd_activate_skill(seed: String, name: String) -> Result<(), String> {
+    log::info!(
+        "[REGISTRY] cmd_activate_skill seed={} name={name}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
+    send_to_agent(&seed, Ui2Agent::ActivateSkill { name })
+}
+
+/// Reload the skill catalog from disk and refresh the catalog system message.
+#[tauri::command]
+pub fn cmd_reload_skills(seed: String) -> Result<(), String> {
+    log::info!(
+        "[REGISTRY] cmd_reload_skills seed={}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
+    send_to_agent(&seed, Ui2Agent::ReloadSkills)
+}
+
 /// Return the app version from Cargo.toml.
 #[tauri::command]
 pub fn cmd_get_version() -> String {

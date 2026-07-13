@@ -203,6 +203,7 @@ export default function App() {
         break;
       }
       case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean, time: (p.time ?? "") as string, args: (p.args ?? "{}") as string }); break;
+      case "skills_changed": chat.handleSkillsChanged(p); break;
       case "compact_start": chat.handleCompactStart(p); break;
       case "compact_end": chat.handleCompactEnd(p); break;
       case "compact_delta": chat.handleCompactDelta(p); break;
@@ -615,7 +616,7 @@ export default function App() {
               <Show when={hasChosenSession() && activeSeed() && activeChat()}>
                 <div class="chat-area">
                   <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} onSlashCommand={handleSlashCommand} />
-                  <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} loadActivityFromBackend={activeChat()!.loadActivityFromBackend} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} />
+                  <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} loadActivityFromBackend={activeChat()!.loadActivityFromBackend} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} skillCatalog={activeChat()!.skillCatalog} activeSkillNames={activeChat()!.activeSkillNames} />
                 </div>
               </Show>
             </Match>

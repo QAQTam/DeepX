@@ -596,6 +596,16 @@ impl Loop {
         }
     }
 
+    /// Emit Agent2Ui::SkillsChanged with current available/active skills.
+    fn emit_skills_status(&mut self) {
+        let workspace = deepx_tools::CURRENT_WORKSPACE
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let status = self.session.agent.build_skills_status(&workspace);
+        let _ = self.event_tx.send(Agent2Ui::SkillsChanged { status });
+    }
+
     // ═══════════════════════════════════════════════════
     // Single-command dispatch
     // ═══════════════════════════════════════════════════
@@ -695,6 +705,9 @@ impl Loop {
             | Ui2Agent::ResumeSession { .. }
             | Ui2Agent::NewSession
             | Ui2Agent::ReloadConfig
+            | Ui2Agent::ReloadSkills
+            | Ui2Agent::UnloadSkill { .. }
+            | Ui2Agent::ActivateSkill { .. }
             | Ui2Agent::ToolCall { .. }
             | Ui2Agent::PermissionResponse { .. }
             | Ui2Agent::Compact => {}
@@ -751,6 +764,28 @@ impl Loop {
             }
             Ui2Agent::ReloadConfig => {
                 self.session_eng.reload_config(&mut self.session.agent, &self.cancel);
+                return Some(Outcome::Handled);
+            }
+            Ui2Agent::ReloadSkills => {
+                let workspace = deepx_tools::CURRENT_WORKSPACE
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                self.session.agent.inject_catalog(&workspace);
+                self.emit_skills_status();
+                return Some(Outcome::Handled);
+            }
+            Ui2Agent::UnloadSkill { name } => {
+                self.session.agent.deactivate_explicit_skill(name);
+                self.emit_skills_status();
+                return Some(Outcome::Handled);
+            }
+            Ui2Agent::ActivateSkill { name } => {
+                // Activate via the same $skill-name parser path
+                self.session
+                    .agent
+                    .activate_explicit_skills(&format!("${name}"));
+                self.emit_skills_status();
                 return Some(Outcome::Handled);
             }
             _ => {}

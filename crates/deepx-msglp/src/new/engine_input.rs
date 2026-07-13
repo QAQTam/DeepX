@@ -51,6 +51,16 @@ impl InputEngine {
 
         ctx.agent.activate_explicit_skills(text);
 
+        // Emit updated skills status so the frontend panel can refresh
+        {
+            let workspace = deepx_tools::CURRENT_WORKSPACE
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let status = ctx.agent.build_skills_status(&workspace);
+            ctx.emitter.emit(Agent2Ui::SkillsChanged { status });
+        }
+
         // Push user message
         ctx.agent.msg.push_user(text);
         ctx.agent.msg.flush_meta(

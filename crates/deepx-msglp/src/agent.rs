@@ -195,6 +195,43 @@ impl AgentState {
         }
     }
 
+    /// Remove an explicitly-activated skill from system_messages.
+    /// Returns true if the skill was unloaded.
+    pub fn deactivate_explicit_skill(&mut self, name: &str) -> bool {
+        let removed = self.msg.remove_skill_system(name);
+        if removed {
+            self.msg
+                .snapshot_full(&self.config.model, &self.config.reasoning_effort);
+        }
+        removed
+    }
+
+    /// Build a SkillsChanged payload for the frontend skills panel.
+    pub fn build_skills_status(&mut self, workspace: &str) -> deepx_proto::SkillsStatus {
+        let catalog = self.refresh_skill_catalog(workspace);
+        let available: Vec<deepx_proto::SkillInfo> = catalog
+            .catalog
+            .skills
+            .iter()
+            .map(|s| deepx_proto::SkillInfo {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                scope: match s.scope {
+                    deepx_skills::SkillScope::Project => "project".to_string(),
+                    deepx_skills::SkillScope::User => "user".to_string(),
+                },
+                source: s
+                    .path
+                    .strip_prefix(Path::new(workspace))
+                    .unwrap_or(&s.path)
+                    .to_string_lossy()
+                    .to_string(),
+            })
+            .collect();
+        let active = self.msg.active_skill_names();
+        deepx_proto::SkillsStatus { available, active }
+    }
+
     pub fn rebind_store(&mut self) {
         self.msg.set_tool_executor(Box::new(|req: ToolExecRequest| {
             let result = deepx_tools::bridge::execute_tool_with_id_full(

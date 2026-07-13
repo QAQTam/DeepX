@@ -176,6 +176,13 @@ const zh: I18nStrings = {
     taskCancel: "取消",
     taskDelete: "删除",
     taskAsk: "询问此任务",
+    skills: "技能",
+    noSkills: "无已加载技能",
+    skillReload: "刷新目录",
+    skillUnload: "卸载",
+    skillActivate: "激活",
+    skillProject: "项目",
+    skillUser: "用户",
   },
   toast: {
     agentDisconnected: "Agent 进程已断开 \u2014 正在重连...",

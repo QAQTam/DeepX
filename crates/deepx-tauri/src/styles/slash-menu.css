@@ -3,7 +3,7 @@
   position: absolute;
   bottom: calc(100% + 6px);
   left: 8px; right: 8px;
-  max-height: 260px;
+  max-height: 360px;
   overflow-y: auto;
   background: var(--bg-primary);
   border: 0.5px solid var(--border-panel);

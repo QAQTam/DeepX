@@ -398,6 +398,48 @@ impl MessageStore {
         });
     }
 
+    /// Remove a single explicitly-activated skill from system_messages.
+    /// Returns true if a message was removed.
+    pub fn remove_skill_system(&mut self, name: &str) -> bool {
+        let prefix = format!("[DEEPX_SKILL_V1]\nname: {name}\n");
+        let before = self.system_messages.len();
+        self.system_messages.retain(|message| {
+            let text = message
+                .content
+                .iter()
+                .find_map(|block| match block {
+                    deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("");
+            !text.starts_with(&prefix)
+        });
+        self.system_messages.len() != before
+    }
+
+    /// Return the names of all explicitly-activated skills currently in
+    /// system_messages (identified by the [DEEPX_SKILL_V1] marker).
+    pub fn active_skill_names(&self) -> Vec<String> {
+        self.system_messages
+            .iter()
+            .filter_map(|message| {
+                let text = message
+                    .content
+                    .iter()
+                    .find_map(|block| match block {
+                        deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("");
+                let name = text
+                    .strip_prefix("[DEEPX_SKILL_V1]\nname: ")
+                    .and_then(|rest| rest.split('\n').next())
+                    .map(|n| n.to_string())?;
+                Some(name)
+            })
+            .collect()
+    }
+
     pub fn push_user(&mut self, text: &str) -> Effect {
         if !self.replaying {
             if let Some(turn) = self.turns.last_mut() {

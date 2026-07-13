@@ -1,6 +1,8 @@
 import { createSignal, createEffect, createMemo, For, Show } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
+import type { SkillInfo } from "../store/chat";
 import SlashMenu, { type SlashCommand } from "./SlashMenu";
 
 const MODES = ["plan", "code"] as const;
@@ -14,6 +16,9 @@ interface InputBarProps {
   mode: string;
   onModeChange: (mode: string) => void;
   onSlashCommand: (cmd: SlashCommand) => void;
+  seed: string;
+  skillCatalog: () => SkillInfo[];
+  activeSkillNames: () => string[];
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
@@ -33,10 +38,24 @@ export default function InputBar(props: InputBarProps) {
 
   const filteredCommands = createMemo(() => {
     const q = slashFilter().toLowerCase();
-    if (!q) return SLASH_COMMANDS;
-    return SLASH_COMMANDS.filter(
-      (c) => c.trigger.toLowerCase().startsWith(q) || c.title.toLowerCase().includes(q)
-    );
+    // Static commands filtered by trigger/title
+    const cmds = q
+      ? SLASH_COMMANDS.filter(
+          (c) => c.trigger.toLowerCase().startsWith(q) || c.title.toLowerCase().includes(q)
+        )
+      : SLASH_COMMANDS;
+    // Dynamic skills — show all when no filter, or match by name
+    const skills: SlashCommand[] = props.skillCatalog()
+      .filter((s) => !q || s.name.toLowerCase().includes(q))
+      .map((s) => ({
+        id: `skill:${s.name}`,
+        trigger: s.name,
+        title: s.name,
+        description: s.description,
+        icon: props.activeSkillNames().includes(s.name) ? "\u2713" : "\u25cb",
+        group: "Skills",
+      }));
+    return [...cmds, ...skills];
   });
 
   function closeSlash() {
@@ -79,7 +98,12 @@ export default function InputBar(props: InputBarProps) {
     closeSlash();
     textareaRef.value = "";
     textareaRef.style.height = "auto";
-    props.onSlashCommand(cmd);
+    if (cmd.id.startsWith("skill:")) {
+      // Activate skill via backend command
+      invoke("cmd_activate_skill", { seed: props.seed, name: cmd.trigger }).catch(() => {});
+    } else {
+      props.onSlashCommand(cmd);
+    }
   }
 
   function handleKeyDown(e: KeyboardEvent) {

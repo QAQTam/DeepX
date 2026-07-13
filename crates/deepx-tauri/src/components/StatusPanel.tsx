@@ -1,7 +1,8 @@
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
-import type { TaskInfo, ActivityEntry } from "../store/chat";
+import { For, Show, createSignal, createMemo, createEffect, onCleanup, onMount } from "solid-js";
+import type { TaskInfo, ActivityEntry, SkillInfo } from "../store/chat";
 import { useI18n } from "../i18n";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import GitDiffPanel from "./GitDiffPanel";
 import PlanReviewPanel from "./PlanReviewPanel";
 
@@ -14,7 +15,7 @@ const TOOL_ICONS: Record<string, string> = {
   web_context7_resolve: "D", web_context7_query: "D",
 };
 
-type Section = "tasks" | "activity" | "plan" | "git";
+type Section = "tasks" | "activity" | "plan" | "git" | "skills";
 
 export default function StatusPanel(props: {
   tasks: () => TaskInfo[];
@@ -23,6 +24,8 @@ export default function StatusPanel(props: {
   seed: string;
   loadActivityFromBackend?: () => Promise<void>;
   onTaskAction?: (action: "cancel" | "delete" | "ask", taskId: string, subject: string, description: string) => void;
+  skillCatalog: () => SkillInfo[];
+  activeSkillNames: () => string[];
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = createSignal<Section | null>(null);
@@ -95,6 +98,35 @@ export default function StatusPanel(props: {
   };
   const isOpen = (section: Section) => expanded() === section;
 
+  // O(1) lookup for active skill names — avoids re-scanning on every render
+  const activeSet = createMemo(() => new Set(props.activeSkillNames()));
+
+  // ── Scroll preservation ──
+  let skillsBodyRef!: HTMLDivElement;
+  let skillsScrollTop = 0;
+  let skillsScrollHeight = 0;
+  createEffect((prev: number | undefined) => {
+    const _active = activeSet(); // track changes
+    const el = skillsBodyRef;
+    if (!el || !isOpen("skills")) return prev;
+    if (prev === undefined) return 0;
+    // Restore scroll after DOM update. If content shrank (unload),
+    // clamp scrollTop so we don't overshoot.
+    if (el.scrollHeight !== skillsScrollHeight) {
+      el.scrollTop = Math.min(skillsScrollTop, Math.max(0, el.scrollHeight - el.clientHeight));
+    }
+    return _active ? 1 : 0;
+  });
+
+  // Save scroll before any re-render triggered by activeSet/click
+  function saveSkillsScroll() {
+    const el = skillsBodyRef;
+    if (el) {
+      skillsScrollTop = el.scrollTop;
+      skillsScrollHeight = el.scrollHeight;
+    }
+  }
+
   return (
     <div class="status-panel">
       <div
@@ -122,6 +154,56 @@ export default function StatusPanel(props: {
         <span>{t().status.title}</span>
       </div>
       <div class="status-panel-body">
+
+        {/* ── Skills ── */}
+        <div class={`status-accordion${isOpen("skills") ? " expanded" : ""}`}>
+          <div class="status-tile" onClick={() => toggle("skills")}>
+            <span class={`status-tile-arrow${isOpen("skills") ? " open" : ""}`}>▶</span>
+            <span class="status-tile-label">{t().status.skills}</span>
+            <Show when={props.activeSkillNames().length > 0}>
+              <span class="status-tile-badge">{props.activeSkillNames().length}</span>
+            </Show>
+          </div>
+          <div class={`status-accordion-body${isOpen("skills") ? " expanded" : ""}`} ref={skillsBodyRef}>
+            <div class="skills-toolbar">
+              <button class="skills-btn-reload" onClick={() => invoke("cmd_reload_skills", { seed: props.seed }).catch(() => {})}>
+                ↻ {t().status.skillReload}
+              </button>
+            </div>
+            <Show when={props.skillCatalog().length > 0} fallback={<div class="status-empty">{t().status.noSkills}</div>}>
+              <For each={props.skillCatalog()}>
+                {(skill) => {
+                  const isActive = () => activeSet().has(skill.name);
+                  return (
+                    <div class={`status-row${isActive() ? " status-active" : ""}`} data-skill={skill.name}>
+                      <span class="status-row-icon" style={{"font-size": "14px"}}>{isActive() ? "✓" : "○"}</span>
+                      <div class="status-row-info">
+                        <span class="status-row-title">{skill.name}</span>
+                        <span class="status-row-desc" style={{"font-size": "10px"}}>
+                          {skill.scope === "project" ? t().status.skillProject : t().status.skillUser}: {skill.source}
+                        </span>
+                      </div>
+                      <Show when={isActive()}>
+                        <button
+                          class="skills-btn-unload"
+                          onClick={() => { saveSkillsScroll(); invoke("cmd_unload_skill", { seed: props.seed, name: skill.name }).catch(() => {}); }}
+                          title={t().status.skillUnload}
+                        >✕</button>
+                      </Show>
+                      <Show when={!isActive()}>
+                        <button
+                          class="skills-btn-activate"
+                          onClick={() => { saveSkillsScroll(); invoke("cmd_activate_skill", { seed: props.seed, name: skill.name }).catch(() => {}); }}
+                          title={t().status.skillActivate}
+                        >+</button>
+                      </Show>
+                    </div>
+                  );
+                }}
+              </For>
+            </Show>
+          </div>
+        </div>
 
         {/* ── Tasks ── */}
         <div class={`status-accordion${isOpen("tasks") ? " expanded" : ""}`}>

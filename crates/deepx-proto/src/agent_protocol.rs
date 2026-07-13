@@ -79,11 +79,52 @@ pub enum Ui2Agent {
     AskResponse {
         answer: String,
     },
+
+    /// Unload an explicitly-activated skill ($name mention) from context.
+    #[serde(rename = "unload_skill")]
+    UnloadSkill {
+        /// Skill name (must match the name field in SKILL.md frontmatter).
+        name: String,
+    },
+
+    /// Explicitly activate a skill by name (equivalent to $skill-name mention).
+    /// Triggers SkillsChanged emission on success.
+    #[serde(rename = "activate_skill")]
+    ActivateSkill {
+        /// Skill name (must match the name field in SKILL.md frontmatter).
+        name: String,
+    },
+
+    /// Reload the skill catalog from disk and refresh the catalog system message.
+    #[serde(rename = "reload_skills")]
+    ReloadSkills,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Shared types
 // ═══════════════════════════════════════════════════════════════════════════
+
+/// Information about an available skill for the frontend skills panel.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    /// "project" or "user"
+    pub scope: String,
+    /// Display path relative to workspace (e.g. "skills/deepx/deepx-debug")
+    pub source: String,
+}
+
+/// Payload for Agent2Ui::SkillsChanged.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillsStatus {
+    /// All discoverable skills in the workspace.
+    pub available: Vec<SkillInfo>,
+    /// Names of currently loaded (explicit, $mention-activated) skills.
+    pub active: Vec<String>,
+}
 
 /// Tool call definition sent in RoundComplete.tool_calls.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -409,6 +450,15 @@ pub enum Agent2Ui {
     /// Heartbeat: daemon responds to frontend ping.
     #[serde(rename = "pong")]
     Pong,
+
+    /// Skills catalog changed — frontend should refresh the skills panel.
+    /// Emitted on explicit activation ($name), deactivation (UnloadSkill),
+    /// and catalog reload (ReloadSkills).
+    #[serde(rename = "skills_changed")]
+    SkillsChanged {
+        #[serde(flatten)]
+        status: SkillsStatus,
+    },
 
     /// Permission request: agent asks user to approve/deny a tool call.
     /// Frontend shows a dialog with tool details and target paths.

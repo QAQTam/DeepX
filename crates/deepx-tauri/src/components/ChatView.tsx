@@ -77,6 +77,9 @@ export default function ChatView(props: ChatViewProps) {
         mode={mode()}
         onModeChange={handleSetMode}
         onSlashCommand={props.onSlashCommand}
+        seed={seed()}
+        skillCatalog={chat().skillCatalog}
+        activeSkillNames={chat().activeSkillNames}
       />
       <AskDialog
         state={chat().askState}

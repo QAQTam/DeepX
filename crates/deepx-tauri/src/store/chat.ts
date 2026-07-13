@@ -21,6 +21,7 @@ export interface Turn {
 }
 export interface SessionInfo { seed: string; model: string; context_tokens: number; context_limit: number; total_tokens: number; prompt_cache_hit: number; prompt_cache_miss: number; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: string; args: string; }
+export interface SkillInfo { name: string; description: string; scope: string; source: string; }
 export interface AskState { question: string; options: string[]; allow_custom: boolean; show: boolean; }
 
 export function createChatStore(seed: string) {
@@ -43,6 +44,8 @@ export function createChatStore(seed: string) {
   const [tasks, setTasks] = createSignal<TaskInfo[]>([]);
   const [recentEdits, setRecentEdits] = createSignal<string[]>([]);
   const [activityLog, setActivityLog] = createSignal<ActivityEntry[]>([]);
+  const [skillCatalog, setSkillCatalog] = createSignal<SkillInfo[]>([]);
+  const [activeSkillNames, setActiveSkillNames] = createSignal<string[]>([]);
   const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], allow_custom: true, show: false });
   const [isCompacting, setIsCompacting] = createSignal(false);
 
@@ -297,6 +300,15 @@ export function createChatStore(seed: string) {
     if (data.recent_edits && (data.recent_edits as any[]).length > 0) setRecentEdits(data.recent_edits as string[]);
   }
 
+  function handleSkillsChanged(data: Record<string, unknown>) {
+    if (data.available && Array.isArray(data.available)) {
+      setSkillCatalog(data.available as SkillInfo[]);
+    }
+    if (data.active && Array.isArray(data.active)) {
+      setActiveSkillNames(data.active as string[]);
+    }
+  }
+
   function handleAuditRecord(entry: ActivityEntry) {
     setActivityLog((prev) => {
       const next = [entry, ...prev];
@@ -440,5 +452,5 @@ export function createChatStore(seed: string) {
     setTurns(produce((prev) => { prev.unshift(...loaded); }));
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, loadActivityFromBackend, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, compactText, metricHistory, handleCompactStart, handleCompactEnd, handleCompactDelta, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, skillCatalog, activeSkillNames, loadActivityFromBackend, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, compactText, metricHistory, handleCompactStart, handleCompactEnd, handleCompactDelta, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleSkillsChanged, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

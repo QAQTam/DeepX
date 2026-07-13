@@ -174,6 +174,13 @@ const en = {
     taskCancel: "Cancel",
     taskDelete: "Delete",
     taskAsk: "Ask about this task",
+    skills: "Skills",
+    noSkills: "No skills loaded",
+    skillReload: "Reload catalog",
+    skillUnload: "Unload",
+    skillActivate: "Activate",
+    skillProject: "project",
+    skillUser: "user",
   },
   toast: {
     agentDisconnected: "Agent process disconnected \u2014 reconnecting...",

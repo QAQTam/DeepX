@@ -24,7 +24,7 @@ mod agent_protocol;
 
 // ── Re-exports ──────────────────────────────────────────────────────────
 
-pub use agent_protocol::{Agent2Ui, CodeDaily, CodeDeltaRecord, DocInfo, FileSnapshotInfo, FrontendToDaemon, DaemonToFrontend, RoundBlock, RoundData, RoundDeltaKind, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent};
+pub use agent_protocol::{Agent2Ui, CodeDaily, CodeDeltaRecord, DocInfo, FileSnapshotInfo, FrontendToDaemon, DaemonToFrontend, RoundBlock, RoundData, RoundDeltaKind, SkillInfo, SkillsStatus, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent};
 
 // ── Redacted (prevents API key leaks in debug logs) ─────────────────────
 
