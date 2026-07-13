@@ -293,8 +293,8 @@ export function createChatStore(seed: string) {
         return next.length > 120 ? next.slice(-120) : next;
       });
     }
-    if (data.tasks) setTasks(data.tasks as TaskInfo[]);
-    if (data.recent_edits) setRecentEdits(data.recent_edits as string[]);
+    if (data.tasks && (data.tasks as any[]).length > 0) setTasks(data.tasks as TaskInfo[]);
+    if (data.recent_edits && (data.recent_edits as any[]).length > 0) setRecentEdits(data.recent_edits as string[]);
   }
 
   function handleAuditRecord(entry: ActivityEntry) {
@@ -396,7 +396,7 @@ export function createChatStore(seed: string) {
   async function submitAskAnswer(answer: string) {
     setAskState({ question: "", options: [], allow_custom: true, show: false });
     try {
-      await invoke("cmd_send_message", { seed, text: answer });
+      await invoke("cmd_ask_response", { seed, text: answer });
     } catch (e) { console.error(e); }
   }
 
