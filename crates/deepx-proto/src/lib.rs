@@ -24,7 +24,12 @@ mod agent_protocol;
 
 // ── Re-exports ──────────────────────────────────────────────────────────
 
-pub use agent_protocol::{Agent2Ui, CodeDaily, CodeDeltaRecord, DocInfo, FileSnapshotInfo, FrontendToDaemon, DaemonToFrontend, RoundBlock, RoundData, RoundDeltaKind, SkillInfo, SkillsStatus, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent};
+pub use agent_protocol::{
+    Agent2Ui, AskAnswer, AskMode, AskQuestion, AskResolution, CodeDaily, CodeDeltaRecord,
+    DaemonToFrontend, DocInfo, FileSnapshotInfo, FrontendToDaemon, RoundBlock, RoundData,
+    RoundDeltaKind, SkillInfo, SkillsStatus, TaskInfo, ToolCallDef, ToolResultDef, TurnData,
+    Ui2Agent,
+};
 
 // ── Redacted (prevents API key leaks in debug logs) ─────────────────────
 
@@ -73,23 +78,24 @@ use std::io::{BufRead, Write};
 
 /// Read a single JSON-LP frame (one line, parse as JSON).
 /// Returns Ok(None) on EOF or empty line.
-pub fn read_frame<T: serde::de::DeserializeOwned>(r: &mut impl BufRead) -> std::io::Result<Option<T>> {
+pub fn read_frame<T: serde::de::DeserializeOwned>(
+    r: &mut impl BufRead,
+) -> std::io::Result<Option<T>> {
     let mut line = String::new();
     let n = r.read_line(&mut line)?;
     if n == 0 || line.trim().is_empty() {
         return Ok(None);
     }
-    serde_json::from_str(&line).map(Some).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-    })
+    serde_json::from_str(&line)
+        .map(Some)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
 }
 
 /// Write a single JSON-LP frame (one JSON object per line, newline terminated).
 /// Flushes after every write for real-time streaming.
 pub fn write_frame(w: &mut impl Write, frame: &impl Serialize) -> std::io::Result<()> {
-    let json = serde_json::to_string(frame).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-    })?;
+    let json = serde_json::to_string(frame)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     writeln!(w, "{}", json)?;
     w.flush()
 }

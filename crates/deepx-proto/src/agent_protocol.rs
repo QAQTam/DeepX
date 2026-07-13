@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// UI → Agent (unchanged from v4)
+// UI → Agent
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -74,11 +74,19 @@ pub enum Ui2Agent {
         trust_folder: bool,
     },
 
-    /// User's answer to an ask_user prompt. Resumes a suspended turn.
+    /// User's answers to an ask_user prompt. Resumes a suspended turn.
+    /// `answers` contains one entry for Single mode, N entries for Batch mode.
     #[serde(rename = "ask_response")]
     AskResponse {
-        answer: String,
+        /// Matches the ask_id from Agent2Ui::AskUser.
+        ask_id: String,
+        answers: Vec<AskAnswer>,
     },
+
+    /// User dismissed the ask_user dialog without answering.
+    /// Agent should abort the suspended turn.
+    #[serde(rename = "ask_dismiss")]
+    AskDismiss { ask_id: String },
 
     /// Unload an explicitly-activated skill ($name mention) from context.
     #[serde(rename = "unload_skill")]
@@ -218,6 +226,61 @@ pub enum RoundBlock {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Ask-user types (v6: multi-question support)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Display mode for an ask_user prompt.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AskMode {
+    /// One question — shown in a modal dialog. Answer is sent immediately.
+    #[default]
+    Single,
+    /// Multiple questions — shown as a form. All answers submitted together.
+    Batch,
+}
+
+/// How an ask_user prompt left the active queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AskResolution {
+    Answered,
+    Dismissed,
+}
+
+/// One question in an ask_user prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AskQuestion {
+    /// Unique ID within this ask (e.g. "q1", "q2").
+    pub id: String,
+    /// Question text (supports Markdown).
+    pub question: String,
+    /// Preset choices. Empty = free-text only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// Allow the user to type a custom answer instead of picking an option.
+    #[serde(default = "default_true")]
+    pub allow_custom: bool,
+}
+
+/// One answer in a user response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AskAnswer {
+    /// Matches AskQuestion.id.
+    pub question_id: String,
+    /// Selected option text, or custom input.
+    pub answer: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Agent → UI (v5 — round-based)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -227,13 +290,9 @@ pub enum RoundBlock {
 #[ts(export)]
 pub enum Agent2Ui {
     // ── Turn lifecycle ──
-
     /// A new turn starts. Frontend creates a user message + turn container.
     #[serde(rename = "turn_start")]
-    TurnStart {
-        turn_id: String,
-        user_text: String,
-    },
+    TurnStart { turn_id: String, user_text: String },
 
     /// Turn complete. All rounds and tool results have been sent.
     #[serde(rename = "turn_end")]
@@ -248,7 +307,6 @@ pub enum Agent2Ui {
     },
 
     // ── Streaming preview (optional, additive) ──
-
     /// Live typing preview for the current round.
     /// Frontend shows this as a draft; RoundComplete replaces it.
     #[serde(rename = "round_delta")]
@@ -260,7 +318,6 @@ pub enum Agent2Ui {
     },
 
     // ── Round complete (authoritative) ──
-
     /// One API call finished. Contains everything the model produced.
     /// Frontend replaces any draft from RoundDelta with this content.
     #[serde(rename = "round_complete")]
@@ -283,7 +340,6 @@ pub enum Agent2Ui {
     },
 
     // ── Tool execution results ──
-
     /// Results from executing the tool calls in a RoundComplete.
     /// Sent after each tool finishes, before the next round or TurnEnd.
     #[serde(rename = "tool_results")]
@@ -296,13 +352,9 @@ pub enum Agent2Ui {
     /// Real-time stdout/stderr chunk from a running exec tool.
     /// Frontend accumulates these until the corresponding ToolResult arrives.
     #[serde(rename = "tool_exec_delta")]
-    ToolExecDelta {
-        tool_call_id: String,
-        delta: String,
-    },
+    ToolExecDelta { tool_call_id: String, delta: String },
 
     // ── Session restore ──
-
     /// Full session history sent on resume.
     #[serde(rename = "session_restored")]
     SessionRestored {
@@ -329,12 +381,9 @@ pub enum Agent2Ui {
 
     /// A new session was created (response to CreateSession).
     #[serde(rename = "session_created")]
-    SessionCreated {
-        seed: String,
-    },
+    SessionCreated { seed: String },
 
     // ── System events ──
-
     #[serde(rename = "error")]
     Error { message: String },
 
@@ -382,10 +431,16 @@ pub enum Agent2Ui {
     Done,
 
     #[serde(rename = "compact_start")]
-    CompactStart { turns_total: u32, turns_keeping: u32 },
+    CompactStart {
+        turns_total: u32,
+        turns_keeping: u32,
+    },
 
     #[serde(rename = "compact_end")]
-    CompactEnd { summary_chars: usize, turns_compacted: u32 },
+    CompactEnd {
+        summary_chars: usize,
+        turns_compacted: u32,
+    },
 
     /// Streaming delta from the compact LLM call — shown to the user
     /// so they can see the model's summary being built in real-time.
@@ -475,9 +530,39 @@ pub enum Agent2Ui {
         /// Current permission level (1-4).
         level: u8,
     },
+
+    /// Ask-user prompt (v6). Agent suspends turn and waits for user response.
+    /// Frontend shows AskDialog (Single) or AskForm (Batch).
+    #[serde(rename = "ask_user")]
+    AskUser {
+        /// Turn containing the original ask_user tool call.
+        turn_id: String,
+        /// Assistant round containing the original ask_user tool call.
+        round_num: u32,
+        /// Original ask_user tool-call ID.
+        ask_id: String,
+        /// How to present the questions.
+        #[serde(default)]
+        mode: AskMode,
+        /// One question per entry. Single mode typically has 1; Batch has N.
+        questions: Vec<AskQuestion>,
+    },
+
+    /// The active ask was accepted or dismissed by the agent.
+    #[serde(rename = "ask_resolved")]
+    AskResolved {
+        ask_id: String,
+        resolution: AskResolution,
+    },
+
+    /// The ask response was rejected without consuming the active prompt.
+    #[serde(rename = "ask_rejected")]
+    AskRejected { ask_id: String, message: String },
 }
 
-fn default_load_count() -> u32 { 20 }
+fn default_load_count() -> u32 {
+    20
+}
 
 /// Streaming block kind for RoundDelta.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -542,15 +627,177 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ask_response_round_trip() {
-        let json = r#"{"type":"ask_response","answer":"Option A"}"#;
+    fn ask_response_single_round_trip() {
+        let json = r#"{"type":"ask_response","ask_id":"a1","answers":[{"question_id":"q1","answer":"Option A"}]}"#;
         let frame: Ui2Agent = serde_json::from_str(json).expect("deserialize AskResponse");
-        match frame {
-            Ui2Agent::AskResponse { answer } => assert_eq!(answer, "Option A"),
+        match &frame {
+            Ui2Agent::AskResponse { ask_id, answers } => {
+                assert_eq!(ask_id, "a1");
+                assert_eq!(answers.len(), 1);
+                assert_eq!(answers[0].question_id, "q1");
+                assert_eq!(answers[0].answer, "Option A");
+            }
             other => panic!(
                 "expected AskResponse, got {:?}",
-                std::any::type_name_of_val(&other)
+                std::any::type_name_of_val(other)
             ),
         }
+        let back = serde_json::to_string(&frame).expect("serialize");
+        assert!(back.contains("\"type\":\"ask_response\""));
+        assert!(back.contains("\"ask_id\":\"a1\""));
+    }
+
+    #[test]
+    fn ask_response_batch_round_trip() {
+        let json = r#"{"type":"ask_response","ask_id":"a2","answers":[{"question_id":"q1","answer":"A"},{"question_id":"q2","answer":"Custom"}]}"#;
+        let frame: Ui2Agent = serde_json::from_str(json).expect("deserialize batch");
+        match &frame {
+            Ui2Agent::AskResponse { ask_id, answers } => {
+                assert_eq!(ask_id, "a2");
+                assert_eq!(answers.len(), 2);
+                assert_eq!(answers[0].question_id, "q1");
+                assert_eq!(answers[1].answer, "Custom");
+            }
+            other => panic!(
+                "expected AskResponse, got {:?}",
+                std::any::type_name_of_val(other)
+            ),
+        }
+    }
+
+    #[test]
+    fn ask_dismiss_round_trip() {
+        let json = r#"{"type":"ask_dismiss","ask_id":"a1"}"#;
+        let frame: Ui2Agent = serde_json::from_str(json).expect("deserialize AskDismiss");
+        match &frame {
+            Ui2Agent::AskDismiss { ask_id } => assert_eq!(ask_id, "a1"),
+            other => panic!(
+                "expected AskDismiss, got {:?}",
+                std::any::type_name_of_val(other)
+            ),
+        }
+    }
+
+    #[test]
+    fn ask_user_single_serialize() {
+        let event = Agent2Ui::AskUser {
+            turn_id: "t1".into(),
+            round_num: 0,
+            ask_id: "a1".into(),
+            mode: AskMode::Single,
+            questions: vec![AskQuestion {
+                id: "q1".into(),
+                question: "Choose one".into(),
+                options: vec!["A".into(), "B".into()],
+                allow_custom: true,
+            }],
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"ask_user\""));
+        assert!(json.contains("\"ask_id\":\"a1\""));
+        assert!(json.contains("\"mode\":\"single\""));
+    }
+
+    #[test]
+    fn ask_user_batch_serialize() {
+        let event = Agent2Ui::AskUser {
+            turn_id: "t2".into(),
+            round_num: 1,
+            ask_id: "b1".into(),
+            mode: AskMode::Batch,
+            questions: vec![
+                AskQuestion {
+                    id: "q1".into(),
+                    question: "Arch?".into(),
+                    options: vec!["A".into(), "B".into()],
+                    allow_custom: false,
+                },
+                AskQuestion {
+                    id: "q2".into(),
+                    question: "Strategy?".into(),
+                    options: vec![],
+                    allow_custom: true,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"ask_user\""));
+        assert!(json.contains("\"mode\":\"batch\""));
+        let back: Agent2Ui = serde_json::from_str(&json).expect("deserialize");
+        match &back {
+            Agent2Ui::AskUser {
+                turn_id,
+                round_num,
+                ask_id,
+                mode,
+                questions,
+            } => {
+                assert_eq!(turn_id, "t2");
+                assert_eq!(*round_num, 1);
+                assert_eq!(ask_id, "b1");
+                assert!(matches!(mode, AskMode::Batch));
+                assert_eq!(questions.len(), 2);
+                assert!(!questions[0].allow_custom);
+                assert!(questions[1].allow_custom);
+            }
+            other => panic!(
+                "expected AskUser, got {:?}",
+                std::any::type_name_of_val(other)
+            ),
+        }
+    }
+
+    #[test]
+    fn ask_user_round_trip_preserves_turn_and_call_identity() {
+        let event = Agent2Ui::AskUser {
+            turn_id: "t7".into(),
+            round_num: 3,
+            ask_id: "call-ask-1".into(),
+            mode: AskMode::Batch,
+            questions: vec![AskQuestion {
+                id: "q1".into(),
+                question: "Choose".into(),
+                options: vec!["A".into()],
+                allow_custom: true,
+            }],
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: Agent2Ui = serde_json::from_str(&json).unwrap();
+
+        assert!(matches!(
+            decoded,
+            Agent2Ui::AskUser {
+                turn_id,
+                round_num: 3,
+                ask_id,
+                ..
+            } if turn_id == "t7" && ask_id == "call-ask-1"
+        ));
+    }
+
+    #[test]
+    fn ask_acknowledgements_round_trip() {
+        let events = [
+            Agent2Ui::AskResolved {
+                ask_id: "a1".into(),
+                resolution: AskResolution::Answered,
+            },
+            Agent2Ui::AskRejected {
+                ask_id: "a1".into(),
+                message: "stale ask_id".into(),
+            },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            serde_json::from_str::<Agent2Ui>(&json).unwrap();
+        }
+    }
+
+    #[test]
+    fn legacy_scalar_ask_response_is_rejected() {
+        assert!(
+            serde_json::from_str::<Ui2Agent>(r#"{"type":"ask_response","answer":"A"}"#,).is_err()
+        );
     }
 }
