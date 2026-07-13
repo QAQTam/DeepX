@@ -890,6 +890,7 @@ impl Loop {
         // ── Inject mode suffix into user text ──
         let full_text = text.to_string();
 
+        self.agent.activate_explicit_skills(&full_text);
         self.agent.msg.push_user(&full_text);
         // Flush user message immediately — survive LLM crash
         self.flush_meta_and_stats();

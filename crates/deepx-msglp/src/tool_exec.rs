@@ -204,7 +204,13 @@ pub(crate) fn emit_tool_result(
         .stack_size(4 * 1024 * 1024)
         .spawn(move || {
             let result = deepx_tools::bridge::execute_authorized(authorized, Some(progress_tx));
-            (tool_id, result.content, result.success, result.code_delta)
+            (
+                tool_id,
+                result.content,
+                result.success,
+                result.code_delta,
+                result.skill_activation,
+            )
         })
         .expect("failed to spawn tool thread");
 
@@ -222,14 +228,18 @@ pub(crate) fn emit_tool_result(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    let (tid, output, success, code_delta) = handle.join().unwrap_or_else(|_| {
+    let (tid, output, success, code_delta, skill_activation) = handle.join().unwrap_or_else(|_| {
         (
             tool_id_for_result,
             "[ERROR] tool thread panicked".into(),
             false,
             None,
+            None,
         )
     });
+    if let Some(activation) = skill_activation {
+        loop_ref.agent.activate_skill(activation);
+    }
     if let Some(ref delta) = code_delta {
         loop_ref.code_stats.push(delta.clone());
         loop_ref.emit_delta(Agent2Ui::CodeDelta {

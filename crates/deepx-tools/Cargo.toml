@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 deepx-message = { path = "../deepx-message" }
+deepx-skills = { path = "../deepx-skills" }
 deepx-proto = { path = "../deepx-proto" }
 deepx-types = { path = "../deepx-types" }
 similar = { version = "2", features = ["text"] }
@@ -34,3 +35,6 @@ agentfs = []
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3"

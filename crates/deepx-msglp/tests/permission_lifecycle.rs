@@ -21,6 +21,7 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 struct MockServer {
     base_url: String,
     requests: Arc<AtomicUsize>,
+    bodies: Arc<Mutex<Vec<String>>>,
     stop: Arc<Mutex<bool>>,
     handle: Option<thread::JoinHandle<()>>,
 }
@@ -30,9 +31,11 @@ impl MockServer {
         let server = Server::http("127.0.0.1:0").expect("bind mock server");
         let port = server.server_addr().to_ip().expect("mock address").port();
         let requests = Arc::new(AtomicUsize::new(0));
+        let bodies = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(Mutex::new(false));
         let scenarios = Arc::new(Mutex::new(VecDeque::from(scenarios)));
         let request_counter = requests.clone();
+        let request_bodies = bodies.clone();
         let stop_flag = stop.clone();
         let handle = thread::spawn(move || {
             loop {
@@ -46,6 +49,7 @@ impl MockServer {
                 };
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
+                request_bodies.lock().expect("body lock").push(body);
                 request_counter.fetch_add(1, Ordering::SeqCst);
                 let scenario = scenarios
                     .lock()
@@ -69,6 +73,7 @@ impl MockServer {
         Self {
             base_url: format!("http://127.0.0.1:{port}"),
             requests,
+            bodies,
             stop,
             handle: Some(handle),
         }
@@ -234,7 +239,7 @@ fn run_case(
     scenarios: Vec<Vec<String>>,
     expected_requests: usize,
     test: impl FnOnce(&mut os_pipe::PipeWriter, &std::sync::mpsc::Receiver<Agent2Ui>) + Send + 'static,
-) {
+) -> Vec<String> {
     SESSION_INIT.call_once(|| {
         deepx_session::SessionManager::init(deepx_types::platform::data_dir(), false);
     });
@@ -265,11 +270,15 @@ fn run_case(
         }
     });
 
+    let workspace = workspace.to_path_buf();
     let driver = thread::spawn(move || {
         send(&mut input_writer, Ui2Agent::CreateSession);
         expect_event(&event_rx, Duration::from_secs(5), |event| {
             matches!(event, Agent2Ui::SessionCreated { .. })
         });
+        // Session creation restores a persisted workspace. Tests need the
+        // explicit workspace selection to occur after that lifecycle step.
+        deepx_tools::set_workspace(&workspace.to_string_lossy());
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             test(&mut input_writer, &event_rx)
         }));
@@ -282,6 +291,90 @@ fn run_case(
     agent_loop.run();
     driver.join().expect("test driver");
     assert_eq!(mock.requests.load(Ordering::SeqCst), expected_requests);
+    mock.bodies.lock().expect("body lock").clone()
+}
+
+#[test]
+fn skill_activation_reaches_followup_round_and_next_user_turn() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let skill_dir = temp.path().join(".agents/skills/sticky-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: sticky-skill\ndescription: Use for the lifecycle test.\n---\nSTICKY_SKILL_INSTRUCTION\n",
+    )
+    .unwrap();
+
+    let bodies = run_case(
+        1,
+        temp.path(),
+        vec![
+            tool_round(&[(
+                "activate-skill",
+                "skills",
+                json!({"action": "activate", "name": "sticky-skill"}),
+            )]),
+            final_round("first turn finished"),
+            final_round("second turn finished"),
+        ],
+        3,
+        move |writer, receiver| {
+            send(
+                writer,
+                Ui2Agent::UserInput {
+                    text: "use the matching skill".into(),
+                },
+            );
+            assert_eq!(permission_id(receiver), "activate-skill");
+            assert_no_round_completion(receiver);
+            send(
+                writer,
+                Ui2Agent::PermissionResponse {
+                    tool_call_id: "activate-skill".into(),
+                    approved: true,
+                    trust_folder: false,
+                },
+            );
+            let first = collect_through_done(receiver);
+            assert_single_completion(&first, 1);
+            let tool_result = first.iter().find_map(|event| match event {
+                Agent2Ui::ToolResults { results, .. } => results.first(),
+                _ => None,
+            });
+            assert!(
+                tool_result.is_some_and(|result| result.success),
+                "skill tool must execute successfully: {tool_result:?}"
+            );
+
+            send(
+                writer,
+                Ui2Agent::UserInput {
+                    text: "continue using it".into(),
+                },
+            );
+            let second = collect_through_done(receiver);
+            assert_eq!(
+                second
+                    .iter()
+                    .filter(|event| matches!(event, Agent2Ui::Done))
+                    .count(),
+                1
+            );
+        },
+    );
+
+    assert!(!bodies[0].contains("STICKY_SKILL_INSTRUCTION"));
+    assert!(
+        bodies[1].contains("STICKY_SKILL_INSTRUCTION"),
+        "follow-up body omitted activation: {}",
+        bodies[1]
+    );
+    assert!(
+        bodies[2].contains("STICKY_SKILL_INSTRUCTION"),
+        "next-turn body omitted activation: {}",
+        bodies[2]
+    );
 }
 
 #[test]

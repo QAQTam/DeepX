@@ -128,6 +128,9 @@ impl ToolEngine {
                     // LLM tool: push result directly into message store
                     let result = deepx_tools::bridge::execute_authorized(authorized, None);
                     ctx.agent.msg.push_tool_result_direct(&call_id, &result.content, result.success);
+                    if let Some(activation) = result.skill_activation.clone() {
+                        ctx.agent.activate_skill(activation);
+                    }
                     if let Some(ref delta) = result.code_delta {
                         ctx.stats.push_delta(delta.clone());
                         ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
@@ -274,15 +277,25 @@ impl ToolEngine {
         let tool_id = id.to_string();
         let handle = std::thread::Builder::new().stack_size(4*1024*1024).spawn(move || {
             let result = deepx_tools::bridge::execute_authorized(authorized, Some(progress_tx));
-            (tool_id, result.content, result.success, result.code_delta)
+            (
+                tool_id,
+                result.content,
+                result.success,
+                result.code_delta,
+                result.skill_activation,
+            )
         }).expect("failed to spawn tool thread");
 
         // Drain progress
         self.drain_progress(ctx, progress_rx, &id.to_string());
 
-        let (tid, output, success, code_delta) = handle.join().unwrap_or_else(|_| {
-            (id.to_string(), "[ERROR] tool thread panicked".into(), false, None)
+        let (tid, output, success, code_delta, skill_activation) = handle.join().unwrap_or_else(|_| {
+            (id.to_string(), "[ERROR] tool thread panicked".into(), false, None, None)
         });
+
+        if let Some(activation) = skill_activation {
+            ctx.agent.activate_skill(activation);
+        }
 
         if let Some(ref delta) = code_delta {
             ctx.stats.push_delta(delta.clone());

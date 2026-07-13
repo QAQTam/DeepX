@@ -279,7 +279,13 @@ impl TurnEngine {
                                         let cid = call_id.clone();
                                         move || {
                                             let result = deepx_tools::bridge::execute_authorized(*auth, Some(tx));
-                                            (cid, result.content, result.success, result.code_delta)
+                                            (
+                                                cid,
+                                                result.content,
+                                                result.success,
+                                                result.code_delta,
+                                                result.skill_activation,
+                                            )
                                         }
                                     })
                                     .expect("tool thread spawn");
@@ -297,10 +303,13 @@ impl TurnEngine {
                                     let _ = h.join(); // reap
                                 } else {
                                     match h.join() {
-                                        Ok((_cid, content, success, code_delta)) => {
+                                        Ok((_cid, content, success, code_delta, skill_activation)) => {
                                             ctx.agent.msg.push_tool_result_direct(
                                                 &call_id, &content, success,
                                             );
+                                            if let Some(activation) = skill_activation {
+                                                ctx.agent.activate_skill(activation);
+                                            }
                                             if let Some(ref delta) = code_delta {
                                                 ctx.stats.push_delta(delta.clone());
                                                 ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
@@ -336,14 +345,22 @@ impl TurnEngine {
                                     let auth = admitted.auth;
                                     move || {
                                         let result = deepx_tools::bridge::execute_authorized(*auth, Some(progress_tx));
-                                        (result.content, result.success, result.code_delta)
+                                        (
+                                            result.content,
+                                            result.success,
+                                            result.code_delta,
+                                            result.skill_activation,
+                                        )
                                     }
                                 })
                                 .expect("tool thread spawn");
                             tool.drain_progress_external(ctx, progress_rx, &call_id);
                             match handle.join() {
-                                Ok((content, success, code_delta)) => {
+                                Ok((content, success, code_delta, skill_activation)) => {
                                     ctx.agent.msg.push_tool_result_direct(&call_id, &content, success);
+                                    if let Some(activation) = skill_activation {
+                                        ctx.agent.activate_skill(activation);
+                                    }
                                     if let Some(ref delta) = code_delta {
                                         ctx.stats.push_delta(delta.clone());
                                         ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
@@ -383,6 +400,10 @@ impl TurnEngine {
                     let results = self.emit_completed_tool_round(ctx, &turn_id, round_num);
                     let has_user_query = results.iter().any(|(_, _, content, _)| {
                         content.starts_with("[USER_QUERY]")
+                            || serde_json::from_str::<serde_json::Value>(content)
+                                .ok()
+                                .and_then(|v| v.get("user_query").and_then(|u| u.as_bool()))
+                                .unwrap_or(false)
                     });
                     if has_user_query {
                         return Outcome::YieldToUser {

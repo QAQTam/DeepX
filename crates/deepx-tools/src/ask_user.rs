@@ -11,12 +11,12 @@ pub(super) fn exec_ask_user(args: &serde_json::Value) -> String {
         .unwrap_or_default();
     let allow_custom = args.opt_bool("allow_custom").unwrap_or(true);
 
-    crate::json_ok(serde_json::json!({
+    format!("[USER_QUERY] {}", crate::json_ok(serde_json::json!({
         "user_query": true,
         "question": question,
         "options": options,
         "allow_custom": allow_custom,
-    }))
+    })))
 }
 
 handler!(handle_ask_user, exec_ask_user);

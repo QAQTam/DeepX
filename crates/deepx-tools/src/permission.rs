@@ -32,22 +32,10 @@ pub enum ToolCategory {
 pub fn categorize_tool(name: &str) -> ToolCategory {
     match name {
         // ── Read ──
-        "read" | "list" | "search" | "diff"
-        | "explore_scan"
-        | "git_diff" | "git_log" | "git_show" | "git_status"
-        | "memory_read" | "plan_list" | "plan_submit"
-        | "process_check" | "process_wait"
-        | "context7"
-        => ToolCategory::Read,
+        "read" | "list" | "search" | "diff" | "skills" | "explore_scan" | "git_diff" | "git_log" | "git_show" | "git_status" | "memory_read" | "plan_list" | "plan_submit" | "process_check" | "process_wait" | "context7" => ToolCategory::Read,
 
         // ── Write ──
-        "write" | "edit" | "edit_block" | "delete"
-        | "git_add" | "git_commit"
-        | "git_branch" | "git_checkout" | "git_merge" | "git_restore"
-        | "memory_write" | "memory_clear"
-        | "plan_create"
-        | "task_create" | "task_update" | "task_delete"
-        => ToolCategory::Write,
+        "write" | "edit" | "edit_block" | "delete" | "git_add" | "git_commit" | "git_branch" | "git_checkout" | "git_merge" | "git_restore" | "memory_write" | "memory_clear" | "plan_create" | "task_create" | "task_update" | "task_delete" => ToolCategory::Write,
 
         // ── Exec ──
         "exec_run" | "spawn_subagent" => ToolCategory::Exec,
@@ -88,7 +76,9 @@ impl PermissionLevel {
         }
     }
 
-    pub fn to_u8(self) -> u8 { self as u8 }
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -144,16 +134,14 @@ pub fn extract_target_paths(tool_name: &str, args: &serde_json::Value) -> Vec<Pa
     }
 
     // Canonicalize where possible for reliable boundary checks
-    paths.into_iter()
+    paths
+        .into_iter()
         .filter_map(|p| {
             if p.is_absolute() {
                 Some(std::fs::canonicalize(&p).ok().unwrap_or(p))
             } else {
                 // Relative paths: resolve against current directory
-                Some(std::env::current_dir().ok()
-                    .map(|cwd| cwd.join(&p))
-                    .and_then(|abs| std::fs::canonicalize(&abs).ok().or(Some(abs)))
-                    .unwrap_or(p))
+                Some(std::env::current_dir().ok().map(|cwd| cwd.join(&p)).and_then(|abs| std::fs::canonicalize(&abs).ok().or(Some(abs))).unwrap_or(p))
             }
         })
         .collect()
@@ -161,7 +149,9 @@ pub fn extract_target_paths(tool_name: &str, args: &serde_json::Value) -> Vec<Pa
 
 /// Check if ALL target paths are inside the workspace root.
 fn all_within_workspace(paths: &[PathBuf], workspace: &Path) -> bool {
-    if paths.is_empty() { return true; } // tools without paths (e.g. memory_read) are considered safe
+    if paths.is_empty() {
+        return true;
+    } // tools without paths (e.g. memory_read) are considered safe
     paths.iter().all(|p| p.starts_with(workspace))
 }
 
@@ -197,13 +187,7 @@ pub enum PermissionDecision {
 /// - `args`: tool arguments (JSON)
 /// - `workspace_root`: workspace root directory (used for boundary checks)
 /// - `trusted_dirs`: set of previously trusted directories
-pub fn needs_permission(
-    level: PermissionLevel,
-    tool_name: &str,
-    args: &serde_json::Value,
-    workspace_root: &Path,
-    trusted_dirs: &HashSet<PathBuf>,
-) -> PermissionDecision {
+pub fn needs_permission(level: PermissionLevel, tool_name: &str, args: &serde_json::Value, workspace_root: &Path, trusted_dirs: &HashSet<PathBuf>) -> PermissionDecision {
     // Level 4: everything auto-approved
     if level == PermissionLevel::Unrestricted {
         return PermissionDecision::AutoApprove;
@@ -214,11 +198,7 @@ pub fn needs_permission(
 
     // Level 1: everything requires confirmation
     if level == PermissionLevel::MaxLockdown {
-        return PermissionDecision::AskUser {
-            reason: format!("Level 1: '{}' requires confirmation.", tool_name),
-            paths,
-            category,
-        };
+        return PermissionDecision::AskUser { reason: format!("Level 1: '{}' requires confirmation.", tool_name), paths, category };
     }
 
     // Level 2+: Reads auto-approve
@@ -243,11 +223,7 @@ pub fn needs_permission(
     }
 
     // Otherwise: ask user
-    let reason = if level == PermissionLevel::ReadFree {
-        format!("Level 2: '{}' (write/exec/net) requires confirmation.", tool_name)
-    } else {
-        format!("Level 3: '{}' accesses a path outside the workspace.", tool_name)
-    };
+    let reason = if level == PermissionLevel::ReadFree { format!("Level 2: '{}' (write/exec/net) requires confirmation.", tool_name) } else { format!("Level 3: '{}' accesses a path outside the workspace.", tool_name) };
 
     PermissionDecision::AskUser { reason, paths, category }
 }
@@ -267,15 +243,7 @@ impl TrustedFolderSet {
     /// Load the trusted folders file for a session, or create an empty set.
     pub fn load(seed: &str) -> Self {
         let path = trusted_folders_path(seed);
-        let dirs = if path.exists() {
-            std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
-                .map(|v| v.into_iter().map(PathBuf::from).collect())
-                .unwrap_or_default()
-        } else {
-            HashSet::new()
-        };
+        let dirs = if path.exists() { std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).map(|v| v.into_iter().map(PathBuf::from).collect()).unwrap_or_default() } else { HashSet::new() };
         Self { seed: seed.to_string(), dirs }
     }
 

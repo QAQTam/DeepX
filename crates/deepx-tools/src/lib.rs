@@ -14,6 +14,7 @@ pub mod file_shared;
 pub mod file_cache;
 pub mod file_state;
 pub mod git_tool;
+pub mod skill;
 mod safety;
 mod web;
 
@@ -294,6 +295,10 @@ pub struct ToolCallCtx {
     pub timeout_secs: Option<u64>,
     /// Per-invocation cancellation signal owned by ToolManager.
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Private, typed effects returned to the host runtime. Sharing this cell
+    /// across context clones avoids parsing trusted effects from tool text.
+    pub(crate) skill_activation:
+        std::sync::Arc<std::sync::Mutex<Option<deepx_skills::SkillActivation>>>,
 }
 
 impl ToolCallCtx {
@@ -305,6 +310,18 @@ impl ToolCallCtx {
     }
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.args.get(key).and_then(|v| v.as_bool())
+    }
+    pub(crate) fn set_skill_activation(&self, activation: deepx_skills::SkillActivation) {
+        *self
+            .skill_activation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(activation);
+    }
+    pub(crate) fn take_skill_activation(&self) -> Option<deepx_skills::SkillActivation> {
+        self.skill_activation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
     }
 }
 

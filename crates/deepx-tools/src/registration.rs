@@ -16,6 +16,7 @@ use super::ask_user;
 use super::process_inspect;
 use super::memory;
 use super::git_tool;
+use super::skill;
 
 /// 工具注册器函数签名。
 pub type ToolRegistrar = fn(&mut ToolManager);
@@ -51,6 +52,9 @@ pub fn build_tool_manager(extra_registrars: &[ToolRegistrar]) -> ToolManager {
 
     // ── 跨会话记忆 ──
     memory::register(&mut mgr);
+
+    // ── Agent Skills ──
+    skill::register(&mut mgr);
 
     // ── Git ──
     git_tool::register(&mut mgr);

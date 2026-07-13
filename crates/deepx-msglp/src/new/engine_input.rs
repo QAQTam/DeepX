@@ -49,6 +49,8 @@ impl InputEngine {
             }
         }
 
+        ctx.agent.activate_explicit_skills(text);
+
         // Push user message
         ctx.agent.msg.push_user(text);
         ctx.agent.msg.flush_meta(

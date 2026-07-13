@@ -1,0 +1,16 @@
+[package]
+name = "deepx-skills"
+version.workspace = true
+edition.workspace = true
+description = "DeepX skill discovery, catalog rendering, and activation"
+
+[dependencies]
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

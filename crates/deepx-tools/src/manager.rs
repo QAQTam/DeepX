@@ -7,9 +7,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use crate::{ToolHandler, CANCEL, SafetyVerdict};
+use crate::{CANCEL, SafetyVerdict, ToolHandler};
 
 // ── Execution metadata ──
 
@@ -61,15 +61,7 @@ pub(crate) struct PreparedCall {
 
 impl ToolManager {
     pub fn new() -> Self {
-        Self {
-            handlers: BTreeMap::new(),
-            allowed: None,
-            inflight_tasks: BTreeMap::new(),
-            stats_total: 0,
-            stats_failures: 0,
-            files_read: Vec::new(),
-            files_written: Vec::new(),
-        }
+        Self { handlers: BTreeMap::new(), allowed: None, inflight_tasks: BTreeMap::new(), stats_total: 0, stats_failures: 0, files_read: Vec::new(), files_written: Vec::new() }
     }
 
     pub fn register(&mut self, handler: ToolHandler) {
@@ -91,9 +83,7 @@ impl ToolManager {
 
     pub fn filtered_defs(&self) -> Vec<deepx_types::ToolDef> {
         match &self.allowed {
-            Some(allowed) => self.all_defs().into_iter()
-                .filter(|d| allowed.contains(&d.function.name))
-                .collect(),
+            Some(allowed) => self.all_defs().into_iter().filter(|d| allowed.contains(&d.function.name)).collect(),
             None => self.all_defs(),
         }
     }
@@ -106,7 +96,12 @@ impl ToolManager {
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
                 let msg = format!("[ERROR] Tool '{}' is not in the allowed list for this subagent. Allowed tools: [{}]", name, allowed.join(", "));
-                return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
+                return Err(ToolExecReport {
+                    success: false,
+                    content: msg.clone(),
+                    files_affected: Vec::new(),
+                    meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() },
+                });
             }
         }
 
@@ -114,22 +109,38 @@ impl ToolManager {
             Some(h) => h.clone(),
             None => {
                 let msg = format!("[ERROR] Unknown tool: {}", name);
-                return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
+                return Err(ToolExecReport {
+                    success: false,
+                    content: msg.clone(),
+                    files_affected: Vec::new(),
+                    meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() },
+                });
             }
         };
 
         let timeout_secs = timeout_secs.unwrap_or_else(|| handler.default_timeout.as_secs());
         let cancel_flag = Arc::new(AtomicBool::new(false));
+        let skill_activation = Arc::new(Mutex::new(None));
         let ctx = crate::ToolCallCtx {
-            id: id.clone(), name: name.to_string(), action: action.to_string(),
-            args: args.clone(), tx_progress: progress_tx.clone(), timeout_secs: Some(timeout_secs),
+            id: id.clone(),
+            name: name.to_string(),
+            action: action.to_string(),
+            args: args.clone(),
+            tx_progress: progress_tx.clone(),
+            timeout_secs: Some(timeout_secs),
             cancel: cancel_flag.clone(),
+            skill_activation: skill_activation.clone(),
         };
         let in_workspace = is_path_in_workspace(&ctx);
         match crate::safety::SafetyPolicy::evaluate(handler.risk.clone(), in_workspace) {
             SafetyVerdict::Block(reason) => {
                 let msg = format!("[ERROR] {}", reason);
-                return Err(ToolExecReport { success: false, content: msg.clone(), files_affected: Vec::new(), meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() } });
+                return Err(ToolExecReport {
+                    success: false,
+                    content: msg.clone(),
+                    files_affected: Vec::new(),
+                    meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() },
+                });
             }
             SafetyVerdict::Allow => {}
         }
@@ -137,18 +148,9 @@ impl ToolManager {
         self.inflight_tasks.insert(id.clone(), cancel_flag.clone());
 
         let audit_args = args.clone();
-        let ctx = crate::ToolCallCtx {
-            id: id.clone(), name: name.to_string(), action: action.to_string(),
-            args, tx_progress: progress_tx, timeout_secs: Some(timeout_secs), cancel: cancel_flag,
-        };
+        let ctx = crate::ToolCallCtx { id: id.clone(), name: name.to_string(), action: action.to_string(), args, tx_progress: progress_tx, timeout_secs: Some(timeout_secs), cancel: cancel_flag, skill_activation };
 
-        Ok(PreparedCall {
-            id,
-            name: name.to_string(),
-            handler_fn: handler.handler,
-            ctx,
-            audit_args,
-        })
+        Ok(PreparedCall { id, name: name.to_string(), handler_fn: handler.handler, ctx, audit_args })
     }
 
     /// Phase 3: deregister inflight, accumulate stats, build report.
@@ -159,16 +161,26 @@ impl ToolManager {
         let success = result.success;
 
         self.stats_total += 1;
-        if !success { self.stats_failures += 1; }
+        if !success {
+            self.stats_failures += 1;
+        }
         let args_summary = audit_args_summary(&prepared.name, &prepared.audit_args);
         let files_affected = extract_files_affected(&prepared.name, &prepared.audit_args);
         if success {
             match prepared.name.as_str() {
-                "read" | "search" | "list" | "diff" | "explore" | "explore_scan" => {
-                    for f in &files_affected { if !self.files_read.contains(f) { self.files_read.push(f.clone()); } }
+                "read" | "search" | "list" | "diff" | "skills" | "explore" | "explore_scan" => {
+                    for f in &files_affected {
+                        if !self.files_read.contains(f) {
+                            self.files_read.push(f.clone());
+                        }
+                    }
                 }
                 "edit" | "edit_block" | "write" | "delete" => {
-                    for f in &files_affected { if !self.files_written.contains(f) { self.files_written.push(f.clone()); } }
+                    for f in &files_affected {
+                        if !self.files_written.contains(f) {
+                            self.files_written.push(f.clone());
+                        }
+                    }
                 }
                 "exec_run" | "git_commit" | "git_add" => {
                     // These mutate the workspace but don't have a single 'path' argument
@@ -220,7 +232,9 @@ fn extract_files_affected(_tool_name: &str, args: &serde_json::Value) -> Vec<Str
     }
     if let Some(arr) = obj.get("paths").and_then(|v| v.as_array()) {
         for v in arr {
-            if let Some(s) = v.as_str() { files.push(s.to_string()); }
+            if let Some(s) = v.as_str() {
+                files.push(s.to_string());
+            }
         }
     }
     for key in ["file_a", "file_b", "dest", "target"] {
@@ -241,11 +255,7 @@ fn is_path_in_workspace(ctx: &crate::ToolCallCtx) -> bool {
         if ws.is_empty() || *ws == "." {
             return true;
         }
-        let abs_path = if std::path::Path::new(path).is_absolute() {
-            path.to_string()
-        } else {
-            std::path::Path::new(&*ws).join(path).to_string_lossy().to_string()
-        };
+        let abs_path = if std::path::Path::new(path).is_absolute() { path.to_string() } else { std::path::Path::new(&*ws).join(path).to_string_lossy().to_string() };
         abs_path.starts_with(&*ws)
     } else {
         // No path arg — assume workspace operation (e.g. task, memory, ask_user)

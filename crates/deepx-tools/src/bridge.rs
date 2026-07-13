@@ -25,6 +25,8 @@ pub struct ToolExecResult {
     pub meta: crate::ToolExecMeta,
     /// Code delta for file operations (write_file, edit_file, delete_file, move_file).
     pub code_delta: Option<deepx_proto::CodeDeltaRecord>,
+    /// Typed host effect. Only `skills(action=activate)` can populate it.
+    pub skill_activation: Option<deepx_skills::SkillActivation>,
 }
 
 // ───────────────────────────────────────────────────────
@@ -321,6 +323,7 @@ pub fn execute_authorized(
                 args_summary: String::new(),
             },
             code_delta: None,
+            skill_activation: None,
         };
     }
 
@@ -347,6 +350,7 @@ pub fn execute_authorized(
                 args_summary: String::new(),
             },
             code_delta: None,
+            skill_activation: None,
         };
     }
 
@@ -368,6 +372,7 @@ pub fn execute_authorized(
                 args_summary: String::new(),
             },
             code_delta: None,
+            skill_activation: None,
         };
     }
 
@@ -387,6 +392,7 @@ pub fn execute_authorized(
                     args_summary: String::new(),
                 },
                 code_delta: None,
+                skill_activation: None,
             };
         }
     }
@@ -411,6 +417,7 @@ pub fn execute_authorized(
                 success: report.success,
                 meta: report.meta,
                 code_delta: None,
+                skill_activation: None,
             };
         }
         None => {
@@ -426,12 +433,21 @@ pub fn execute_authorized(
                     args_summary: String::new(),
                 },
                 code_delta: None,
+                skill_activation: None,
             };
         }
     };
 
     // Phase 2: execute (no lock)
     let tool_result = (prepared.handler_fn)(prepared.ctx.clone());
+    let skill_activation = if name == "skills"
+        && args.get("action").and_then(serde_json::Value::as_str) == Some("activate")
+        && tool_result.success
+    {
+        prepared.ctx.take_skill_activation()
+    } else {
+        None
+    };
     let elapsed_ms = t0.elapsed().as_millis() as u64;
 
     // Phase 3: finalize
@@ -452,6 +468,7 @@ pub fn execute_authorized(
                 success: r.success,
                 meta: r.meta,
                 code_delta,
+                skill_activation,
             };
             let audit_entry = crate::audit::AuditEntry {
                 ts: chrono::Utc::now().to_rfc3339(),
@@ -489,6 +506,7 @@ pub fn execute_authorized(
                 args_summary: String::new(),
             },
             code_delta: None,
+            skill_activation: None,
         },
     }
 }
@@ -597,6 +615,7 @@ pub fn execute_tool_with_id_full(
                     args_summary: String::new(),
                 },
                 code_delta: None,
+                skill_activation: None,
             };
         }
     };
@@ -670,6 +689,7 @@ pub fn execute_tool_with_id_full(
                         args_summary: String::new(),
                     },
                     code_delta: None,
+                    skill_activation: None,
                 };
             }
             Admission::Denied(reason) => {
@@ -688,6 +708,7 @@ pub fn execute_tool_with_id_full(
                         args_summary: String::new(),
                     },
                     code_delta: None,
+                    skill_activation: None,
                 };
             }
         }
@@ -709,6 +730,7 @@ pub fn execute_tool_with_id_full(
             args_summary: String::new(),
         },
         code_delta: None,
+        skill_activation: None,
     }
 }
 
@@ -1026,6 +1048,92 @@ mod tests {
         }
         TEST_HANDLER_COUNT.store(0, Ordering::SeqCst);
         test_guard
+    }
+
+    #[test]
+    fn skill_execution_returns_typed_activation() {
+        let _test_guard = setup_test_manager();
+        let definitions = all_tools();
+        let skill_definitions = definitions
+            .iter()
+            .filter(|definition| definition.function.name == "skills")
+            .collect::<Vec<_>>();
+        assert_eq!(skill_definitions.len(), 1);
+        assert!(
+            skill_definitions[0].function.parameters["oneOf"]
+                .as_array()
+                .is_some_and(|variants| variants.len() == 4)
+        );
+        assert!(!definitions.iter().any(|definition| matches!(
+            definition.function.name.as_str(),
+            "skill" | "skill_resource" | "skills_list" | "skill_validate"
+        )));
+        let temp = tempfile::tempdir().unwrap();
+        let skill_dir = temp.path().join(".agents/skills/typed-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: typed-skill\ndescription: Use for typed activation tests.\n---\n\n# Typed instructions",
+        ).unwrap();
+        std::fs::create_dir_all(skill_dir.join("references")).unwrap();
+        std::fs::write(skill_dir.join("references/info.md"), "complete reference").unwrap();
+        crate::set_workspace(&temp.path().to_string_lossy());
+        set_runtime_context("test_session", 4);
+
+        let result = execute_tool_with_id_full(
+            "skills",
+            "",
+            r#"{"action":"activate","name":"typed-skill"}"#,
+            "skill-call-1",
+            None,
+        );
+
+        assert!(result.success);
+        let activation = result.skill_activation.expect("typed activation");
+        assert_eq!(activation.metadata.name, "typed-skill");
+        assert!(activation.body.contains("Typed instructions"));
+
+        let resource = execute_tool_with_id_full(
+            "skills",
+            "",
+            r#"{"action":"resource","name":"typed-skill","path":"references/info.md"}"#,
+            "resource-call-1",
+            None,
+        );
+        assert!(resource.success);
+        assert_eq!(resource.content, "complete reference");
+        assert!(resource.skill_activation.is_none());
+
+        let traversal = execute_tool_with_id_full(
+            "skills",
+            "",
+            r#"{"action":"resource","name":"typed-skill","path":"../outside.md"}"#,
+            "resource-call-2",
+            None,
+        );
+        assert!(!traversal.success);
+        assert!(traversal.content.contains("SKILL_RESOURCE_UNAVAILABLE"));
+
+        let list = execute_tool_with_id_full(
+            "skills",
+            "",
+            r#"{"action":"list"}"#,
+            "skills-list-1",
+            None,
+        );
+        assert!(list.success);
+        assert!(list.content.contains("typed-skill"));
+
+        let invalid = execute_tool_with_id_full(
+            "skills",
+            "",
+            r#"{"action":"list","name":"typed-skill"}"#,
+            "skills-invalid-1",
+            None,
+        );
+        assert!(!invalid.success);
+        assert!(invalid.content.contains("INVALID_ARGUMENTS"));
+        crate::set_workspace(".");
     }
 
     fn make_invocation(tool_name: &str, call_id: &str) -> ToolInvocation {

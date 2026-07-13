@@ -430,6 +430,7 @@ pub(crate) fn run_llm_turn(
                             String,
                             bool,
                             Option<deepx_proto::CodeDeltaRecord>,
+                            Option<deepx_skills::SkillActivation>,
                         )>,
                     )> = Vec::new();
                     let mut tool_infos = Vec::new();
@@ -451,6 +452,7 @@ pub(crate) fn run_llm_turn(
                                     result.content,
                                     result.success,
                                     result.code_delta,
+                                    result.skill_activation,
                                 )
                             })
                             .expect("failed to spawn tool thread");
@@ -482,12 +484,15 @@ pub(crate) fn run_llm_turn(
                             let ts = util::chrono_local_datetime();
                             for (tc_id, h) in handles {
                                 match h.join() {
-                                    Ok((_id, content, success, code_delta)) => {
+                                    Ok((_id, content, success, code_delta, skill_activation)) => {
                                         loop_ref.agent.msg.push_tool_result_direct(
                                             &tc_id,
                                             &format!("[timeis: {ts}]\n{content}"),
                                             success,
                                         );
+                                        if let Some(activation) = skill_activation {
+                                            loop_ref.agent.activate_skill(activation);
+                                        }
                                         if let Some(ref delta) = code_delta {
                                             loop_ref.code_stats.push(delta.clone());
                                             loop_ref.emit_delta(Agent2Ui::CodeDelta {
@@ -541,6 +546,9 @@ pub(crate) fn run_llm_turn(
                                             &format!("[timeis: {ts}]\n{}", result.content),
                                             result.success,
                                         );
+                                        if let Some(activation) = result.skill_activation.clone() {
+                                            loop_ref.agent.activate_skill(activation);
+                                        }
                                         if let Some(ref delta) = result.code_delta {
                                             loop_ref.code_stats.push(delta.clone());
                                             loop_ref.emit_delta(Agent2Ui::CodeDelta {

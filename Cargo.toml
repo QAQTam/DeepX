@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/deepx-gate",
     "crates/deepx-config",
+    "crates/deepx-skills",
     "crates/deepx-msglp",
     "crates/deepx-message",
     "crates/deepx-types",
