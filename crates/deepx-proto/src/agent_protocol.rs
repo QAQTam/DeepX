@@ -73,6 +73,12 @@ pub enum Ui2Agent {
         #[serde(default)]
         trust_folder: bool,
     },
+
+    /// User's answer to an ask_user prompt. Resumes a suspended turn.
+    #[serde(rename = "ask_response")]
+    AskResponse {
+        answer: String,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -479,4 +485,22 @@ pub struct DaemonToFrontend {
     pub seed: String,
     #[serde(flatten)]
     pub event: Agent2Ui,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ask_response_round_trip() {
+        let json = r#"{"type":"ask_response","answer":"Option A"}"#;
+        let frame: Ui2Agent = serde_json::from_str(json).expect("deserialize AskResponse");
+        match frame {
+            Ui2Agent::AskResponse { answer } => assert_eq!(answer, "Option A"),
+            other => panic!(
+                "expected AskResponse, got {:?}",
+                std::any::type_name_of_val(&other)
+            ),
+        }
+    }
 }

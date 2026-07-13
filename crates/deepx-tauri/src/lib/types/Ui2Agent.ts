@@ -8,4 +8,4 @@ before_turn_id: string,
 /**
  * How many turns to load.
  */
-count: number, } | { "type": "subscribe", seed: string, } | { "type": "reconnect", seed: string, last_seq: bigint, };
+count: number, } | { "type": "subscribe", seed: string, } | { "type": "reconnect", seed: string, last_seq: bigint, } | { "type": "ask_response", answer: string, };
