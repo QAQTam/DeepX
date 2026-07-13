@@ -370,9 +370,11 @@ fn skill_activation_reaches_followup_round_and_next_user_turn() {
         "follow-up body omitted activation: {}",
         bodies[1]
     );
+    // Skill bodies are now ephemeral (per-turn), not persisted to system_messages.
+    // The next turn should NOT contain the skill from the previous turn.
     assert!(
-        bodies[2].contains("STICKY_SKILL_INSTRUCTION"),
-        "next-turn body omitted activation: {}",
+        !bodies[2].contains("STICKY_SKILL_INSTRUCTION"),
+        "next-turn should NOT persist skill activation (ephemeral design): {}",
         bodies[2]
     );
 }

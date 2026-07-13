@@ -381,6 +381,23 @@ impl MessageStore {
         }
     }
 
+    /// Remove all system messages whose first text block starts with the
+    /// given prefix. Used to replace catalog messages without relying on
+    /// the [DEEPX_SKILL_V1] format.
+    pub fn remove_system_messages_by_prefix(&mut self, prefix: &str) {
+        self.system_messages.retain(|message| {
+            let text = message
+                .content
+                .iter()
+                .find_map(|block| match block {
+                    deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("");
+            !text.starts_with(prefix)
+        });
+    }
+
     pub fn push_user(&mut self, text: &str) -> Effect {
         if !self.replaying {
             if let Some(turn) = self.turns.last_mut() {
@@ -489,7 +506,7 @@ impl MessageStore {
         log::error!("replace_tool_result: tool_call_id {} not found in any turn", tool_call_id);
     }
 
-    pub fn build_context_for_gate(&mut self, annotations: &[String]) -> Vec<Message> {
+    pub fn build_context_for_gate(&mut self, annotations: &[String], skill_bodies: &std::collections::HashMap<String, String>) -> Vec<Message> {
         let mut full: Vec<Message> = {
             let mut v = Vec::new();
             v.extend(self.system_messages.clone());
@@ -506,13 +523,11 @@ impl MessageStore {
                     let is_last_step_of_last_turn = is_last_turn && si == total_steps - 1;
                     for tr in &step.tool_results {
                         if is_last_step_of_last_turn {
-                            // Current turn: fold write/edit tools (LLM doesn't need its own diff),
-                            // truncate read/search/exec (LLM needs the content).
                             let mut msg = tr.clone();
                             for block in &mut msg.content {
                                 if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = block {
                                     let tool_name = step.tool_name_for_result(tool_use_id).unwrap_or("");
-                                    let keep_full = tool_name == "read" || tool_name == "search" || tool_name == "skills" || tool_name.starts_with("exec");
+                                    let keep_full = tool_name == "read" || tool_name == "search" || tool_name.starts_with("exec");
                                     if keep_full {
                                         *content = truncate_tool_result(tool_name, content);
                                     } else {
@@ -521,8 +536,16 @@ impl MessageStore {
                                 }
                             }
                             v.push(msg);
+
+                            // Inject skill body as system message for skills(activate) calls
+                            if let Some(tc_id) = step.assistant_tool_ids().iter().find(|id| {
+                                step.tool_name_for_result(id) == Some("skills")
+                            }) {
+                                if let Some(skill_body) = skill_bodies.get(tc_id.as_str()) {
+                                    v.push(deepx_types::Message::system(skill_body));
+                                }
+                            }
                         } else {
-                            // Completed turn — fold to status line.
                             let mut folded = tr.clone();
                             for block in &mut folded.content {
                                 if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, .. } = block {
@@ -625,6 +648,15 @@ impl MessageStore {
     pub fn tool_call_args(&self, tool_call_id: &str) -> Option<serde_json::Value> {
         let step = self.turns.last().and_then(|t| t.steps.last())?;
         step.assistant.content.iter().find_map(|b| if let deepx_types::ContentBlock::ToolUse { id, input, .. } = b { if id == tool_call_id { Some(input.clone()) } else { None } } else { None })
+    }
+
+    /// Find the tool_call_id of a named tool in the most recent assistant step.
+    pub fn find_last_step_tool_call(&self, tool_name: &str) -> Option<String> {
+        let step = self.turns.last()?.steps.last()?;
+        step.assistant.content.iter().find_map(|block| match block {
+            deepx_types::ContentBlock::ToolUse { name, id, .. } if name == tool_name => Some(id.clone()),
+            _ => None,
+        })
     }
 
     pub fn has_pending_tools(&self) -> bool {
@@ -995,7 +1027,7 @@ mod tests {
         store.push_tool_result_direct("read-1", "READ_RESULT", true);
         store.push_tool_result_direct("exec-1", "EXEC_RESULT", true);
 
-        let context = store.build_context_for_gate(&[]);
+        let context = store.build_context_for_gate(&[], &std::collections::HashMap::new());
 
         assert_eq!(context_result(&context, "write-1"), "WRITE_RESULT [details folded]");
         assert_eq!(context_result(&context, "read-1"), "READ_RESULT");
@@ -1011,7 +1043,7 @@ mod tests {
         store.push_tool_result_direct("read-1", "READ_RESULT", true);
         store.push_user("second turn");
 
-        let context = store.build_context_for_gate(&[]);
+        let context = store.build_context_for_gate(&[], &std::collections::HashMap::new());
 
         assert_eq!(context_result(&context, "write-1"), "WRITE_RESULT [details folded]");
         assert_eq!(context_result(&context, "read-1"), "READ_RESULT");
@@ -1025,9 +1057,9 @@ mod tests {
         store.push_assistant(assistant_with_tools(&[("skill-1", "skills")]));
         store.push_tool_result_direct("skill-1", &activation, true);
 
-        assert_eq!(context_result(&store.build_context_for_gate(&[]), "skill-1"), activation);
+        assert_eq!(context_result(&store.build_context_for_gate(&[], &std::collections::HashMap::new()), "skill-1"), activation);
         store.push_user("continue");
-        assert_eq!(context_result(&store.build_context_for_gate(&[]), "skill-1"), activation);
+        assert_eq!(context_result(&store.build_context_for_gate(&[], &std::collections::HashMap::new()), "skill-1"), activation);
     }
 
     #[test]
@@ -1038,9 +1070,9 @@ mod tests {
         store.push_assistant(assistant_with_tools(&[("resource-1", "skills")]));
         store.push_tool_result_direct("resource-1", &resource, true);
 
-        assert_eq!(context_result(&store.build_context_for_gate(&[]), "resource-1"), resource);
+        assert_eq!(context_result(&store.build_context_for_gate(&[], &std::collections::HashMap::new()), "resource-1"), resource);
         store.push_user("continue");
-        assert_eq!(context_result(&store.build_context_for_gate(&[]), "resource-1"), resource);
+        assert_eq!(context_result(&store.build_context_for_gate(&[], &std::collections::HashMap::new()), "resource-1"), resource);
     }
 
     #[test]
@@ -1092,5 +1124,38 @@ mod tests {
 
         assert!(truncated.len() < result.len());
         assert!(truncated.contains("Call read again with the same path and a later start_line/end_line range."));
+    }
+
+    #[test]
+    fn find_last_step_tool_call_returns_correct_id() {
+        let mut store = MessageStore::new_ephemeral("test");
+        store.push_user("hello");
+
+        let assistant = Message {
+            msg_id: None,
+            role: "assistant".into(),
+            name: None,
+            content: vec![
+                ContentBlock::Text {
+                    text: "Let me ask...".into(),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_abc".into(),
+                    name: "ask_user".into(),
+                    input: serde_json::json!({"question": "Which?"}),
+                },
+            ],
+        };
+        store.push_assistant(assistant);
+
+        let id = store.find_last_step_tool_call("ask_user").unwrap();
+        assert_eq!(id, "call_abc");
+        assert!(store.find_last_step_tool_call("bogus").is_none());
+    }
+
+    #[test]
+    fn find_last_step_tool_call_no_turns_returns_none() {
+        let store = MessageStore::new_ephemeral("test");
+        assert!(store.find_last_step_tool_call("ask_user").is_none());
     }
 }

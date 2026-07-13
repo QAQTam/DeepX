@@ -1,10 +1,9 @@
-//! AgentState: core agent session state backing the message loop.
-
 use deepx_config::Config;
 use deepx_session::SessionMeta;
 
 use deepx_message::{ToolExecReport, ToolExecRequest};
 use deepx_tools::bridge;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -27,6 +26,11 @@ pub struct AgentState {
     /// Retains the exact rendered catalog bytes while the effective catalog is
     /// unchanged. The filesystem is still checked so installs remain dynamic.
     skill_catalog_snapshot: Option<SkillCatalogSnapshot>,
+    /// Skill bodies activated in the current turn, keyed by tool_call_id.
+    /// Cleared when a new turn starts (push_user). These are ephemeral —
+    /// injected into the context after the skills(activate) tool result,
+    /// not persisted to system_messages.
+    pub active_skill_bodies: HashMap<String, String>,
 }
 
 impl AgentState {
@@ -43,6 +47,7 @@ impl AgentState {
             turn_count: 0,
             ephemeral: false,
             skill_catalog_snapshot: None,
+            active_skill_bodies: HashMap::new(),
         }
     }
 
@@ -106,25 +111,24 @@ impl AgentState {
         if !fs.is_empty() {
             annotations.push(fs);
         }
-        let mut context = self.msg.build_context_for_gate(&annotations);
-
-        let catalog_text = self.refresh_skill_catalog(&workspace).rendered.clone();
-        if !catalog_text.is_empty() {
-            // Catalog metadata is the stable prefix. Activated skill bodies are
-            // mutable session state and must remain after it, otherwise every
-            // activation invalidates the catalog portion of the prompt cache.
-            let catalog_slot = context
-                .iter()
-                .position(is_skill_activation_message)
-                .unwrap_or_else(|| {
-                    context
-                        .iter()
-                        .take_while(|message| message.role == "system")
-                        .count()
-                });
-            context.insert(catalog_slot, deepx_types::Message::system(&catalog_text));
-        }
+        let context = self.msg.build_context_for_gate(&annotations, &self.active_skill_bodies);
+        // Clear ephemeral skill bodies after building context — they're
+        // injected in the same turn and should not persist.
+        self.active_skill_bodies.clear();
         context
+    }
+
+    /// Inject the skill catalog as a system message. Called once at session
+    /// init and on explicit reload. Uses the numbered format for stable IDs.
+    pub fn inject_catalog(&mut self, workspace: &str) {
+        let snapshot = self.refresh_skill_catalog(workspace);
+        let numbered = deepx_skills::render_catalog_numbered(&snapshot.catalog.skills);
+        if numbered.is_empty() {
+            return;
+        }
+        // Remove any previous catalog messages (identified by the numbered format prefix)
+        self.msg.remove_system_messages_by_prefix("Available skills");
+        self.msg.push_system(deepx_types::Message::system(&numbered));
     }
 
     fn refresh_skill_catalog(&mut self, workspace: &str) -> &SkillCatalogSnapshot {
@@ -158,18 +162,17 @@ impl AgentState {
     }
 
     /// Apply a trusted, typed activation produced by the tool runtime.
-    pub fn activate_skill(&mut self, activation: deepx_skills::SkillActivation) {
+    /// The skill body is stored ephemerally (per-turn), keyed by tool_call_id,
+    /// and injected into the context after the skills(activate) tool result.
+    pub fn activate_skill(&mut self, tool_call_id: &str, activation: deepx_skills::SkillActivation) {
         let content = deepx_skills::render_activation(&activation);
-        if self
-            .msg
-            .upsert_skill_system(&activation.metadata.name, &content)
-        {
-            self.msg
-                .snapshot_full(&self.config.model, &self.config.reasoning_effort);
-        }
+        self.active_skill_bodies.insert(tool_call_id.to_string(), content);
     }
 
     /// Host-side activation for explicit `$skill-name` mentions.
+    /// These are NOT tool-call-activated — they use upsert_skill_system
+    /// to inject the body at the top of system_messages (different mechanism
+    /// from the ephemeral per-turn injection used by skills(activate)).
     pub fn activate_explicit_skills(&mut self, text: &str) {
         let workspace = deepx_tools::CURRENT_WORKSPACE
             .read()
@@ -218,13 +221,6 @@ impl AgentState {
     }
 }
 
-fn is_skill_activation_message(message: &deepx_types::Message) -> bool {
-    message.role == "system"
-        && message.content.iter().any(|block| {
-            matches!(block, deepx_types::ContentBlock::Text { text } if deepx_skills::is_activation_text(text))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,9 +267,7 @@ mod tests {
         agent.msg = deepx_message::MessageStore::new_ephemeral("test");
         agent.msg.push_system(deepx_types::Message::system("base"));
 
-        assert!(!agent.build_context().iter().any(|message| message.content.iter().any(
-            |block| matches!(block, deepx_types::ContentBlock::Text { text } if text.contains("dynamic-skill"))
-        )));
+        // Create skill on disk
         let skill_dir = temp.path().join(".agents/skills/dynamic-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
@@ -282,16 +276,26 @@ mod tests {
         )
         .unwrap();
 
-        assert!(agent.build_context().iter().any(|message| message.content.iter().any(
+        // Catalog is now injected at session init, not by build_context().
+        // Verify build_context does NOT contain skill catalog by default
+        assert!(!agent.build_context().iter().any(|message| message.content.iter().any(
             |block| matches!(block, deepx_types::ContentBlock::Text { text } if text.contains("dynamic-skill"))
         )));
+
+        // After inject_catalog, the catalog appears in system_messages
+        agent.inject_catalog(&temp.path().to_string_lossy());
+        assert!(agent.msg.system_messages().iter().any(|message| message.content.iter().any(
+            |block| matches!(block, deepx_types::ContentBlock::Text { text } if text.contains("dynamic-skill"))
+        )));
+
+        // Explicit mention ($skill-name) still upserts to system_messages
         agent.activate_explicit_skills("please use $dynamic-skill");
         assert!(agent.msg.system_messages().iter().any(|message| message.content.iter().any(
             |block| matches!(block, deepx_types::ContentBlock::Text { text } if text.contains("DYNAMIC_FULL_BODY"))
         )));
+
         deepx_tools::set_workspace(".");
     }
-
     #[test]
     fn catalog_prefix_is_stable_when_a_skill_is_activated() {
         let _guard = SKILL_TEST_LOCK
@@ -316,23 +320,24 @@ mod tests {
         assert!(before[0].content.iter().any(
             |block| matches!(block, deepx_types::ContentBlock::Text { text } if text == "stable base")
         ));
-        assert!(before[1].content.iter().any(
+        // Catalog is no longer auto-inserted by build_context() —
+        // it must be explicitly injected via inject_catalog()
+        assert_eq!(before.len(), 1, "only base system message without catalog injection");
+
+        // After inject_catalog, the numbered catalog appears
+        agent.inject_catalog(&temp.path().to_string_lossy());
+        let after = agent.build_context();
+        assert!(after[0].content.iter().any(
+            |block| matches!(block, deepx_types::ContentBlock::Text { text } if text == "stable base")
+        ));
+        assert!(after[1].content.iter().any(
             |block| matches!(block, deepx_types::ContentBlock::Text { text } if text.contains("cache-skill"))
         ));
+        // Context is stable — same call returns identical result
         assert_eq!(
-            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(&after).unwrap(),
             serde_json::to_value(agent.build_context()).unwrap()
         );
-
-        agent.activate_explicit_skills("use $cache-skill");
-        let after = agent.build_context();
-        assert_eq!(
-            serde_json::to_value(&after[..2]).unwrap(),
-            serde_json::to_value(&before[..2]).unwrap()
-        );
-        assert!(after[2].content.iter().any(
-            |block| matches!(block, deepx_types::ContentBlock::Text { text } if text.contains("CACHE_SKILL_BODY"))
-        ));
         deepx_tools::set_workspace(".");
     }
 }

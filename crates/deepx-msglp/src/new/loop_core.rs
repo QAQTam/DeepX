@@ -604,25 +604,30 @@ impl Loop {
     ///
     /// # Dispatch order
     ///
-    /// 1. **Guard**: if turn is suspended, only accept PermissionResponse /
-    ///    Cancel / session-switch commands
+    /// 1. **Guard**: if turn is suspended, only accept commands matching the
+    ///    suspension reason (PermissionResponse for PermissionPending,
+    ///    AskResponse/UserInput for AskUser, plus Cancel/session-switch/Shutdown)
     /// 2. **Engine chain**: try each engine's handler via explicit match
-    ///    (avoids borrow conflicts between engines_iter_mut and ctx())
     /// 3. **Fallback**: commands needing direct event_tx access (Undo, SetMode,
     ///    LoadMoreTurns, Cancel, Shutdown)
     fn dispatch_one(&mut self, frame: Ui2Agent) {
-        // ── Guard: suspended turn ──
-        if self.session.turn.is_suspended() {
-            match &frame {
-                Ui2Agent::PermissionResponse { .. }
-                | Ui2Agent::Cancel
-                | Ui2Agent::ResumeSession { .. }
-                | Ui2Agent::NewSession
-                | Ui2Agent::Shutdown => {}
+        // ── Guard: suspended turn — reason-aware command filtering ──
+        if let Some(reason) = self.session.turn.suspended_reason() {
+            match (&frame, reason) {
+                // Permission pending → only accept PermissionResponse
+                (Ui2Agent::PermissionResponse { .. }, YieldReason::PermissionPending) => {}
+                // AskUser pending → accept AskResponse or direct text input
+                (Ui2Agent::AskResponse { .. }, YieldReason::AskUser) => {}
+                (Ui2Agent::UserInput { .. }, YieldReason::AskUser) => {}
+                // Always accepted regardless of suspension reason
+                (Ui2Agent::Cancel, _)
+                | (Ui2Agent::ResumeSession { .. }, _)
+                | (Ui2Agent::NewSession, _)
+                | (Ui2Agent::Shutdown, _) => {}
                 _ => {
                     log::warn!("[AGENT] dropping command during suspended turn");
                     let _ = self.event_tx.send(Agent2Ui::Error {
-                        message: "Turn is suspended — resolve pending permissions first.".into(),
+                        message: "Turn is suspended — resolve pending permissions or ask_user first.".into(),
                     });
                     return;
                 }
@@ -685,6 +690,7 @@ impl Loop {
             }
             // Already handled by engine chain — unreachable here
             Ui2Agent::UserInput { .. }
+            | Ui2Agent::AskResponse { .. }
             | Ui2Agent::CreateSession
             | Ui2Agent::ResumeSession { .. }
             | Ui2Agent::NewSession
@@ -770,7 +776,25 @@ impl Loop {
 
         match frame {
             Ui2Agent::UserInput { text } => {
-                Some(self.input.handle_user_input(&mut ctx, text))
+                if self.session.turn.is_suspended() {
+                    // User typed directly instead of clicking AskDialog — treat as ask_user answer
+                    let outcome = self.session.turn.resume(
+                        &mut ctx,
+                        &mut self.session.tool,
+                        super::engine_turn::ResumeReason::AskUserAnswer { answer: text.clone() },
+                    );
+                    Some(outcome)
+                } else {
+                    Some(self.input.handle_user_input(&mut ctx, text))
+                }
+            }
+            Ui2Agent::AskResponse { answer } => {
+                let outcome = self.session.turn.resume(
+                    &mut ctx,
+                    &mut self.session.tool,
+                    super::engine_turn::ResumeReason::AskUserAnswer { answer: answer.clone() },
+                );
+                Some(outcome)
             }
             Ui2Agent::ToolCall { id, name, action, args } => {
                 self.session.tool.handle_ui_tool_call(&mut ctx, id, name, action, args);

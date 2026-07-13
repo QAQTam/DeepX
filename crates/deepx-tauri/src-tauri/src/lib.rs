@@ -14,6 +14,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agent_bridge::cmd_send_message,
+            agent_bridge::cmd_ask_response,
             agent_bridge::cmd_set_mode,
             agent_bridge::cmd_get_version,
             agent_bridge::cmd_list_available_tools,

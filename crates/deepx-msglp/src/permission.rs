@@ -55,7 +55,7 @@ pub(crate) fn handle_permission_response(
                     result.success,
                 );
                 if let Some(activation) = result.skill_activation.clone() {
-                    loop_ref.agent.activate_skill(activation);
+                    loop_ref.agent.activate_skill(&call_id, activation);
                 }
                 if let Some(ref delta) = result.code_delta {
                     loop_ref.code_stats.push(delta.clone());

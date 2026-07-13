@@ -162,6 +162,7 @@ pub enum Outcome {
 }
 
 /// Why the turn yielded to the user.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum YieldReason {
     /// One or more tool calls need permission approval.
     PermissionPending,
@@ -174,8 +175,8 @@ pub enum YieldReason {
 // ═══════════════════════════════════════════════════════
 
 /// Serialized snapshot of a turn mid-execution.
-/// Stored in `TurnEngine.suspended` when a turn is paused for permissions.
-/// Restored via `TurnEngine.resume()` when all approvals resolve.
+/// Stored in `TurnEngine.suspended` when a turn is paused for permissions
+/// or awaiting user input. Restored via `TurnEngine.resume()`.
 pub struct TurnState {
     pub turn_id: String,
     pub round_num: u32,
@@ -185,6 +186,8 @@ pub struct TurnState {
     /// Session ID at the time of suspension (validated on resume to prevent
     /// stale turn resumption after a session switch).
     pub session_id: String,
+    /// Why this turn was suspended.
+    pub reason: YieldReason,
 }
 
 // ═══════════════════════════════════════════════════════

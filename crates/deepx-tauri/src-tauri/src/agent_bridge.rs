@@ -713,6 +713,18 @@ pub fn cmd_permission_response(
     })
 }
 
+/// Send user's answer to an ask_user prompt. Resumes a suspended turn.
+#[tauri::command]
+pub fn cmd_ask_response(seed: String, text: String) -> Result<(), String> {
+    log::info!(
+        "[REGISTRY] cmd_ask_response seed={} answer={:.50}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))],
+        &text[..text.floor_char_boundary(50)]
+    );
+    ensure_agent(&seed)?;
+    send_to_agent(&seed, Ui2Agent::AskResponse { answer: text })
+}
+
 /// Return the app version from Cargo.toml.
 #[tauri::command]
 pub fn cmd_get_version() -> String {

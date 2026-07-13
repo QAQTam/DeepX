@@ -560,6 +560,30 @@ pub fn render_catalog(catalog: &SkillCatalog) -> String {
     output
 }
 
+/// Render a numbered catalog for use as a stable system message.
+/// Skills are sorted by name for deterministic numbering.
+pub fn render_catalog_numbered(skills: &[SkillMetadata]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+    let mut sorted: Vec<&SkillMetadata> = skills.iter().collect();
+    sorted.sort_by_key(|s| &s.name);
+
+    let mut output = String::from(
+        "Available skills (use `$S{N}` or `skills(action=activate, name=\"...\")` to load):\n\n",
+    );
+    for (i, skill) in sorted.iter().enumerate() {
+        let desc: String = skill
+            .description
+            .chars()
+            .take(500)
+            .collect::<String>()
+            .replace(['\r', '\n'], " ");
+        output.push_str(&format!("S{}: {} — {}\n", i + 1, skill.name, desc));
+    }
+    output
+}
+
 pub fn render_activation(activation: &SkillActivation) -> String {
     let dir = activation.metadata.path.parent().unwrap_or(Path::new("."));
     let mut output = format!(
@@ -852,5 +876,32 @@ mod tests {
         assert_eq!(resource.content, "complete resource");
         assert!(read_resource(workspace, "resource-skill", Path::new("../outside.md")).is_err());
         assert!(read_resource(workspace, "resource-skill", Path::new("references")).is_err());
+    }
+
+    #[test]
+    fn render_catalog_numbered_assigns_stable_ids() {
+        let meta = |name: &str, desc: &str| SkillMetadata {
+            name: name.into(),
+            description: desc.into(),
+            license: None,
+            compatibility: None,
+            metadata: BTreeMap::new(),
+            allowed_tools: vec![],
+            path: PathBuf::from(name),
+            scope: SkillScope::Project,
+        };
+        let skills = vec![
+            meta("zebra", "Last in alphabetical order"),
+            meta("alpha", "First in alphabetical order"),
+        ];
+        assert_eq!(
+            render_catalog_numbered(&skills),
+            "Available skills (use `$S{N}` or `skills(action=activate, name=\"...\")` to load):\n\nS1: alpha — First in alphabetical order\nS2: zebra — Last in alphabetical order\n"
+        );
+    }
+
+    #[test]
+    fn render_catalog_numbered_empty_returns_empty() {
+        assert_eq!(render_catalog_numbered(&[]), "");
     }
 }

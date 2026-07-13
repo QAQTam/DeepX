@@ -64,7 +64,7 @@ impl CompactEngine {
         let turns_total = ctx.agent.msg.turn_count();
         log::info!("[COMPACT] {} turns", turns_total);
 
-        let all = ctx.agent.msg.build_context_for_gate(&[]);
+        let all = ctx.agent.msg.build_context_for_gate(&[], &std::collections::HashMap::new());
         let msgs: Vec<&deepx_types::Message> = all.iter().filter(|m| m.role != "system").collect();
         if msgs.is_empty() { return None; }
 

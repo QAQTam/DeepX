@@ -15,6 +15,14 @@ use super::engine_tool::ToolEngine;
 use crate::conflict;
 use crate::util;
 
+/// Why the turn is being resumed.
+pub enum ResumeReason {
+    /// User answered permission dialogs — all approvals resolved.
+    PermissionResolved,
+    /// User answered an ask_user prompt — feed answer as tool result.
+    AskUserAnswer { answer: String },
+}
+
 /// TurnEngine manages a single LLM turn lifecycle.
 pub struct TurnEngine {
     /// If Some, a turn is suspended waiting for permission or ask_user.
@@ -28,6 +36,11 @@ impl TurnEngine {
 
     pub fn is_suspended(&self) -> bool {
         self.suspended.is_some()
+    }
+
+    /// Returns the reason the turn was suspended, or None if not suspended.
+    pub fn suspended_reason(&self) -> Option<YieldReason> {
+        self.suspended.as_ref().map(|s| s.reason)
     }
 
     // ── Public API ──
@@ -46,8 +59,13 @@ impl TurnEngine {
         self.run_lap(ctx, tool, turn_id, round_num, last_usage)
     }
 
-    /// Resume a suspended turn after all permission approvals are resolved.
-    pub fn resume(&mut self, ctx: &mut RingContext, tool: &mut ToolEngine) -> Outcome {
+    /// Resume a suspended turn.
+    pub fn resume(
+        &mut self,
+        ctx: &mut RingContext,
+        tool: &mut ToolEngine,
+        reason: ResumeReason,
+    ) -> Outcome {
         let saved = match self.suspended.take() {
             Some(s) => s,
             None => return Outcome::Error("No suspended turn to resume".into()),
@@ -56,13 +74,35 @@ impl TurnEngine {
             log::warn!("[TURN] refusing to resume stale turn {}", saved.turn_id);
             return Outcome::Handled;
         }
-        log::info!("[TURN] resuming turn {} round {}", saved.turn_id, saved.round_num);
 
-        // Emit completed tool results from the suspended round
-        self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
-
-        // Continue with next round
-        self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
+        match reason {
+            ResumeReason::PermissionResolved => {
+                log::info!("[TURN] resuming turn {} round {}", saved.turn_id, saved.round_num);
+                self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
+                self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
+            }
+            ResumeReason::AskUserAnswer { answer } => {
+                let ask_call_id = match ctx.agent.msg.find_last_step_tool_call("ask_user") {
+                    Some(id) => id,
+                    None => {
+                        return Outcome::Error(
+                            "Cannot find ask_user tool call in suspended turn".into(),
+                        );
+                    }
+                };
+                ctx.agent.msg.push_tool_result(&ask_call_id, &answer, true);
+                ctx.agent.msg.flush_meta(
+                    &ctx.agent.config.model,
+                    &ctx.agent.config.reasoning_effort,
+                );
+                log::info!(
+                    "[TURN] ask_user answer fed as tool result, resuming turn {}",
+                    saved.turn_id
+                );
+                self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
+                self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
+            }
+        }
     }
 
     // ── Internal lap execution ──
@@ -308,7 +348,7 @@ impl TurnEngine {
                                                 &call_id, &content, success,
                                             );
                                             if let Some(activation) = skill_activation {
-                                                ctx.agent.activate_skill(activation);
+                                                ctx.agent.activate_skill(&call_id, activation);
                                             }
                                             if let Some(ref delta) = code_delta {
                                                 ctx.stats.push_delta(delta.clone());
@@ -359,7 +399,7 @@ impl TurnEngine {
                                 Ok((content, success, code_delta, skill_activation)) => {
                                     ctx.agent.msg.push_tool_result_direct(&call_id, &content, success);
                                     if let Some(activation) = skill_activation {
-                                        ctx.agent.activate_skill(activation);
+                                        ctx.agent.activate_skill(&call_id, activation);
                                     }
                                     if let Some(ref delta) = code_delta {
                                         ctx.stats.push_delta(delta.clone());
@@ -388,6 +428,7 @@ impl TurnEngine {
                                 round_num,
                                 pending_call_ids: round_pending_ids,
                                 usage: last_usage.clone(),
+                                reason: YieldReason::PermissionPending,
                             });
                             return Outcome::YieldToUser {
                                 turn_id,
@@ -406,6 +447,14 @@ impl TurnEngine {
                                 .unwrap_or(false)
                     });
                     if has_user_query {
+                        self.suspended = Some(TurnState {
+                            session_id: ctx.agent.session.seed.clone(),
+                            turn_id: turn_id.clone(),
+                            round_num,
+                            pending_call_ids: Vec::new(),
+                            usage: last_usage.clone(),
+                            reason: YieldReason::AskUser,
+                        });
                         return Outcome::YieldToUser {
                             turn_id,
                             reason: YieldReason::AskUser,

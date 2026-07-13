@@ -129,7 +129,7 @@ impl ToolEngine {
                     let result = deepx_tools::bridge::execute_authorized(authorized, None);
                     ctx.agent.msg.push_tool_result_direct(&call_id, &result.content, result.success);
                     if let Some(activation) = result.skill_activation.clone() {
-                        ctx.agent.activate_skill(activation);
+                        ctx.agent.activate_skill(&call_id, activation);
                     }
                     if let Some(ref delta) = result.code_delta {
                         ctx.stats.push_delta(delta.clone());
@@ -294,7 +294,7 @@ impl ToolEngine {
         });
 
         if let Some(activation) = skill_activation {
-            ctx.agent.activate_skill(activation);
+            ctx.agent.activate_skill(&tid, activation);
         }
 
         if let Some(ref delta) = code_delta {

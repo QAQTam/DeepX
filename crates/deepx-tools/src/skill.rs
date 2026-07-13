@@ -51,9 +51,13 @@ fn load_skill_resource(
 fn handle_skill(ctx: crate::ToolCallCtx) -> ToolResult {
     match load_activation(&ctx.args) {
         Ok(activation) => {
-            let output = deepx_skills::render_activation(&activation);
+            let name = activation.metadata.name.clone();
             ctx.set_skill_activation(activation);
-            ToolResult::ok(output)
+            ToolResult::ok(serde_json::json!({
+                "status": "ok",
+                "skill": name,
+                "content": format!("[OK] skill activated. The skill instructions are available in the context above. Use them directly.")
+            }).to_string())
         }
         Err(error) => ToolResult {
             success: false,

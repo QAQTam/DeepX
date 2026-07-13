@@ -238,7 +238,7 @@ pub(crate) fn emit_tool_result(
         )
     });
     if let Some(activation) = skill_activation {
-        loop_ref.agent.activate_skill(activation);
+        loop_ref.agent.activate_skill(&tid, activation);
     }
     if let Some(ref delta) = code_delta {
         loop_ref.code_stats.push(delta.clone());
