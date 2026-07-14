@@ -985,7 +985,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "turso",
- "ureq 2.12.1",
+ "ureq",
 ]
 
 [[package]]
@@ -1000,7 +1000,7 @@ dependencies = [
  "serde_json",
  "tiny_http",
  "unicode-normalization",
- "ureq 2.12.1",
+ "ureq",
 ]
 
 [[package]]
@@ -1101,7 +1101,6 @@ dependencies = [
  "deepx-session",
  "deepx-tools",
  "deepx-types",
- "git2",
  "log",
  "serde_json",
  "tauri",
@@ -1130,7 +1129,7 @@ dependencies = [
  "sha2",
  "similar",
  "tempfile",
- "ureq 3.3.0",
+ "ureq",
 ]
 
 [[package]]
@@ -6186,24 +6185,6 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "2.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
-dependencies = [
- "base64 0.22.1",
- "flate2",
- "log",
- "once_cell",
- "rustls",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "url",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "ureq"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
@@ -6219,7 +6200,7 @@ dependencies = [
  "serde_json",
  "ureq-proto",
  "utf8-zero",
- "webpki-roots 1.0.8",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -6516,15 +6497,6 @@ dependencies = [
  "pkg-config",
  "soup3-sys",
  "system-deps",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.8",
 ]
 
 [[package]]

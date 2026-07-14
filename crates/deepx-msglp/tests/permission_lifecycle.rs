@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use deepx_msglp::Loop;
+use deepx_msglp::new::loop_core::Loop;
 use deepx_msglp::agent::AgentState;
 use deepx_proto::{Agent2Ui, Ui2Agent};
 use serde_json::json;

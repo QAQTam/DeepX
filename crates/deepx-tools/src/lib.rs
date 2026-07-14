@@ -13,7 +13,7 @@ pub mod file_query;
 pub mod file_shared;
 pub mod file_cache;
 pub mod file_state;
-pub mod git_tool;
+pub mod git;
 pub mod skill;
 mod safety;
 mod web;

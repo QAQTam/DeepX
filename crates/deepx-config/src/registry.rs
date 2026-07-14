@@ -257,11 +257,14 @@ pub fn fetch_models(provider_id: &str, endpoint_id: &str, api_key: &str) -> Vec<
         None => return vec![],
     };
 
-    let req = ureq::get(&url).set("Authorization", &format!("Bearer {}", api_key));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .build()
+        .into();
 
-    match req.timeout(std::time::Duration::from_secs(10)).call() {
+    match agent.get(&url).header("Authorization", &format!("Bearer {}", api_key)).call() {
         Ok(resp) => {
-            let body: Result<serde_json::Value, _> = resp.into_json();
+            let body: Result<serde_json::Value, _> = resp.into_body().read_json();
             match body {
                 Ok(v) => {
                     let models: Vec<String> = v["data"]

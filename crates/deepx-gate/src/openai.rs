@@ -127,14 +127,17 @@ pub fn chat_stream_openai(
     let url = build_chat_url(&provider.base_url, provider.chat_path.as_deref());
 
     let mut attempt = 0u32;
-    // Reuse a global Agent with a short per-read timeout so that `stream_sse`
+    // Reuse a global Agent with a short per-read timeout so that stream_sse
     // can check the cancel flag between reads. Connection pool and DNS cache
     // are preserved across requests.
+    // http_status_as_error(false) so we can read error bodies for retry logic.
     static GLOBAL_AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
-        ureq::AgentBuilder::new()
-            .timeout_read(SSE_READ_TIMEOUT)
-            .timeout_write(Duration::from_secs(30))
+        ureq::Agent::config_builder()
+            .timeout_recv_body(Some(SSE_READ_TIMEOUT))
+            .timeout_send_body(Some(Duration::from_secs(30)))
+            .http_status_as_error(false)
             .build()
+            .into()
     });
     let agent = &*GLOBAL_AGENT;
 
@@ -147,20 +150,21 @@ pub fn chat_stream_openai(
         }
 
         let resp = agent.post(&url)
-            .set("Authorization", &format!("Bearer {}", provider.api_key))
-            .set("Content-Type", "application/json")
-            .timeout(Duration::from_secs(900))
+            .header("Authorization", &format!("Bearer {}", provider.api_key))
+            .header("Content-Type", "application/json")
             .send_json(&body);
 
         match resp {
             Ok(resp) => {
-                return stream_sse(resp, provider, user_id.as_deref(), cancel, on_event);
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let text = resp.into_string().unwrap_or_default();
-                let code_desc = http_error_description(code);
-                if attempt >= MAX_RETRIES || !is_retryable(code as u16) {
-                    let msg = format!("OpenAI API HTTP {} ({})", code, code_desc);
+                let status = resp.status().as_u16();
+                if status >= 200 && status < 300 {
+                    return stream_sse(resp, provider, user_id.as_deref(), cancel, on_event);
+                }
+                // HTTP error — read body for details
+                let text = resp.into_body().read_to_string().unwrap_or_default();
+                let code_desc = http_error_description(status);
+                if attempt >= MAX_RETRIES || !is_retryable(status) {
+                    let msg = format!("OpenAI API HTTP {} ({})", status, code_desc);
                     on_event(StreamEvent::Error(format!("{}: {}", msg, text)));
                     return Err(anyhow::anyhow!("{}", msg));
                 }
@@ -169,13 +173,14 @@ pub fn chat_stream_openai(
                 on_event(StreamEvent::Retrying {
                     attempt, max_retries: MAX_RETRIES,
                     delay_secs: delay.as_secs(),
-                    error: format!("HTTP {} ({})", code, code_desc),
+                    error: format!("HTTP {} ({})", status, code_desc),
                 });
                 if sleep_with_cancel(delay, cancel) {
                     return Err(anyhow::anyhow!("cancelled by user"));
                 }
             }
-            Err(ureq::Error::Transport(e)) => {
+            Err(e) => {
+                // Transport / timeout / connection errors
                 if attempt >= MAX_RETRIES {
                     let msg = format!("HTTP transport error: {e}");
                     on_event(StreamEvent::Error(msg.clone()));
@@ -197,13 +202,13 @@ pub fn chat_stream_openai(
 }
 
 fn stream_sse(
-    resp: ureq::Response,
+    resp: ureq::http::Response<ureq::Body>,
     provider: &ProviderConfig,
     _user_id: Option<&str>,
     cancel: Option<&Arc<AtomicBool>>,
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> anyhow::Result<()> {
-    let mut reader = resp.into_reader();
+    let mut reader = resp.into_body().into_reader();
     let mut sse_buf = String::new();
     let mut byte_buf = vec![0u8; 4096];
 
@@ -612,13 +617,12 @@ pub fn chat_sync_openai(provider: &ProviderConfig, model: &str, messages: Vec<Me
     }
 
     let resp = ureq::post(&url)
-        .set("Authorization", &format!("Bearer {}", provider.api_key))
-        .set("Content-Type", "application/json")
-        .timeout(std::time::Duration::from_secs(60))
+        .header("Authorization", &format!("Bearer {}", provider.api_key))
+        .header("Content-Type", "application/json")
         .send_json(&body)
         .map_err(|e| format!("compact request failed: {e}"))?;
 
-    let json: serde_json::Value = resp.into_json()
+    let json: serde_json::Value = resp.into_body().read_json()
         .map_err(|e| format!("compact parse failed: {e}"))?;
 
     json["choices"][0]["message"]["content"]
