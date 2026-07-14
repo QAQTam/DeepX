@@ -1,254 +1,29 @@
-/* ── Settings Page (full page, like ChatView) ── */
+/* ── Settings Page ── */
 .settings-page {
   display: flex; flex-direction: column;
   height: 100%; overflow: hidden;
   background: var(--bg-primary);
 }
 
-/* Header: title + save button */
+/* ── Header ── */
 .settings-page-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 24px;
+  padding: 12px 20px;
   border-bottom: 0.5px solid var(--border-divider);
   flex-shrink: 0;
 }
 .settings-page-header h1 {
-  font-size: 20px; font-weight: 600; color: var(--text-primary); margin: 0;
+  font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;
 }
 .settings-save-btn {
-  padding: 6px 20px;
+  padding: 5px 16px;
   border: none; border-radius: var(--radius);
   background: var(--accent); color: #fff;
   font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background var(--transition);
+  white-space: nowrap;
 }
 .settings-save-btn:hover { background: var(--accent-hover); }
-.settings-save-btn.saved { background: #16a34a; }
-
-/* Scrollable body */
-.settings-page-body {
-  flex: 1; overflow-y: auto; overflow-x: hidden;
-  padding: 20px 24px 32px;
-}
-
-/* Section card */
-.settings-card {
-  margin-bottom: 24px;
-  padding: 20px;
-  background: var(--bg-secondary);
-  border: 0.5px solid var(--border-card);
-  border-radius: var(--radius-md);
-}
-.settings-card:last-child { margin-bottom: 0; }
-.settings-card-title {
-  font-size: 13px; font-weight: 600; color: var(--text-secondary);
-  text-transform: uppercase; letter-spacing: 0.05em;
-  margin: 0 0 14px;
-}
-.settings-card-desc {
-  font-size: 12px; color: var(--text-muted);
-  margin: -8px 0 14px; line-height: 1.5;
-}
-
-/* Two-column row: label | control */
-.settings-row {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  gap: 12px;
-  align-items: start;
-  margin-bottom: 10px;
-}
-.settings-row:last-child { margin-bottom: 0; }
-.settings-row > label {
-  padding-top: 7px;
-  font-size: 12px; font-weight: 500; color: var(--text-secondary);
-  line-height: 1.4; word-break: break-word;
-}
-
-/* Inputs */
-.settings-row input,
-.settings-row select {
-  width: 100%; padding: 6px 10px;
-  background: var(--bg-primary); border: 0.5px solid var(--border-input);
-  border-radius: var(--radius); color: var(--text-primary);
-  font-size: 13px; font-family: var(--font-sans); outline: none;
-  transition: border-color var(--transition);
-}
-.settings-row input:focus,
-.settings-row select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
-}
-.settings-row select {
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239b8d7a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 10px center;
-  padding-right: 28px; cursor: pointer;
-}
-.settings-row input[type="number"] {
-  max-width: 180px;
-}
-
-/* Input group (input + hint below) */
-.settings-input-group {
-  display: flex; flex-direction: column; gap: 4px;
-}
-.settings-hint {
-  font-size: 11px; color: var(--text-muted); line-height: 1.4;
-}
-
-/* Secret row (input + eye button) */
-.settings-secret-row { display: flex; gap: 6px; }
-.settings-secret-row input { flex: 1; }
-.settings-eye-btn {
-  width: 34px; height: 34px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  border: 0.5px solid var(--border-input); border-radius: var(--radius);
-  background: var(--bg-primary); color: var(--text-muted); cursor: pointer;
-  transition: all var(--transition);
-}
-.settings-eye-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent); }
-
-/* Checkbox grid (subagent tools) */
-.settings-checkbox-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 4px;
-}
-.settings-checkbox-item {
-  display: flex; align-items: center; gap: 6px;
-  padding: 3px 6px; border-radius: var(--radius);
-  cursor: pointer; font-size: 12px; color: var(--text-secondary);
-  transition: background var(--transition); user-select: none;
-}
-.settings-checkbox-item:hover { background: var(--bg-hover); }
-.settings-checkbox-item.checked { color: var(--accent); }
-.settings-checkbox-item input[type="checkbox"] {
-  accent-color: var(--accent); width: 14px; height: 14px; margin: 0;
-}
-
-/* Toggle switch */
-.settings-toggle {
-  display: inline-flex; align-items: center; cursor: pointer;
-}
-.settings-toggle input { display: none; }
-.settings-toggle-track {
-  width: 36px; height: 20px;
-  border-radius: 10px;
-  background: var(--border-input);
-  transition: background var(--transition);
-  position: relative;
-}
-.settings-toggle-track::after {
-  content: "";
-  position: absolute; top: 2px; left: 2px;
-  width: 16px; height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform var(--transition);
-}
-.settings-toggle input:checked + .settings-toggle-track {
-  background: var(--accent);
-}
-.settings-toggle input:checked + .settings-toggle-track::after {
-  transform: translateX(16px);
-}
-
-/* Loading */
-.settings-loading {
-  display: flex; align-items: center; justify-content: center;
-  padding: 60px 0; color: var(--text-muted); font-size: 14px;
-}
-
-/* ── Responsive: single column on narrow screens ── */
-@media (max-width: 700px) {
-  .settings-page-body { padding: 12px; }
-  .settings-card { padding: 14px; }
-  .settings-row { grid-template-columns: 1fr; gap: 4px; }
-  .settings-row > label { padding-top: 0; }
-}
-
-/* ── Migration modal ── */
-.modal-overlay {
-  position: fixed; inset: 0; z-index: 1000;
-  background: rgba(0,0,0,0.5);
-  display: flex; align-items: center; justify-content: center;
-}
-.modal-card {
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 24px; max-width: 420px; width: 90%;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-}
-
-.settings-db-desc {
-  font-size: 12px; color: var(--text-muted); line-height: 1.6; margin: 0;
-}
-
-/* ── SQLite status indicator ── */
-.sqlite-status-dot {
-  display: inline-block; width: 10px; height: 10px;
-  border: 2px solid var(--bg-hover);
-  border-radius: 50%; margin-right: 6px; flex-shrink: 0;
-  vertical-align: middle;
-}
-.sqlite-status-dot.healthy {
-  border-color: var(--green);
-  opacity: 0.8;
-}
-.sqlite-status-dot.pending {
-  border-top-color: var(--accent);
-  animation: spin 0.6s linear infinite;
-}
-
-/* ── Dual-write checkbox in migration done dialog ── */
-.dual-write-checkbox {
-  display: flex; align-items: center; gap: 8px;
-  margin: 12px 0 16px;
-  font-size: 13px; color: var(--text-secondary);
-  cursor: pointer; user-select: none;
-}
-.dual-write-checkbox input {
-  accent-color: var(--accent); width: 15px; height: 15px;
-}
-
-/* ── Migration progress bar ── */
-.migration-bar-bg {
-  width: 100%; height: 6px;
-  background: var(--bg-tertiary);
-  border-radius: 3px; overflow: hidden;
-  margin-bottom: 8px;
-}
-.migration-bar-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 3px;
-  transition: width 0.3s ease;
-  position: relative; overflow: hidden;
-}
-.migration-bar-fill::after {
-  content: "";
-  position: absolute; top: 0; left: -100%;
-  width: 60%; height: 100%;
-  background: linear-gradient(90deg,
-    transparent 0%,
-    rgba(255,255,255,0.18) 40%,
-    rgba(255,255,255,0.35) 50%,
-    rgba(255,255,255,0.18) 60%,
-    transparent 100%
-  );
-  animation: bar-shimmer 1.6s ease-in-out infinite;
-}
-
-/* ── Migration title glow ── */
-.migration-running-title {
-  animation: title-glow 1.8s ease-in-out infinite;
-}
-@keyframes title-glow {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-/* ── Save button pulse ── */
 .settings-save-btn.saved {
   background: #16a34a;
   animation: save-pop 0.45s ease-out;
@@ -259,8 +34,347 @@
   100% { transform: scale(1); }
 }
 
-/* ── Shared shimmer keyframe ── */
-@keyframes bar-shimmer {
-  0% { left: -100%; }
-  100% { left: 120%; }
+/* ── Layout: nav + body ── */
+.settings-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Left Navigation ── */
+.settings-nav {
+  width: 200px;
+  flex-shrink: 0;
+  border-right: 0.5px solid var(--border-divider);
+  padding: 8px 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav-item {
+  display: block;
+  width: 100%;
+  padding: 7px 16px;
+  text-align: left;
+  background: none;
+  border: none;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+  border-radius: 0;
+  font-family: inherit;
+}
+.settings-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.settings-nav-item.active {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* ── Right Content Area ── */
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 24px 32px;
+}
+
+/* ── Section ── */
+.settings-section {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 0.5px solid var(--border-divider);
+}
+.settings-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.settings-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 12px;
+}
+.settings-section-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: -4px 0 12px;
+  line-height: 1.5;
+}
+
+/* ── Row (label + control) ── */
+.settings-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.settings-row:last-child {
+  margin-bottom: 0;
+}
+.settings-row label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-row input,
+.settings-row select {
+  width: 100%;
+  max-width: 360px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-input);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.settings-row input:focus,
+.settings-row select:focus {
+  border-color: var(--accent);
+}
+.settings-row input[type="number"] {
+  max-width: 160px;
+}
+.settings-row option {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* ── Input Group (input + hint) ── */
+.settings-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 360px;
+}
+.settings-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* ── Secret Row (password + eye) ── */
+.settings-secret-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.settings-secret-row input {
+  flex: 1;
+  max-width: 280px;
+}
+
+/* ── Configured Badge ── */
+.settings-configured-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--green);
+  padding: 4px 0;
+}
+.settings-configured-badge::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+/* ── Link-style button (replace / cancel) ── */
+.settings-link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.settings-link-btn:hover {
+  text-decoration: underline;
+  color: var(--accent-hover);
+}
+
+/* ── Toggle ── */
+.settings-toggle {
+  display: inline-block;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+}
+.settings-toggle input { display: none; }
+.settings-toggle-track {
+  display: block;
+  width: 100%; height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  transition: background var(--transition);
+  position: relative;
+}
+.settings-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--transition);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+.settings-toggle input:checked + .settings-toggle-track {
+  background: var(--accent);
+}
+.settings-toggle input:checked + .settings-toggle-track::after {
+  transform: translateX(16px);
+}
+
+/* ── Checkbox Grid ── */
+.settings-checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 400px;
+}
+.settings-checkbox-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms;
+}
+.settings-checkbox-item:hover { background: var(--bg-hover); }
+.settings-checkbox-item.checked {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+}
+.settings-checkbox-item input { display: none; }
+.settings-checkbox-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── DB Description ── */
+.settings-db-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ── Loading ── */
+.settings-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+/* ── Error state ── */
+.settings-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px;
+  color: var(--text-secondary);
+}
+.settings-error p {
+  margin: 0;
+  font-size: 14px;
+}
+.settings-error-detail {
+  font-size: 12px !important;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  max-width: 400px;
+  word-break: break-all;
+}
+
+/* ── Migration Modal (unchanged from original) ── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal-card {
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-panel);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  max-width: 440px; width: 90%;
+  box-shadow: var(--shadow-dialog);
+}
+
+/* ── Responsive: narrow → horizontal nav ── */
+@media (max-width: 640px) {
+  .settings-layout {
+    flex-direction: column;
+  }
+  .settings-nav {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 8px;
+    border-right: none;
+    border-bottom: 0.5px solid var(--border-divider);
+    gap: 4px;
+  }
+  .settings-nav-item {
+    white-space: nowrap;
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+    width: auto;
+  }
+  .settings-nav-item.active {
+    background: rgba(var(--accent-rgb), 0.12);
+  }
+  .settings-body {
+    padding: 12px 16px 24px;
+  }
+  .settings-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    align-items: flex-start;
+  }
+  .settings-row input,
+  .settings-row select {
+    max-width: 100%;
+  }
+  .settings-row input[type="number"] {
+    max-width: 100%;
+  }
+  .settings-input-group {
+    max-width: 100%;
+  }
 }

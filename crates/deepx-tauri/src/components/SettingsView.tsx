@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { useI18n, type Lang } from "../i18n";
 
-type ThemeMode = "system" | "light" | "dark" | "dark-gray";
+export type ThemeMode = "system" | "light" | "dark" | "dark-gray";
 
 interface Provider { id: string; display: string; endpoints: Endpoint[]; }
 interface Endpoint { id: string; display: string; base_url: string; default_model: string; models: string[]; stateful?: boolean; }
@@ -13,9 +13,82 @@ interface SettingsViewProps {
   theme: () => ThemeMode; onThemeChange: (t: ThemeMode) => void;
 }
 
+interface Category {
+  id: string;
+  label: string;
+}
+
+function EyeIcon(props: { show: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      {props.show
+        ? <><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>
+        : <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>
+      }
+    </svg>
+  );
+}
+
+function SecretInput(props: {
+  configured: boolean;
+  showInput: boolean;
+  value: string;
+  onInput: (v: string) => void;
+  onReplace: () => void;
+  onCancel: () => void;
+  placeholder: string;
+  configuredLabel: string;
+  replaceLabel: string;
+  cancelLabel: string;
+  hint: string;
+}) {
+  return (
+    <div class="settings-input-group">
+      <Show
+        when={props.configured && !props.showInput}
+        fallback={
+          <div>
+            <div class="settings-secret-row">
+              <input
+                type="password"
+                value={props.value}
+                onInput={(e) => props.onInput(e.currentTarget.value)}
+                placeholder={props.placeholder}
+                autocomplete="off"
+              />
+              <Show when={props.configured}>
+                <button
+                  class="settings-link-btn"
+                  onClick={props.onCancel}
+                >
+                  {props.cancelLabel}
+                </button>
+              </Show>
+            </div>
+            <div class="settings-hint">{props.hint}</div>
+          </div>
+        }
+      >
+        <div>
+          <div class="settings-secret-row">
+            <span class="settings-configured-badge">{props.configuredLabel}</span>
+            <button class="settings-link-btn" onClick={props.onReplace}>
+              {props.replaceLabel}
+            </button>
+          </div>
+          <div class="settings-hint">{props.hint}</div>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
 export default function SettingsView(props: SettingsViewProps) {
   const { t } = useI18n();
-  const [apiKey, setApiKey] = createSignal("");
+  const [apiKeyValue, setApiKeyValue] = createSignal("");
+  const [apiKeyConfigured, setApiKeyConfigured] = createSignal(false);
+  const [showApiKeyInput, setShowApiKeyInput] = createSignal(false);
+
   const [model, setModel] = createSignal("");
   const [baseUrl, setBaseUrl] = createSignal("");
   const [providerId, setProviderId] = createSignal("deepseek");
@@ -28,24 +101,26 @@ export default function SettingsView(props: SettingsViewProps) {
   const [migrationPending, setMigrationPending] = createSignal(0);
   const [migrating, setMigrating] = createSignal(false);
   const [migrationResult, setMigrationResult] = createSignal("");
-  const [migrationProgress, setMigrationProgress] = createSignal(0);  // 0-100
+  const [migrationProgress, setMigrationProgress] = createSignal(0);
   const [migrationPhase, setMigrationPhase] = createSignal<"idle" | "confirm" | "running" | "done">("idle");
   const [dualWriteChecked, setDualWriteChecked] = createSignal(true);
   const [saved, setSaved] = createSignal(false);
-  let dbToggled = false;  // track whether database switch changed
-  const [showApiKey, setShowApiKey] = createSignal(false);
+  let dbToggled = false;
 
   // Subagent
   const [subModel, setSubModel] = createSignal("");
   const [subBaseUrl, setSubBaseUrl] = createSignal("");
-  const [subApiKey, setSubApiKey] = createSignal("");
+  const [subApiKeyValue, setSubApiKeyValue] = createSignal("");
+  const [subApiKeyConfigured, setSubApiKeyConfigured] = createSignal(false);
+  const [showSubApiKeyInput, setShowSubApiKeyInput] = createSignal(false);
   const [subMaxTokens, setSubMaxTokens] = createSignal(4096);
   const [subTimeout, setSubTimeout] = createSignal(120);
   const [subTools, setSubTools] = createSignal<string[]>(["read_file", "search", "grep", "exec", "list_dir", "glob"]);
-  const [showSubApiKey, setShowSubApiKey] = createSignal(false);
   const [tokenizerPath, setTokenizerPath] = createSignal("");
 
-  const [configData] = createResource(async () => {
+  const [activeCategory, setActiveCategory] = createSignal("models");
+
+  const [configData, { refetch: refetchConfig }] = createResource(async () => {
     try { const raw = await invoke<string>("cmd_load_config"); return JSON.parse(raw); }
     catch (e) { console.error(e); return null; }
   });
@@ -55,10 +130,27 @@ export default function SettingsView(props: SettingsViewProps) {
     catch (e) { console.error(e); return []; }
   });
 
+  const [loadError, setLoadError] = createSignal<string | null>(null);
+
   createEffect(() => {
     const data = configData();
-    if (!data) return;
-    if (data.api_key) setApiKey(data.api_key === "****" ? "" : data.api_key);
+    if (configData.loading) return;
+    if (configData.error) {
+      setLoadError(String(configData.error));
+      return;
+    }
+    if (!data) {
+      setLoadError("No config data received");
+      return;
+    }
+    setLoadError(null);
+
+    if (data.api_key) {
+      const isMasked = data.api_key === "****";
+      setApiKeyConfigured(isMasked);
+      setApiKeyValue(isMasked ? "" : data.api_key);
+      setShowApiKeyInput(!isMasked);
+    }
     if (data.model) setModel(data.model);
     if (data.base_url) setBaseUrl(data.base_url);
     if (data.provider_id) setProviderId(data.provider_id);
@@ -71,7 +163,12 @@ export default function SettingsView(props: SettingsViewProps) {
     if (data.subagent) {
       if (data.subagent.model) setSubModel(data.subagent.model);
       if (data.subagent.base_url) setSubBaseUrl(data.subagent.base_url);
-      if (data.subagent.api_key && data.subagent.api_key !== "****") setSubApiKey(data.subagent.api_key);
+      if (data.subagent.api_key) {
+        const isMasked = data.subagent.api_key === "****";
+        setSubApiKeyConfigured(isMasked);
+        setSubApiKeyValue(isMasked ? "" : data.subagent.api_key);
+        setShowSubApiKeyInput(!isMasked);
+      }
       if (data.subagent.max_tokens) setSubMaxTokens(data.subagent.max_tokens);
       if (data.subagent.timeout_secs) setSubTimeout(data.subagent.timeout_secs);
       if (data.subagent.default_tools?.length) setSubTools(data.subagent.default_tools);
@@ -109,19 +206,20 @@ export default function SettingsView(props: SettingsViewProps) {
   async function save() {
     try {
       await invoke("cmd_save_config", {
-        apiKey: apiKey(), model: model(), baseUrl: baseUrl(),
+        apiKey: showApiKeyInput() ? apiKeyValue() : "",
+        model: model(), baseUrl: baseUrl(),
         providerId: providerId(), endpoint: endpointId(),
         maxTokens: maxTokens(), contextLimit: contextLimit(),
         reasoningEffort: reasoningEffort(), lang: props.lang(),
         subagentModel: subModel(), subagentBaseUrl: subBaseUrl(),
-        subagentApiKey: subApiKey(), subagentMaxTokens: subMaxTokens(),
+        subagentApiKey: showSubApiKeyInput() ? subApiKeyValue() : "",
+        subagentMaxTokens: subMaxTokens(),
         subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
         databaseEnabled: databaseEnabled(),
         tokenizerPath: tokenizerPath(),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
-      // Prompt restart if database toggle was changed
       if (dbToggled) {
         dbToggled = false;
         await confirm(t().settings.restartPrompt, {
@@ -133,7 +231,6 @@ export default function SettingsView(props: SettingsViewProps) {
   }
 
   // ── Migration ──
-
   createEffect(async () => {
     if (!databaseEnabled()) return;
     try {
@@ -152,9 +249,8 @@ export default function SettingsView(props: SettingsViewProps) {
     setMigrationPhase("running");
     setMigrationProgress(0);
     const start = Date.now();
-    const DURATION = 10_000; // 10 seconds for the progress bar ceremony
+    const DURATION = 10_000;
 
-    // Animate progress bar: runs independently of actual migration
     const interval = setInterval(() => {
       const elapsed = Date.now() - start;
       const pct = Math.min(100, Math.round((elapsed / DURATION) * 100));
@@ -175,7 +271,6 @@ export default function SettingsView(props: SettingsViewProps) {
       return;
     }
 
-    // Ensure bar shows 100% and wait for the full ceremony duration
     setMigrationProgress(100);
     const remain = DURATION - (Date.now() - start);
     if (remain > 0) await new Promise(r => setTimeout(r, remain));
@@ -187,22 +282,22 @@ export default function SettingsView(props: SettingsViewProps) {
     setMigrationPending(0);
     setMigrationProgress(100);
     setMigrationPhase("done");
-    setDualWriteChecked(databaseEnabled()); // default: mirror current toggle state
+    setDualWriteChecked(databaseEnabled());
   }
 
   async function finishMigration() {
-    // Apply dual-write preference from checkbox
     if (dualWriteChecked() !== databaseEnabled()) {
       setDatabaseEnabled(dualWriteChecked());
       dbToggled = true;
-      // Save config with new database.enabled
       await invoke("cmd_save_config", {
-        apiKey: apiKey(), model: model(), baseUrl: baseUrl(),
+        apiKey: showApiKeyInput() ? apiKeyValue() : "",
+        model: model(), baseUrl: baseUrl(),
         providerId: providerId(), endpoint: endpointId(),
         maxTokens: maxTokens(), contextLimit: contextLimit(),
         reasoningEffort: reasoningEffort(), lang: props.lang(),
         subagentModel: subModel(), subagentBaseUrl: subBaseUrl(),
-        subagentApiKey: subApiKey(), subagentMaxTokens: subMaxTokens(),
+        subagentApiKey: showSubApiKeyInput() ? subApiKeyValue() : "",
+        subagentMaxTokens: subMaxTokens(),
         subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
         databaseEnabled: dualWriteChecked(),
       });
@@ -213,16 +308,27 @@ export default function SettingsView(props: SettingsViewProps) {
     setMigrationResult("");
   }
 
-  const EyeIcon = (props: { show: boolean }) => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      {props.show
-        ? <><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>
-        : <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>
-      }
-    </svg>
-  );
+  // ── Category definitions ──
+  const categories = (): Category[] => [
+    { id: "models", label: t().settings.categoryModels },
+    { id: "api", label: t().settings.categoryApi },
+    { id: "context", label: t().settings.categoryContext },
+    { id: "subagent", label: t().settings.categorySubagent },
+    { id: "data", label: t().settings.categoryData },
+    { id: "appearance", label: t().settings.categoryAppearance },
+    { id: "advanced", label: t().settings.categoryAdvanced },
+  ];
 
   const Loading = () => <div class="settings-loading">{t().chat.thinking}</div>;
+  const ErrorState = () => (
+    <div class="settings-error">
+      <p>{t().settings.loadError ?? "Failed to load settings"}</p>
+      <p class="settings-error-detail">{loadError()}</p>
+      <button class="settings-save-btn" onClick={() => { setLoadError(null); refetchConfig(); }}>
+        {t().settings.retry ?? "Retry"}
+      </button>
+    </div>
+  );
 
   return (
     <div class="settings-page">
@@ -234,221 +340,256 @@ export default function SettingsView(props: SettingsViewProps) {
       </div>
 
       <Show when={!configData.loading} fallback={<Loading />}>
-        <div class="settings-page-body">
-
-          
-          <section class="settings-card">
-            <h2 class="settings-card-title">{t().settings.sectionPerformance}</h2>
-            <div class="settings-row">
-              <label>{t().settings.tokenizerPath}</label>
-              <div class="settings-input-group">
-                <input value={tokenizerPath()} onInput={(e) => setTokenizerPath(e.currentTarget.value)} placeholder="path/to/tokenizer.json" />
-                <button class="settings-save-btn" style="margin-top:4px;padding:4px 12px;font-size:12px;" onClick={browseTokenizer}>{t().settings.tokenizerBrowse}</button>
-                <div class="settings-hint">{t().settings.tokenizerPathHint}</div>
-              </div>
-            </div>
-          </section>
-
-          {/* ── Provider ── */}
-          <section class="settings-card">
-            <h2 class="settings-card-title">{t().settings.sectionProvider}</h2>
-            <div class="settings-row">
-              <label>{t().settings.provider}</label>
-              <select value={providerId()} onChange={(e) => handleProviderChange(e.currentTarget.value)}>
-                <For each={providers()}>{(p: Provider) => <option value={p.id}>{p.display}</option>}</For>
-              </select>
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.endpoint}</label>
-              <select value={endpointId()} onChange={(e) => handleEndpointChange(e.currentTarget.value)}>
-                <For each={currentEndpoints()}>{(ep: Endpoint) => <option value={ep.id}>{ep.display}</option>}</For>
-              </select>
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.baseUrl}</label>
-              <input value={baseUrl()} onInput={(e) => setBaseUrl(e.currentTarget.value)} placeholder="https://api.deepseek.com/v1" />
-            </div>
-          </section>
-
-          {/* ── Model ── */}
-          <section class="settings-card">
-            <h2 class="settings-card-title">{t().settings.sectionModel}</h2>
-            <div class="settings-row">
-              <label>{t().settings.model}</label>
-              <div class="settings-input-group">
-                <input list="model-suggestions" value={model()} onInput={(e) => setModel(e.currentTarget.value)} placeholder="e.g. deepseek-chat" />
-                <datalist id="model-suggestions"><For each={currentModels()}>{(m: string) => <option value={m} />}</For></datalist>
-                <div class="settings-hint">{t().settings.modelHint}</div>
-              </div>
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.maxTokens}</label>
-              <input type="number" value={maxTokens()} onInput={(e) => setMaxTokens(parseInt(e.currentTarget.value) || 16384)} step={1024} />
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.contextLimit}</label>
-              <input type="number" value={contextLimit()} onInput={(e) => setContextLimit(parseInt(e.currentTarget.value) || 1000000)} step={100000} />
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.reasoningEffort}</label>
-              <select value={reasoningEffort()} onChange={(e) => setReasoningEffort(e.currentTarget.value)}>
-                <option value="high">high</option>
-                <option value="max">max</option>
-              </select>
-            </div>
-          </section>
-
-          {/* ── API Keys ── */}
-          <section class="settings-card">
-            <h2 class="settings-card-title">{t().settings.sectionApi}</h2>
-            <div class="settings-row">
-              <label>{t().settings.apiKey}</label>
-              <div class="settings-input-group">
-                <div class="settings-secret-row">
-                  <input type={showApiKey() ? "text" : "password"} value={apiKey()} onInput={(e) => setApiKey(e.currentTarget.value)} placeholder="sk-..." />
-                  <button class="settings-eye-btn" onClick={() => setShowApiKey(v => !v)} title={showApiKey() ? t().settings.hide : t().settings.show}>
-                    <EyeIcon show={showApiKey()} />
+        <Show when={!loadError()} fallback={<ErrorState />}>
+          <div class="settings-layout">
+            {/* ── Left Nav ── */}
+            <nav class="settings-nav">
+              <For each={categories()}>
+                {(cat) => (
+                  <button
+                    class={`settings-nav-item${cat.id === activeCategory() ? " active" : ""}`}
+                    onClick={() => setActiveCategory(cat.id)}
+                  >
+                    {cat.label}
                   </button>
-                </div>
-                <div class="settings-hint">{t().settings.apiKeyHint}</div>
-              </div>
-            </div>
-            <div class="settings-row">
-            </div>
-          </section>
+                )}
+              </For>
+            </nav>
 
-          {/* ── Subagent ── */}
-          <section class="settings-card">
-            <h2 class="settings-card-title">{t().settings.sectionSubagent}</h2>
-            <p class="settings-card-desc">{t().settings.subagentDesc}</p>
-            <div class="settings-row">
-              <label>{t().settings.subagentModel}</label>
-              <div class="settings-input-group">
-                <input value={subModel()} onInput={(e) => setSubModel(e.currentTarget.value)} placeholder={t().settings.subagentInherit} />
-                <div class="settings-hint">{t().settings.subagentModelHint}</div>
-              </div>
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.subagentBaseUrl}</label>
-              <input value={subBaseUrl()} onInput={(e) => setSubBaseUrl(e.currentTarget.value)} placeholder={t().settings.subagentInherit} />
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.subagentApiKey}</label>
-              <div class="settings-input-group">
-                <div class="settings-secret-row">
-                  <input type={showSubApiKey() ? "text" : "password"} value={subApiKey()} onInput={(e) => setSubApiKey(e.currentTarget.value)} placeholder={t().settings.subagentInherit} />
-                  <button class="settings-eye-btn" onClick={() => setShowSubApiKey(v => !v)} title={showSubApiKey() ? t().settings.hide : t().settings.show}>
-                    <EyeIcon show={showSubApiKey()} />
-                  </button>
-                </div>
-                <div class="settings-hint">{t().settings.subagentApiKeyHint}</div>
-              </div>
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.subagentMaxTokens}</label>
-              <input type="number" value={subMaxTokens()} onInput={(e) => setSubMaxTokens(parseInt(e.currentTarget.value) || 4096)} step={512} />
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.subagentTimeout}</label>
-              <input type="number" value={subTimeout()} onInput={(e) => setSubTimeout(parseInt(e.currentTarget.value) || 120)} step={30} />
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.subagentTools}</label>
-              <div class="settings-input-group">
-                <div class="settings-checkbox-grid">
-                  <For each={allTools() ?? []}>
-                    {(name) => (
-                      <label class={`settings-checkbox-item ${subTools().includes(name) ? "checked" : ""}`}>
-                        <input type="checkbox" checked={subTools().includes(name)} onChange={() => toggleTool(name)} />
-                        <span>{name}</span>
-                      </label>
-                    )}
-                  </For>
-                </div>
-                <div class="settings-hint">{t().settings.subagentToolsHint}</div>
-              </div>
-            </div>
-          </section>
-
-          {/* ── Interface ── */}
-          <section class="settings-card">
-            <h2 class="settings-card-title">{t().settings.sectionInterface}</h2>
-            <div class="settings-row">
-              <label>{t().settings.theme}</label>
-              <select value={props.theme()} onChange={(e) => props.onThemeChange(e.currentTarget.value as ThemeMode)}>
-                <option value="system">{t().settings.themeSystem}</option>
-                <option value="light">{t().settings.themeLight}</option>
-                <option value="dark">{t().settings.themeDark}</option>
-                <option value="dark-gray">{t().settings.themeDarkGray}</option>
-              </select>
-            </div>
-            <div class="settings-row">
-              <label>{t().settings.language}</label>
-              <select value={props.lang()} onChange={(e) => props.onLangChange(e.currentTarget.value as Lang)}>
-                <option value="en">English</option>
-                <option value="zh">中文</option>
-              </select>
-            </div>
-          </section>
-
-          {/* ── Compliance ── */}
-          <section class="settings-card">
-            <h2 class="settings-card-title">{t().settings.sectionCompliance}</h2>
-            <div class="settings-row">
-              <label>{t().settings.complianceEnabled}</label>
-              <div class="settings-input-group">
-                <label class="settings-toggle">
-                  <input type="checkbox" checked={complianceEnabled()} onChange={(e) => setComplianceEnabled(e.currentTarget.checked)} />
-                  <span class="settings-toggle-track" />
-                </label>
-                <div class="settings-hint">{t().settings.complianceEnabledHint}</div>
-              </div>
-            </div>
-          </section>
-
-          {/* ── Database ── */}
-          <section class="settings-card">
-            <h2 class="settings-card-title">{t().settings.sectionDatabase}</h2>
-            <div class="settings-row">
-              <label>{t().settings.databaseEnabled}</label>
-              <div class="settings-input-group">
-                <label class="settings-toggle">
-                  <input type="checkbox" checked={databaseEnabled()} onChange={(e) => { setDatabaseEnabled(e.currentTarget.checked); dbToggled = true; }} />
-                  <span class="settings-toggle-track" />
-                </label>
-                <div class="settings-hint">{t().settings.databaseEnabledHint}</div>
-              </div>
-            </div>
-            <Show when={databaseEnabled()}>
-              <div class="settings-row" style="grid-template-columns:1fr;">
-                <p class="settings-db-desc">{t().settings.databaseDesc}</p>
-              </div>
-              <div class="settings-row">
-                <label>
-                  {migrationPending() > 0
-                    ? t().settings.migrateCount.replace("{n}", String(migrationPending()))
-                    : t().settings.migrateUpToDate}
-                </label>
-                <Show when={migrationPending() > 0}>
-                  <div class="settings-input-group">
-                    <button
-                      class="settings-save-btn"
-                      onClick={startMigrate}
-                    >
-                      {t().settings.migrateBtn}
-                    </button>
+            {/* ── Right Content ── */}
+            <div class="settings-body">
+              {/* Category: Models & Providers */}
+              <Show when={activeCategory() === "models"}>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.sectionProvider}</h2>
+                  <div class="settings-row">
+                    <label>{t().settings.provider}</label>
+                    <select value={providerId()} onChange={(e) => handleProviderChange(e.currentTarget.value)}>
+                      <For each={providers()}>{(p: Provider) => <option value={p.id}>{p.display}</option>}</For>
+                    </select>
                   </div>
-                </Show>
-              </div>
-            </Show>
-            <Show when={migrationResult()}>
-              <div class="settings-row">
-                <div class="settings-hint" style="color: var(--accent-green)">{migrationResult()}</div>
-              </div>
-            </Show>
-          </section>
+                  <div class="settings-row">
+                    <label>{t().settings.endpoint}</label>
+                    <select value={endpointId()} onChange={(e) => handleEndpointChange(e.currentTarget.value)}>
+                      <For each={currentEndpoints()}>{(ep: Endpoint) => <option value={ep.id}>{ep.display}</option>}</For>
+                    </select>
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.baseUrl}</label>
+                    <input value={baseUrl()} onInput={(e) => setBaseUrl(e.currentTarget.value)} placeholder="https://api.deepseek.com/v1" />
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.model}</label>
+                    <div class="settings-input-group">
+                      <input list="model-suggestions" value={model()} onInput={(e) => setModel(e.currentTarget.value)} placeholder="e.g. deepseek-chat" />
+                      <datalist id="model-suggestions"><For each={currentModels()}>{(m: string) => <option value={m} />}</For></datalist>
+                      <div class="settings-hint">{t().settings.modelHint}</div>
+                    </div>
+                  </div>
+                </section>
+              </Show>
 
-        </div>
+              {/* Category: API & Credentials */}
+              <Show when={activeCategory() === "api"}>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.sectionApi}</h2>
+                  <div class="settings-row">
+                    <label>{t().settings.apiKey}</label>
+                    <SecretInput
+                      configured={apiKeyConfigured()}
+                      showInput={showApiKeyInput()}
+                      value={apiKeyValue()}
+                      onInput={(v) => setApiKeyValue(v)}
+                      onReplace={() => { setShowApiKeyInput(true); setApiKeyValue(""); }}
+                      onCancel={() => { setShowApiKeyInput(false); setApiKeyValue(""); }}
+                      placeholder="sk-..."
+                      configuredLabel={t().settings.apiKeyConfigured}
+                      replaceLabel={t().settings.apiKeyReplace}
+                      cancelLabel={t().settings.cancel}
+                      hint={t().settings.apiKeyHint}
+                    />
+                  </div>
+                </section>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.subagentApiKey}</h2>
+                  <div class="settings-row">
+                    <label>{t().settings.subagentApiKey}</label>
+                    <SecretInput
+                      configured={subApiKeyConfigured()}
+                      showInput={showSubApiKeyInput()}
+                      value={subApiKeyValue()}
+                      onInput={(v) => setSubApiKeyValue(v)}
+                      onReplace={() => { setShowSubApiKeyInput(true); setSubApiKeyValue(""); }}
+                      onCancel={() => { setShowSubApiKeyInput(false); setSubApiKeyValue(""); }}
+                      placeholder={t().settings.subagentInherit}
+                      configuredLabel={t().settings.apiKeyConfigured}
+                      replaceLabel={t().settings.apiKeyReplace}
+                      cancelLabel={t().settings.cancel}
+                      hint={t().settings.subagentApiKeyHint}
+                    />
+                  </div>
+                </section>
+              </Show>
+
+              {/* Category: Context & Reasoning */}
+              <Show when={activeCategory() === "context"}>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.sectionModel}</h2>
+                  <div class="settings-row">
+                    <label>{t().settings.maxTokens}</label>
+                    <input type="number" value={maxTokens()} onInput={(e) => setMaxTokens(parseInt(e.currentTarget.value) || 16384)} step={1024} />
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.contextLimit}</label>
+                    <input type="number" value={contextLimit()} onInput={(e) => setContextLimit(parseInt(e.currentTarget.value) || 1000000)} step={100000} />
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.reasoningEffort}</label>
+                    <select value={reasoningEffort()} onChange={(e) => setReasoningEffort(e.currentTarget.value)}>
+                      <option value="high">high</option>
+                      <option value="max">max</option>
+                    </select>
+                  </div>
+                </section>
+              </Show>
+
+              {/* Category: Subagent */}
+              <Show when={activeCategory() === "subagent"}>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.sectionSubagent}</h2>
+                  <p class="settings-section-desc">{t().settings.subagentDesc}</p>
+                  <div class="settings-row">
+                    <label>{t().settings.subagentModel}</label>
+                    <div class="settings-input-group">
+                      <input value={subModel()} onInput={(e) => setSubModel(e.currentTarget.value)} placeholder={t().settings.subagentInherit} />
+                      <div class="settings-hint">{t().settings.subagentModelHint}</div>
+                    </div>
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.subagentBaseUrl}</label>
+                    <input value={subBaseUrl()} onInput={(e) => setSubBaseUrl(e.currentTarget.value)} placeholder={t().settings.subagentInherit} />
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.subagentMaxTokens}</label>
+                    <input type="number" value={subMaxTokens()} onInput={(e) => setSubMaxTokens(parseInt(e.currentTarget.value) || 4096)} step={512} />
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.subagentTimeout}</label>
+                    <input type="number" value={subTimeout()} onInput={(e) => setSubTimeout(parseInt(e.currentTarget.value) || 120)} step={30} />
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.subagentTools}</label>
+                    <div class="settings-input-group">
+                      <div class="settings-checkbox-grid">
+                        <For each={allTools() ?? []}>
+                          {(name) => (
+                            <label class={`settings-checkbox-item ${subTools().includes(name) ? "checked" : ""}`}>
+                              <input type="checkbox" checked={subTools().includes(name)} onChange={() => toggleTool(name)} />
+                              <span>{name}</span>
+                            </label>
+                          )}
+                        </For>
+                      </div>
+                      <div class="settings-hint">{t().settings.subagentToolsHint}</div>
+                    </div>
+                  </div>
+                </section>
+              </Show>
+
+              {/* Category: Data & Storage */}
+              <Show when={activeCategory() === "data"}>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.sectionDatabase}</h2>
+                  <div class="settings-row">
+                    <label>{t().settings.databaseEnabled}</label>
+                    <div class="settings-input-group">
+                      <label class="settings-toggle">
+                        <input type="checkbox" checked={databaseEnabled()} onChange={(e) => { setDatabaseEnabled(e.currentTarget.checked); dbToggled = true; }} />
+                        <span class="settings-toggle-track" />
+                      </label>
+                      <div class="settings-hint">{t().settings.databaseEnabledHint}</div>
+                    </div>
+                  </div>
+                  <Show when={databaseEnabled()}>
+                    <div class="settings-row" style="grid-template-columns:1fr;">
+                      <p class="settings-db-desc">{t().settings.databaseDesc}</p>
+                    </div>
+                    <div class="settings-row">
+                      <label>
+                        {migrationPending() > 0
+                          ? t().settings.migrateCount.replace("{n}", String(migrationPending()))
+                          : t().settings.migrateUpToDate}
+                      </label>
+                      <Show when={migrationPending() > 0}>
+                        <div class="settings-input-group">
+                          <button class="settings-save-btn" onClick={startMigrate}>
+                            {t().settings.migrateBtn}
+                          </button>
+                        </div>
+                      </Show>
+                    </div>
+                  </Show>
+                  <Show when={migrationResult()}>
+                    <div class="settings-row">
+                      <div class="settings-hint" style="color: var(--accent-green)">{migrationResult()}</div>
+                    </div>
+                  </Show>
+                </section>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.sectionCompliance}</h2>
+                  <div class="settings-row">
+                    <label>{t().settings.complianceEnabled}</label>
+                    <div class="settings-input-group">
+                      <label class="settings-toggle">
+                        <input type="checkbox" checked={complianceEnabled()} onChange={(e) => setComplianceEnabled(e.currentTarget.checked)} />
+                        <span class="settings-toggle-track" />
+                      </label>
+                      <div class="settings-hint">{t().settings.complianceEnabledHint}</div>
+                    </div>
+                  </div>
+                </section>
+              </Show>
+
+              {/* Category: Appearance & Language */}
+              <Show when={activeCategory() === "appearance"}>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.sectionInterface}</h2>
+                  <div class="settings-row">
+                    <label>{t().settings.theme}</label>
+                    <select value={props.theme()} onChange={(e) => props.onThemeChange(e.currentTarget.value as ThemeMode)}>
+                      <option value="system">{t().settings.themeSystem}</option>
+                      <option value="light">{t().settings.themeLight}</option>
+                      <option value="dark">{t().settings.themeDark}</option>
+                      <option value="dark-gray">{t().settings.themeDarkGray}</option>
+                    </select>
+                  </div>
+                  <div class="settings-row">
+                    <label>{t().settings.language}</label>
+                    <select value={props.lang()} onChange={(e) => props.onLangChange(e.currentTarget.value as Lang)}>
+                      <option value="en">English</option>
+                      <option value="zh">中文</option>
+                    </select>
+                  </div>
+                </section>
+              </Show>
+
+              {/* Category: Advanced */}
+              <Show when={activeCategory() === "advanced"}>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">{t().settings.sectionPerformance}</h2>
+                  <div class="settings-row">
+                    <label>{t().settings.tokenizerPath}</label>
+                    <div class="settings-input-group">
+                      <input value={tokenizerPath()} onInput={(e) => setTokenizerPath(e.currentTarget.value)} placeholder="path/to/tokenizer.json" />
+                      <button class="settings-save-btn" style="margin-top:4px;padding:4px 12px;font-size:12px;" onClick={browseTokenizer}>{t().settings.tokenizerBrowse}</button>
+                      <div class="settings-hint">{t().settings.tokenizerPathHint}</div>
+                    </div>
+                  </div>
+                </section>
+              </Show>
+            </div>
+          </div>
+        </Show>
       </Show>
 
       {/* ── Migration Modal ── */}
@@ -474,7 +615,7 @@ export default function SettingsView(props: SettingsViewProps) {
               <h3 style="margin:0 0 4px;font-size:16px;font-weight:600;">{t().settings.migratingTitle}</h3>
               <p style="margin:0 0 16px;font-size:13px;color:var(--text-secondary);">{t().settings.migratingHint}</p>
               <div style="width:100%;height:6px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;margin-bottom:8px;">
-                <div style="height:100%;width:{migrationProgress()}%;background:var(--accent);border-radius:3px;transition:width 0.3s ease;" />
+                <div style={`height:100%;width:${migrationProgress()}%;background:var(--accent);border-radius:3px;transition:width 0.3s ease;`} />
               </div>
               <p style="margin:0;font-size:12px;color:var(--text-muted);text-align:center;">{migrationProgress()}%</p>
             </Show>
