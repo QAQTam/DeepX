@@ -1,7 +1,7 @@
 export const PERMISSION_LEVELS = [
-  { value: 1, label: "L1 只读" },
-  { value: 2, label: "L2 工作区写入" },
-  { value: 3, label: "L3 受控执行" },
+  { value: 1, label: "L1 全部询问" },
+  { value: 2, label: "L2 读取免询问" },
+  { value: 3, label: "L3 工作区操作" },
   { value: 4, label: "L4 完全访问" },
 ] as const;
 

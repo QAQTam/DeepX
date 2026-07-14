@@ -324,9 +324,9 @@ pub fn needs_permission(
         return PermissionDecision::AutoApprove;
     }
 
-    // Level 3+: Within-workspace auto-approve; check boundary for Write/Exec/Net
-    if level >= PermissionLevel::WorkspaceFree {
-        // If no paths or all paths within workspace, auto-approve
+    // Level 3: only workspace writes auto-approve. Exec and Net still require confirmation.
+    if level >= PermissionLevel::WorkspaceFree && category == ToolCategory::Write {
+        // If no paths or all paths are within the workspace, auto-approve the write.
         if all_within_workspace(&paths, &workspace_root) {
             return PermissionDecision::AutoApprove;
         }
@@ -349,6 +349,8 @@ pub fn needs_permission(
             "Level 2: '{}' (write/exec/net) requires confirmation.",
             tool_name
         )
+    } else if matches!(category, ToolCategory::Exec | ToolCategory::Net) {
+        format!("Level 3: '{}' requires execution or network confirmation.", tool_name)
     } else {
         format!(
             "Level 3: '{}' accesses a path outside the workspace.",
@@ -573,5 +575,22 @@ mod tests {
             matches!(decision, PermissionDecision::AskUser { .. }),
             "parent traversal to a missing file outside the workspace must not auto-approve"
         );
+    }
+
+    #[test]
+    fn workspace_free_still_requires_approval_for_exec_and_network() {
+        for tool in ["exec_run", "spawn_subagent", "web"] {
+            let decision = needs_permission(
+                PermissionLevel::WorkspaceFree,
+                tool,
+                &serde_json::json!({}),
+                Path::new("."),
+                &HashSet::new(),
+            );
+            assert!(
+                matches!(decision, PermissionDecision::AskUser { .. }),
+                "Level 3 must ask before {tool}"
+            );
+        }
     }
 }
