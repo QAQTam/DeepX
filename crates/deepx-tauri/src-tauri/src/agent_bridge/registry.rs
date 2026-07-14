@@ -46,6 +46,36 @@ impl std::fmt::Debug for AgentRegistry {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shutdown_all_agents_without_init_does_not_panic() {
+        // REGISTRY is not initialized in test — should be a clean no-op
+        shutdown_all_agents();
+    }
+
+    #[test]
+    fn test_agent_instance_fields_accessible() {
+        // Verify the struct layout is intact after module split
+        let stdin: Arc<Mutex<Box<dyn Write + Send>>> =
+            Arc::new(Mutex::new(Box::new(std::io::sink())));
+        let child: Arc<Mutex<Option<std::process::Child>>> =
+            Arc::new(Mutex::new(None));
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        let inst = AgentInstance {
+            seed: "test_seed".into(),
+            stdin,
+            child,
+            shutdown_flag: shutdown,
+        };
+
+        assert_eq!(inst.seed, "test_seed");
+    }
+}
+
 /// Spawn an agent child process (free function, no lock needed).
 /// Returns an AgentInstance ready for insertion into the registry.
 fn spawn_agent_process(

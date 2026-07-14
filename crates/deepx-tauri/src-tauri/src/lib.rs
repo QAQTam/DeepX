@@ -60,3 +60,44 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running DeepX Tauri application");
 }
+
+#[cfg(test)]
+mod reachability_tests {
+    use super::agent_bridge;
+
+    #[test]
+    fn cmd_get_version_works() {
+        let v = agent_bridge::cmd_get_version();
+        assert!(!v.is_empty());
+        assert!(v.contains('.'));
+    }
+
+    #[test]
+    fn cmd_list_available_tools_works() {
+        let r = agent_bridge::cmd_list_available_tools();
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn cmd_get_token_stats_works() {
+        let r = agent_bridge::cmd_get_token_stats(7);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn util_api_visible() {
+        let items = agent_bridge::parse_plan_items("- [ ] P1: Test");
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn registry_types_visible() {
+        let _: Option<agent_bridge::AgentRegistry> = None;
+        let _: Option<agent_bridge::AgentInstance> = None;
+    }
+
+    // The remaining 34 Tauri commands are verified via `cargo check --tests`.
+    // Their `#[tauri::command]` attribute pulls in `AppHandle` which requires
+    // Tauri runtime DLLs not available in unit test binaries on Windows.
+    // `generate_handler![]` in lib.rs acts as an additional compile-time guard.
+}

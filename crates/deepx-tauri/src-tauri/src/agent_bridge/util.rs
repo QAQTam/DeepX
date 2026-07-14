@@ -160,3 +160,148 @@ pub fn agent2ui_event_name_for_ui(event: &Ui2Agent) -> &'static str {
         _ => "unknown",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use deepx_proto::Ui2Agent;
+
+    // ── read_file_preview ──
+
+    #[test]
+    fn test_read_file_preview_basic() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("deepx_test_read_preview.txt");
+        std::fs::write(&path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+        let result = read_file_preview(&path.to_string_lossy(), 3, 1000).unwrap();
+        assert!(result.contains("line1"));
+        assert!(result.contains("line2"));
+        assert!(result.contains("line3"));
+        assert!(!result.contains("line4")); // max_lines=3
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_read_file_preview_char_truncation() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("deepx_test_trunc.txt");
+        std::fs::write(&path, "abcdefghijklmnopqrstuvwxyz").unwrap();
+        let result = read_file_preview(&path.to_string_lossy(), 10, 10).unwrap();
+        assert!(result.len() <= 10 + "… (truncated)".len() + 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_read_file_preview_nonexistent() {
+        let result = read_file_preview("/nonexistent/deepx_test_file.txt", 5, 100);
+        assert!(result.is_err());
+    }
+
+    // ── parse_plan_items ──
+
+    #[test]
+    fn test_parse_plan_items_complete() {
+        let content = "- [ ] P1: 审计持久化 — 确保所有操作落盘。Deps: none。Effort: 2h\n- [✓] P2: 重构模块";
+
+        let items = parse_plan_items(content);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "P1");
+        assert_eq!(items[0].title, "审计持久化");
+        assert_eq!(items[0].status, "pending");
+
+        assert_eq!(items[1].id, "P2");
+        assert_eq!(items[1].title, "重构模块");
+        assert_eq!(items[1].status, "approved");
+    }
+
+    #[test]
+    fn test_parse_plan_items_with_comment() {
+        let content = "- [-] P3: 已废弃 — Deps: P1。Effort: 1h | 不再需要";
+        let items = parse_plan_items(content);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, "rejected");
+        assert_eq!(items[0].comment, "不再需要");
+    }
+
+    #[test]
+    fn test_parse_plan_items_ask_status() {
+        let content = "- [?] P4: 需求确认 — Deps: none。Effort: 0.5h";
+        let items = parse_plan_items(content);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, "ask");
+    }
+
+    #[test]
+    fn test_parse_plan_items_empty() {
+        let items = parse_plan_items("");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_parse_plan_items_ignores_non_checklist() {
+        let content = "# 标题\n这是一段描述\n- [ ] P1: 有效项 — Deps: none。Effort: 1h";
+        let items = parse_plan_items(content);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "P1");
+    }
+
+    // ── agent2ui_event_name_for_ui ──
+
+    #[test]
+    fn test_agent2ui_event_names() {
+        assert_eq!(
+            agent2ui_event_name_for_ui(&Ui2Agent::UserInput { text: "hi".into() }),
+            "user_input"
+        );
+        assert_eq!(agent2ui_event_name_for_ui(&Ui2Agent::Cancel), "cancel");
+        assert_eq!(agent2ui_event_name_for_ui(&Ui2Agent::CreateSession), "create_session");
+        assert_eq!(agent2ui_event_name_for_ui(&Ui2Agent::Shutdown), "shutdown");
+        assert_eq!(agent2ui_event_name_for_ui(&Ui2Agent::Compact), "compact");
+        assert_eq!(
+            agent2ui_event_name_for_ui(&Ui2Agent::ResumeSession { seed: "abc".into() }),
+            "resume_session"
+        );
+    }
+
+    #[test]
+    fn test_agent2ui_event_name_unknown() {
+        // AskResponse is not listed → should be "unknown"
+        assert_eq!(
+            agent2ui_event_name_for_ui(&Ui2Agent::AskResponse {
+                ask_id: "q1".into(),
+                answers: vec![]
+            }),
+            "unknown"
+        );
+    }
+
+    // ── days_before_today / chrono ──
+
+    #[test]
+    fn test_days_before_today_format() {
+        let date = days_before_today(0);
+        // Should be YYYY-MM-DD format
+        assert_eq!(date.len(), 10);
+        assert_eq!(date.chars().nth(4), Some('-'));
+        assert_eq!(date.chars().nth(7), Some('-'));
+    }
+
+    #[test]
+    fn test_chrono_local_date_simple() {
+        // 2024-01-01 00:00:00 UTC = 1704067200
+        let date = chrono_local_date_from_epoch(1704067200);
+        assert_eq!(date, "2024-01-01");
+    }
+
+    // ── generate_date_range ──
+
+    #[test]
+    fn test_generate_date_range_count() {
+        let arr = generate_date_range(3);
+        assert_eq!(arr.len(), 3);
+        for entry in &arr {
+            assert!(entry.get("date").is_some());
+            assert!(entry.get("prompt_tokens").is_some());
+        }
+    }
+}

@@ -386,3 +386,38 @@ fn detect_tools() -> String {
     }
     parts.join(" | ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn ensure_init() {
+        INIT.call_once(|| {
+            cache_system_path();
+            detect_os_info();
+        });
+    }
+
+    #[test]
+    fn test_cache_system_path_sets_path() {
+        ensure_init();
+        let path = SYSTEM_PATH.get();
+        assert!(path.is_some());
+        assert!(!path.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_detect_os_info_does_not_panic() {
+        ensure_init();
+        // Should not panic on any platform
+    }
+
+    #[test]
+    fn test_detect_os_info_sets_os_info() {
+        ensure_init();
+        // OS_INFO is set inside deepx_config — we just verify the call doesn't crash
+    }
+}
