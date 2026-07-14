@@ -41,6 +41,10 @@ export default function PermissionPrompt(props: {
     >
       <div class="interaction-eyebrow">需要授权</div>
       <h3 id="permission-heading">{props.request.tool_name}</h3>
+      <div class="permission-meta">
+        <span data-permission-category>{props.request.category}</span>
+        <span data-permission-risk>{props.request.risk}</span>
+      </div>
       <p class="interaction-reason">{props.request.reason}</p>
       <p class="interaction-consequence">{props.request.consequence}</p>
       <Show when={props.request.paths.length > 0}>

@@ -10,6 +10,14 @@ interface CompactStatusRowProps {
 
 export default function CompactStatusRow(props: CompactStatusRowProps) {
   const [expanded, setExpanded] = createSignal(false);
+  const displayText = () => props.text.trim() || (props.active ? "正在整理上下文…" : "");
+  const toggleExpanded = () => {
+    setExpanded((current) => {
+      const next = !current;
+      if (next) props.onExpand?.();
+      return next;
+    });
+  };
 
   return (
     <div
@@ -34,9 +42,11 @@ export default function CompactStatusRow(props: CompactStatusRowProps) {
         <span
           class="compact-text"
           classList={{ "compact-text-expanded": expanded() }}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={toggleExpanded}
         >
-          {expanded() ? props.text : props.text.slice(0, 50) + (props.text.length > 50 ? "…" : "")}
+          {expanded()
+            ? displayText()
+            : displayText().slice(0, 50) + (displayText().length > 50 ? "…" : "")}
         </span>
 
         {/* Turns compacted (complete state) */}
@@ -48,8 +58,8 @@ export default function CompactStatusRow(props: CompactStatusRowProps) {
 
         {/* Expand toggle */}
         <Show when={props.onExpand}>
-          <button class="compact-expand-btn" onClick={props.onExpand}>
-            展开
+          <button class="compact-expand-btn" onClick={toggleExpanded}>
+            {expanded() ? "收起" : "展开"}
           </button>
         </Show>
       </div>

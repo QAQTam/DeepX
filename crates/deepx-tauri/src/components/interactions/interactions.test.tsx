@@ -200,6 +200,22 @@ describe("PermissionPrompt", () => {
     dispose();
     host.remove();
   });
+
+  it("6b. shows the authoritative category and risk", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const dispose = render(
+      () => <PermissionPrompt request={permReq("high")} onRespond={vi.fn()} />,
+      host,
+    );
+    await flush();
+
+    expect(host.querySelector("[data-permission-category]")?.textContent).toContain("exec");
+    expect(host.querySelector("[data-permission-risk]")?.textContent).toContain("high");
+
+    dispose();
+    host.remove();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -244,6 +260,39 @@ describe("CompactStatusRow", () => {
     await flush();
     expect(host.textContent).toContain("失败");
     expect(host.querySelector(".compact-failed")).toBeTruthy();
+
+    dispose();
+    host.remove();
+  });
+
+  it("7b. supplies an active fallback and expands text from its own button", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const onExpand = vi.fn();
+    const longText = `${"摘要内容".repeat(20)}结尾标记`;
+    const [text, setText] = createSignal("");
+    const dispose = render(
+      () => (
+        <CompactStatusRow
+          active
+          text={text()}
+          status="active"
+          onExpand={onExpand}
+        />
+      ),
+      host,
+    );
+    await flush();
+
+    expect(host.textContent).toContain("正在整理上下文");
+    setText(longText);
+    await flush();
+    expect(host.textContent).not.toContain("结尾标记");
+
+    host.querySelector<HTMLButtonElement>(".compact-expand-btn")!.click();
+    await flush();
+    expect(host.textContent).toContain("结尾标记");
+    expect(onExpand).toHaveBeenCalledTimes(1);
 
     dispose();
     host.remove();

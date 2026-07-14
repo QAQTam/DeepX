@@ -34,6 +34,19 @@
   color: var(--text-primary);
   margin: 0 0 4px;
 }
+.permission-meta {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.permission-meta span {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
 .interaction-reason {
   font-size: 12px;
   color: var(--text-secondary);
