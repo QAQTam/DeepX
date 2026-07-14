@@ -1,22 +1,310 @@
-.interaction-prompt {
-  width: min(var(--dx-transcript-width), calc(100% - 24px)); margin: 14px auto; padding: 16px;
-  border: 1px solid var(--dx-border); border-radius: var(--dx-radius-md); background: var(--dx-surface); color: var(--dx-text);
+/* ── Interaction Dock ── */
+.interaction-dock {
+  position: relative;
+  z-index: 5;
+  border-top: 0.5px solid var(--border-divider);
+  background: var(--bg-primary);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
-.interaction-eyebrow { margin-bottom: 6px; color: var(--dx-text-muted); font-size: 12px; }
-.interaction-prompt h3, .interaction-prompt p { margin: 0 0 8px; }
-.interaction-consequence { color: var(--dx-text-muted); }
-.interaction-paths { display: grid; gap: 5px; margin: 10px 0; }
-.interaction-paths code { padding: 5px 7px; border-radius: 5px; background: var(--dx-surface-muted); overflow-wrap: anywhere; }
-.interaction-trust { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
-.interaction-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.interaction-actions button { min-height: 34px; padding: 0 13px; border-radius: 8px; cursor: pointer; font: inherit; }
-.interaction-reject, .interaction-secondary { border: 1px solid var(--dx-border); background: var(--dx-surface); color: var(--dx-text); }
-.interaction-approve.approval-low { border: 1px solid #292927; background: #292927; color: #fff; }
-.interaction-approve.approval-medium { border: 1px solid var(--dx-danger); background: transparent; color: var(--dx-danger); }
-.interaction-approve.approval-high { border: 1px solid var(--dx-danger); background: var(--dx-danger); color: #fff; }
-.interaction-actions button:focus-visible { outline: 2px solid var(--dx-accent); outline-offset: 2px; }
-.ask-user-prompt fieldset { margin: 12px 0; border: 0; padding: 0; }
-.ask-options { display: grid; gap: 7px; margin-top: 8px; }
-.ask-options label { display: flex; gap: 8px; align-items: center; }
-.ask-custom { width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--dx-border); border-radius: 8px; background: var(--dx-surface-muted); color: var(--dx-text); }
-.interaction-overlay{position:fixed;z-index:1000;inset:0;display:grid;place-items:center;padding:24px;background:rgba(20,20,18,.28);backdrop-filter:blur(3px)}
+
+/* ── Shared Prompt Card ── */
+.interaction-prompt {
+  padding: 14px 18px;
+  border-bottom: 0.5px solid var(--border-divider);
+  animation: prompt-slide-in 0.2s ease;
+}
+@keyframes prompt-slide-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.interaction-eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.interaction-prompt h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+.interaction-reason {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
+}
+.interaction-consequence {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+.interaction-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.interaction-paths code {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-secondary);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+
+/* ── Trust Checkbox ── */
+.interaction-trust {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.interaction-trust input {
+  accent-color: var(--accent);
+}
+
+/* ── Action Buttons ── */
+.interaction-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.interaction-reject {
+  padding: 6px 14px;
+  border: 0.5px solid var(--border-input);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 120ms;
+}
+.interaction-reject:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.interaction-reject:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Approve Button ── */
+.interaction-approve {
+  padding: 6px 14px;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 120ms;
+}
+.interaction-approve:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* Low risk */
+.approval-low {
+  background: var(--accent);
+  color: #fff;
+}
+.approval-low:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+/* Medium risk */
+.approval-medium {
+  background: var(--accent);
+  color: #fff;
+}
+.approval-medium:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+/* High risk — red solid */
+.approval-high {
+  background: var(--red);
+  color: #fff;
+}
+.approval-high:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+/* ── Submit (AskUser) ── */
+.interaction-submit {
+  padding: 6px 14px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 120ms;
+}
+.interaction-submit:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.interaction-submit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── AskUser Options ── */
+.interaction-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+.interaction-option {
+  padding: 5px 12px;
+  border: 0.5px solid var(--border-input);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.interaction-option:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.interaction-option.selected {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+}
+.interaction-option:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Custom Input ── */
+.interaction-custom-input {
+  width: 100%;
+  padding: 6px 10px;
+  margin-top: 6px;
+  border: 0.5px solid var(--border-input);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.interaction-custom-input:focus {
+  border-color: var(--accent);
+}
+.interaction-custom-input:disabled {
+  opacity: 0.4;
+}
+
+/* ── AskUserPrompt ── */
+.ask-user-prompt fieldset {
+  border: none;
+  padding: 0;
+  margin: 0 0 10px;
+}
+.ask-user-prompt legend {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+/* ── CompactStatusRow ── */
+.compact-row {
+  padding: 8px 18px;
+  border-bottom: 0.5px solid var(--border-divider);
+  font-size: 12px;
+}
+.compact-row-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.compact-indicator {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+}
+.compact-active .compact-indicator {
+  color: var(--accent);
+}
+.compact-complete .compact-indicator {
+  color: var(--green);
+}
+.compact-failed .compact-indicator {
+  color: var(--red);
+}
+.compact-text {
+  flex: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+.compact-text-expanded {
+  white-space: normal;
+  overflow: visible;
+}
+.compact-result {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.compact-expand-btn {
+  padding: 2px 8px;
+  border: 0.5px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.compact-expand-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* ── Spinner ── */
+@keyframes compact-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.compact-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-input);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: compact-rotate 0.7s linear infinite;
+}
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+  .interaction-prompt {
+    padding: 10px 12px;
+  }
+  .interaction-actions {
+    flex-wrap: wrap;
+  }
+}

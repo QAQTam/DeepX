@@ -1,56 +1,114 @@
 import { createSignal, For, Show } from "solid-js";
-import type { AskAnswer, AskMode, AskQuestion } from "../../lib/types";
+import type { AskQuestion, AskAnswer } from "../../lib/types";
 
-export default function AskUserPrompt(props: {
-  mode: AskMode;
+interface AskUserPromptProps {
   questions: AskQuestion[];
-  onSubmit: (answers: AskAnswer[]) => void | Promise<void>;
-  onDismiss: () => void | Promise<void>;
-}) {
+  onSubmit: (answers: AskAnswer[]) => Promise<void> | void;
+  onDismiss: () => void;
+}
+
+export default function AskUserPrompt(props: AskUserPromptProps) {
   const [answers, setAnswers] = createSignal<Record<string, string>>({});
-  const setAnswer = (id: string, answer: string) =>
-    setAnswers(current => ({ ...current, [id]: answer }));
+  const [customInputs, setCustomInputs] = createSignal<Record<string, string>>({});
+  const [busy, setBusy] = createSignal(false);
+
+  const allAnswered = () =>
+    props.questions.every((q) =>
+      (customInputs()[q.id] || "").trim() || answers()[q.id],
+    );
+
+  function selectOption(qid: string, opt: string) {
+    setAnswers((prev) => ({ ...prev, [qid]: opt }));
+    // Clear custom input for this question when option is selected
+    setCustomInputs((prev) => {
+      const next = { ...prev };
+      delete next[qid];
+      return next;
+    });
+  }
+
+  function handleCustomInput(qid: string, value: string) {
+    setCustomInputs((prev) => ({ ...prev, [qid]: value }));
+    if (value.trim()) {
+      setAnswers((prev) => {
+        const next = { ...prev };
+        delete next[qid];
+        return next;
+      });
+    }
+  }
+
+  async function handleSubmit() {
+    if (!allAnswered() || busy()) return;
+    setBusy(true);
+    try {
+      const result: AskAnswer[] = props.questions.map((q) => ({
+        question_id: q.id,
+        answer: (customInputs()[q.id] || "").trim() || answers()[q.id] || "",
+      }));
+      await props.onSubmit(result);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <section class="interaction-prompt ask-user-prompt">
-      <div class="interaction-eyebrow">需要你的选择</div>
-      <For each={props.questions}>{question => (
-        <fieldset>
-          <legend>{question.question}</legend>
-          <div class="ask-options">
-            <For each={question.options}>{option => (
-              <label>
-                <input
-                  type="radio"
-                  name={question.id}
-                  value={option}
-                  checked={answers()[question.id] === option}
-                  onChange={() => setAnswer(question.id, option)}
-                />
-                {option}
-              </label>
-            )}</For>
-          </div>
-          <Show when={question.allow_custom}>
-            <input
-              class="ask-custom"
-              aria-label={`${question.question} 自定义回答`}
-              placeholder="其它…"
-              onInput={event => setAnswer(question.id, event.currentTarget.value)}
-            />
-          </Show>
-        </fieldset>
-      )}</For>
+      <div class="interaction-eyebrow">问题</div>
+
+      <For each={props.questions}>
+        {(q, i) => (
+          <fieldset>
+            <legend>
+              {props.questions.length > 1 ? `${i() + 1}. ` : ""}
+              {q.question}
+            </legend>
+
+            <Show when={q.options && q.options.length > 0}>
+              <div class="interaction-options">
+                <For each={q.options}>
+                  {(opt) => (
+                    <button
+                      class={`interaction-option${answers()[q.id] === opt ? " selected" : ""}`}
+                      onClick={() => selectOption(q.id, opt)}
+                      disabled={busy()}
+                    >
+                      {opt}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+
+            <Show when={(!q.options?.length || q.allow_custom !== false)}>
+              <input
+                type="text"
+                class="interaction-custom-input"
+                placeholder="输入自定义答案..."
+                value={customInputs()[q.id] || ""}
+                onInput={(e) => handleCustomInput(q.id, e.currentTarget.value)}
+                disabled={busy()}
+              />
+            </Show>
+          </fieldset>
+        )}
+      </For>
+
       <div class="interaction-actions">
-        <button type="button" class="interaction-reject" onClick={props.onDismiss}>跳过</button>
         <button
-          type="button"
-          class="interaction-approve approval-low"
-          onClick={() => props.onSubmit(props.questions.map(question => ({
-            question_id: question.id,
-            answer: answers()[question.id] ?? "",
-          })))}
-        >提交</button>
+          class="interaction-reject"
+          onClick={props.onDismiss}
+          disabled={busy()}
+        >
+          跳过
+        </button>
+        <button
+          class="interaction-submit"
+          onClick={handleSubmit}
+          disabled={!allAnswered() || busy()}
+        >
+          {busy() ? "..." : "确认"}
+        </button>
       </div>
     </section>
   );
