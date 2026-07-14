@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import type { createFollowUpQueue } from "../../store/followUpQueue";
 import ComposerQueue from "./ComposerQueue";
+import PermissionLevelSelect from "./PermissionLevelSelect";
 
 type Queue = ReturnType<typeof createFollowUpQueue>;
 export default function ComposerDock(props: {
@@ -12,6 +13,8 @@ export default function ComposerDock(props: {
   mode: string;
   onModeChange: (mode: string) => void;
   model?: string;
+  permissionLevel: number;
+  onPermissionLevelChange: (level: number) => void | Promise<void>;
 }) {
   const [text, setText] = createSignal("");
   const submit = async () => {
@@ -28,7 +31,7 @@ export default function ComposerDock(props: {
         if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
       }} placeholder={props.hasPendingGate() ? "请先处理当前授权请求" : "向 DeepX 提问…"} />
       <footer>
-        <div><button class="composer-attach" aria-label="添加附件">＋</button><button class="composer-mode" onClick={() => props.onModeChange(props.mode === "plan" ? "code" : "plan")}>{props.mode === "plan" ? "规划" : "执行"}</button></div>
+        <div class="composer-controls"><button class="composer-attach" aria-label="添加附件">＋</button><button class="composer-mode" onClick={() => props.onModeChange(props.mode === "plan" ? "code" : "plan")}>{props.mode === "plan" ? "规划" : "执行"}</button><PermissionLevelSelect compact level={props.permissionLevel} onChange={props.onPermissionLevelChange} /></div>
         <div class="composer-meta"><span>{props.model}</span>{props.isStreaming()
           ? <button class="composer-stop" onClick={() => void props.onStop()}>■</button>
           : <button class="composer-send" disabled={!text().trim() || props.hasPendingGate()} onClick={() => void submit()}>↑</button>}</div>

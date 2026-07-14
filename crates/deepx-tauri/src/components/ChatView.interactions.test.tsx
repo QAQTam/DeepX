@@ -57,6 +57,8 @@ function mountChat(chat: ReturnType<typeof makeChat>, options?: {
         hasMore={false}
         onLoadMore={vi.fn()}
         onSlashCommand={vi.fn()}
+        permissionLevel={2}
+        onPermissionLevelChange={vi.fn()}
         permission={options?.permission}
         onPermissionRespond={options?.onPermissionRespond}
       />

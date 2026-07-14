@@ -126,6 +126,30 @@ pub fn cmd_save_config(
     Ok(())
 }
 
+fn validate_permission_level(level: u8) -> Result<u8, String> {
+    if (1..=4).contains(&level) {
+        Ok(level)
+    } else {
+        Err(format!("permission level must be between 1 and 4, got {level}"))
+    }
+}
+
+#[tauri::command]
+pub fn cmd_set_permission_level(level: u8) -> Result<(), String> {
+    let level = validate_permission_level(level)?;
+    let mut cfg = deepx_config::Config::load().unwrap_or_default();
+    cfg.permission_level = level;
+    cfg.save()?;
+
+    let registry = AgentRegistry::get()
+        .lock()
+        .map_err(|e| format!("lock: {e}"))?;
+    for seed in registry.instances.keys() {
+        let _ = registry.send_to(seed, &Ui2Agent::ReloadConfig);
+    }
+    Ok(())
+}
+
 /// Resolve the `.deepx/` directory path.
 /// Priority: {workspace}/.deepx/ → {data_dir}/workspace/ (fallback)
 pub(crate) fn resolve_deepx_dir(seed: &str) -> std::path::PathBuf {
@@ -171,6 +195,7 @@ pub fn cmd_load_config() -> Result<String, String> {
         "max_tokens": cfg.max_tokens,
         "context_limit": cfg.context_limit,
         "reasoning_effort": cfg.reasoning_effort,
+        "permission_level": cfg.permission_level,
         "lang": cfg.lang,
         "active_profile": cfg.active_profile,
         "providers": providers,
@@ -187,6 +212,19 @@ pub fn cmd_load_config() -> Result<String, String> {
         },
     });
     serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
+}
+
+#[cfg(test)]
+mod permission_level_tests {
+    use super::validate_permission_level;
+
+    #[test]
+    fn accepts_only_levels_one_through_four() {
+        assert_eq!(validate_permission_level(1), Ok(1));
+        assert_eq!(validate_permission_level(4), Ok(4));
+        assert!(validate_permission_level(0).is_err());
+        assert!(validate_permission_level(5).is_err());
+    }
 }
 
 /// List all sessions with metadata.

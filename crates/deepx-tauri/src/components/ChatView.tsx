@@ -28,6 +28,8 @@ interface ChatViewProps {
     approved: boolean,
     trustFolder: boolean,
   ) => Promise<void>;
+  permissionLevel: number;
+  onPermissionLevelChange: (level: number) => void | Promise<void>;
 }
 
 export default function ChatView(props: ChatViewProps) {
@@ -163,6 +165,8 @@ export default function ChatView(props: ChatViewProps) {
         mode={mode()}
         onModeChange={handleSetMode}
         model={chat().sessionInfo.model}
+        permissionLevel={props.permissionLevel}
+        onPermissionLevelChange={props.onPermissionLevelChange}
       />
 
       {/* ── Git Diff Workspace Overlay ── */}

@@ -2,6 +2,7 @@ import { createSignal, createResource, For, Show, createEffect } from "solid-js"
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { useI18n, type Lang } from "../i18n";
+import PermissionLevelSelect from "./composer/PermissionLevelSelect";
 
 export type ThemeMode = "system" | "light" | "dark" | "dark-gray";
 
@@ -11,6 +12,8 @@ interface Endpoint { id: string; display: string; base_url: string; default_mode
 interface SettingsViewProps {
   lang: () => Lang; onLangChange: (l: Lang) => void;
   theme: () => ThemeMode; onThemeChange: (t: ThemeMode) => void;
+  permissionLevel: number;
+  onPermissionLevelChange: (level: number) => void | Promise<void>;
 }
 
 interface Category {
@@ -587,6 +590,16 @@ export default function SettingsView(props: SettingsViewProps) {
 
               {/* Category: Advanced */}
               <Show when={activeCategory() === "advanced"}>
+                <section class="settings-section">
+                  <h2 class="settings-section-title">权限控制</h2>
+                  <div class="settings-row">
+                    <label>默认权限等级</label>
+                    <div class="settings-input-group">
+                      <PermissionLevelSelect level={props.permissionLevel} onChange={props.onPermissionLevelChange} />
+                      <div class="settings-hint">切换后立即保存。L4 完全访问允许执行高风险操作。</div>
+                    </div>
+                  </div>
+                </section>
                 <section class="settings-section">
                   <h2 class="settings-section-title">{t().settings.sectionPerformance}</h2>
                   <div class="settings-row">

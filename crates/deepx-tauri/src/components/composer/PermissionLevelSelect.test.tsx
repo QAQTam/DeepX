@@ -1,0 +1,32 @@
+// @vitest-environment jsdom
+
+import { render } from "solid-js/web";
+import { describe, expect, it, vi } from "vitest";
+import PermissionLevelSelect from "./PermissionLevelSelect";
+
+describe("PermissionLevelSelect", () => {
+  it("renders all four permission levels and reports changes", () => {
+    const host = document.createElement("div");
+    const onChange = vi.fn();
+    const dispose = render(() => (
+      <PermissionLevelSelect level={2} onChange={onChange} />
+    ), host);
+
+    const select = host.querySelector("select") as HTMLSelectElement;
+    expect([...select.options].map((option) => option.value)).toEqual(["1", "2", "3", "4"]);
+    select.value = "3";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onChange).toHaveBeenCalledWith(3);
+    dispose();
+  });
+
+  it("marks full access as dangerous", () => {
+    const host = document.createElement("div");
+    const dispose = render(() => (
+      <PermissionLevelSelect level={4} onChange={vi.fn()} compact />
+    ), host);
+
+    expect(host.querySelector("[data-permission-level]")?.classList.contains("is-danger")).toBe(true);
+    dispose();
+  });
+});

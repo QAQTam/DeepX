@@ -52,6 +52,7 @@ export default function App() {
   const i18n = createI18n(((localStorage.getItem("deepx:lang") ?? "en") as Lang));
   const [view, setView] = createSignal<View>("home");
   const [configLang, setConfigLang] = createSignal<Lang>("en");
+  const [permissionLevel, setPermissionLevel] = createSignal(4);
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
   // Active session seed — drives which ChatStore is displayed
   const [activeSeed, setActiveSeed] = createSignal<string>("");
@@ -96,6 +97,17 @@ export default function App() {
       approved ? "approved" : "rejected",
     ));
     permissionQueue.resolve(permission.seed, permission.request.tool_call_id);
+  }
+
+  async function changePermissionLevel(level: number) {
+    if (level < 1 || level > 4) return;
+    try {
+      await invoke("cmd_set_permission_level", { level });
+      setPermissionLevel(level);
+    } catch (error) {
+      console.error("set permission level:", error);
+      toastCtrl.push("权限等级保存失败", "error");
+    }
   }
   const [showChangelog, setShowChangelog] = createSignal(false);
 
@@ -458,6 +470,9 @@ export default function App() {
         setConfigLang(cl);
         localStorage.setItem("deepx:lang", cl);
       }
+      if (Number.isInteger(cfg.permission_level) && cfg.permission_level >= 1 && cfg.permission_level <= 4) {
+        setPermissionLevel(cfg.permission_level);
+      }
     } catch (_) {}
 
     await refreshSessions();
@@ -643,7 +658,7 @@ export default function App() {
         <main class="main-content">
           <Switch>
             <Match when={view() === "settings"}>
-              <SettingsView lang={configLang} onLangChange={switchLang} theme={theme} onThemeChange={switchTheme} />
+              <SettingsView lang={configLang} onLangChange={switchLang} theme={theme} onThemeChange={switchTheme} permissionLevel={permissionLevel()} onPermissionLevelChange={changePermissionLevel} />
             </Match>
             <Match when={view() === "skills"}>
               <SkillsView
@@ -669,6 +684,8 @@ export default function App() {
                     onSlashCommand={handleSlashCommand}
                     permission={activeChatPermission}
                     onPermissionRespond={respondToPermission}
+                    permissionLevel={permissionLevel()}
+                    onPermissionLevelChange={changePermissionLevel}
                   />
                 </div>
               </Show>

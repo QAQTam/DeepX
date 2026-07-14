@@ -71,6 +71,8 @@ function setup(props: { lang?: () => Lang; theme?: () => ThemeMode } = {}) {
           onLangChange={() => {}}
           theme={theme}
           onThemeChange={() => {}}
+          permissionLevel={2}
+          onPermissionLevelChange={() => {}}
         />
       </I18nCtx.Provider>
     ),
@@ -216,6 +218,8 @@ describe("SettingsView – API Key behavior", () => {
             onLangChange={() => {}}
             theme={theme}
             onThemeChange={() => {}}
+            permissionLevel={2}
+            onPermissionLevelChange={() => {}}
           />
         </I18nCtx.Provider>
       ),
