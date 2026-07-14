@@ -15,6 +15,7 @@ import AskUserPrompt from "./interactions/AskUserPrompt";
 import PermissionPrompt from "./interactions/PermissionPrompt";
 import CompactStatusRow from "./interactions/CompactStatusRow";
 import InteractionModal from "./interactions/InteractionModal";
+import PlanReviewPanel from "./PlanReviewPanel";
 import type { PermissionQueueProgress, QueuedPermission } from "../store/permissionQueue";
 
 interface ChatViewProps {
@@ -33,6 +34,8 @@ interface ChatViewProps {
   permissionLevel: number;
   onPermissionLevelChange: (level: number) => void | Promise<void>;
   onChangeWorkspace: () => void | Promise<void>;
+  planReviewOpen?: () => boolean;
+  onPlanReviewClose?: () => void;
 }
 
 export default function ChatView(props: ChatViewProps) {
@@ -120,7 +123,9 @@ export default function ChatView(props: ChatViewProps) {
             session={raw()}
             workspace={chat().workspace()}
             branch={branch()}
+            tasks={chat().tasks()}
             onOpenDiff={() => setShowGitWorkspace(true)}
+            onTaskAction={(action, task) => void chat().submitTaskAction(action, task.id, task.subject, task.description)}
           />
         )}
       </Show>
@@ -140,14 +145,23 @@ export default function ChatView(props: ChatViewProps) {
       <Show
         when={permission()}
         fallback={
-          <Show when={chat().askState().show}>
-            <InteractionModal label="DeepX 需要你的回答">
-              <AskUserPrompt
-                questions={chat().askState().questions}
-                onSubmit={(answers) => chat().submitAskAnswer(answers)}
-                onDismiss={() => void chat().dismissAsk()}
-              />
-            </InteractionModal>
+          <Show
+            when={chat().askState().show}
+            fallback={
+              <Show when={props.planReviewOpen?.()}>
+                <InteractionModal label="审核执行计划">
+                  <PlanReviewPanel seed={seed()} onClose={() => props.onPlanReviewClose?.()} />
+                </InteractionModal>
+              </Show>
+            }
+          >
+              <InteractionModal label="DeepX 需要你的回答">
+                <AskUserPrompt
+                  questions={chat().askState().questions}
+                  onSubmit={(answers) => chat().submitAskAnswer(answers)}
+                  onDismiss={() => void chat().dismissAsk()}
+                />
+              </InteractionModal>
           </Show>
         }
       >

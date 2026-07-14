@@ -1,12 +1,11 @@
-import { For, Show, createSignal, createResource, onCleanup, onMount } from "solid-js";
+import { For, Show, createResource, createSignal, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useI18n } from "../i18n";
 
 interface PlanItem {
   id: string;
   title: string;
-  status: string;
+  status: "pending" | "approved" | "rejected" | "ask";
   comment: string;
   actions: string[];
 }
@@ -14,219 +13,102 @@ interface PlanItem {
 async function fetchPlan(seed: string): Promise<PlanItem[]> {
   try {
     const raw = await invoke<string>("cmd_read_plan", { seed });
-    if (!raw || raw === "[]") return [];
-    return JSON.parse(raw);
+    return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
   }
 }
 
-export default function PlanReviewPanel(props: { seed: string }) {
-  const { t } = useI18n();
-  const [planItems, { refetch }] = createResource(
-    () => props.seed,
-    fetchPlan,
-  );
-  const [submitted, setSubmitted] = createSignal(false);
-
-  listen("plan-changed", (e: { payload: { seed: string } }) => {
-    if (e.payload.seed === props.seed) refetch();
-  }).then(unlisten => onCleanup(unlisten));
-
-  // Listen for plan submission events (emitted by agent via DOM)
-  onMount(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.seed === props.seed) {
-        refetch();
-        setSubmitted(true);
-        setTimeout(() => setSubmitted(false), 2000);
-      }
-    };
-    window.addEventListener("plan-submitted", handler);
-    onCleanup(() => window.removeEventListener("plan-submitted", handler));
-  });
-
-  const [selected, setSelected] = createSignal<Set<string>>(new Set<string>());
-  const [followUps, setFollowUps] = createSignal<Record<string, string>>({});
+export default function PlanReviewPanel(props: { seed: string; onClose: () => void }) {
+  const [planItems, { refetch }] = createResource(() => props.seed, fetchPlan);
+  const [feedback, setFeedback] = createSignal("");
   const [busy, setBusy] = createSignal(false);
-  const [confirmAction, setConfirmAction] = createSignal<"approve" | "reject" | null>(null);
 
-  const toggle = (id: string) => {
-    const next = new Set(selected());
-    if (next.has(id)) next.delete(id); else next.add(id);
-    setSelected(next);
-  };
+  listen("plan-changed", (event: { payload: { seed: string } }) => {
+    if (event.payload.seed === props.seed) void refetch();
+  }).then((unlisten) => onCleanup(unlisten));
 
-  const toggleAll = () => {
-    const items = planItems();
-    if (!items) return;
-    if (selected().size === items.length) {
-      setSelected(new Set<string>());
-    } else {
-      setSelected(new Set<string>(items.map(i => i.id)));
-    }
-  };
-
-  const setFollowUp = (id: string, text: string) => {
-    setFollowUps(prev => ({ ...prev, [id]: text }));
-  };
-
-  const doBatchAction = async (action: "approve" | "reject") => {
-    setConfirmAction(action);
-  };
-
-  const confirmBatch = async () => {
-    const action = confirmAction();
-    if (!action) return;
-    setBusy(true);
-    const ids = [...selected()];
-    let ok = 0;
-    for (const id of ids) {
-      try {
-        const comment = followUps()[id] || "";
-        await invoke("cmd_plan_action", {
-          seed: props.seed,
-          itemId: id,
-          action,
-          userComment: comment,
-        });
-        ok++;
-      } catch (e) {
-        console.error(`plan_action ${id}:`, e);
-      }
-    }
-    setBusy(false);
-    setConfirmAction(null);
-    setSelected(new Set<string>());
-    setFollowUps({});
+  async function updateItem(item: PlanItem, action: "approve" | "reject" | "ask") {
+    await invoke("cmd_plan_action", {
+      seed: props.seed,
+      itemId: item.id,
+      action,
+      userComment: feedback(),
+    });
     await refetch();
-    console.log(`[plan] batch ${action}: ${ok}/${ids.length} ok`);
-  };
+  }
 
-  const cancelConfirm = () => setConfirmAction(null);
-
-  const deleteItem = async (id: string) => {
+  async function finish(action: "approve" | "revise" | "reject") {
+    if (busy() || (action === "revise" && !feedback().trim())) return;
+    setBusy(true);
     try {
-      await invoke("cmd_plan_action", { seed: props.seed, itemId: id, action: "delete", userComment: "" });
-      await refetch();
-    } catch (e) { console.error(`plan_delete ${id}:`, e); }
-  };
-
-  const statusLabel = (s: string) => {
-    switch (s) {
-      case "approved": return t().planReview?.approved ?? "Approved";
-      case "rejected": return t().planReview?.rejected ?? "Rejected";
-      case "ask": return t().planReview?.ask ?? "Question";
-      default: return t().planReview?.pending ?? "Pending";
+      if (action === "approve") {
+        for (const item of planItems() ?? []) {
+          if (item.status !== "approved") await updateItem(item, "approve");
+        }
+      }
+      const text = action === "approve"
+        ? "计划已由用户批准。请严格按已批准的 PLAN.md 继续执行。"
+        : action === "revise"
+          ? `计划暂未批准。请根据以下审阅意见修改 PLAN.md，并重新提交审核：\n${feedback().trim()}`
+          : `用户拒绝了当前计划。请停止执行并等待进一步指示。${feedback().trim() ? `\n原因：${feedback().trim()}` : ""}`;
+      await invoke("cmd_send_message", { seed: props.seed, text });
+      props.onClose();
+    } catch (error) {
+      console.error("plan review:", error);
+    } finally {
+      setBusy(false);
     }
-  };
-
-  const statusClass = (s: string) => `plan-status-${s}`;
-
-  const selectedCount = () => selected().size;
-  const totalCount = () => planItems()?.length ?? 0;
+  }
 
   return (
-    <div class="plan-review-full" classList={{ "plan-submitted-pulse": submitted() }}>
-      {/* Confirm dialog overlay */}
-      <Show when={confirmAction()}>
-        <div class="plan-confirm-overlay" onClick={cancelConfirm}>
-          <div class="plan-confirm-dialog" onClick={(e) => e.stopPropagation()}>
-            <div class="plan-confirm-title">
-              {confirmAction() === "approve" ? "批准" : "拒绝"} {selectedCount()} 项？
-            </div>
-            <div class="plan-confirm-body">
-              <For each={planItems()?.filter(i => selected().has(i.id))}>
-                {(item) => (
-                  <div class="plan-confirm-item">
-                    <span class={statusClass(item.status)}>{item.id}: {item.title}</span>
-                    <Show when={followUps()[item.id]}>
-                      <span class="plan-confirm-followup">追问: {followUps()[item.id]}</span>
-                    </Show>
-                  </div>
-                )}
-              </For>
-            </div>
-            <div class="plan-confirm-actions">
-              <button class="plan-btn plan-btn-cancel" onClick={cancelConfirm}>取消</button>
-              <button class="plan-btn plan-btn-confirm" onClick={confirmBatch} disabled={busy()}>
-                {busy() ? "提交中…" : "确认提交"}
-              </button>
-            </div>
-          </div>
+    <section class="plan-review-prompt">
+      <header class="plan-review-header">
+        <div>
+          <div class="interaction-eyebrow">计划审核</div>
+          <h2>确认执行计划</h2>
+          <p>逐项审阅后批准执行，或留下修改意见。</p>
         </div>
-      </Show>
+        <button type="button" class="plan-review-close" aria-label="稍后审核" onClick={props.onClose}>×</button>
+      </header>
 
-      {/* Header with select-all */}
-      <div class="plan-review-hd">
-        <label class="plan-check-all">
-          <input type="checkbox" checked={selectedCount() === totalCount() && totalCount() > 0}
-            onChange={toggleAll} disabled={confirmAction() !== null} />
-          <span>全选 ({selectedCount()}/{totalCount()})</span>
-        </label>
-      </div>
-
-      {/* Plan items */}
-      <Show
-        when={planItems()?.length}
-        fallback={<div class="status-empty">{t().planReview?.empty ?? "No PLAN.md found in workspace."}</div>}
-      >
-        <div class="plan-review-list">
-          <For each={planItems()}>
-            {(item) => (
-              <div class={`plan-row ${statusClass(item.status)} ${selected().has(item.id) ? "selected" : ""}`}>
-                <label class="plan-row-check">
-                  <input type="checkbox" checked={selected().has(item.id)}
-                    onChange={() => toggle(item.id)}
-                    disabled={confirmAction() !== null} />
-                </label>
-                <div class="plan-row-body" onClick={() => toggle(item.id)}>
-                  <span class="plan-row-icon">
-                    {item.status === "approved" ? "✓" :
-                     item.status === "rejected" ? "✗" :
-                     item.status === "ask" ? "?" : "○"}
+      <Show when={!planItems.loading} fallback={<div class="plan-review-empty">正在加载计划…</div>}>
+        <Show when={(planItems()?.length ?? 0) > 0} fallback={<div class="plan-review-empty">当前工作区没有可审核的计划。</div>}>
+          <div class="plan-review-list">
+            <For each={planItems()}>
+              {(item) => (
+                <article class={`plan-review-item status-${item.status}`}>
+                  <span class="plan-review-state">
+                    {item.status === "approved" ? "✓" : item.status === "rejected" ? "×" : item.status === "ask" ? "?" : "○"}
                   </span>
-                  <div class="plan-row-info">
-                    <span class="plan-row-title">{item.id}: {item.title}</span>
-                    <span class="plan-row-status">{statusLabel(item.status)}</span>
-                    <Show when={item.comment}>
-                      <span class="plan-comment">{item.comment}</span>
-                    </Show>
+                  <div class="plan-review-copy">
+                    <strong>{item.id} · {item.title}</strong>
+                    <Show when={item.comment}><small>{item.comment}</small></Show>
                   </div>
-                </div>
-                <button class="plan-row-delete" onClick={(e) => { e.stopPropagation(); deleteItem(item.id); }} title="删除此项">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                  </svg>
-                </button>
-                <div class="plan-row-followup">
-                  <input
-                    type="text"
-                    class="plan-followup-input"
-                    placeholder="追问理由…"
-                    value={followUps()[item.id] || ""}
-                    onInput={(e) => setFollowUp(item.id, e.currentTarget.value)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </div>
-              </div>
-            )}
-          </For>
-        </div>
+                  <div class="plan-review-item-actions">
+                    <button type="button" title="需要修改" onClick={() => void updateItem(item, "ask")}>?</button>
+                    <button type="button" title="拒绝此项" onClick={() => void updateItem(item, "reject")}>×</button>
+                    <button type="button" class="item-approve" title="批准此项" onClick={() => void updateItem(item, "approve")}>✓</button>
+                  </div>
+                </article>
+              )}
+            </For>
+          </div>
+        </Show>
       </Show>
 
-      {/* Batch action bar */}
-      <Show when={selectedCount() > 0 && !confirmAction()}>
-        <div class="plan-batch-bar">
-          <button class="plan-btn plan-btn-approve" onClick={() => doBatchAction("approve")}>
-            ✓ 批准选中 ({selectedCount()})
-          </button>
-          <button class="plan-btn plan-btn-reject" onClick={() => doBatchAction("reject")}>
-            ✗ 拒绝选中 ({selectedCount()})
-          </button>
-        </div>
-      </Show>
-    </div>
+      <textarea
+        class="plan-review-feedback"
+        rows={3}
+        value={feedback()}
+        onInput={(event) => setFeedback(event.currentTarget.value)}
+        placeholder="修改意见或拒绝原因（要求修改时必填）"
+      />
+      <footer class="plan-review-actions">
+        <button type="button" class="interaction-reject" disabled={busy()} onClick={() => void finish("reject")}>拒绝计划</button>
+        <button type="button" class="interaction-reject" disabled={busy() || !feedback().trim()} onClick={() => void finish("revise")}>要求修改</button>
+        <button type="button" class="interaction-approve approval-low" disabled={busy() || planItems.loading || !(planItems()?.length)} onClick={() => void finish("approve")}>{busy() ? "提交中…" : "批准并继续"}</button>
+      </footer>
+    </section>
   );
 }

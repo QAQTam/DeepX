@@ -31,7 +31,7 @@ pub fn cmd_migrate_to_turso() -> Result<String, String> {
 
 #[tauri::command]
 pub fn cmd_task_action(seed: String, action: String, task_id: u32) -> Result<(), String> {
-    let path = resolve_deepx_dir(&seed).join("tasks.md");
+    let path = deepx_types::platform::sessions_dir().join(&seed).join("tasks.md");
     let _guard = std::sync::Mutex::new(()); // serialize access
 
     let mut lines: Vec<String> = if path.exists() {
@@ -316,17 +316,22 @@ pub fn cmd_plan_action(
             if !found && trimmed.starts_with("- [") && trimmed.contains(&format!(" {}: ", item_id))
             {
                 found = true;
+                let normalized = if let Some(end) = line.find(']') {
+                    format!("- [ ]{}", &line[end + 1..])
+                } else {
+                    line.to_string()
+                };
                 match action.as_str() {
-                    "approve" => line.replacen("- [ ]", "- [✓]", 1),
+                    "approve" => normalized.replacen("- [ ]", "- [✓]", 1),
                     "reject" => {
-                        let base = line.replacen("- [ ]", "- [-]", 1);
+                        let base = normalized.replacen("- [ ]", "- [-]", 1);
                         if user_comment.is_empty() {
                             base
                         } else {
                             format!("{base} | {user_comment}")
                         }
                     }
-                    "ask" => line.replacen("- [ ]", "- [?]", 1),
+                    "ask" => normalized.replacen("- [ ]", "- [?]", 1),
                     "delete" => return String::new(), // remove the line entirely
                     _ => format!("{line} | {user_comment}"),
                 }

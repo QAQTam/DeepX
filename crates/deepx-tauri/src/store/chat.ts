@@ -295,8 +295,8 @@ export function createChatStore(seed: string) {
         return next.length > 120 ? next.slice(-120) : next;
       });
     }
-    if (data.tasks && (data.tasks as any[]).length > 0) setTasks(data.tasks as TaskInfo[]);
-    if (data.recent_edits && (data.recent_edits as any[]).length > 0) setRecentEdits(data.recent_edits as string[]);
+    if (Array.isArray(data.tasks)) setTasks(data.tasks as TaskInfo[]);
+    if (Array.isArray(data.recent_edits)) setRecentEdits(data.recent_edits as string[]);
   }
 
   function handleSkillsChanged(data: Record<string, unknown>) {
@@ -408,6 +408,8 @@ export function createChatStore(seed: string) {
       if (isNaN(num)) return;
       try {
         await invoke("cmd_task_action", { seed, action, taskId: num });
+        const raw = await invoke<string>("cmd_get_dashboard_data", { seed });
+        handleDashboard(JSON.parse(raw));
       } catch (e) { console.error(e); }
     }
   }

@@ -9,6 +9,7 @@ import { createI18n, I18nCtx } from "../i18n";
 import ChatView from "./ChatView";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn().mockResolvedValue(undefined) }));
 
 const cleanups: Array<() => void> = [];
@@ -45,6 +46,8 @@ function mountChat(chat: ReturnType<typeof makeChat>, options?: {
     approved: boolean,
     trustFolder: boolean,
   ) => Promise<void>;
+  planReviewOpen?: () => boolean;
+  onPlanReviewClose?: () => void;
 }) {
   const host = document.createElement("div");
   document.body.append(host);
@@ -62,6 +65,8 @@ function mountChat(chat: ReturnType<typeof makeChat>, options?: {
         onChangeWorkspace={vi.fn()}
         permission={options?.permission}
         onPermissionRespond={options?.onPermissionRespond}
+        planReviewOpen={options?.planReviewOpen}
+        onPlanReviewClose={options?.onPlanReviewClose}
       />
     </I18nCtx.Provider>
   ), host));
@@ -69,6 +74,16 @@ function mountChat(chat: ReturnType<typeof makeChat>, options?: {
 }
 
 describe("ChatView blocking interactions", () => {
+  it("renders plan review in the centered modal", async () => {
+    const chat = makeChat(() => ({ askId: "", mode: "single", questions: [], show: false }));
+    mountChat(chat, { planReviewOpen: () => true });
+    await flush();
+
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog?.getAttribute("aria-label")).toBe("审核执行计划");
+    expect(dialog?.querySelector(".plan-review-prompt")).not.toBeNull();
+  });
+
   it("renders ask_user in a centered modal outside the chat layout", async () => {
     const chat = makeChat(() => ({
       askId: "ask-1",

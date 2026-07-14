@@ -52,6 +52,7 @@ export default function App() {
   const [view, setView] = createSignal<View>("home");
   const [configLang, setConfigLang] = createSignal<Lang>("en");
   const [permissionLevel, setPermissionLevel] = createSignal(4);
+  const [pendingPlanReviews, setPendingPlanReviews] = createSignal<string[]>([]);
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
   // Active session seed — drives which ChatStore is displayed
   const [activeSeed, setActiveSeed] = createSignal<string>("");
@@ -188,8 +189,7 @@ export default function App() {
       case "ask_resolved": chat.handleAskResolved((p.ask_id ?? "") as string); break;
       case "ask_rejected": chat.handleAskRejected((p.ask_id ?? "") as string, (p.message ?? "Invalid answer") as string); break;
       case "plan_changed": {
-        // Forward to PlanReviewPanel via DOM custom event
-        window.dispatchEvent(new CustomEvent("plan-submitted", { detail: { seed: listenerSeed } }));
+        setPendingPlanReviews((current) => current.includes(listenerSeed) ? current : [...current, listenerSeed]);
         break;
       }
       case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); if (listenerSeed === activeSeed()) setRefreshKey((k) => k + 1); break;
@@ -312,9 +312,7 @@ export default function App() {
     try {
       const raw = await invoke<string>("cmd_get_dashboard_data", { seed });
       const data = JSON.parse(raw);
-      if (data.tasks && data.tasks.length > 0) {
-        chat.handleDashboard({ tasks: data.tasks, recent_edits: data.recent_edits });
-      }
+      chat.handleDashboard({ tasks: data.tasks ?? [], recent_edits: data.recent_edits ?? [] });
     } catch (e) { console.error("loadDashboardFromDisk:", e); }
   }
 
@@ -691,6 +689,8 @@ export default function App() {
                     permissionLevel={permissionLevel()}
                     onPermissionLevelChange={changePermissionLevel}
                     onChangeWorkspace={browseWorkspace}
+                    planReviewOpen={() => pendingPlanReviews().includes(activeSeed())}
+                    onPlanReviewClose={() => setPendingPlanReviews((current) => current.filter((seed) => seed !== activeSeed()))}
                   />
                 </div>
               </Show>

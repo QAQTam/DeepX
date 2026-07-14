@@ -1,7 +1,6 @@
 //! Session lifecycle commands: send message, create/resume/close session,
 //! cancel, set mode, dashboard, activity, undo, compact, load more turns.
 
-use super::super::config::resolve_deepx_dir;
 use super::super::registry::{AgentRegistry, ensure_agent, send_to_agent};
 use super::super::util::read_file_preview;
 use deepx_proto::Ui2Agent;
@@ -213,9 +212,9 @@ pub fn cmd_close_session(seed: String) -> Result<(), String> {
 pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
     use std::io::BufRead;
 
-    // Tasks from .deepx/tasks.md (same path as the task tool)
+    // Tasks are session-scoped, matching deepx-tools/task.rs.
     let tasks: Vec<serde_json::Value> = {
-        let path = resolve_deepx_dir(&seed).join("tasks.md");
+        let path = deepx_types::platform::sessions_dir().join(&seed).join("tasks.md");
         if let Ok(file) = std::fs::File::open(&path) {
             std::io::BufReader::new(file)
                 .lines()
