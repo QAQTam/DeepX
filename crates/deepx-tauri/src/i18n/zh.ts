@@ -189,6 +189,7 @@ const zh: I18nStrings = {
     noFiles: "无文件",
     gitChanges: "Git 变更",
     noChanges: "没有变更",
+    noFileSelected: "选择文件以查看差异",
     commit: "提交",
     commitPlaceholder: "提交信息...",
     stashSwitch: "暂存并切换",

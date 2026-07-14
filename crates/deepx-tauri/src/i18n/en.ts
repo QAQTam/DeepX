@@ -187,6 +187,7 @@ const en = {
     noFiles: "No files",
     gitChanges: "Git Changes",
     noChanges: "No changes",
+    noFileSelected: "Select a file to view diff",
     commit: "Commit",
     commitPlaceholder: "commit message...",
     stashSwitch: "Stash & Switch",

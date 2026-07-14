@@ -1,4 +1,4 @@
-import { createSignal, For, Show, onMount } from "solid-js";
+import { createSignal, For, Show, onMount, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
 import { renderDiffHtml } from "../lib/diff";
@@ -25,79 +25,113 @@ const CHANGE_ICONS: Record<string, string> = {
   renamed: "\u2192",
 };
 
-export default function GitDiffPanel(props: { seed: string }) {
+interface GitDiffPanelProps {
+  open: boolean;
+  seed: string;
+  onClose: () => void;
+}
+
+export default function GitDiffPanel(props: GitDiffPanelProps) {
   const { t } = useI18n();
   const [files, setFiles] = createSignal<GitFileEntry[]>([]);
-  const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
   const [loading, setLoading] = createSignal(false);
   const [branch, setBranch] = createSignal("");
-  const [branches, setBranches] = createSignal<{name: string; current: boolean}[]>([]);
+  const [branches, setBranches] = createSignal<{ name: string; current: boolean }[]>([]);
   const [switching, setSwitching] = createSignal(false);
   const [committing, setCommitting] = createSignal(false);
-  const [showCommitInput, setShowCommitInput] = createSignal(false);
   const [commitMessage, setCommitMessage] = createSignal("");
+  const [selectedFile, setSelectedFile] = createSignal<string | null>(null);
+  const [diffLoading, setDiffLoading] = createSignal(false);
+  const [diffError, setDiffError] = createSignal<string | null>(null);
+  const [diffHtml, setDiffHtml] = createSignal<string | null>(null);
+  const [diffMode, setDiffMode] = createSignal<"unified" | "split">("unified");
   const [showSwitchPrompt, setShowSwitchPrompt] = createSignal(false);
   const [pendingBranch, setPendingBranch] = createSignal("");
+
+  // ── Load data when opened ──
+  createEffect(() => {
+    if (props.open && props.seed) {
+      refresh();
+      loadBranches();
+    }
+  });
+
+  // ── Reset state when closed ──
+  createEffect(() => {
+    if (!props.open) {
+      setFiles([]);
+      setBranch("");
+      setBranches([]);
+      setSelectedFile(null);
+      setDiffHtml(null);
+      setDiffError(null);
+      setCommitMessage("");
+      setShowSwitchPrompt(false);
+    }
+  });
 
   async function refresh() {
     if (!props.seed) return;
     setLoading(true);
     try {
       const raw: GitFileEntry[] = JSON.parse(await invoke("cmd_get_git_diff", { seed: props.seed }));
-      const prev = files();
-      const prevMap = new Map(prev.map(f => [f.path, f]));
-      const merged = raw.map(f => {
-        const old = prevMap.get(f.path);
-        if (old?.diffHtml) return { ...f, diffHtml: old.diffHtml };
-        return f;
-      });
-      setFiles(merged);
-    } catch (e) { console.error("git_diff error:", e); }
+      setFiles(raw);
+      setDiffError(null);
+    } catch (e) {
+      console.error("git_diff error:", e);
+      setFiles([]);
+    }
     setLoading(false);
   }
-
-  function toggle(path: string) {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(path)) { next.delete(path); return next; }
-      next.add(path);
-      const f = files().find(x => x.path === path);
-      if (f && !f.diffHtml && (f.change === "modified" || f.change === "added")) {
-        loadDiff(path);
-      }
-      return next;
-    });
-  }
-
-  async function loadDiff(path: string) {
-    try {
-      const rawDiff: string = await invoke("cmd_get_git_file_diff", { seed: props.seed, filePath: path });
-      const html = renderDiffHtml(rawDiff) || "<div class='status-empty'>No diff available (new/untracked file)</div>";
-      setFiles(prev => prev.map(f => f.path === path ? { ...f, diffHtml: html } : f));
-    } catch (e) {
-      console.error("git_file_diff error:", e);
-      setFiles(prev => prev.map(f => f.path === path ? { ...f, diffHtml: "<div class='status-empty'>Diff failed</div>" } : f));
-    }
-  }
-
-  // Refresh on mount + load branches
-  onMount(() => {
-    refresh();
-    loadBranches();
-  });
 
   async function loadBranches() {
     try {
       const raw = await invoke<string>("cmd_list_branches", { seed: props.seed });
-      setBranches(JSON.parse(raw));
-      invoke<string>("cmd_get_git_branch", { seed: props.seed })
-        .then(setBranch).catch(() => setBranch(""));
-    } catch (_) { setBranches([]); }
+      const list: { name: string; current: boolean }[] = JSON.parse(raw);
+      setBranches(list);
+      const current = list.find((b) => b.current)?.name ?? "";
+      setBranch(current);
+    } catch (_) {
+      setBranches([]);
+    }
+  }
+
+  async function selectFile(path: string) {
+    setSelectedFile(path);
+    setDiffLoading(true);
+    setDiffError(null);
+    setDiffHtml(null);
+
+    // Check if we already have the diff cached
+    const cached = files().find((f) => f.path === path);
+    if (cached?.diffHtml) {
+      setDiffHtml(cached.diffHtml);
+      setDiffLoading(false);
+      return;
+    }
+
+    try {
+      const rawDiff: string = await invoke("cmd_get_git_file_diff", {
+        seed: props.seed,
+        filePath: path,
+      });
+      const html =
+        renderDiffHtml(rawDiff) ||
+        '<div class="git-workspace-empty">No diff available</div>';
+      // Cache the result
+      setFiles((prev) =>
+        prev.map((f) => (f.path === path ? { ...f, diffHtml: html } : f)),
+      );
+      setDiffHtml(html);
+    } catch (e) {
+      console.error("git_file_diff error:", e);
+      setDiffError(String(e));
+    }
+    setDiffLoading(false);
   }
 
   async function switchBranch(name: string) {
     if (name === branch()) return;
-    // If there are uncommitted changes, ask the user
     if (files().length > 0) {
       setPendingBranch(name);
       setShowSwitchPrompt(true);
@@ -110,10 +144,13 @@ export default function GitDiffPanel(props: { seed: string }) {
     setSwitching(true);
     setShowSwitchPrompt(false);
     try {
-      const newHead = await invoke<string>("cmd_switch_branch", { seed: props.seed, branch: name, stash });
-      setBranch(newHead);
-      setFiles([]); setExpanded(new Set<string>());
+      await invoke<string>("cmd_switch_branch", {
+        seed: props.seed,
+        branch: name,
+        stash,
+      });
       await refresh();
+      await loadBranches();
     } catch (e) {
       console.error("switch branch:", e);
     }
@@ -125,9 +162,13 @@ export default function GitDiffPanel(props: { seed: string }) {
     if (!msg) return;
     setCommitting(true);
     try {
-      await invoke<string>("cmd_git_commit", { seed: props.seed, message: msg });
+      await invoke<string>("cmd_git_commit", {
+        seed: props.seed,
+        message: msg,
+      });
       setCommitMessage("");
-      setShowCommitInput(false);
+      setSelectedFile(null);
+      setDiffHtml(null);
       await refresh();
     } catch (e) {
       console.error("commit:", e);
@@ -136,118 +177,203 @@ export default function GitDiffPanel(props: { seed: string }) {
   }
 
   const totalStats = () => {
-    let a = 0, r = 0;
-    for (const f of files()) { a += f.lines_added; r += f.lines_removed; }
+    let a = 0,
+      r = 0;
+    for (const f of files()) {
+      a += f.lines_added;
+      r += f.lines_removed;
+    }
     return { added: a, removed: r };
   };
 
-  const countByChange = () => {
-    const c: Record<string, number> = {};
-    for (const f of files()) { c[f.change] = (c[f.change] || 0) + 1; }
-    return c;
-  };
+  // ── Don't render when closed ──
+  if (!props.open) return null;
 
   return (
-    <div class="git-diff-panel">
-      <div class="git-diff-header">
-        <Show when={branches().length > 0} fallback={
-          <span class="git-diff-title" onClick={refresh}>{branch() || t().status.gitChanges}</span>
-        }>
-          <select
-            class="git-branch-select"
-            value={branch()}
-            onChange={(e) => switchBranch(e.currentTarget.value)}
-            disabled={switching()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <For each={branches()}>
-              {(b) => <option value={b.name} selected={b.current}>{b.name}</option>}
-            </For>
-          </select>
-        </Show>
-        <Show when={switching()}><span class="git-diff-spinner">⟳</span></Show>
-        <Show when={loading()}><span class="git-diff-spinner" onClick={refresh}>⟳</span></Show>
-        <span class="git-diff-summary">
-          <Show when={totalStats().added > 0 || totalStats().removed > 0}>
-            <span class="git-diff-stat-add">+{totalStats().added}</span>
-            <span class="git-diff-stat-del">-{totalStats().removed}</span>
-          </Show>
-        </span>
-        {/* Commit button / inline input */}
-        <Show when={files().length > 0}>
-          <Show when={showCommitInput()} fallback={
-            <button class="git-commit-btn" onClick={() => setShowCommitInput(true)}
-              disabled={committing() || switching()}>{t().status.commit}</button>
-          }>
-            <span class="git-commit-inline">
-              <input
-                type="text"
-                class="git-commit-input"
-                placeholder={t().status.commitPlaceholder}
-                value={commitMessage()}
-                onInput={(e) => setCommitMessage(e.currentTarget.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setShowCommitInput(false); setCommitMessage(""); }}}
-                disabled={committing()}
-                ref={(el) => { if (el) setTimeout(() => el.focus(), 0); }}
-              />
-              <button class="git-commit-ok" onClick={commit} disabled={committing() || !commitMessage().trim()}>✓</button>
-              <button class="git-commit-cancel" onClick={() => { setShowCommitInput(false); setCommitMessage(""); }}>✗</button>
+    <div class="git-workspace-overlay" onClick={props.onClose}>
+      <div class="git-workspace" onClick={(e) => e.stopPropagation()}>
+        {/* ── Header ── */}
+        <div class="git-workspace-header">
+          <span class="git-workspace-title">{t().status.gitChanges}</span>
+
+          <Show when={branches().length > 0} fallback={
+            <span class="git-workspace-branch-select" style="cursor:default;">
+              {branch() || "—"}
             </span>
+          }>
+            <select
+              class="git-workspace-branch-select"
+              value={branch()}
+              onChange={(e) => switchBranch(e.currentTarget.value)}
+              disabled={switching()}
+            >
+              <For each={branches()}>
+                {(b) => (
+                  <option value={b.name} selected={b.current}>
+                    {b.name}
+                  </option>
+                )}
+              </For>
+            </select>
           </Show>
+
+          <Show when={switching()}>
+            <span class="git-spinner">⟳</span>
+          </Show>
+
+          <div class="git-workspace-stats">
+            <Show when={files().length > 0}>
+              <span>{files().length} {t().status.files}</span>
+            </Show>
+            <Show when={totalStats().added > 0}>
+              <span class="git-workspace-stat-add">+{totalStats().added}</span>
+            </Show>
+            <Show when={totalStats().removed > 0}>
+              <span class="git-workspace-stat-del">-{totalStats().removed}</span>
+            </Show>
+          </div>
+
+          <div class="git-workspace-actions">
+            <button
+              class={`git-workspace-icon-btn${diffMode() === "split" ? " active" : ""}`}
+              onClick={() => setDiffMode("unified")}
+              title="Unified diff"
+              disabled
+            >
+              U
+            </button>
+            <button
+              class="git-workspace-icon-btn"
+              onClick={refresh}
+              disabled={loading()}
+              title={t().skills.refresh}
+            >
+              {loading() ? <span class="git-spinner">⟳</span> : "↻"}
+            </button>
+            <button
+              class="git-workspace-icon-btn"
+              onClick={props.onClose}
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* ── Branch switch prompt ── */}
+        <Show when={showSwitchPrompt()}>
+          <div class="git-switch-prompt">
+            <span class="git-switch-prompt-msg">
+              {t().status.switchPrompt.replace("{branch}", pendingBranch())}
+            </span>
+            <span class="git-switch-prompt-btns">
+              <button class="git-switch-stash" onClick={() => doSwitch(pendingBranch(), true)}>
+                {t().status.stashSwitch}
+              </button>
+              <button class="git-switch-discard" onClick={() => doSwitch(pendingBranch(), false)}>
+                {t().status.discardSwitch}
+              </button>
+              <button class="git-switch-cancel" onClick={() => { setShowSwitchPrompt(false); setPendingBranch(""); }}>
+                {t().settings.cancel}
+              </button>
+            </span>
+          </div>
+        </Show>
+
+        {/* ── Body ── */}
+        <Show
+          when={files().length > 0}
+          fallback={
+            <div class="git-workspace-empty">
+              {loading() ? "Loading..." : t().status.noChanges}
+            </div>
+          }
+        >
+          <div class="git-workspace-body">
+            {/* Left: File list */}
+            <div class="git-file-list">
+              <For each={files()}>
+                {(f) => (
+                  <div
+                    class={`git-file-item${selectedFile() === f.path ? " selected" : ""}`}
+                    onClick={() => selectFile(f.path)}
+                  >
+                    <span
+                      class="git-file-change-icon"
+                      style={`color: ${CHANGE_COLORS[f.change] || "var(--text-muted)"}`}
+                    >
+                      {CHANGE_ICONS[f.change] || "?"}
+                    </span>
+                    <span class="git-file-path">{f.path}</span>
+                    <span class="git-file-stats">
+                      <Show when={f.lines_added > 0}>
+                        <span class="git-file-stat-add">+{f.lines_added}</span>
+                      </Show>
+                      <Show when={f.lines_removed > 0}>
+                        <span class="git-file-stat-del">-{f.lines_removed}</span>
+                      </Show>
+                    </span>
+                  </div>
+                )}
+              </For>
+            </div>
+
+            {/* Right: Diff view */}
+            <div class="git-diff-view">
+              <Show
+                when={selectedFile()}
+                fallback={
+                  <div class="git-diff-view-empty">
+                    {t().status.noFileSelected ?? "Select a file to view diff"}
+                  </div>
+                }
+              >
+                <Show when={!diffLoading()} fallback={
+                  <div class="git-diff-view-loading">Loading diff...</div>
+                }>
+                  <Show when={!diffError()} fallback={
+                    <div class="git-diff-view-error">
+                      <span>{diffError()}</span>
+                      <button class="git-workspace-icon-btn" onClick={() => selectFile(selectedFile()!)}>
+                        Retry
+                      </button>
+                    </div>
+                  }>
+                    <div class="git-diff-content" innerHTML={diffHtml() || ""} />
+                  </Show>
+                </Show>
+              </Show>
+            </div>
+          </div>
+        </Show>
+
+        {/* ── Footer: Commit ── */}
+        <Show when={files().length > 0}>
+          <div class="git-workspace-footer">
+            <input
+              class="git-commit-input"
+              type="text"
+              value={commitMessage()}
+              onInput={(e) => setCommitMessage(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  commit();
+                }
+              }}
+              placeholder={t().status.commitPlaceholder}
+              disabled={committing()}
+            />
+            <button
+              class="git-commit-submit"
+              onClick={commit}
+              disabled={committing() || !commitMessage().trim()}
+            >
+              {committing() ? "..." : t().status.commit}
+            </button>
+          </div>
         </Show>
       </div>
-
-      {/* Switch-branch prompt when there are uncommitted changes */}
-      <Show when={showSwitchPrompt()}>
-        <div class="git-switch-prompt">
-          <span class="git-switch-prompt-msg">
-            {t().status.switchPrompt.replace("{branch}", pendingBranch())}
-          </span>
-          <span class="git-switch-prompt-btns">
-            <button class="git-switch-stash" onClick={() => doSwitch(pendingBranch(), true)}>
-              {t().status.stashSwitch}
-            </button>
-            <button class="git-switch-discard" onClick={() => doSwitch(pendingBranch(), false)}>
-              {t().status.discardSwitch}
-            </button>
-            <button class="git-switch-cancel" onClick={() => { setShowSwitchPrompt(false); setPendingBranch(""); }}>
-              {t().settings.cancel}
-            </button>
-          </span>
-        </div>
-      </Show>
-      <Show when={files().length > 0} fallback={
-        <div class="git-diff-empty">{t().status.noChanges}</div>
-      }>
-        <div class="git-diff-list">
-          <For each={files()}>
-            {(file) => (
-              <div class={`git-diff-card ${expanded().has(file.path) ? "expanded" : ""}`}>
-                <div class="git-diff-card-hd" onClick={() => toggle(file.path)}>
-                  <span class="git-diff-change-icon" style={`color: ${CHANGE_COLORS[file.change] || "var(--text-muted)"}`}>
-                    {CHANGE_ICONS[file.change] || "?"}
-                  </span>
-                  <span class="git-diff-card-path">{file.path}</span>
-                  <span class="git-diff-card-stats">
-                    <Show when={file.lines_added > 0 || file.lines_removed > 0}>
-                      <span class="git-diff-stat-add">+{file.lines_added}</span>
-                      <span class="git-diff-stat-del">-{file.lines_removed}</span>
-                    </Show>
-                  </span>
-                  <span class="git-diff-card-arrow">{expanded().has(file.path) ? "▼" : "▶"}</span>
-                </div>
-                <Show when={expanded().has(file.path)}>
-                  <div class="git-diff-card-body">
-                    <Show when={file.diffHtml} fallback={<div class="git-diff-loading">Loading...</div>}>
-                      <div class="git-diff-content" innerHTML={file.diffHtml || ""} />
-                    </Show>
-                  </div>
-                </Show>
-              </div>
-            )}
-          </For>
-        </div>
-      </Show>
     </div>
   );
 }

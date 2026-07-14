@@ -9,10 +9,17 @@ import { projectSession } from "../presentation/useConversationView";
 import type { RawSessionState } from "../store/rawSession";
 import ThreadHeader from "./shell/ThreadHeader";
 import EnvironmentPopover from "./shell/EnvironmentPopover";
+import GitDiffPanel from "./GitDiffPanel";
 import ComposerDock from "./composer/ComposerDock";
 import { createFollowUpQueue } from "../store/followUpQueue";
 
-interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; rawSession: () => RawSessionState | undefined; hasMore: boolean; onLoadMore: () => void; onSlashCommand: (cmd: SlashCommand) => void; }
+interface ChatViewProps {
+  chat: ReturnType<typeof import("../store/chat").createChatStore>;
+  rawSession: () => RawSessionState | undefined;
+  hasMore: boolean;
+  onLoadMore: () => void;
+  onSlashCommand: (cmd: SlashCommand) => void;
+}
 
 export default function ChatView(props: ChatViewProps) {
   const chat = () => props.chat;
@@ -20,11 +27,15 @@ export default function ChatView(props: ChatViewProps) {
   const [mode, setMode] = createSignal("plan");
   const [environmentOpen, setEnvironmentOpen] = createSignal(false);
   const [branch, setBranch] = createSignal("");
+  const [showGitWorkspace, setShowGitWorkspace] = createSignal(false);
 
   async function handleSetMode(m: string) {
     setMode(m);
-    try { await invoke("cmd_set_mode", { seed: seed(), mode: m }); }
-    catch (e) { console.error("set_mode error:", e); }
+    try {
+      await invoke("cmd_set_mode", { seed: seed(), mode: m });
+    } catch (e) {
+      console.error("set_mode error:", e);
+    }
   }
 
   async function handleSend(text: string, files: string[]) {
@@ -47,7 +58,9 @@ export default function ChatView(props: ChatViewProps) {
   async function handleCompact() {
     try {
       await invoke("cmd_compact", { seed: seed() });
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   const followUps = createFollowUpQueue(seed(), handleSend);
@@ -55,27 +68,42 @@ export default function ChatView(props: ChatViewProps) {
   createEffect(() => {
     const streaming = chat().isStreaming();
     if (wasStreaming && !streaming) {
-      void followUps.drainAfterTurnEnd({ hasPendingGate: !!props.rawSession?.()?.pendingInteraction });
+      void followUps.drainAfterTurnEnd({
+        hasPendingGate: !!props.rawSession?.()?.pendingInteraction,
+      });
     }
     wasStreaming = streaming;
   });
 
   createEffect(() => {
     if (!environmentOpen()) return;
-    invoke<string>("cmd_get_git_branch", { seed: seed() }).then(setBranch).catch(() => setBranch(""));
+    invoke<string>("cmd_get_git_branch", { seed: seed() })
+      .then(setBranch)
+      .catch(() => setBranch(""));
   });
 
   return (
     <div class="chat-view">
       <ThreadHeader
-        title={props.rawSession?.()?.session.title || seed().slice(0, 8)}
+        title={
+          props.rawSession?.()?.session.title || seed().slice(0, 8)
+        }
         environmentOpen={environmentOpen()}
-        onToggleEnvironment={() => setEnvironmentOpen(value => !value)}
-        onOpenLocation={() => { if (chat().workspace()) void open(chat().workspace()); }}
+        onToggleEnvironment={() => setEnvironmentOpen((value) => !value)}
+        onOpenLocation={() => {
+          if (chat().workspace()) void open(chat().workspace());
+        }}
         onCompact={handleCompact}
       />
       <Show when={environmentOpen() && props.rawSession?.()}>
-        {raw => <EnvironmentPopover session={raw()} workspace={chat().workspace()} branch={branch()} />}
+        {(raw) => (
+          <EnvironmentPopover
+            session={raw()}
+            workspace={chat().workspace()}
+            branch={branch()}
+            onOpenDiff={() => setShowGitWorkspace(true)}
+          />
+        )}
       </Show>
       <Show when={props.rawSession()}>
         {(raw) => <ConversationTranscript turns={projectSession(raw())} />}
@@ -99,6 +127,13 @@ export default function ChatView(props: ChatViewProps) {
         state={chat().askState}
         onSubmit={(a) => chat().submitAskAnswer(a)}
         onDismiss={() => chat().dismissAsk()}
+      />
+
+      {/* ── Git Diff Workspace Overlay ── */}
+      <GitDiffPanel
+        open={showGitWorkspace()}
+        seed={seed()}
+        onClose={() => setShowGitWorkspace(false)}
       />
     </div>
   );
