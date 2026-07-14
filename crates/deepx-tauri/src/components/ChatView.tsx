@@ -2,8 +2,6 @@ import { createEffect, createSignal, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import type { SlashCommand } from "./SlashMenu";
-import AskDialog from "./AskDialog";
-import AskForm from "./AskForm";
 import ConversationTranscript from "./conversation/ConversationTranscript";
 import { projectSession } from "../presentation/useConversationView";
 import type { RawSessionState } from "../store/rawSession";
@@ -12,6 +10,11 @@ import EnvironmentPopover from "./shell/EnvironmentPopover";
 import GitDiffPanel from "./GitDiffPanel";
 import ComposerDock from "./composer/ComposerDock";
 import { createFollowUpQueue } from "../store/followUpQueue";
+import InteractionDock from "./interactions/InteractionDock";
+import AskUserPrompt from "./interactions/AskUserPrompt";
+import PermissionPrompt from "./interactions/PermissionPrompt";
+import CompactStatusRow from "./interactions/CompactStatusRow";
+import type { QueuedPermission } from "../store/permissionQueue";
 
 interface ChatViewProps {
   chat: ReturnType<typeof import("../store/chat").createChatStore>;
@@ -19,6 +22,12 @@ interface ChatViewProps {
   hasMore: boolean;
   onLoadMore: () => void;
   onSlashCommand: (cmd: SlashCommand) => void;
+  permission?: () => QueuedPermission | null;
+  onPermissionRespond?: (
+    permission: QueuedPermission,
+    approved: boolean,
+    trustFolder: boolean,
+  ) => Promise<void>;
 }
 
 export default function ChatView(props: ChatViewProps) {
@@ -28,6 +37,10 @@ export default function ChatView(props: ChatViewProps) {
   const [environmentOpen, setEnvironmentOpen] = createSignal(false);
   const [branch, setBranch] = createSignal("");
   const [showGitWorkspace, setShowGitWorkspace] = createSignal(false);
+  const permission = () => props.permission?.() ?? null;
+  const showCompactStatus = () => chat().isCompacting() || chat().compactResult() != null;
+  const hasInteractions = () =>
+    showCompactStatus() || permission() !== null || chat().askState().show;
 
   async function handleSetMode(m: string) {
     setMode(m);
@@ -108,6 +121,39 @@ export default function ChatView(props: ChatViewProps) {
       <Show when={props.rawSession()}>
         {(raw) => <ConversationTranscript turns={projectSession(raw())} />}
       </Show>
+      <Show when={hasInteractions()}>
+        <InteractionDock>
+          <Show when={showCompactStatus()}>
+            <CompactStatusRow
+              active={chat().isCompacting()}
+              status={chat().isCompacting() ? "active" : "complete"}
+              text={chat().compactText()}
+              turnsCompacted={chat().compactResult() ?? undefined}
+            />
+          </Show>
+          <Show
+            when={permission()}
+            fallback={
+              <Show when={chat().askState().show}>
+                <AskUserPrompt
+                  questions={chat().askState().questions}
+                  onSubmit={(answers) => chat().submitAskAnswer(answers)}
+                  onDismiss={() => void chat().dismissAsk()}
+                />
+              </Show>
+            }
+          >
+            {(item) => (
+              <PermissionPrompt
+                request={item().request}
+                onRespond={(approved, trustFolder) =>
+                  props.onPermissionRespond?.(item(), approved, trustFolder)
+                }
+              />
+            )}
+          </Show>
+        </InteractionDock>
+      </Show>
       <ComposerDock
         onSend={handleSend}
         onStop={handleStop}
@@ -117,16 +163,6 @@ export default function ChatView(props: ChatViewProps) {
         mode={mode()}
         onModeChange={handleSetMode}
         model={chat().sessionInfo.model}
-      />
-      <AskDialog
-        state={chat().askState}
-        onSubmit={(a) => chat().submitAskAnswer(a)}
-        onDismiss={() => chat().dismissAsk()}
-      />
-      <AskForm
-        state={chat().askState}
-        onSubmit={(a) => chat().submitAskAnswer(a)}
-        onDismiss={() => chat().dismissAsk()}
       />
 
       {/* ── Git Diff Workspace Overlay ── */}

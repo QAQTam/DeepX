@@ -17,8 +17,7 @@ import "./styles/permission-dialog.css";
 import "./styles/changelog.css";
 import "./styles/skills.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
-import PermissionPrompt from "./components/interactions/PermissionPrompt";
-import { createPermissionQueue } from "./store/permissionQueue";
+import { createPermissionQueue, type QueuedPermission } from "./store/permissionQueue";
 import { createRawSessionState, reduceAgentEvent, resolvePendingInteraction } from "./store/sessionEventReducer";
 import type { RawSessionState } from "./store/rawSession";
 import ChangelogModal from "./components/ChangelogModal";
@@ -74,6 +73,30 @@ export default function App() {
   const [theme, setTheme] = createSignal<ThemeMode>("system");
   const [refreshKey, setRefreshKey] = createSignal(0); // bump to refresh TokenChart
   const permissionQueue = createPermissionQueue();
+  const activeChatPermission = () => {
+    const permission = permissionQueue.active();
+    return permission?.seed === activeSeed() ? permission : null;
+  };
+
+  async function respondToPermission(
+    permission: QueuedPermission,
+    approved: boolean,
+    trustFolder: boolean,
+  ) {
+    await invoke("cmd_permission_response", {
+      seed: permission.seed,
+      toolCallId: permission.request.tool_call_id,
+      approved,
+      trustFolder,
+    });
+    const raw = rawSessions.get(permission.seed);
+    raw?.[1](state => resolvePendingInteraction(
+      state,
+      permission.request.tool_call_id,
+      approved ? "approved" : "rejected",
+    ));
+    permissionQueue.resolve(permission.seed, permission.request.tool_call_id);
+  }
   const [showChangelog, setShowChangelog] = createSignal(false);
 
   // ── Toast notifications (disconnect warnings, errors) ──
@@ -638,7 +661,15 @@ export default function App() {
             <Match when={view() === "chat"}>
               <Show when={hasChosenSession() && activeSeed() && activeChat()}>
                 <div class="chat-area">
-                  <ChatView chat={activeChat()!} rawSession={activeRawSession} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} onSlashCommand={handleSlashCommand} />
+                  <ChatView
+                    chat={activeChat()!}
+                    rawSession={activeRawSession}
+                    hasMore={activeChat()!.hasMore()}
+                    onLoadMore={loadMoreTurns}
+                    onSlashCommand={handleSlashCommand}
+                    permission={activeChatPermission}
+                    onPermissionRespond={respondToPermission}
+                  />
                 </div>
               </Show>
             </Match>
@@ -647,26 +678,6 @@ export default function App() {
         
       </div>
       <ToastContainer ctrl={toastCtrl} />
-      <Show keyed when={permissionQueue.active()}>
-        {(permission) => (
-          <div class="interaction-overlay">
-          <PermissionPrompt
-            request={permission.request}
-            onRespond={async (approved, trustFolder) => {
-              await invoke("cmd_permission_response", {
-                seed: permission.seed,
-                toolCallId: permission.request.tool_call_id,
-                approved,
-                trustFolder,
-              });
-              const raw = rawSessions.get(permission.seed);
-              raw?.[1](state => resolvePendingInteraction(state, permission.request.tool_call_id, approved ? "approved" : "rejected"));
-              permissionQueue.resolve(permission.seed, permission.request.tool_call_id);
-            }}
-          />
-          </div>
-        )}
-      </Show>
       <Show when={showChangelog()}>
         <ChangelogModal onClose={() => setShowChangelog(false)} />
       </Show>
