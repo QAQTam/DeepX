@@ -9,8 +9,8 @@
 //! 2. Add `Box::new(YourEngine::new())` to the engines vec in Loop::new_ipc()
 //! 3. Done — no changes to Loop::dispatch() needed
 
-use deepx_proto::Ui2Agent;
 use super::types::{Outcome, RingContext};
+use deepx_proto::Ui2Agent;
 
 /// An Engine processes Ui2Agent commands within a RingContext.
 ///
@@ -54,12 +54,23 @@ impl Engine for super::engine_turn::TurnEngine {
 impl Engine for super::engine_tool::ToolEngine {
     fn try_handle(&mut self, ctx: &mut RingContext, cmd: &Ui2Agent) -> Option<Outcome> {
         match cmd {
-            Ui2Agent::ToolCall { id, name, action, args } => {
+            Ui2Agent::ToolCall {
+                id,
+                name,
+                action,
+                args,
+            } => {
                 self.handle_ui_tool_call(ctx, id, name, action, args);
                 Some(Outcome::Handled)
             }
-            Ui2Agent::PermissionResponse { tool_call_id, approved, trust_folder } => {
-                Some(self.handle_permission_response(ctx, tool_call_id, *approved, *trust_folder))
+            Ui2Agent::PermissionResponse {
+                tool_call_id,
+                approved,
+                trust_folder,
+            } => {
+                let _ =
+                    self.handle_permission_response(ctx, tool_call_id, *approved, *trust_folder);
+                Some(Outcome::Handled)
             }
             _ => None,
         }
@@ -101,9 +112,7 @@ impl Engine for super::engine_session::SessionEngine {
 impl Engine for super::engine_input::InputEngine {
     fn try_handle(&mut self, ctx: &mut RingContext, cmd: &Ui2Agent) -> Option<Outcome> {
         match cmd {
-            Ui2Agent::UserInput { text } => {
-                Some(self.handle_user_input(ctx, text))
-            }
+            Ui2Agent::UserInput { text } => Some(self.handle_user_input(ctx, text)),
             _ => None,
         }
     }

@@ -1,25 +1,34 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, on, Show } from "solid-js";
 import type { AskState } from "../store/chat";
+import type { AskAnswer } from "../lib/types";
 
 interface AskDialogProps {
   state: () => AskState;
-  onSubmit: (answer: string) => void;
+  onSubmit: (answers: AskAnswer[]) => void;
   onDismiss: () => void;
 }
 
 export default function AskDialog(props: AskDialogProps) {
   const [customInput, setCustomInput] = createSignal("");
+  createEffect(on(
+    () => props.state().askId,
+    () => setCustomInput(""),
+    { defer: true },
+  ));
   let inputRef!: HTMLInputElement;
 
   function handleOptionClick(opt: string) {
-    props.onSubmit(opt);
+    const q = props.state().questions[0];
+    if (!q) return;
+    props.onSubmit([{ question_id: q.id, answer: opt }]);
   }
 
   function handleCustomSubmit(e: Event) {
     e.preventDefault();
     const text = customInput().trim();
-    if (text) {
-      props.onSubmit(text);
+    const q = props.state().questions[0];
+    if (text && q) {
+      props.onSubmit([{ question_id: q.id, answer: text }]);
       setCustomInput("");
     }
   }
@@ -30,11 +39,12 @@ export default function AskDialog(props: AskDialogProps) {
   }
 
   const s = () => props.state();
-  const hasOptions = () => s().options.length > 0;
-  const showCustomInput = () => s().options.length === 0 || s().allow_custom;
+  const q = () => s().questions[0];
+  const hasOptions = () => (q()?.options?.length ?? 0) > 0;
+  const showCustomInput = () => q() && (!hasOptions() || q().allow_custom !== false);
 
   return (
-    <Show when={s().show}>
+    <Show when={s().show && s().mode === "single" && q()}>
       <div class="ask-overlay" onClick={handleDismiss}>
         <div class="ask-dialog" onClick={(e) => e.stopPropagation()}>
           <div class="ask-header">
@@ -46,10 +56,10 @@ export default function AskDialog(props: AskDialogProps) {
               </svg>
             </button>
           </div>
-          <div class="ask-question">{s().question}</div>
+          <div class="ask-question">{q().question}</div>
           <Show when={hasOptions()}>
             <div class="ask-options">
-              {s().options.map((opt) => (
+              {(q().options || []).map((opt: string) => (
                 <button class="ask-option-btn" onClick={() => handleOptionClick(opt)}>
                   {opt}
                 </button>

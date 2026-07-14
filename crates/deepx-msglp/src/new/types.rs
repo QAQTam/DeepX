@@ -22,11 +22,12 @@
 //! and swap the active one on session switch. The rest of the Loop
 //! (I/O channels, cancel token, session-agnostic engines) stays unchanged.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 
-use deepx_proto::Agent2Ui;
+use deepx_proto::{Agent2Ui, AskMode, AskQuestion};
 use deepx_types::UsageInfo;
 
 use crate::agent::AgentState;
@@ -51,16 +52,26 @@ pub struct CancelToken {
 
 impl CancelToken {
     pub fn new() -> Self {
-        Self { inner: Arc::new(AtomicBool::new(false)) }
+        Self {
+            inner: Arc::new(AtomicBool::new(false)),
+        }
     }
     /// Signal cancellation. Non-blocking.
-    pub fn set(&self) { self.inner.store(true, std::sync::atomic::Ordering::SeqCst); }
+    pub fn set(&self) {
+        self.inner.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
     /// Clear the cancel flag (called when starting a new turn).
-    pub fn clear(&self) { self.inner.store(false, std::sync::atomic::Ordering::SeqCst); }
+    pub fn clear(&self) {
+        self.inner.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
     /// Check if cancellation has been requested.
-    pub fn is_set(&self) -> bool { self.inner.load(std::sync::atomic::Ordering::SeqCst) }
+    pub fn is_set(&self) -> bool {
+        self.inner.load(std::sync::atomic::Ordering::SeqCst)
+    }
     /// Clone the inner Arc for passing to threads / Gate layer.
-    pub fn arc(&self) -> Arc<AtomicBool> { self.inner.clone() }
+    pub fn arc(&self) -> Arc<AtomicBool> {
+        self.inner.clone()
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -135,6 +146,15 @@ pub enum Outcome {
         usage: Option<UsageInfo>,
     },
 
+    /// A suspended turn was deliberately aborted by the user.
+    TurnAborted {
+        turn_id: String,
+        usage: Option<UsageInfo>,
+        /// The reader already queued the interrupt command that caused this
+        /// outcome; Loop must consume it without emitting a second terminal.
+        consume_queued_interrupt: bool,
+    },
+
     /// Turn needs another lap around the ring (tools executed → back to gate).
     /// Loop calls TurnEngine.run() recursively.
     ContinueTurn {
@@ -174,6 +194,14 @@ pub enum YieldReason {
 // TurnState — saved turn snapshot for suspend/resume
 // ═══════════════════════════════════════════════════════
 
+/// One authorized ask_user tool call waiting for a typed user response.
+#[derive(Debug, Clone)]
+pub struct PendingAsk {
+    pub call_id: String,
+    pub mode: AskMode,
+    pub questions: Vec<AskQuestion>,
+}
+
 /// Serialized snapshot of a turn mid-execution.
 /// Stored in `TurnEngine.suspended` when a turn is paused for permissions
 /// or awaiting user input. Restored via `TurnEngine.resume()`.
@@ -182,7 +210,9 @@ pub struct TurnState {
     pub round_num: u32,
     pub usage: Option<UsageInfo>,
     /// Tool call IDs still awaiting permission approval.
-    pub pending_call_ids: Vec<String>,
+    pub pending_permission_ids: Vec<String>,
+    /// Authorized ask_user calls in assistant tool-call order.
+    pub pending_asks: VecDeque<PendingAsk>,
     /// Session ID at the time of suspension (validated on resume to prevent
     /// stale turn resumption after a session switch).
     pub session_id: String,
@@ -262,18 +292,26 @@ pub struct StatsCollector {
 
 impl StatsCollector {
     pub fn new() -> Self {
-        Self { code_stats: Vec::new() }
+        Self {
+            code_stats: Vec::new(),
+        }
     }
     pub fn push_delta(&mut self, delta: deepx_proto::CodeDeltaRecord) {
         self.code_stats.push(delta);
     }
     /// Persist accumulated deltas to disk. Clears the in-memory buffer.
     pub fn flush(&mut self, seed: &str) {
-        if self.code_stats.is_empty() || seed.is_empty() { return; }
+        if self.code_stats.is_empty() || seed.is_empty() {
+            return;
+        }
         let dir = deepx_types::platform::sessions_dir().join(seed);
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("code_stats.jsonl");
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             use std::io::Write;
             for delta in self.code_stats.drain(..) {
                 let line = serde_json::to_string(&delta).unwrap_or_default();
@@ -296,7 +334,9 @@ pub struct NotifyHandle {
 
 impl NotifyHandle {
     pub fn notify(&self, body: String) {
-        let _ = self.tx.send(crate::notification::NotifyMessage::Toast(body));
+        let _ = self
+            .tx
+            .send(crate::notification::NotifyMessage::Toast(body));
     }
 }
 

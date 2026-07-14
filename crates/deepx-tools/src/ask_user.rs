@@ -85,17 +85,39 @@ pub fn normalize_ask_user(args: &serde_json::Value) -> Result<NormalizedAsk, Ask
             });
         }
 
-        let options = raw
-            .get("options")
-            .and_then(serde_json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let options = match raw.get("options") {
+            None => Vec::new(),
+            Some(serde_json::Value::Array(values)) => {
+                let mut options = Vec::with_capacity(values.len());
+                for (option_index, value) in values.iter().enumerate() {
+                    let Some(option) = value.as_str() else {
+                        return Err(AskUserError {
+                            code: "INVALID_OPTION",
+                            message: format!(
+                                "question {id} option {option_index} must be a non-empty string"
+                            ),
+                        });
+                    };
+                    let option = option.trim();
+                    if option.is_empty() {
+                        return Err(AskUserError {
+                            code: "INVALID_OPTION",
+                            message: format!(
+                                "question {id} option {option_index} must be a non-empty string"
+                            ),
+                        });
+                    }
+                    options.push(option.to_string());
+                }
+                options
+            }
+            Some(_) => {
+                return Err(AskUserError {
+                    code: "INVALID_OPTIONS",
+                    message: format!("question {id} options must be an array"),
+                });
+            }
+        };
         let mut unique_options = HashSet::new();
         if options
             .iter()
@@ -345,6 +367,18 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code, "UNANSWERABLE_QUESTION");
+    }
+
+    #[test]
+    fn blank_option_is_rejected_before_presenting_the_prompt() {
+        let error = normalize_ask_user(&serde_json::json!({
+            "question": "Blocked",
+            "options": ["   "],
+            "allow_custom": false
+        }))
+        .unwrap_err();
+
+        assert_eq!(error.code, "INVALID_OPTION");
     }
 
     #[test]

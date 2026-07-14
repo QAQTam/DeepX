@@ -8,9 +8,9 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter};
 
@@ -35,7 +35,7 @@ static SYSTEM_PATH: OnceLock<String> = OnceLock::new();
 /// Must be called from main() early, before Tauri initialization.
 pub fn cache_system_path() {
     let mut path = std::env::var("PATH").unwrap_or_default();
-    
+
     // On Windows GUI apps, the process PATH may be stripped. Read the full
     // system+user PATH from the registry as a reliable fallback.
     #[cfg(target_os = "windows")]
@@ -43,20 +43,25 @@ pub fn cache_system_path() {
         let reg_path = windows_reg_path();
         if !reg_path.is_empty() {
             // Merge with current PATH, deduplicating
-            let mut seen: std::collections::HashSet<String> = path.split(';').map(|s| s.to_string()).collect();
+            let mut seen: std::collections::HashSet<String> =
+                path.split(';').map(|s| s.to_string()).collect();
             for segment in reg_path.split(';') {
                 if !segment.is_empty() && seen.insert(segment.to_string()) {
-                    if !path.is_empty() { path.push(';'); }
+                    if !path.is_empty() {
+                        path.push(';');
+                    }
                     path.push_str(segment);
                 }
             }
         }
     }
-    
+
     let _ = SYSTEM_PATH.set(path.clone());
     // Apply the full PATH to the current process so all child processes
     // (agent subprocess, pwsh via conpty, daemon, etc.) inherit it automatically.
-    unsafe { std::env::set_var("PATH", &path); }
+    unsafe {
+        std::env::set_var("PATH", &path);
+    }
 }
 
 /// Detect OS version and store it for injection into the system prompt [SESSION] block.
@@ -81,63 +86,89 @@ pub fn detect_os_info() {
 
 #[cfg(target_os = "windows")]
 fn windows_reg_path() -> String {
-    
     unsafe {
         // Win32 FFI declarations
         unsafe extern "system" {
             fn RegOpenKeyExW(
-                hkey: isize, subkey: *const u16, _uloptions: u32,
-                _samdesired: u32, phkresult: *mut isize,
+                hkey: isize,
+                subkey: *const u16,
+                _uloptions: u32,
+                _samdesired: u32,
+                phkresult: *mut isize,
             ) -> i32;
             fn RegQueryValueExW(
-                hkey: isize, value: *const u16, _reserved: *const u8,
-                pdwtype: *mut u32, pbdata: *mut u8, pcbdata: *mut u32,
+                hkey: isize,
+                value: *const u16,
+                _reserved: *const u8,
+                pdwtype: *mut u32,
+                pbdata: *mut u8,
+                pcbdata: *mut u32,
             ) -> i32;
             fn RegCloseKey(hkey: isize) -> i32;
         }
-        
+
         const HKEY_LOCAL_MACHINE: isize = -2147483646i64 as isize; // 0x80000002
-        const HKEY_CURRENT_USER: isize = -2147483647i64 as isize;   // 0x80000001
+        const HKEY_CURRENT_USER: isize = -2147483647i64 as isize; // 0x80000001
         const KEY_READ: u32 = 0x20019;
-        
+
         let mut result = String::new();
-        
+
         for (hkey, subkey_str) in [
-            (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\0"),
+            (
+                HKEY_LOCAL_MACHINE,
+                "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\0",
+            ),
             (HKEY_CURRENT_USER, "Environment\0"),
         ] {
             let subkey_wide: Vec<u16> = subkey_str.encode_utf16().collect();
             let value_name: Vec<u16> = "PATH\0".encode_utf16().collect();
             let mut key_handle: isize = 0;
-            
+
             if RegOpenKeyExW(hkey, subkey_wide.as_ptr(), 0, KEY_READ, &mut key_handle) != 0 {
                 continue;
             }
-            
+
             let mut data_type: u32 = 0;
             let mut data_size: u32 = 0;
-            
-            if RegQueryValueExW(key_handle, value_name.as_ptr(), std::ptr::null(),
-                &mut data_type, std::ptr::null_mut(), &mut data_size) != 0 || data_size == 0 {
+
+            if RegQueryValueExW(
+                key_handle,
+                value_name.as_ptr(),
+                std::ptr::null(),
+                &mut data_type,
+                std::ptr::null_mut(),
+                &mut data_size,
+            ) != 0
+                || data_size == 0
+            {
                 RegCloseKey(key_handle);
                 continue;
             }
-            
+
             let mut buf: Vec<u16> = vec![0u16; (data_size / 2) as usize + 1];
-            if RegQueryValueExW(key_handle, value_name.as_ptr(), std::ptr::null(),
-                &mut data_type, buf.as_mut_ptr() as *mut u8, &mut data_size) != 0 {
+            if RegQueryValueExW(
+                key_handle,
+                value_name.as_ptr(),
+                std::ptr::null(),
+                &mut data_type,
+                buf.as_mut_ptr() as *mut u8,
+                &mut data_size,
+            ) != 0
+            {
                 RegCloseKey(key_handle);
                 continue;
             }
             RegCloseKey(key_handle);
-            
+
             let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
             let path = String::from_utf16_lossy(&buf[..len]);
-            
-            if !result.is_empty() { result.push(';'); }
+
+            if !result.is_empty() {
+                result.push(';');
+            }
             result.push_str(&path);
         }
-        
+
         result
     }
 }
@@ -148,12 +179,19 @@ fn reg_read_string(hkey: isize, subkey_str: &str, value_name_str: &str) -> Strin
     unsafe {
         unsafe extern "system" {
             fn RegOpenKeyExW(
-                hkey: isize, subkey: *const u16, _uloptions: u32,
-                _samdesired: u32, phkresult: *mut isize,
+                hkey: isize,
+                subkey: *const u16,
+                _uloptions: u32,
+                _samdesired: u32,
+                phkresult: *mut isize,
             ) -> i32;
             fn RegQueryValueExW(
-                hkey: isize, value: *const u16, _reserved: *const u8,
-                pdwtype: *mut u32, pbdata: *mut u8, pcbdata: *mut u32,
+                hkey: isize,
+                value: *const u16,
+                _reserved: *const u8,
+                pdwtype: *mut u32,
+                pbdata: *mut u8,
+                pcbdata: *mut u32,
             ) -> i32;
             fn RegCloseKey(hkey: isize) -> i32;
         }
@@ -166,14 +204,29 @@ fn reg_read_string(hkey: isize, subkey_str: &str, value_name_str: &str) -> Strin
         }
         let mut data_type: u32 = 0;
         let mut data_size: u32 = 0;
-        if RegQueryValueExW(key_handle, value_wide.as_ptr(), std::ptr::null(),
-            &mut data_type, std::ptr::null_mut(), &mut data_size) != 0 || data_size == 0 {
+        if RegQueryValueExW(
+            key_handle,
+            value_wide.as_ptr(),
+            std::ptr::null(),
+            &mut data_type,
+            std::ptr::null_mut(),
+            &mut data_size,
+        ) != 0
+            || data_size == 0
+        {
             RegCloseKey(key_handle);
             return String::new();
         }
         let mut buf: Vec<u16> = vec![0u16; (data_size / 2) as usize + 1];
-        if RegQueryValueExW(key_handle, value_wide.as_ptr(), std::ptr::null(),
-            &mut data_type, buf.as_mut_ptr() as *mut u8, &mut data_size) != 0 {
+        if RegQueryValueExW(
+            key_handle,
+            value_wide.as_ptr(),
+            std::ptr::null(),
+            &mut data_type,
+            buf.as_mut_ptr() as *mut u8,
+            &mut data_size,
+        ) != 0
+        {
             RegCloseKey(key_handle);
             return String::new();
         }
@@ -188,19 +241,45 @@ fn reg_read_string(hkey: isize, subkey_str: &str, value_name_str: &str) -> Strin
 fn reg_read_dword(hkey: isize, subkey_str: &str, value_name_str: &str) -> u32 {
     unsafe {
         unsafe extern "system" {
-            fn RegOpenKeyExW(hkey: isize, subkey: *const u16, _uloptions: u32, _samdesired: u32, phkresult: *mut isize) -> i32;
-            fn RegQueryValueExW(hkey: isize, value: *const u16, _reserved: *const u8, pdwtype: *mut u32, pbdata: *mut u8, pcbdata: *mut u32) -> i32;
+            fn RegOpenKeyExW(
+                hkey: isize,
+                subkey: *const u16,
+                _uloptions: u32,
+                _samdesired: u32,
+                phkresult: *mut isize,
+            ) -> i32;
+            fn RegQueryValueExW(
+                hkey: isize,
+                value: *const u16,
+                _reserved: *const u8,
+                pdwtype: *mut u32,
+                pbdata: *mut u8,
+                pcbdata: *mut u32,
+            ) -> i32;
             fn RegCloseKey(hkey: isize) -> i32;
         }
         const KEY_READ: u32 = 0x20019;
         let subkey_wide: Vec<u16> = subkey_str.encode_utf16().collect();
         let value_wide: Vec<u16> = value_name_str.encode_utf16().collect();
         let mut key_handle: isize = 0;
-        if RegOpenKeyExW(hkey, subkey_wide.as_ptr(), 0, KEY_READ, &mut key_handle) != 0 { return 0; }
+        if RegOpenKeyExW(hkey, subkey_wide.as_ptr(), 0, KEY_READ, &mut key_handle) != 0 {
+            return 0;
+        }
         let mut data_type: u32 = 0;
         let mut data: u32 = 0;
         let mut data_size: u32 = 4;
-        if RegQueryValueExW(key_handle, value_wide.as_ptr(), std::ptr::null(), &mut data_type, &mut data as *mut u32 as *mut u8, &mut data_size) != 0 { RegCloseKey(key_handle); return 0; }
+        if RegQueryValueExW(
+            key_handle,
+            value_wide.as_ptr(),
+            std::ptr::null(),
+            &mut data_type,
+            &mut data as *mut u32 as *mut u8,
+            &mut data_size,
+        ) != 0
+        {
+            RegCloseKey(key_handle);
+            return 0;
+        }
         RegCloseKey(key_handle);
         data
     }
@@ -209,16 +288,41 @@ fn reg_read_dword(hkey: isize, subkey_str: &str, value_name_str: &str) -> u32 {
 /// Build an OS info string like "Windows NT 10.0.26200.8737 (25H2)".
 #[cfg(target_os = "windows")]
 fn windows_os_info() -> String {
-    let major = reg_read_dword(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0", "CurrentMajorVersionNumber\0");
-    let minor = reg_read_dword(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0", "CurrentMinorVersionNumber\0");
-    let build_str = reg_read_string(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\0", "CurrentBuild\\0");
-    let ubr = reg_read_dword(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0", "UBR\0");
-    if build_str.is_empty() { return String::new(); }
-    let display = reg_read_string(-2147483646i64 as isize, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\0", "DisplayVersion\\0");
+    let major = reg_read_dword(
+        -2147483646i64 as isize,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0",
+        "CurrentMajorVersionNumber\0",
+    );
+    let minor = reg_read_dword(
+        -2147483646i64 as isize,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0",
+        "CurrentMinorVersionNumber\0",
+    );
+    let build_str = reg_read_string(
+        -2147483646i64 as isize,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\0",
+        "CurrentBuild\\0",
+    );
+    let ubr = reg_read_dword(
+        -2147483646i64 as isize,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0",
+        "UBR\0",
+    );
+    if build_str.is_empty() {
+        return String::new();
+    }
+    let display = reg_read_string(
+        -2147483646i64 as isize,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\0",
+        "DisplayVersion\\0",
+    );
     if display.is_empty() {
         format!("Windows NT {}.{}.{}.{}", major, minor, build_str, ubr)
     } else {
-        format!("Windows NT {}.{}.{}.{} ({})", major, minor, build_str, ubr, display)
+        format!(
+            "Windows NT {}.{}.{}.{} ({})",
+            major, minor, build_str, ubr, display
+        )
     }
 }
 
@@ -226,14 +330,24 @@ fn windows_os_info() -> String {
 #[cfg(not(target_os = "windows"))]
 fn unix_os_info() -> String {
     use std::process::Command;
-    let sysname = Command::new("uname").arg("-s").output()
+    let sysname = Command::new("uname")
+        .arg("-s")
+        .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    let release = Command::new("uname").arg("-r").output()
+    let release = Command::new("uname")
+        .arg("-r")
+        .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    if sysname.is_empty() { return String::new(); }
-    if release.is_empty() { sysname } else { format!("{} {}", sysname, release) }
+    if sysname.is_empty() {
+        return String::new();
+    }
+    if release.is_empty() {
+        sysname
+    } else {
+        format!("{} {}", sysname, release)
+    }
 }
 
 /// Quick scan of shell version and common toolchains on PATH.
@@ -249,10 +363,18 @@ fn detect_tools() -> String {
             .ok()?;
         let output = child.wait_with_output().ok()?;
         // Some tools (python, java) output version to stderr
-        let raw = if output.stdout.is_empty() { &output.stderr } else { &output.stdout };
+        let raw = if output.stdout.is_empty() {
+            &output.stderr
+        } else {
+            &output.stdout
+        };
         let s = String::from_utf8_lossy(raw);
         let first_line = s.lines().next().unwrap_or("").trim().to_string();
-        if first_line.is_empty() { None } else { Some(first_line) }
+        if first_line.is_empty() {
+            None
+        } else {
+            Some(first_line)
+        }
     }
     // Ordered: shell first, then important toolchains
     let probes: &[(&str, &[&str])] = &[
@@ -276,7 +398,9 @@ fn detect_tools() -> String {
             let short = if v.len() > 80 {
                 let boundary = v.floor_char_boundary(77);
                 format!("{}...", &v[..boundary])
-            } else { v };
+            } else {
+                v
+            };
             parts.push(short);
         }
     }
@@ -298,7 +422,11 @@ impl std::fmt::Debug for AgentRegistry {
 
 /// Spawn an agent child process (free function, no lock needed).
 /// Returns an AgentInstance ready for insertion into the registry.
-fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandle) -> Result<AgentInstance, String> {
+fn spawn_agent_process(
+    seed: &str,
+    new_seed: Option<&str>,
+    app_handle: &AppHandle,
+) -> Result<AgentInstance, String> {
     use std::process::{Command, Stdio};
 
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
@@ -326,23 +454,34 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to spawn agent for seed {seed}: {e}"))?;
 
-    let stdin = child.stdin.take()
+    let stdin = child
+        .stdin
+        .take()
         .ok_or_else(|| "Failed to get stdin".to_string())?;
-    let stdout = child.stdout.take()
+    let stdout = child
+        .stdout
+        .take()
         .ok_or_else(|| "Failed to get stdout".to_string())?;
-    let stderr = child.stderr.take()
+    let stderr = child
+        .stderr
+        .take()
         .ok_or_else(|| "Failed to get stderr".to_string())?;
 
     // Debug: pipe agent stderr to a per-seed log file
     let debug_seed = seed.to_string();
     std::thread::spawn(move || {
-        let log_path = deepx_types::platform::data_dir()
-            .join(format!("agent_{}_debug.log", &debug_seed[..debug_seed.floor_char_boundary(debug_seed.len().min(8))]));
-        let mut writer = std::fs::File::create(&log_path)
-            .unwrap_or_else(|_| std::fs::File::create(deepx_types::platform::data_dir().join("agent_debug.log")).unwrap());
+        let log_path = deepx_types::platform::data_dir().join(format!(
+            "agent_{}_debug.log",
+            &debug_seed[..debug_seed.floor_char_boundary(debug_seed.len().min(8))]
+        ));
+        let mut writer = std::fs::File::create(&log_path).unwrap_or_else(|_| {
+            std::fs::File::create(deepx_types::platform::data_dir().join("agent_debug.log"))
+                .unwrap()
+        });
         let mut reader = BufReader::new(stderr);
         let mut line = String::new();
         loop {
@@ -373,34 +512,60 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
                     break;
                 }
             };
-            if line.trim().is_empty() { continue; }
+            if line.trim().is_empty() {
+                continue;
+            }
             let payload: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(e) => {
-                    log::info!("[REGISTRY] failed to parse from {}: {} -- error: {e}",
+                    log::info!(
+                        "[REGISTRY] failed to parse from {}: {} -- error: {e}",
                         &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))],
-                        &line[..line.floor_char_boundary(line.len().min(80))]);
+                        &line[..line.floor_char_boundary(line.len().min(80))]
+                    );
                     continue;
                 }
             };
-            let event_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let event_type = payload
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             // No per-event log in hot path — it writes to disk synchronously.
             // Only log non-streaming events (turn_start, round_complete, error, etc.)
-            if event_type != "round_delta" && event_type != "tool_call_preview" && event_type != "exec_progress" {
-                log::info!("[REGISTRY] agent {} got event: {}", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))], event_type);
+            if event_type != "round_delta"
+                && event_type != "tool_call_preview"
+                && event_type != "exec_progress"
+            {
+                log::info!(
+                    "[REGISTRY] agent {} got event: {}",
+                    &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))],
+                    event_type
+                );
             }
             if app_handle.emit(&event_label, &payload).is_err() {
                 break;
             }
         }
-        log::warn!("[REGISTRY] agent {} stdout reader thread exiting", seed_owned);
+        log::warn!(
+            "[REGISTRY] agent {} stdout reader thread exiting",
+            seed_owned
+        );
         // Check if the child process actually exited (vs just pipe closed)
-        let exit_status = child_for_thread.lock().ok()
+        let exit_status = child_for_thread
+            .lock()
+            .ok()
             .and_then(|mut c| c.as_mut().and_then(|c| c.try_wait().ok()).flatten());
-        log::warn!("[REGISTRY] agent {} child exit status: {:?}", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))], exit_status);
+        log::warn!(
+            "[REGISTRY] agent {} child exit status: {:?}",
+            &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))],
+            exit_status
+        );
         // Notify frontend that the agent died so it can trigger reconnection
         let error_event = Agent2Ui::Error {
-            message: format!("Agent process for session {} has exited unexpectedly", &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))]),
+            message: format!(
+                "Agent process for session {} has exited unexpectedly",
+                &seed_owned[..seed_owned.floor_char_boundary(seed_owned.len().min(8))]
+            ),
         };
         let payload = serde_json::to_value(&error_event).unwrap_or_default();
         let _ = app_handle.emit(&event_label, payload.clone());
@@ -420,18 +585,23 @@ fn spawn_agent_process(seed: &str, new_seed: Option<&str>, app_handle: &AppHandl
 
 impl AgentRegistry {
     fn get() -> &'static Mutex<AgentRegistry> {
-        REGISTRY.get().expect("AgentRegistry not initialized — call init() first")
+        REGISTRY
+            .get()
+            .expect("AgentRegistry not initialized — call init() first")
     }
 
     /// Initialize the global registry and SessionManager. Called once at startup.
     pub fn init(app: &AppHandle) {
-        let turso_enabled = deepx_config::Config::load().map(|c| c.turso_enabled()).unwrap_or(true);
+        let turso_enabled = deepx_config::Config::load()
+            .map(|c| c.turso_enabled())
+            .unwrap_or(true);
         deepx_session::SessionManager::init(deepx_types::platform::data_dir(), turso_enabled);
         let registry = AgentRegistry {
             instances: HashMap::new(),
             app_handle: app.clone(),
         };
-        REGISTRY.set(Mutex::new(registry))
+        REGISTRY
+            .set(Mutex::new(registry))
             .expect("AgentRegistry already initialized");
     }
 
@@ -463,16 +633,27 @@ impl AgentRegistry {
     fn spawn_agent(&mut self, seed: &str, new_seed: Option<&str>) -> Result<(), String> {
         let instance = spawn_agent_process(seed, new_seed, &self.app_handle)?;
         self.instances.insert(seed.to_string(), instance);
-        log::info!("[REGISTRY] spawned agent for seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+        log::info!(
+            "[REGISTRY] spawned agent for seed={}",
+            &seed[..seed.floor_char_boundary(seed.len().min(8))]
+        );
         Ok(())
     }
 
     /// Send a Ui2Agent frame to a specific agent instance.
     /// Only holds the registry lock during lookup, not during the write.
     pub fn send_to(&self, seed: &str, frame: &Ui2Agent) -> Result<(), String> {
-        let stdin_arc = self.instances.get(seed)
-            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))?
-            .stdin.clone();
+        let stdin_arc = self
+            .instances
+            .get(seed)
+            .ok_or_else(|| {
+                format!(
+                    "No agent running for seed: {}",
+                    &seed[..seed.floor_char_boundary(seed.len().min(8))]
+                )
+            })?
+            .stdin
+            .clone();
         // Registry lock released here via the caller dropping the MutexGuard
         let json = serde_json::to_string(frame).map_err(|e| format!("serialize: {e}"))?;
         let mut stdin = stdin_arc.lock().map_err(|e| format!("lock: {e}"))?;
@@ -491,7 +672,10 @@ impl AgentRegistry {
     pub fn kill_agent(&mut self, seed: &str) -> Option<AgentInstance> {
         let instance = self.instances.remove(seed);
         if instance.is_some() {
-            log::info!("[REGISTRY] removed agent for seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+            log::info!(
+                "[REGISTRY] removed agent for seed={}",
+                &seed[..seed.floor_char_boundary(seed.len().min(8))]
+            );
         }
         instance
     }
@@ -513,17 +697,28 @@ impl AgentInstance {
         let child = self.child.clone();
         let shutdown = self.shutdown_flag.clone();
         std::thread::Builder::new()
-            .name(format!("hb-{}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))
-            .spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(10));
-                if shutdown.load(Ordering::Relaxed) { break; }
-                let is_dead = child.lock().ok()
-                    .and_then(|mut c| c.as_mut().and_then(|c| c.try_wait().ok()).flatten())
-                    .is_some();
-                if is_dead {
-                    log::warn!("[HEARTBEAT] agent {} died, auto-respawning",
-                        &seed[..seed.floor_char_boundary(seed.len().min(8))]);
-                    let _ = ensure_agent(&seed);
+            .name(format!(
+                "hb-{}",
+                &seed[..seed.floor_char_boundary(seed.len().min(8))]
+            ))
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    if shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let is_dead = child
+                        .lock()
+                        .ok()
+                        .and_then(|mut c| c.as_mut().and_then(|c| c.try_wait().ok()).flatten())
+                        .is_some();
+                    if is_dead {
+                        log::warn!(
+                            "[HEARTBEAT] agent {} died, auto-respawning",
+                            &seed[..seed.floor_char_boundary(seed.len().min(8))]
+                        );
+                        let _ = ensure_agent(&seed);
+                    }
                 }
             })
             .expect("failed to spawn heartbeat");
@@ -558,7 +753,9 @@ impl AgentInstance {
                         Ok(Some(_)) => break,
                         Ok(None) => {
                             if start.elapsed() > std::time::Duration::from_secs(5) {
-                                log::warn!("[REGISTRY] agent {seed} did not exit after kill, force-killing again");
+                                log::warn!(
+                                    "[REGISTRY] agent {seed} did not exit after kill, force-killing again"
+                                );
                                 let _ = child.kill();
                                 let _ = child.wait();
                                 break;
@@ -581,34 +778,59 @@ impl AgentInstance {
 
 /// Ensure an agent is running for the given seed (resume existing session).
 fn ensure_agent(seed: &str) -> Result<(), String> {
-    let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
+    let mut registry = AgentRegistry::get()
+        .lock()
+        .map_err(|e| format!("lock: {e}"))?;
     registry.get_or_spawn(seed)
 }
 
 /// Send a Ui2Agent frame to the agent for the given seed.
 fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
-    log::info!("[REGISTRY] send_to_agent seed={} type={}",
-        &seed[..seed.floor_char_boundary(seed.len().min(8))], agent2ui_event_name_for_ui(&frame));
-    
+    log::info!(
+        "[REGISTRY] send_to_agent seed={} type={}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))],
+        agent2ui_event_name_for_ui(&frame)
+    );
+
     let json = serde_json::to_string(&frame).map_err(|e| format!("serialize: {e}"))?;
     let stdin_arc = {
-        let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
-        registry.instances.get(seed)
-            .ok_or_else(|| format!("No agent running for seed: {}", &seed[..seed.floor_char_boundary(seed.len().min(8))]))?
-            .stdin.clone()
+        let registry = AgentRegistry::get()
+            .lock()
+            .map_err(|e| format!("lock: {e}"))?;
+        registry
+            .instances
+            .get(seed)
+            .ok_or_else(|| {
+                format!(
+                    "No agent running for seed: {}",
+                    &seed[..seed.floor_char_boundary(seed.len().min(8))]
+                )
+            })?
+            .stdin
+            .clone()
     };
     let mut stdin = stdin_arc.lock().map_err(|e| format!("lock: {e}"))?;
     if writeln!(*stdin, "{}", json).is_err() || stdin.flush().is_err() {
         // Agent process is dead — remove it, respawn, and retry once.
-        let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
+        let mut registry = AgentRegistry::get()
+            .lock()
+            .map_err(|e| format!("lock: {e}"))?;
         registry.instances.remove(seed);
         drop(registry);
-        log::warn!("[REGISTRY] agent {} pipe broken, respawning...", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
-        let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
+        log::warn!(
+            "[REGISTRY] agent {} pipe broken, respawning...",
+            &seed[..seed.floor_char_boundary(seed.len().min(8))]
+        );
+        let mut registry = AgentRegistry::get()
+            .lock()
+            .map_err(|e| format!("lock: {e}"))?;
         registry.get_or_spawn(seed)?;
-        let stdin_arc2 = registry.instances.get(seed)
+        let stdin_arc2 = registry
+            .instances
+            .get(seed)
             .ok_or_else(|| format!("respawn failed for {seed}"))?
-            .stdin.clone();
+            .stdin
+            .clone();
         drop(registry);
         let mut stdin2 = stdin_arc2.lock().map_err(|e| format!("lock: {e}"))?;
         writeln!(*stdin2, "{}", json).map_err(|e| format!("write retry: {e}"))?;
@@ -639,9 +861,13 @@ fn read_file_preview(path: &str, max_lines: usize, max_chars: usize) -> Result<S
     let mut result = String::new();
     let mut line_count = 0;
     for line in reader.lines() {
-        if line_count >= max_lines { break; }
+        if line_count >= max_lines {
+            break;
+        }
         let line = line.map_err(|e| format!("read: {e}"))?;
-        if !result.is_empty() { result.push('\n'); }
+        if !result.is_empty() {
+            result.push('\n');
+        }
         result.push_str(&line);
         line_count += 1;
         if result.chars().count() >= max_chars {
@@ -665,7 +891,11 @@ pub fn cmd_send_message(
     files: Option<Vec<String>>,
 ) -> Result<(), String> {
     let files = files.unwrap_or_default();
-    log::info!("[REGISTRY] cmd_send_message seed={}: {}", &seed[..seed.floor_char_boundary(seed.len().min(8))], &text[..text.floor_char_boundary(50)]);
+    log::info!(
+        "[REGISTRY] cmd_send_message seed={}: {}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))],
+        &text[..text.floor_char_boundary(50)]
+    );
     ensure_agent(&seed)?;
 
     let full_text = if files.is_empty() {
@@ -693,7 +923,10 @@ pub fn cmd_send_message(
 /// Set the agent's operating mode (Normal, Plan, Code).
 #[tauri::command]
 pub fn cmd_set_mode(seed: String, mode: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_set_mode seed={} mode={mode}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+    log::info!(
+        "[REGISTRY] cmd_set_mode seed={} mode={mode}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
     send_to_agent(&seed, Ui2Agent::SetMode { mode })
 }
 
@@ -706,23 +939,43 @@ pub fn cmd_permission_response(
     trust_folder: Option<bool>,
 ) -> Result<(), String> {
     log::info!("[REGISTRY] permission_response id={tool_call_id} approved={approved}");
-    send_to_agent(&seed, Ui2Agent::PermissionResponse {
-        tool_call_id,
-        approved,
-        trust_folder: trust_folder.unwrap_or(false),
-    })
+    send_to_agent(
+        &seed,
+        Ui2Agent::PermissionResponse {
+            tool_call_id,
+            approved,
+            trust_folder: trust_folder.unwrap_or(false),
+        },
+    )
 }
 
-/// Send user's answer to an ask_user prompt. Resumes a suspended turn.
+/// Send user's answers to an ask_user prompt. Resumes a suspended turn.
 #[tauri::command]
-pub fn cmd_ask_response(seed: String, text: String) -> Result<(), String> {
+pub fn cmd_ask_response(
+    seed: String,
+    ask_id: String,
+    answers: Vec<deepx_proto::AskAnswer>,
+) -> Result<(), String> {
     log::info!(
-        "[REGISTRY] cmd_ask_response seed={} answer={:.50}",
+        "[REGISTRY] cmd_ask_response seed={} ask_id={} num_answers={}",
         &seed[..seed.floor_char_boundary(seed.len().min(8))],
-        &text[..text.floor_char_boundary(50)]
+        ask_id,
+        answers.len(),
     );
     ensure_agent(&seed)?;
-    send_to_agent(&seed, Ui2Agent::AskResponse { answer: text })
+    send_to_agent(&seed, Ui2Agent::AskResponse { ask_id, answers })
+}
+
+/// User dismissed the ask_user dialog without answering. Notifies the agent.
+#[tauri::command]
+pub fn cmd_ask_dismiss(seed: String, ask_id: String) -> Result<(), String> {
+    log::info!(
+        "[REGISTRY] cmd_ask_dismiss seed={} ask_id={}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))],
+        ask_id,
+    );
+    ensure_agent(&seed)?;
+    send_to_agent(&seed, Ui2Agent::AskDismiss { ask_id })
 }
 
 /// Unload an explicitly-activated skill from the agent's context.
@@ -772,7 +1025,10 @@ pub fn cmd_list_available_tools() -> Result<String, String> {
 /// The agent auto-loads the session on startup and emits SessionRestored.
 #[tauri::command]
 pub fn cmd_resume_session(seed: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_resume_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+    log::info!(
+        "[REGISTRY] cmd_resume_session seed={}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
     deepx_session::SessionManager::global().set_active_seed(&seed);
     ensure_agent(&seed)?;
     Ok(())
@@ -782,10 +1038,15 @@ pub fn cmd_resume_session(seed: String) -> Result<(), String> {
 #[tauri::command]
 pub fn cmd_new_session() -> Result<String, String> {
     let seed = deepx_session::SessionManager::generate_seed();
-    log::info!("[REGISTRY] cmd_new_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+    log::info!(
+        "[REGISTRY] cmd_new_session seed={}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
     deepx_session::SessionManager::global().clear_active();
     {
-        let mut registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
+        let mut registry = AgentRegistry::get()
+            .lock()
+            .map_err(|e| format!("lock: {e}"))?;
         registry.spawn_new(&seed)?;
     }
     Ok(seed)
@@ -820,9 +1081,21 @@ pub fn cmd_save_config(
     tokenizer_path: String,
 ) -> Result<(), String> {
     let mut cfg = deepx_config::Config::load().unwrap_or_default();
-    let set_str = |dest: &mut String, src: &str| { if !src.is_empty() { *dest = src.to_string(); } };
-    let set_u32 = |dest: &mut u32, src: u32| { if src > 0 { *dest = src; } };
-    let set_u64 = |dest: &mut u64, src: u64| { if src > 0 { *dest = src; } };
+    let set_str = |dest: &mut String, src: &str| {
+        if !src.is_empty() {
+            *dest = src.to_string();
+        }
+    };
+    let set_u32 = |dest: &mut u32, src: u32| {
+        if src > 0 {
+            *dest = src;
+        }
+    };
+    let set_u64 = |dest: &mut u64, src: u64| {
+        if src > 0 {
+            *dest = src;
+        }
+    };
 
     set_str(&mut cfg.api_key, &api_key);
     set_str(&mut cfg.model, &model);
@@ -832,15 +1105,21 @@ pub fn cmd_save_config(
     set_u32(&mut cfg.max_tokens, max_tokens);
     set_u32(&mut cfg.context_limit, context_limit);
     set_str(&mut cfg.reasoning_effort, &reasoning_effort);
-    if !lang.is_empty() { cfg.lang = Some(lang); }
-    if !context7_api_key.is_empty() { cfg.context7_api_key = Some(context7_api_key); }
+    if !lang.is_empty() {
+        cfg.lang = Some(lang);
+    }
+    if !context7_api_key.is_empty() {
+        cfg.context7_api_key = Some(context7_api_key);
+    }
 
     set_str(&mut cfg.subagent.model, &subagent_model);
     set_str(&mut cfg.subagent.base_url, &subagent_base_url);
     set_str(&mut cfg.subagent.api_key, &subagent_api_key);
     set_u32(&mut cfg.subagent.max_tokens, subagent_max_tokens);
     set_u64(&mut cfg.subagent.timeout_secs, subagent_timeout_secs);
-    if !subagent_default_tools.is_empty() { cfg.subagent.default_tools = subagent_default_tools; }
+    if !subagent_default_tools.is_empty() {
+        cfg.subagent.default_tools = subagent_default_tools;
+    }
     cfg.database.enabled = database_enabled;
     if !tokenizer_path.is_empty() {
         cfg.tokenizer_path = Some(tokenizer_path);
@@ -849,7 +1128,9 @@ pub fn cmd_save_config(
     }
     cfg.save()?;
     // Broadcast reload to all running agents
-    let registry = AgentRegistry::get().lock().map_err(|e| format!("lock: {e}"))?;
+    let registry = AgentRegistry::get()
+        .lock()
+        .map_err(|e| format!("lock: {e}"))?;
     for seed in registry.instances.keys() {
         let _ = registry.send_to(seed, &Ui2Agent::ReloadConfig);
     }
@@ -859,8 +1140,7 @@ pub fn cmd_save_config(
 /// Load the current config and return it as JSON.
 #[tauri::command]
 pub fn cmd_load_config() -> Result<String, String> {
-    let cfg = deepx_config::Config::load()
-        .map_err(|e| format!("load config: {e}"))?;
+    let cfg = deepx_config::Config::load().map_err(|e| format!("load config: {e}"))?;
     let providers: Vec<serde_json::Value> = deepx_config::registry::all_providers()
         .into_iter()
         .map(|p| {
@@ -924,7 +1204,9 @@ pub fn cmd_list_sessions() -> Result<String, String> {
             // Check if an agent process is running for this session
             let running = if let Ok(reg) = AgentRegistry::get().lock() {
                 reg.has_instance(&m.seed)
-            } else { false };
+            } else {
+                false
+            };
             v["running"] = serde_json::Value::Bool(running);
             v
         })
@@ -957,11 +1239,13 @@ pub fn cmd_migrate_to_turso() -> Result<String, String> {
 #[tauri::command]
 pub fn cmd_get_activity(seed: String) -> Result<String, String> {
     let mgr = deepx_session::SessionManager::global();
-    let (_meta, messages) = mgr.load(&seed)
+    let (_meta, messages) = mgr
+        .load(&seed)
         .ok_or_else(|| "session not found".to_string())?;
 
     // Build a map: tool_use_id → (name, args)
-    let mut tool_map: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    let mut tool_map: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
     for msg in &messages {
         if msg.role == "assistant" {
             for b in &msg.content {
@@ -974,16 +1258,28 @@ pub fn cmd_get_activity(seed: String) -> Result<String, String> {
 
     let mut activities = Vec::new();
     for msg in &messages {
-        if msg.role != "tool" { continue; }
+        if msg.role != "tool" {
+            continue;
+        }
         for b in &msg.content {
-            if let deepx_types::ContentBlock::ToolResult { tool_use_id, content, success } = b {
-                let (tool_name, args) = tool_map.get(tool_use_id)
+            if let deepx_types::ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                success,
+            } = b
+            {
+                let (tool_name, args) = tool_map
+                    .get(tool_use_id)
                     .map(|(n, a)| (n.clone(), a.clone()))
                     .unwrap_or_default();
-                let summary = content.lines()
+                let summary = content
+                    .lines()
                     .skip_while(|l| l.starts_with("[timeis:"))
-                    .next().unwrap_or("")
-                    .chars().take(120).collect::<String>();
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(120)
+                    .collect::<String>();
                 activities.push(serde_json::json!({
                     "tool_name": tool_name,
                     "summary": summary,
@@ -1001,12 +1297,17 @@ pub fn cmd_get_activity(seed: String) -> Result<String, String> {
 /// Delete a session by seed. Also kills the agent if running for that seed.
 #[tauri::command]
 pub fn cmd_delete_session(seed: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_delete_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+    log::info!(
+        "[REGISTRY] cmd_delete_session seed={}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
     // Kill the agent first so it doesn't resurrect the session on flush.
     let instance = {
         if let Ok(mut registry) = AgentRegistry::get().lock() {
             registry.kill_agent(&seed)
-        } else { None }
+        } else {
+            None
+        }
     };
     if let Some(inst) = instance {
         inst.shutdown_and_wait();
@@ -1023,28 +1324,44 @@ pub fn cmd_undo_turn(seed: String, turn_id: String) -> Result<(), String> {
 /// Compact conversation history (summarize old turns).
 #[tauri::command]
 pub fn cmd_compact(seed: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_compact seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+    log::info!(
+        "[REGISTRY] cmd_compact seed={}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
     send_to_agent(&seed, Ui2Agent::Compact)
 }
 
 /// Load older turns from session history (paginated, 20 at a time before the given turn).
 #[tauri::command]
 pub fn cmd_load_more_turns(seed: String, before_turn_id: String) -> Result<(), String> {
-    send_to_agent(&seed, Ui2Agent::LoadMoreTurns { before_turn_id, count: 20 })
+    send_to_agent(
+        &seed,
+        Ui2Agent::LoadMoreTurns {
+            before_turn_id,
+            count: 20,
+        },
+    )
 }
 
 /// Get the current session's workspace root path.
 #[tauri::command]
 pub fn cmd_get_workspace(seed: String) -> Result<String, String> {
-    if seed.is_empty() { return Ok(String::new()); }
+    if seed.is_empty() {
+        return Ok(String::new());
+    }
     let dir = deepx_types::platform::sessions_dir().join(&seed);
-    Ok(std::fs::read_to_string(dir.join("workspace.txt")).unwrap_or_default().trim().to_string())
+    Ok(std::fs::read_to_string(dir.join("workspace.txt"))
+        .unwrap_or_default()
+        .trim()
+        .to_string())
 }
 
 /// Set the current session's workspace root path and notify the agent.
 #[tauri::command]
 pub fn cmd_set_workspace(seed: String, path: String) -> Result<(), String> {
-    if seed.is_empty() { return Err("No active session".into()); }
+    if seed.is_empty() {
+        return Err("No active session".into());
+    }
     let dir = deepx_types::platform::sessions_dir().join(&seed);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
     std::fs::write(dir.join("workspace.txt"), path.trim()).map_err(|e| format!("write: {e}"))?;
@@ -1071,12 +1388,17 @@ fn chrono_local_date_from_epoch(epoch_secs: u64) -> String {
 /// Kill the agent for a session (when tab is closed but session not deleted).
 #[tauri::command]
 pub fn cmd_close_session(seed: String) -> Result<(), String> {
-    log::info!("[REGISTRY] cmd_close_session seed={}", &seed[..seed.floor_char_boundary(seed.len().min(8))]);
+    log::info!(
+        "[REGISTRY] cmd_close_session seed={}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))]
+    );
     // Extract instance under lock, then wait outside lock.
     let instance = {
         if let Ok(mut registry) = AgentRegistry::get().lock() {
             registry.kill_agent(&seed)
-        } else { None }
+        } else {
+            None
+        }
     };
     if let Some(inst) = instance {
         inst.shutdown_and_wait();
@@ -1091,9 +1413,14 @@ pub fn cmd_get_git_diff(seed: String) -> Result<String, String> {
     let workspace = {
         let dir = deepx_types::platform::sessions_dir().join(&seed);
         let ws_path = dir.join("workspace.txt");
-        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+        std::fs::read_to_string(&ws_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
     };
-    if workspace.is_empty() { return Ok("[]".into()); }
+    if workspace.is_empty() {
+        return Ok("[]".into());
+    }
 
     let repo = match git2::Repository::open(&workspace) {
         Ok(r) => r,
@@ -1149,9 +1476,14 @@ pub fn cmd_get_git_branch(seed: String) -> Result<String, String> {
     let workspace = {
         let dir = deepx_types::platform::sessions_dir().join(&seed);
         let ws_path = dir.join("workspace.txt");
-        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+        std::fs::read_to_string(&ws_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
     };
-    if workspace.is_empty() { return Ok("".into()); }
+    if workspace.is_empty() {
+        return Ok("".into());
+    }
     let repo = git2::Repository::open(&workspace).map_err(|_| "not a repo")?;
     let head = repo.head().map_err(|_| "no HEAD")?;
     if head.is_branch() {
@@ -1167,17 +1499,27 @@ pub fn cmd_list_branches(seed: String) -> Result<String, String> {
     let workspace = {
         let dir = deepx_types::platform::sessions_dir().join(&seed);
         let ws_path = dir.join("workspace.txt");
-        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+        std::fs::read_to_string(&ws_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
     };
-    if workspace.is_empty() { return Ok("[]".into()); }
+    if workspace.is_empty() {
+        return Ok("[]".into());
+    }
     let repo = git2::Repository::open(&workspace).map_err(|_| "not a repo")?;
-    let head_name = repo.head().ok().and_then(|h| h.shorthand().ok().map(String::from));
+    let head_name = repo
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().ok().map(String::from));
 
     let mut branches: Vec<serde_json::Value> = Vec::new();
     if let Ok(iter) = repo.branches(Some(git2::BranchType::Local)) {
         for b in iter.flatten() {
             let name = b.0.name().ok().flatten().unwrap_or("").to_string();
-            if name.is_empty() { continue; }
+            if name.is_empty() {
+                continue;
+            }
             branches.push(serde_json::json!({
                 "name": name,
                 "current": head_name.as_deref() == Some(&name),
@@ -1195,29 +1537,36 @@ pub fn cmd_switch_branch(seed: String, branch: String, stash: bool) -> Result<St
     let workspace = {
         let dir = deepx_types::platform::sessions_dir().join(&seed);
         let ws_path = dir.join("workspace.txt");
-        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+        std::fs::read_to_string(&ws_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
     };
-    if workspace.is_empty() { return Err("no workspace".into()); }
+    if workspace.is_empty() {
+        return Err("no workspace".into());
+    }
     let mut repo = git2::Repository::open(&workspace).map_err(|e| format!("open repo: {e}"))?;
 
     // Check for dirty worktree before switching
-    let has_changes = repo.statuses(None)
-        .map(|s| !s.is_empty()).unwrap_or(false);
+    let has_changes = repo.statuses(None).map(|s| !s.is_empty()).unwrap_or(false);
 
     // Stash before switching
     let mut stashed = false;
     if stash && has_changes {
-        let sig = git2::Signature::now("DeepX", "deepx@local")
-            .map_err(|e| format!("signature: {e}"))?;
+        let sig =
+            git2::Signature::now("DeepX", "deepx@local").map_err(|e| format!("signature: {e}"))?;
         repo.stash_save(&sig, "deepx-auto-stash", None)
             .map_err(|e| format!("stash: {e}"))?;
         stashed = true;
     }
 
     {
-        let branch_ref = repo.find_branch(&branch, git2::BranchType::Local)
+        let branch_ref = repo
+            .find_branch(&branch, git2::BranchType::Local)
             .map_err(|e| format!("find branch '{}': {}", branch, e))?;
-        let obj = branch_ref.get().peel(git2::ObjectType::Tree)
+        let obj = branch_ref
+            .get()
+            .peel(git2::ObjectType::Tree)
             .map_err(|e| format!("peel: {e}"))?;
 
         let mut checkout_opts = git2::build::CheckoutBuilder::new();
@@ -1236,7 +1585,9 @@ pub fn cmd_switch_branch(seed: String, branch: String, stash: bool) -> Result<St
         }
     }
 
-    let new_head = repo.head().ok()
+    let new_head = repo
+        .head()
+        .ok()
         .and_then(|h| h.shorthand().ok().map(String::from))
         .unwrap_or_default();
     Ok(new_head)
@@ -1248,31 +1599,40 @@ pub fn cmd_git_commit(seed: String, message: String) -> Result<String, String> {
     let workspace = {
         let dir = deepx_types::platform::sessions_dir().join(&seed);
         let ws_path = dir.join("workspace.txt");
-        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+        std::fs::read_to_string(&ws_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
     };
-    if workspace.is_empty() { return Err("no workspace".into()); }
+    if workspace.is_empty() {
+        return Err("no workspace".into());
+    }
     let repo = git2::Repository::open(&workspace).map_err(|e| format!("open repo: {e}"))?;
 
     // Stage all changes
     let mut index = repo.index().map_err(|e| format!("index: {e}"))?;
-    index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
         .map_err(|e| format!("add_all: {e}"))?;
     index.write().map_err(|e| format!("index write: {e}"))?;
 
     // Write tree from index
     let tree_oid = index.write_tree().map_err(|e| format!("write_tree: {e}"))?;
-    let tree = repo.find_tree(tree_oid).map_err(|e| format!("find_tree: {e}"))?;
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(|e| format!("find_tree: {e}"))?;
 
     // Get HEAD commit as parent
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     let parents: Vec<&git2::Commit> = parent.iter().collect();
 
     // Create signature
-    let sig = git2::Signature::now("DeepX", "deepx@local")
-        .map_err(|e| format!("signature: {e}"))?;
+    let sig =
+        git2::Signature::now("DeepX", "deepx@local").map_err(|e| format!("signature: {e}"))?;
 
     // Commit, updating HEAD
-    let oid = repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &parents)
+    let oid = repo
+        .commit(Some("HEAD"), &sig, &sig, &message, &tree, &parents)
         .map_err(|e| format!("commit: {e}"))?;
 
     Ok(oid.to_string())
@@ -1284,9 +1644,14 @@ pub fn cmd_get_git_file_diff(seed: String, file_path: String) -> Result<String, 
     let workspace = {
         let dir = deepx_types::platform::sessions_dir().join(&seed);
         let ws_path = dir.join("workspace.txt");
-        std::fs::read_to_string(&ws_path).unwrap_or_default().trim().to_string()
+        std::fs::read_to_string(&ws_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
     };
-    if workspace.is_empty() { return Ok("".into()); }
+    if workspace.is_empty() {
+        return Ok("".into());
+    }
 
     let repo = git2::Repository::open(&workspace).map_err(|e| format!("open repo: {e}"))?;
     let head = repo.head().map_err(|e| format!("head: {e}"))?;
@@ -1295,7 +1660,8 @@ pub fn cmd_get_git_file_diff(seed: String, file_path: String) -> Result<String, 
     let mut diff_opts = git2::DiffOptions::new();
     diff_opts.pathspec(&file_path);
 
-    let diff = repo.diff_tree_to_workdir(Some(&head_tree), Some(&mut diff_opts))
+    let diff = repo
+        .diff_tree_to_workdir(Some(&head_tree), Some(&mut diff_opts))
         .map_err(|e| format!("diff: {e}"))?;
 
     let mut patch_text = String::new();
@@ -1305,7 +1671,8 @@ pub fn cmd_get_git_file_diff(seed: String, file_path: String) -> Result<String, 
         patch_text.push(origin);
         patch_text.push_str(content);
         true
-    }).map_err(|e| format!("print diff: {e}"))?;
+    })
+    .map_err(|e| format!("print diff: {e}"))?;
 
     Ok(patch_text)
 }
@@ -1320,7 +1687,8 @@ pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
     let tasks: Vec<serde_json::Value> = {
         let path = resolve_deepx_dir(&seed).join("tasks.md");
         if let Ok(file) = std::fs::File::open(&path) {
-            std::io::BufReader::new(file).lines()
+            std::io::BufReader::new(file)
+                .lines()
                 .filter_map(|l| l.ok())
                 .filter(|l| l.starts_with("- ["))
                 .filter_map(|line| {
@@ -1344,12 +1712,16 @@ pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
 
     // Recent edits from code_stats.jsonl (last 10 unique files)
     let recent_edits: Vec<String> = {
-        let path = deepx_types::platform::sessions_dir().join(&seed).join("code_stats.jsonl");
+        let path = deepx_types::platform::sessions_dir()
+            .join(&seed)
+            .join("code_stats.jsonl");
         if let Ok(file) = std::fs::File::open(&path) {
-            let mut files: Vec<String> = std::io::BufReader::new(file).lines()
+            let mut files: Vec<String> = std::io::BufReader::new(file)
+                .lines()
                 .filter_map(|l| l.ok())
                 .filter_map(|line| {
-                    serde_json::from_str::<serde_json::Value>(&line).ok()
+                    serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
                         .and_then(|v| v.get("file").and_then(|f| f.as_str()).map(String::from))
                 })
                 .collect();
@@ -1365,7 +1737,8 @@ pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
         "tasks": tasks,
         "recent_edits": recent_edits,
-    })).map_err(|e| format!("serialize: {e}"))
+    }))
+    .map_err(|e| format!("serialize: {e}"))
 }
 
 /// Modify or delete a task directly from the frontend.
@@ -1377,8 +1750,11 @@ pub fn cmd_task_action(seed: String, action: String, task_id: u32) -> Result<(),
     let _guard = std::sync::Mutex::new(()); // serialize access
 
     let mut lines: Vec<String> = if path.exists() {
-        std::fs::read_to_string(&path).unwrap_or_default()
-            .lines().map(String::from).collect()
+        std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
     } else {
         Vec::new()
     };
@@ -1409,9 +1785,19 @@ pub fn cmd_task_action(seed: String, action: String, task_id: u32) -> Result<(),
     // Notify agent if running
     let args = serde_json::json!({"id": task_id, "status": if action == "cancel" { "cancelled" } else { "deleted" }});
     let frame = if action == "cancel" {
-        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", task_id), name: "task".into(), action: "update".into(), args }
+        Ui2Agent::ToolCall {
+            id: format!("frontend_tc_{}", task_id),
+            name: "task".into(),
+            action: "update".into(),
+            args,
+        }
     } else {
-        Ui2Agent::ToolCall { id: format!("frontend_tc_{}", task_id), name: "task".into(), action: "delete".into(), args }
+        Ui2Agent::ToolCall {
+            id: format!("frontend_tc_{}", task_id),
+            name: "task".into(),
+            action: "delete".into(),
+            args,
+        }
     };
     let _ = send_to_agent(&seed, frame);
     Ok(())
@@ -1421,7 +1807,9 @@ pub fn cmd_task_action(seed: String, action: String, task_id: u32) -> Result<(),
 /// Returns JSON breakdown from context_stats.json (written by the agent after compaction).
 #[tauri::command]
 pub fn cmd_get_context_stats(seed: String) -> Result<String, String> {
-    let stats_path = deepx_types::platform::sessions_dir().join(&seed).join("context_stats.json");
+    let stats_path = deepx_types::platform::sessions_dir()
+        .join(&seed)
+        .join("context_stats.json");
     if stats_path.exists() {
         return Ok(std::fs::read_to_string(&stats_path).unwrap_or_default());
     }
@@ -1429,7 +1817,8 @@ pub fn cmd_get_context_stats(seed: String) -> Result<String, String> {
     Ok(serde_json::json!({
         "messages":0,"chat_text":0,"thinking":0,"tool_calls":0,"tool_results":0,
         "tools_schema":0,"system_prompt":0,"thinking_blocks":0,"tool_call_blocks":0
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Get aggregated token usage stats for the last N days.
@@ -1461,26 +1850,34 @@ pub fn cmd_get_token_stats(days: u32) -> Result<String, String> {
 
     for line in reader.lines() {
         let line = line.map_err(|e| format!("read: {e}"))?;
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let entry: serde_json::Value =
             serde_json::from_str(&line).map_err(|e| format!("parse: {e}"))?;
         let date = entry["date"].as_str().unwrap_or("").to_string();
-        if date < cutoff { continue; } // before range, skip
+        if date < cutoff {
+            continue;
+        } // before range, skip
 
         let prompt = entry["prompt_tokens"].as_u64().unwrap_or(0);
         let completion = entry["completion_tokens"].as_u64().unwrap_or(0);
         let hit = entry["cache_hit"].as_u64().unwrap_or(0);
         let miss = entry["cache_miss"].as_u64().unwrap_or(0);
 
-        let day = daily.entry(date).or_insert_with(|| serde_json::json!({
-            "prompt_tokens": 0u64,
-            "completion_tokens": 0u64,
-            "cache_hit": 0u64,
-            "cache_miss": 0u64,
-            "calls": 0u64,
-        }));
-        day["prompt_tokens"] = serde_json::json!(day["prompt_tokens"].as_u64().unwrap_or(0) + prompt);
-        day["completion_tokens"] = serde_json::json!(day["completion_tokens"].as_u64().unwrap_or(0) + completion);
+        let day = daily.entry(date).or_insert_with(|| {
+            serde_json::json!({
+                "prompt_tokens": 0u64,
+                "completion_tokens": 0u64,
+                "cache_hit": 0u64,
+                "cache_miss": 0u64,
+                "calls": 0u64,
+            })
+        });
+        day["prompt_tokens"] =
+            serde_json::json!(day["prompt_tokens"].as_u64().unwrap_or(0) + prompt);
+        day["completion_tokens"] =
+            serde_json::json!(day["completion_tokens"].as_u64().unwrap_or(0) + completion);
         day["cache_hit"] = serde_json::json!(day["cache_hit"].as_u64().unwrap_or(0) + hit);
         day["cache_miss"] = serde_json::json!(day["cache_miss"].as_u64().unwrap_or(0) + miss);
         day["calls"] = serde_json::json!(day["calls"].as_u64().unwrap_or(0) + 1);
@@ -1499,14 +1896,22 @@ pub fn cmd_get_token_stats(days: u32) -> Result<String, String> {
     // Generate all dates in range
     for d in 0..days {
         let date = days_before_today(days - 1 - d); // start from cutoff, go forward
-        let entry = daily.get(&date).cloned().unwrap_or_else(|| serde_json::json!({
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "cache_hit": 0,
-            "cache_miss": 0,
-            "calls": 0,
-        }));
-        for key in &["prompt_tokens", "completion_tokens", "cache_hit", "cache_miss", "calls"] {
+        let entry = daily.get(&date).cloned().unwrap_or_else(|| {
+            serde_json::json!({
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cache_hit": 0,
+                "cache_miss": 0,
+                "calls": 0,
+            })
+        });
+        for key in &[
+            "prompt_tokens",
+            "completion_tokens",
+            "cache_hit",
+            "cache_miss",
+            "calls",
+        ] {
             let v = entry[key].as_u64().unwrap_or(0);
             totals[key] = serde_json::json!(totals[key].as_u64().unwrap_or(0) + v);
         }
@@ -1531,7 +1936,10 @@ pub fn cmd_get_token_stats(days: u32) -> Result<String, String> {
     };
     totals["cache_hit_pct"] = serde_json::json!(hit_pct);
     // Remove raw hit/miss from totals (keep only percentage)
-    totals.as_object_mut().map(|o| { o.remove("cache_hit"); o.remove("cache_miss"); });
+    totals.as_object_mut().map(|o| {
+        o.remove("cache_hit");
+        o.remove("cache_miss");
+    });
 
     let result = serde_json::json!({
         "daily": daily_arr,
@@ -1574,8 +1982,7 @@ fn days_before_today(days: u32) -> String {
 /// `deepx_tools::workspace::deepx_dir()`.
 /// Priority: {workspace}/.deepx/ → {data_dir}/workspace/ (fallback)
 fn resolve_deepx_dir(seed: &str) -> std::path::PathBuf {
-    let ws = crate::agent_bridge::cmd_get_workspace(seed.to_string())
-        .unwrap_or_default();
+    let ws = crate::agent_bridge::cmd_get_workspace(seed.to_string()).unwrap_or_default();
     if !ws.is_empty() && ws != "." {
         std::path::Path::new(&ws).join(".deepx")
     } else {
@@ -1597,49 +2004,66 @@ pub fn cmd_read_plan(seed: String) -> Result<String, String> {
     };
     let items = parse_plan_items(&content);
     // Manual JSON serialization (avoid serde derive dependency)
-    let json_items: Vec<serde_json::Value> = items.into_iter().map(|item| {
-        serde_json::json!({
-            "id": item.id,
-            "title": item.title,
-            "status": item.status,
-            "comment": item.comment,
-            "actions": item.actions,
+    let json_items: Vec<serde_json::Value> = items
+        .into_iter()
+        .map(|item| {
+            serde_json::json!({
+                "id": item.id,
+                "title": item.title,
+                "status": item.status,
+                "comment": item.comment,
+                "actions": item.actions,
+            })
         })
-    }).collect();
+        .collect();
     serde_json::to_string(&json_items).map_err(|e| format!("serialize: {e}"))
 }
 
 /// Write a plan action (approve/reject/ask) back to PLAN.md by updating
 /// the checklist status marker. Format: `- [✓] P1: ...` or `- [-] P1: ... | reason`
 #[tauri::command]
-pub fn cmd_plan_action(app: AppHandle, seed: String, item_id: String, action: String, user_comment: String) -> Result<(), String> {
+pub fn cmd_plan_action(
+    app: AppHandle,
+    seed: String,
+    item_id: String,
+    action: String,
+    user_comment: String,
+) -> Result<(), String> {
     if seed.is_empty() {
         return Err("No active session".into());
     }
     let plan_path = resolve_deepx_dir(&seed).join("PLAN.md");
-    let content = std::fs::read_to_string(&plan_path)
-        .map_err(|e| format!("read PLAN.md: {e}"))?;
+    let content = std::fs::read_to_string(&plan_path).map_err(|e| format!("read PLAN.md: {e}"))?;
 
     // Find checklist line matching "- [ ] P1:" or "- [✓] P1:" etc.
     let mut found = false;
-    let new_content: String = content.lines().map(|line| {
-        let trimmed = line.trim();
-        if !found && trimmed.starts_with("- [") && trimmed.contains(&format!(" {}: ", item_id)) {
-            found = true;
-            match action.as_str() {
-                "approve" => line.replacen("- [ ]", "- [✓]", 1),
-                "reject" => {
-                    let base = line.replacen("- [ ]", "- [-]", 1);
-                    if user_comment.is_empty() { base } else { format!("{base} | {user_comment}") }
-                },
-                "ask" => line.replacen("- [ ]", "- [?]", 1),
-                "delete" => return String::new(), // remove the line entirely
-                _ => format!("{line} | {user_comment}"),
+    let new_content: String = content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if !found && trimmed.starts_with("- [") && trimmed.contains(&format!(" {}: ", item_id))
+            {
+                found = true;
+                match action.as_str() {
+                    "approve" => line.replacen("- [ ]", "- [✓]", 1),
+                    "reject" => {
+                        let base = line.replacen("- [ ]", "- [-]", 1);
+                        if user_comment.is_empty() {
+                            base
+                        } else {
+                            format!("{base} | {user_comment}")
+                        }
+                    }
+                    "ask" => line.replacen("- [ ]", "- [?]", 1),
+                    "delete" => return String::new(), // remove the line entirely
+                    _ => format!("{line} | {user_comment}"),
+                }
+            } else {
+                line.to_string()
             }
-        } else {
-            line.to_string()
-        }
-    }).collect::<Vec<_>>().join("\n");
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     if !found {
         return Err(format!("Plan item '{}' not found in PLAN.md", item_id));
@@ -1656,10 +2080,10 @@ pub fn cmd_plan_action(app: AppHandle, seed: String, item_id: String, action: St
 /// Parse PLAN.md checklist format into structured items.
 /// Format: `- [ ] P1: Title — Description。Deps: none。Effort: 2h | comment`
 struct PlanItem {
-    id: String,       // e.g. "P1"
-    title: String,    // e.g. "审计持久化"
-    status: String,   // "pending", "approved", "rejected", or "ask"
-    comment: String,  // text after `|`
+    id: String,           // e.g. "P1"
+    title: String,        // e.g. "审计持久化"
+    status: String,       // "pending", "approved", "rejected", or "ask"
+    comment: String,      // text after `|`
     actions: Vec<String>, // kept for frontend compatibility
 }
 
@@ -1667,7 +2091,9 @@ fn parse_plan_items(content: &str) -> Vec<PlanItem> {
     let mut items = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        if !trimmed.starts_with("- [") { continue; }
+        if !trimmed.starts_with("- [") {
+            continue;
+        }
 
         // Extract status marker
         let status = if let Some(bracket_end) = trimmed.find("] ") {
@@ -1678,7 +2104,9 @@ fn parse_plan_items(content: &str) -> Vec<PlanItem> {
                 "?" => "ask",
                 _ => "pending",
             }
-        } else { continue };
+        } else {
+            continue;
+        };
 
         // Extract body after "] "
         let body = match trimmed.split_once("] ") {
@@ -1700,7 +2128,10 @@ fn parse_plan_items(content: &str) -> Vec<PlanItem> {
 
         // Extract comment (after last '|')
         let (_description, comment) = if let Some(pos) = tail.rfind(" | ") {
-            (tail[..pos].trim().to_string(), tail[pos+3..].trim().to_string())
+            (
+                tail[..pos].trim().to_string(),
+                tail[pos + 3..].trim().to_string(),
+            )
         } else {
             (tail, String::new())
         };
@@ -1710,7 +2141,11 @@ fn parse_plan_items(content: &str) -> Vec<PlanItem> {
             title,
             status: status.to_string(),
             comment: comment.clone(),
-            actions: if comment.is_empty() { Vec::new() } else { vec![comment] },
+            actions: if comment.is_empty() {
+                Vec::new()
+            } else {
+                vec![comment]
+            },
         });
     }
     items

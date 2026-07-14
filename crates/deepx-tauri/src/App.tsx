@@ -17,7 +17,8 @@ import "./styles/slash-menu.css";
 import "./styles/permission-dialog.css";
 import "./styles/changelog.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
-import PermissionDialog, { type PermissionRequest } from "./components/PermissionDialog";
+import PermissionDialog from "./components/PermissionDialog";
+import { createPermissionQueue } from "./store/permissionQueue";
 import ChangelogModal from "./components/ChangelogModal";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
@@ -69,7 +70,7 @@ export default function App() {
   });
   const [theme, setTheme] = createSignal<ThemeMode>("system");
   const [refreshKey, setRefreshKey] = createSignal(0); // bump to refresh TokenChart
-  const [permissionRequest, setPermissionRequest] = createSignal<PermissionRequest | null>(null);
+  const permissionQueue = createPermissionQueue();
   const [showChangelog, setShowChangelog] = createSignal(false);
 
   // ── Toast notifications (disconnect warnings, errors) ──
@@ -129,6 +130,12 @@ export default function App() {
       case "tool_call_preview": chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
       case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
       case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
+      case "ask_user": {
+        chat.showAskDialog({ ask_id: p.ask_id, mode: p.mode, questions: p.questions });
+        break;
+      }
+      case "ask_resolved": chat.handleAskResolved((p.ask_id ?? "") as string); break;
+      case "ask_rejected": chat.handleAskRejected((p.ask_id ?? "") as string, (p.message ?? "Invalid answer") as string); break;
       case "plan_changed": {
         // Forward to PlanReviewPanel via DOM custom event
         window.dispatchEvent(new CustomEvent("plan-submitted", { detail: { seed: listenerSeed } }));
@@ -136,6 +143,7 @@ export default function App() {
       }
       case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); if (listenerSeed === activeSeed()) setRefreshKey((k) => k + 1); break;
       case "session_created": {
+        permissionQueue.clearSeed(listenerSeed);
         const evtSeed = p.seed as string;
         chat.clearTurns();
         chat.handleSessionCreated(evtSeed);
@@ -157,6 +165,7 @@ export default function App() {
         break;
       }
       case "session_restored": if (p.seed) {
+        permissionQueue.clearSeed(listenerSeed);
         const evtSeed = p.seed as string;
         chat.clearTurns();
         chat.handleSessionCreated(evtSeed);
@@ -181,14 +190,16 @@ export default function App() {
       } break;
       case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); chat.setHasMore(!!p.has_more); } break;
       case "dashboard": chat.handleDashboard(p); break;
-      case "done": chat.handleDone(); chat.handleDone(); break;
-      case "cancelled": chat.handleCancelled(); break;
+      case "done": chat.handleDone(); break;
+      case "cancelled": chat.handleCancelled(); permissionQueue.clearSeed(listenerSeed); break;
       case "error": {
         const errMsg = (p.message ?? "Unknown error") as string;
         chat.handleError(errMsg);
         // Detect agent death: any message indicating the agent process is gone
         const isAgentDead = /(exited|died|broken.pipe|killed|connection.*lost|agent.*(dead|gone|stopped))/i.test(errMsg);
         if (isAgentDead) {
+          chat.handleCancelled();
+          permissionQueue.clearSeed(listenerSeed);
           toastCtrl.push(i18n.t().toast.agentLost, "error", true);
           // Auto-reconnect after agent death
           const seed = activeSeed();
@@ -209,7 +220,7 @@ export default function App() {
       case "compact_delta": chat.handleCompactDelta(p); break;
       case "tool_notice": chat.handleToolNotice(p); break;
       case "permission_request": {
-        setPermissionRequest({
+        permissionQueue.enqueue(listenerSeed, {
           tool_call_id: (p.tool_call_id ?? "") as string,
           tool_name: (p.tool_name ?? "") as string,
           reason: (p.reason ?? "") as string,
@@ -625,12 +636,14 @@ export default function App() {
         
       </div>
       <ToastContainer ctrl={toastCtrl} />
-      <Show when={permissionRequest()}>
-        <PermissionDialog
-          request={permissionRequest()!}
-          seed={activeSeed()}
-          onClose={() => setPermissionRequest(null)}
-        />
+      <Show keyed when={permissionQueue.active()}>
+        {(permission) => (
+          <PermissionDialog
+            request={permission.request}
+            seed={permission.seed}
+            onResolved={(seed, toolCallId) => permissionQueue.resolve(seed, toolCallId)}
+          />
+        )}
       </Show>
       <Show when={showChangelog()}>
         <ChangelogModal onClose={() => setShowChangelog(false)} />

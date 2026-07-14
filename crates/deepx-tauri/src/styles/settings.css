@@ -184,27 +184,20 @@
   font-size: 12px; color: var(--text-muted); line-height: 1.6; margin: 0;
 }
 
-/* ── SQLite status indicator dots ── */
+/* ── SQLite status indicator ── */
 .sqlite-status-dot {
-  display: inline-block; width: 8px; height: 8px;
+  display: inline-block; width: 10px; height: 10px;
+  border: 2px solid var(--bg-hover);
   border-radius: 50%; margin-right: 6px; flex-shrink: 0;
   vertical-align: middle;
 }
 .sqlite-status-dot.healthy {
-  background: var(--green);
-  animation: sqlite-healthy-pulse 2s ease-in-out infinite;
+  border-color: var(--green);
+  opacity: 0.8;
 }
 .sqlite-status-dot.pending {
-  background: var(--yellow);
-  animation: sqlite-pending-pulse 1.4s ease-in-out infinite;
-}
-@keyframes sqlite-healthy-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--green); }
-  50% { opacity: 0.55; box-shadow: 0 0 8px var(--green); }
-}
-@keyframes sqlite-pending-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  border-top-color: var(--accent);
+  animation: spin 0.6s linear infinite;
 }
 
 /* ── Dual-write checkbox in migration done dialog ── */

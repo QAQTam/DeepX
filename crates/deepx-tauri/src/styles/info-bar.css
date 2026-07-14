@@ -1,17 +1,17 @@
 /* ── Info Bar (chat top-left) ── */
-.info-bar { display: flex; align-items: center; gap: 16px; padding: 10px 20px 8px; border-bottom: 1px solid transparent; flex-shrink: 0; flex-wrap: wrap; background: var(--bg-glass-bar); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
-.info-item { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.info-label { color: var(--text-muted); }
-.info-value { color: var(--text-primary); font-weight: 500; }
+.info-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px 6px; border-bottom: var(--panel-border); flex-shrink: 0; flex-wrap: wrap; background: var(--bg-glass-bar); backdrop-filter: blur(var(--panel-glass-blur)) saturate(var(--panel-glass-saturate)); -webkit-backdrop-filter: blur(var(--panel-glass-blur)) saturate(var(--panel-glass-saturate)); }
+.info-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.info-label { color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.info-value { color: var(--text-primary); font-weight: 500; font-size: 12px; }
 .info-value.mono { font-family: var(--font-mono); font-size: 11px; }
-.info-bar-pct { width: 40px; height: 3px; border-radius: 2px; background: var(--bg-tertiary); overflow: hidden; flex-shrink: 0; position: relative; }
-.info-bar-pct::before { content: ""; position: absolute; inset: 0; background: var(--accent); border-radius: 2px; width: var(--pct, 0%); transition: width 0.4s ease; }
+.info-bar-pct { width: 40px; height: 3px; border-radius: var(--radius-sm); background: var(--bg-tertiary); overflow: hidden; flex-shrink: 0; position: relative; }
+.info-bar-pct::before { content: ""; position: absolute; inset: 0; background: var(--accent); border-radius: var(--radius-sm); width: var(--pct, 0%); transition: width 0.4s ease; }
 
-/* ── Info dot / error inline ── */
-.info-dot { display: inline-block; width: 6px; height: 6px; border-radius: var(--radius-pill); margin-right: 6px; flex-shrink: 0; }
-.info-dot.idle { background: var(--text-muted); }
-.info-dot.active { background: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
-.info-dot.error { background: var(--red); }
+/* ── Info status indicator ── */
+.info-dot { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--bg-hover); border-top-color: var(--text-muted); border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
+.info-dot.idle { border-top-color: var(--text-muted); animation: none; }
+.info-dot.active { border-top-color: var(--accent); animation: spin 0.6s linear infinite; }
+.info-dot.error { border-top-color: var(--red); animation: none; border-color: var(--red); opacity: 0.7; }
 .info-error { display: flex; align-items: center; width: 100%; padding: 2px 0 4px; color: var(--red); font-size: 12px; cursor: pointer; user-select: none; }
 .info-error:hover { text-decoration: line-through; }
 
@@ -19,12 +19,11 @@
 .info-compact-btn {
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
-  font-size: 18px;
   cursor: pointer;
-  padding: 2px 10px;
-  font-family: var(--font-sans);
+  padding: 4px 8px;
+  display: flex; align-items: center;
   transition: color var(--transition), border-color var(--transition);
 }
 .info-compact-btn:hover {

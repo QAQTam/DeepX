@@ -4,23 +4,22 @@
 //! Receives: RingContext + ToolEngine (for tool execution).
 //! Returns: Outcome (ContinueTurn, YieldToUser, TurnComplete, Error).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use deepx_message::Effect;
-use deepx_proto::{Agent2Ui, RoundDeltaKind};
+use deepx_proto::{Agent2Ui, AskAnswer, AskResolution, RoundDeltaKind};
 use deepx_types::UsageInfo;
 
-use super::types::*;
 use super::engine_tool::ToolEngine;
+use super::types::*;
 use crate::conflict;
+use crate::dashboard;
 use crate::util;
 
 /// Why the turn is being resumed.
 pub enum ResumeReason {
     /// User answered permission dialogs — all approvals resolved.
     PermissionResolved,
-    /// User answered an ask_user prompt — feed answer as tool result.
-    AskUserAnswer { answer: String },
 }
 
 /// TurnEngine manages a single LLM turn lifecycle.
@@ -41,6 +40,10 @@ impl TurnEngine {
     /// Returns the reason the turn was suspended, or None if not suspended.
     pub fn suspended_reason(&self) -> Option<YieldReason> {
         self.suspended.as_ref().map(|s| s.reason)
+    }
+
+    pub fn suspended_turn_id(&self) -> Option<&str> {
+        self.suspended.as_ref().map(|state| state.turn_id.as_str())
     }
 
     // ── Public API ──
@@ -77,27 +80,10 @@ impl TurnEngine {
 
         match reason {
             ResumeReason::PermissionResolved => {
-                log::info!("[TURN] resuming turn {} round {}", saved.turn_id, saved.round_num);
-                self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
-                self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
-            }
-            ResumeReason::AskUserAnswer { answer } => {
-                let ask_call_id = match ctx.agent.msg.find_last_step_tool_call("ask_user") {
-                    Some(id) => id,
-                    None => {
-                        return Outcome::Error(
-                            "Cannot find ask_user tool call in suspended turn".into(),
-                        );
-                    }
-                };
-                ctx.agent.msg.push_tool_result(&ask_call_id, &answer, true);
-                ctx.agent.msg.flush_meta(
-                    &ctx.agent.config.model,
-                    &ctx.agent.config.reasoning_effort,
-                );
                 log::info!(
-                    "[TURN] ask_user answer fed as tool result, resuming turn {}",
-                    saved.turn_id
+                    "[TURN] resuming turn {} round {}",
+                    saved.turn_id,
+                    saved.round_num
                 );
                 self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
                 self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
@@ -105,7 +91,221 @@ impl TurnEngine {
         }
     }
 
+    /// Resolve one LLM permission by call ID. The turn only advances after
+    /// every permission from the assistant round has been accounted for.
+    pub fn handle_permission_resolved(
+        &mut self,
+        ctx: &mut RingContext,
+        tool: &mut ToolEngine,
+        call_id: &str,
+    ) -> Outcome {
+        let Some(saved) = self.suspended.as_mut() else {
+            log::warn!("[TURN] permission resolved without a suspended turn: {call_id}");
+            return Outcome::Handled;
+        };
+        if saved.reason != YieldReason::PermissionPending
+            || !saved.pending_permission_ids.iter().any(|id| id == call_id)
+        {
+            log::warn!("[TURN] stale permission resolution ignored: {call_id}");
+            return Outcome::Handled;
+        }
+
+        saved.pending_permission_ids.retain(|id| id != call_id);
+        if !saved.pending_permission_ids.is_empty() {
+            return Outcome::YieldToUser {
+                turn_id: saved.turn_id.clone(),
+                reason: YieldReason::PermissionPending,
+            };
+        }
+
+        if !saved.pending_asks.is_empty() {
+            saved.reason = YieldReason::AskUser;
+            Self::emit_active_ask(ctx, saved);
+            return Outcome::YieldToUser {
+                turn_id: saved.turn_id.clone(),
+                reason: YieldReason::AskUser,
+            };
+        }
+
+        let saved = self.suspended.take().expect("permission suspension exists");
+        self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
+        self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
+    }
+
+    /// Validate and apply an answer to the front ask without consuming state
+    /// on identity or payload errors.
+    pub fn handle_ask_response(
+        &mut self,
+        ctx: &mut RingContext,
+        tool: &mut ToolEngine,
+        ask_id: &str,
+        answers: &[AskAnswer],
+    ) -> Outcome {
+        let active = match self.suspended.as_ref() {
+            Some(state) if state.reason == YieldReason::AskUser => {
+                match state.pending_asks.front() {
+                    Some(active) => active,
+                    None => {
+                        Self::emit_ask_rejected(ctx, ask_id, "No active ask_user prompt");
+                        return Outcome::Handled;
+                    }
+                }
+            }
+            _ => {
+                Self::emit_ask_rejected(ctx, ask_id, "No active ask_user prompt");
+                return Outcome::Handled;
+            }
+        };
+
+        if active.call_id != ask_id {
+            Self::emit_ask_rejected(ctx, ask_id, "ask_id does not match the active prompt");
+            return Outcome::Handled;
+        }
+        let ordered = match Self::validate_answers(active, answers) {
+            Ok(ordered) => ordered,
+            Err(message) => {
+                Self::emit_ask_rejected(ctx, ask_id, &message);
+                return Outcome::Handled;
+            }
+        };
+
+        let mut saved = self.suspended.take().expect("active ask suspension exists");
+        let active = saved.pending_asks.pop_front().expect("active ask exists");
+        let content = serde_json::json!({
+            "status": "answered",
+            "answers": ordered,
+        })
+        .to_string();
+        ctx.agent
+            .msg
+            .push_tool_result_direct(&active.call_id, &content, true);
+        ctx.agent
+            .msg
+            .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+        ctx.emitter.emit(Agent2Ui::AskResolved {
+            ask_id: active.call_id,
+            resolution: AskResolution::Answered,
+        });
+
+        if !saved.pending_asks.is_empty() {
+            saved.reason = YieldReason::AskUser;
+            let turn_id = saved.turn_id.clone();
+            Self::emit_active_ask(ctx, &saved);
+            self.suspended = Some(saved);
+            return Outcome::YieldToUser {
+                turn_id,
+                reason: YieldReason::AskUser,
+            };
+        }
+
+        self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
+        self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
+    }
+
+    /// Abort the active suspended ask. A stale dismiss leaves state untouched.
+    pub fn handle_ask_dismiss(
+        &mut self,
+        ctx: &mut RingContext,
+        tool: &mut ToolEngine,
+        ask_id: &str,
+    ) -> Outcome {
+        let active_id = self
+            .suspended
+            .as_ref()
+            .filter(|state| state.reason == YieldReason::AskUser)
+            .and_then(|state| state.pending_asks.front())
+            .map(|ask| ask.call_id.as_str());
+        if active_id != Some(ask_id) {
+            Self::emit_ask_rejected(ctx, ask_id, "ask_id does not match the active prompt");
+            return Outcome::Handled;
+        }
+
+        let saved = self.suspended.take().expect("active ask suspension exists");
+        tool.clear_pending();
+        ctx.agent.msg.remove_last_step_if_incomplete();
+        ctx.agent
+            .msg
+            .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+        ctx.emitter.emit(Agent2Ui::AskResolved {
+            ask_id: ask_id.to_string(),
+            resolution: AskResolution::Dismissed,
+        });
+        Outcome::TurnAborted {
+            turn_id: saved.turn_id,
+            usage: saved.usage,
+            consume_queued_interrupt: false,
+        }
+    }
+
+    fn emit_ask_rejected(ctx: &mut RingContext, ask_id: &str, message: &str) {
+        ctx.emitter.emit(Agent2Ui::AskRejected {
+            ask_id: ask_id.to_string(),
+            message: message.to_string(),
+        });
+    }
+
+    fn emit_active_ask(ctx: &mut RingContext, state: &TurnState) {
+        if let Some(ask) = state.pending_asks.front() {
+            ctx.emitter.emit(Agent2Ui::AskUser {
+                turn_id: state.turn_id.clone(),
+                round_num: state.round_num,
+                ask_id: ask.call_id.clone(),
+                mode: ask.mode,
+                questions: ask.questions.clone(),
+            });
+        }
+    }
+
+    fn validate_answers(ask: &PendingAsk, answers: &[AskAnswer]) -> Result<Vec<AskAnswer>, String> {
+        let mut supplied = HashMap::new();
+        for answer in answers {
+            if supplied
+                .insert(answer.question_id.as_str(), answer.answer.as_str())
+                .is_some()
+            {
+                return Err(format!("duplicate answer for {}", answer.question_id));
+            }
+        }
+
+        let mut ordered = Vec::with_capacity(ask.questions.len());
+        for question in &ask.questions {
+            let answer = supplied
+                .remove(question.id.as_str())
+                .ok_or_else(|| format!("missing answer for {}", question.id))?;
+            if answer.trim().is_empty() {
+                return Err(format!("empty answer for {}", question.id));
+            }
+            if !question.options.iter().any(|option| option == answer) && !question.allow_custom {
+                return Err(format!("invalid answer for {}", question.id));
+            }
+            ordered.push(AskAnswer {
+                question_id: question.id.clone(),
+                answer: answer.to_string(),
+            });
+        }
+        if !supplied.is_empty() {
+            return Err("response contains unknown question ids".into());
+        }
+        Ok(ordered)
+    }
+
     // ── Internal lap execution ──
+
+    fn abort_running_turn(
+        ctx: &mut RingContext,
+        turn_id: String,
+        usage: Option<UsageInfo>,
+    ) -> Outcome {
+        ctx.agent.msg.remove_last_step_if_incomplete();
+        ctx.agent
+            .msg
+            .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+        Outcome::TurnAborted {
+            turn_id,
+            usage,
+            consume_queued_interrupt: true,
+        }
+    }
 
     fn run_lap(
         &mut self,
@@ -126,22 +326,27 @@ impl TurnEngine {
             &ctx.agent.config.model,
             ep.as_ref().and_then(|e| e.user_id_mode.clone()),
             ep.as_ref().and_then(|e| e.chat_path.clone()),
-            ep.as_ref().map(|e| e.thinking_mode.clone()).unwrap_or_default(),
-            ep.as_ref().map(|e| e.cache_field.clone()).unwrap_or_default(),
+            ep.as_ref()
+                .map(|e| e.thinking_mode.clone())
+                .unwrap_or_default(),
+            ep.as_ref()
+                .map(|e| e.cache_field.clone())
+                .unwrap_or_default(),
             ep.as_ref().map(|e| e.supports_thinking).unwrap_or(true),
         )
         .with_stateful(ep.as_ref().map(|e| e.stateful).unwrap_or(false));
 
         loop {
             // ── Interrupt check ──
-            if ctx.cancel.is_set() || deepx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
-                ctx.agent.msg.remove_last_step_if_incomplete();
-                ctx.agent.msg.flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
-                return Outcome::Handled;
+            if ctx.cancel.is_set() || deepx_tools::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Self::abort_running_turn(ctx, turn_id, last_usage);
             }
             if !ctx.pending.is_empty() {
                 ctx.agent.msg.remove_last_step_if_incomplete();
-                ctx.agent.msg.flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+                ctx.agent
+                    .msg
+                    .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
                 return Outcome::Handled;
             }
 
@@ -157,105 +362,151 @@ impl TurnEngine {
 
             // ── SSE Gate Request ──
             let result = deepx_gate::chat_stream(
-                &provider, messages, tools,
+                &provider,
+                messages,
+                tools,
                 ctx.agent.config.max_tokens,
                 Some(ctx.agent.config.reasoning_effort.clone()),
                 Some(ctx.agent.session.seed.clone()),
                 Some(&cancel_arc),
-                &mut |event| {
-                    match event {
-                        deepx_gate::StreamEvent::ContentDelta(d) => {
-                            if ctx.cancel.is_set() { return; }
-                            content.push_str(&d);
-                            ctx.emitter.emit_delta(Agent2Ui::RoundDelta {
-                                turn_id: turn_id.clone(), round_num,
-                                kind: RoundDeltaKind::Answering, delta: d,
-                            });
+                &mut |event| match event {
+                    deepx_gate::StreamEvent::ContentDelta(d) => {
+                        if ctx.cancel.is_set() {
+                            return;
                         }
-                        deepx_gate::StreamEvent::ReasoningDelta(r) => {
-                            if ctx.cancel.is_set() { return; }
-                            reasoning.push_str(&r);
-                            ctx.emitter.emit_delta(Agent2Ui::RoundDelta {
-                                turn_id: turn_id.clone(), round_num,
-                                kind: RoundDeltaKind::Thinking, delta: r,
-                            });
+                        content.push_str(&d);
+                        ctx.emitter.emit_delta(Agent2Ui::RoundDelta {
+                            turn_id: turn_id.clone(),
+                            round_num,
+                            kind: RoundDeltaKind::Answering,
+                            delta: d,
+                        });
+                    }
+                    deepx_gate::StreamEvent::ReasoningDelta(r) => {
+                        if ctx.cancel.is_set() {
+                            return;
                         }
-                        deepx_gate::StreamEvent::Done { raw_message, usage, .. } => {
-                            if let Some(ref u) = usage {
-                                ctx.agent.session.tokens += u.total_tokens as u64;
-                                last_usage = usage.clone();
-                            }
-                            content.clear(); reasoning.clear();
-                            let mut blocks: Vec<serde_json::Value> = Vec::new();
-                            for block in &raw_message.content {
-                                match block {
-                                    deepx_types::ContentBlock::Text { text } => content.push_str(text),
-                                    deepx_types::ContentBlock::Reasoning { reasoning: r } => reasoning.push_str(r),
-                                    deepx_types::ContentBlock::ToolUse { id, name, input } => {
-                                        blocks.push(serde_json::json!({
-                                            "id": id, "name": name, "arguments": input.to_string(),
-                                        }));
-                                    }
-                                    _ => {}
+                        reasoning.push_str(&r);
+                        ctx.emitter.emit_delta(Agent2Ui::RoundDelta {
+                            turn_id: turn_id.clone(),
+                            round_num,
+                            kind: RoundDeltaKind::Thinking,
+                            delta: r,
+                        });
+                    }
+                    deepx_gate::StreamEvent::Done {
+                        raw_message, usage, ..
+                    } => {
+                        if let Some(ref u) = usage {
+                            ctx.agent.session.tokens += u.total_tokens as u64;
+                            last_usage = usage.clone();
+                        }
+                        content.clear();
+                        reasoning.clear();
+                        let mut blocks: Vec<serde_json::Value> = Vec::new();
+                        for block in &raw_message.content {
+                            match block {
+                                deepx_types::ContentBlock::Text { text } => content.push_str(text),
+                                deepx_types::ContentBlock::Reasoning { reasoning: r } => {
+                                    reasoning.push_str(r)
                                 }
+                                deepx_types::ContentBlock::ToolUse { id, name, input } => {
+                                    blocks.push(serde_json::json!({
+                                        "id": id, "name": name, "arguments": input.to_string(),
+                                    }));
+                                }
+                                _ => {}
                             }
-                            if !blocks.is_empty() {
-                                tool_calls_raw = serde_json::Value::Array(blocks);
-                            }
                         }
-                        deepx_gate::StreamEvent::ToolCallProgress { index, id, name, args_so_far } => {
-                            ctx.emitter.emit_delta(Agent2Ui::ToolCallPreview {
-                                turn_id: turn_id.clone(), round_num, index, id, name, args_so_far,
-                            });
+                        if !blocks.is_empty() {
+                            tool_calls_raw = serde_json::Value::Array(blocks);
                         }
-                        deepx_gate::StreamEvent::UsageUpdate(u) => {
-                            last_usage = Some(u.clone());
-                            ctx.agent.session.tokens = ctx.agent.session.tokens.max(u.total_tokens as u64);
-                            ctx.emitter.emit_delta(Agent2Ui::Dashboard {
-                                hp_connected: true,
-                                session_seed: ctx.agent.session.seed.clone(),
-                                context_limit: ctx.agent.config.context_limit,
-                                tool_calls_total: 0, tool_failures: 0,
-                                current_phase: "single".into(), streaming: true,
-                                dsml_compat_count: ctx.agent.dsml_compat_count,
-                                documents: Vec::new(), recent_edits: Vec::new(), tasks: Vec::new(),
-                                session_title: None, usage: Some(u),
-                                model: Some(ctx.agent.config.model.clone()),
-                            });
-                        }
-                        deepx_gate::StreamEvent::Retrying { attempt, max_retries, delay_secs, error } => {
-                            ctx.emitter.emit(Agent2Ui::Error {
+                    }
+                    deepx_gate::StreamEvent::ToolCallProgress {
+                        index,
+                        id,
+                        name,
+                        args_so_far,
+                    } => {
+                        ctx.emitter.emit_delta(Agent2Ui::ToolCallPreview {
+                            turn_id: turn_id.clone(),
+                            round_num,
+                            index,
+                            id,
+                            name,
+                            args_so_far,
+                        });
+                    }
+                    deepx_gate::StreamEvent::UsageUpdate(u) => {
+                        last_usage = Some(u.clone());
+                        ctx.agent.session.tokens =
+                            ctx.agent.session.tokens.max(u.total_tokens as u64);
+                        ctx.emitter.emit_delta(Agent2Ui::Dashboard {
+                            hp_connected: true,
+                            session_seed: ctx.agent.session.seed.clone(),
+                            context_limit: ctx.agent.config.context_limit,
+                            tool_calls_total: 0,
+                            tool_failures: 0,
+                            current_phase: "single".into(),
+                            streaming: true,
+                            dsml_compat_count: ctx.agent.dsml_compat_count,
+                            documents: Vec::new(),
+                            recent_edits: Vec::new(),
+                            tasks: Vec::new(),
+                            session_title: None,
+                            usage: Some(u),
+                            model: Some(ctx.agent.config.model.clone()),
+                        });
+                    }
+                    deepx_gate::StreamEvent::Retrying {
+                        attempt,
+                        max_retries,
+                        delay_secs,
+                        error,
+                    } => {
+                        ctx.emitter.emit(Agent2Ui::Error {
                                 message: format!("API error, retrying ({attempt}/{max_retries}) in {delay_secs}s: {error}"),
                             });
-                        }
-                        deepx_gate::StreamEvent::Error(msg) => {
-                            ctx.emitter.emit(Agent2Ui::Error { message: msg });
-                            had_error = true;
-                        }
+                    }
+                    deepx_gate::StreamEvent::Error(msg) => {
+                        ctx.emitter.emit(Agent2Ui::Error { message: msg });
+                        had_error = true;
                     }
                 },
             );
 
-            if had_error || result.is_err() {
-                ctx.agent.msg.flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
-                return Outcome::Handled;
+            if ctx.cancel.is_set() {
+                return Self::abort_running_turn(ctx, turn_id, last_usage);
             }
 
-            if ctx.cancel.is_set() {
-                ctx.agent.msg.remove_last_step_if_incomplete();
-                ctx.agent.msg.flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+            if had_error || result.is_err() {
+                ctx.agent
+                    .msg
+                    .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
                 return Outcome::Handled;
             }
 
             // ── Parse + push assistant message ──
-            let parsed = util::parse_tool_calls_from_response(&content, &reasoning, &tool_calls_raw, &ctx.agent);
+            let parsed = util::parse_tool_calls_from_response(
+                &content,
+                &reasoning,
+                &tool_calls_raw,
+                &ctx.agent,
+            );
             let assistant_msg = util::build_assistant_message(&content, &reasoning, &parsed);
             let effect = ctx.agent.msg.push_assistant(assistant_msg.clone());
-            ctx.agent.msg.flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+            ctx.agent
+                .msg
+                .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
 
             util::emit_round_complete_via_emitter(
-                ctx.emitter, &turn_id, round_num,
-                &assistant_msg, &content, &reasoning, &parsed,
+                ctx.emitter,
+                &turn_id,
+                round_num,
+                &assistant_msg,
+                &content,
+                &reasoning,
+                &parsed,
             );
 
             match effect {
@@ -292,21 +543,26 @@ impl TurnEngine {
                         // Admit all tools via ToolEngine, then keep later writers
                         // out of the parallel worker batches.
                         const MAX_PARALLEL_TOOL_WORKERS: usize = 4;
-                        let (_serial_groups, serial_after) = conflict::resolve_write_conflicts(&pending);
+                        let (_serial_groups, serial_after) =
+                            conflict::resolve_write_conflicts(&pending);
                         let serial_call_ids: HashSet<String> = serial_after
                             .iter()
                             .map(|index| pending[*index].id.clone())
                             .collect();
-                        let (authorized, round_pending_ids) = tool.admit_batch(ctx, &pending);
-                        let (mut parallel_authorized, serial_authorized): (Vec<_>, Vec<_>) = authorized
-                            .into_iter()
-                            .partition(|admitted| !serial_call_ids.contains(&admitted.call_id));
+                        let admission = tool.admit_batch(ctx, &pending);
+                        let (mut parallel_authorized, serial_authorized): (Vec<_>, Vec<_>) =
+                            admission
+                                .authorized
+                                .into_iter()
+                                .partition(|admitted| !serial_call_ids.contains(&admitted.call_id));
 
                         // Execute independent tools in bounded parallel batches.
                         while !parallel_authorized.is_empty() {
-                            let batch_len = parallel_authorized.len().min(MAX_PARALLEL_TOOL_WORKERS);
+                            let batch_len =
+                                parallel_authorized.len().min(MAX_PARALLEL_TOOL_WORKERS);
                             let batch: Vec<_> = parallel_authorized.drain(..batch_len).collect();
-                            let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
+                            let (progress_tx, progress_rx) =
+                                deepx_tools::bounded_exec_progress_channel();
                             let mut handles: Vec<(String, std::thread::JoinHandle<_>)> = Vec::new();
 
                             for admitted in batch {
@@ -318,7 +574,10 @@ impl TurnEngine {
                                         let auth = admitted.auth;
                                         let cid = call_id.clone();
                                         move || {
-                                            let result = deepx_tools::bridge::execute_authorized(*auth, Some(tx));
+                                            let result = deepx_tools::bridge::execute_authorized(
+                                                *auth,
+                                                Some(tx),
+                                            );
                                             (
                                                 cid,
                                                 result.content,
@@ -343,7 +602,13 @@ impl TurnEngine {
                                     let _ = h.join(); // reap
                                 } else {
                                     match h.join() {
-                                        Ok((_cid, content, success, code_delta, skill_activation)) => {
+                                        Ok((
+                                            _cid,
+                                            content,
+                                            success,
+                                            code_delta,
+                                            skill_activation,
+                                        )) => {
                                             ctx.agent.msg.push_tool_result_direct(
                                                 &call_id, &content, success,
                                             );
@@ -363,7 +628,9 @@ impl TurnEngine {
                                         }
                                         Err(_) => {
                                             ctx.agent.msg.push_tool_result_direct(
-                                                &call_id, "[ERROR] tool thread panicked", false,
+                                                &call_id,
+                                                "[ERROR] tool thread panicked",
+                                                false,
                                             );
                                         }
                                     }
@@ -378,13 +645,17 @@ impl TurnEngine {
                                 break;
                             }
                             let call_id = admitted.call_id;
-                            let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
+                            let (progress_tx, progress_rx) =
+                                deepx_tools::bounded_exec_progress_channel();
                             let handle = std::thread::Builder::new()
                                 .stack_size(4 * 1024 * 1024)
                                 .spawn({
                                     let auth = admitted.auth;
                                     move || {
-                                        let result = deepx_tools::bridge::execute_authorized(*auth, Some(progress_tx));
+                                        let result = deepx_tools::bridge::execute_authorized(
+                                            *auth,
+                                            Some(progress_tx),
+                                        );
                                         (
                                             result.content,
                                             result.success,
@@ -397,7 +668,9 @@ impl TurnEngine {
                             tool.drain_progress_external(ctx, progress_rx, &call_id);
                             match handle.join() {
                                 Ok((content, success, code_delta, skill_activation)) => {
-                                    ctx.agent.msg.push_tool_result_direct(&call_id, &content, success);
+                                    ctx.agent
+                                        .msg
+                                        .push_tool_result_direct(&call_id, &content, success);
                                     if let Some(activation) = skill_activation {
                                         ctx.agent.activate_skill(&call_id, activation);
                                     }
@@ -420,46 +693,41 @@ impl TurnEngine {
                             }
                         }
 
-                        // Check for pending approvals
-                        if !round_pending_ids.is_empty() {
+                        if ctx.cancel.is_set() {
+                            return Self::abort_running_turn(ctx, turn_id, last_usage);
+                        }
+
+                        // Suspend before the next gate lap while any approval or
+                        // ask_user call from this assistant round is unresolved.
+                        if !admission.pending_permission_ids.is_empty()
+                            || !admission.pending_asks.is_empty()
+                        {
+                            let reason = if admission.pending_permission_ids.is_empty() {
+                                YieldReason::AskUser
+                            } else {
+                                YieldReason::PermissionPending
+                            };
                             self.suspended = Some(TurnState {
                                 session_id: ctx.agent.session.seed.clone(),
                                 turn_id: turn_id.clone(),
                                 round_num,
-                                pending_call_ids: round_pending_ids,
+                                pending_permission_ids: admission.pending_permission_ids,
+                                pending_asks: admission.pending_asks,
                                 usage: last_usage.clone(),
-                                reason: YieldReason::PermissionPending,
+                                reason,
                             });
-                            return Outcome::YieldToUser {
-                                turn_id,
-                                reason: YieldReason::PermissionPending,
-                            };
+                            if reason == YieldReason::AskUser {
+                                Self::emit_active_ask(
+                                    ctx,
+                                    self.suspended.as_ref().expect("suspended ask state"),
+                                );
+                            }
+                            return Outcome::YieldToUser { turn_id, reason };
                         }
                     }
 
-                    // Emit completed tool round + check ask_user
-                    let results = self.emit_completed_tool_round(ctx, &turn_id, round_num);
-                    let has_user_query = results.iter().any(|(_, _, content, _)| {
-                        content.starts_with("[USER_QUERY]")
-                            || serde_json::from_str::<serde_json::Value>(content)
-                                .ok()
-                                .and_then(|v| v.get("user_query").and_then(|u| u.as_bool()))
-                                .unwrap_or(false)
-                    });
-                    if has_user_query {
-                        self.suspended = Some(TurnState {
-                            session_id: ctx.agent.session.seed.clone(),
-                            turn_id: turn_id.clone(),
-                            round_num,
-                            pending_call_ids: Vec::new(),
-                            usage: last_usage.clone(),
-                            reason: YieldReason::AskUser,
-                        });
-                        return Outcome::YieldToUser {
-                            turn_id,
-                            reason: YieldReason::AskUser,
-                        };
-                    }
+                    // All tools from this round are now resolved.
+                    self.emit_completed_tool_round(ctx, &turn_id, round_num);
 
                     // Another lap: tools executed, back to Gate
                     return Outcome::ContinueTurn {
@@ -472,15 +740,12 @@ impl TurnEngine {
                 _ => {}
             }
 
-            ctx.agent.msg.flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+            ctx.agent
+                .msg
+                .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
             if let Some(ref usage) = last_usage {
                 util::record_token_usage(usage, &ctx.agent.config.model);
             }
-            ctx.emitter.emit(Agent2Ui::TurnEnd {
-                turn_id: turn_id.clone(),
-                stop_reason: None,
-                usage: last_usage.clone(),
-            });
             return Outcome::TurnComplete {
                 turn_id,
                 usage: last_usage,
@@ -488,35 +753,88 @@ impl TurnEngine {
         }
     }
 
-    fn emit_completed_tool_round(&self, ctx: &mut RingContext, turn_id: &str, round_num: u32)
-        -> Vec<(String, String, String, bool)>
-    {
+    fn emit_completed_tool_round(
+        &self,
+        ctx: &mut RingContext,
+        turn_id: &str,
+        round_num: u32,
+    ) -> Vec<(String, String, String, bool)> {
         let results = ctx.agent.msg.last_step_tool_results();
         let ts = util::chrono_local_datetime();
-        let tool_defs: Vec<_> = results.iter().map(|(tc_id, name, content, success)| {
-            let args = ctx.agent.msg.tool_call_args(tc_id).map(|a| a.to_string()).unwrap_or_default();
-            ctx.emitter.emit_delta(Agent2Ui::AuditRecord {
-                tool_name: name.clone(),
-                result_summary: content.lines().next().unwrap_or("").chars().take(120).collect(),
-                success: *success, time: ts.clone(), args,
-            });
-            deepx_proto::ToolResultDef {
-                tool_call_id: tc_id.clone(), output: content.clone(), success: *success, file: None,
-            }
-        }).collect();
+        let tool_defs: Vec<_> = results
+            .iter()
+            .map(|(tc_id, name, content, success)| {
+                let args = ctx
+                    .agent
+                    .msg
+                    .tool_call_args(tc_id)
+                    .map(|a| a.to_string())
+                    .unwrap_or_default();
+                ctx.emitter.emit_delta(Agent2Ui::AuditRecord {
+                    tool_name: name.clone(),
+                    result_summary: content
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .take(120)
+                        .collect(),
+                    success: *success,
+                    time: ts.clone(),
+                    args,
+                });
+                deepx_proto::ToolResultDef {
+                    tool_call_id: tc_id.clone(),
+                    output: content.clone(),
+                    success: *success,
+                    file: None,
+                }
+            })
+            .collect();
 
         if !tool_defs.is_empty() {
-            ctx.emitter.emit(Agent2Ui::ToolResults { turn_id: turn_id.to_string(), round_num, results: tool_defs });
+            ctx.emitter.emit(Agent2Ui::ToolResults {
+                turn_id: turn_id.to_string(),
+                round_num,
+                results: tool_defs,
+            });
         }
         if results.iter().any(|(_, name, _, _)| name == "plan_submit") {
             ctx.emitter.emit(Agent2Ui::PlanChanged);
         }
-        ctx.agent.msg.flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+        // Refresh status bar tasks after every tool round
+        if !results.is_empty() {
+            ctx.emitter.emit(Agent2Ui::Dashboard {
+                hp_connected: true,
+                session_seed: ctx.agent.session.seed.clone(),
+                context_limit: ctx.agent.config.context_limit,
+                tool_calls_total: 0,
+                tool_failures: 0,
+                current_phase: "single".into(),
+                streaming: false,
+                dsml_compat_count: ctx.agent.dsml_compat_count,
+                documents: dashboard::build_documents(),
+                recent_edits: dashboard::build_recent_edits(),
+                tasks: dashboard::build_tasks(),
+                session_title: ctx.agent.session.title.clone(),
+                usage: None,
+                model: Some(ctx.agent.config.model.clone()),
+            });
+        }
+        ctx.agent
+            .msg
+            .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
         results
     }
 
     /// Reset all turn state (called on Cancel / new session).
     pub fn reset(&mut self) {
         self.suspended = None;
+    }
+
+    pub fn take_suspended_for_abort(&mut self) -> Option<(String, Option<UsageInfo>)> {
+        self.suspended
+            .take()
+            .map(|state| (state.turn_id, state.usage))
     }
 }

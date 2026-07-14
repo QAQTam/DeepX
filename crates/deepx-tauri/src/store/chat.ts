@@ -1,11 +1,11 @@
 import { createStore, produce } from "solid-js/store";
 import { createSignal, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import type { ToolCallDef, ToolResultDef, RoundBlock, RoundData, TurnData, TaskInfo, SessionMeta } from "@/lib/types";
+import type { ToolCallDef, ToolResultDef, RoundBlock, RoundData, TurnData, TaskInfo, SessionMeta, AskMode, AskQuestion, AskAnswer, SkillInfo } from "@/lib/types";
 import type { MetricPoint } from "@/components/StreamMetricsChart";
 
 // Re-export for other modules
-export type { ToolCallDef, ToolResultDef, RoundBlock, TaskInfo, SessionMeta };
+export type { ToolCallDef, ToolResultDef, RoundBlock, TaskInfo, SessionMeta, SkillInfo };
 export interface Round extends RoundData {
   blocks: RoundBlock[];
   thinking_ms?: number;
@@ -21,8 +21,12 @@ export interface Turn {
 }
 export interface SessionInfo { seed: string; model: string; context_tokens: number; context_limit: number; total_tokens: number; prompt_cache_hit: number; prompt_cache_miss: number; }
 export interface ActivityEntry { tool_name: string; summary: string; success: boolean; time: string; args: string; }
-export interface SkillInfo { name: string; description: string; scope: string; source: string; }
-export interface AskState { question: string; options: string[]; allow_custom: boolean; show: boolean; }
+export interface AskState {
+  askId: string;
+  mode: AskMode;
+  questions: AskQuestion[];
+  show: boolean;
+}
 
 export function createChatStore(seed: string) {
   const [turns, setTurns] = createStore<Turn[]>([]);
@@ -46,7 +50,10 @@ export function createChatStore(seed: string) {
   const [activityLog, setActivityLog] = createSignal<ActivityEntry[]>([]);
   const [skillCatalog, setSkillCatalog] = createSignal<SkillInfo[]>([]);
   const [activeSkillNames, setActiveSkillNames] = createSignal<string[]>([]);
-  const [askState, setAskState] = createSignal<AskState>({ question: "", options: [], allow_custom: true, show: false });
+  const [askState, setAskState] = createSignal<AskState>({ askId: "", mode: "single" as AskMode, questions: [], show: false });
+  let askLock: string | null = null;
+  let askPending = false;
+  const askQueue: AskState[] = [];
   const [isCompacting, setIsCompacting] = createSignal(false);
 
   const [compactResult, setCompactResult] = createSignal<number | null>(null);
@@ -224,14 +231,6 @@ export function createChatStore(seed: string) {
       // Append final results
       round.tool_results.push(...results);
     }));
-    for (const r of results) {
-      if (r.success && r.output.startsWith("[USER_QUERY] ")) {
-        try {
-          const json = JSON.parse(r.output.slice(13));
-          setAskState({ question: json.question || "", options: json.options || [], allow_custom: json.allow_custom !== false, show: true });
-        } catch {}
-      }
-    }
   }
 
   function handleTurnEnd(turn_id: string, data: Record<string, unknown>) {
@@ -327,6 +326,7 @@ export function createChatStore(seed: string) {
   }
 
   function handleCancelled() {
+    resetAskLifecycle();
     setIsStreaming(false); setInputDisabled(false); resetStreamBuffer(); lastRoundNum = 0;
     turnStartedAt = 0; roundThinkingStart = 0; roundAnswerStart = 0; cumulativeAnswerMs = 0;
   }
@@ -344,6 +344,7 @@ export function createChatStore(seed: string) {
   function clearError() { setError(null); }
 
   function clear() {
+    resetAskLifecycle();
     setTurns([]); setError(null); setTasks([]); setRecentEdits([]); setActivityLog([]);
     resetStreamBuffer(); setIsStreaming(false); setInputDisabled(false); lastRoundNum = 0;
     turnStartedAt = 0; roundThinkingStart = 0; roundAnswerStart = 0; cumulativeAnswerMs = 0;
@@ -351,6 +352,7 @@ export function createChatStore(seed: string) {
   }
 
   function clearTurns() {
+    resetAskLifecycle();
     cacheCurrentStatus();
     setTurns([]); resetStreamBuffer(); lastRoundNum = 0;
     turnStartedAt = 0; roundThinkingStart = 0; roundAnswerStart = 0; cumulativeAnswerMs = 0;
@@ -381,11 +383,16 @@ export function createChatStore(seed: string) {
   async function undoTurn(turn_id: string) {
     try {
       await invoke("cmd_undo_turn", { seed, turnId: turn_id });
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      return;
+    }
+    resetAskLifecycle();
     setTurns((prev) => prev.filter(t => t.turn_id !== turn_id));
   }
 
   function handleSessionCreated(evtSeed: string) {
+    resetAskLifecycle();
     cacheCurrentStatus();
     setSessionInfo(produce((s) => { s.seed = evtSeed; }));
     loadCachedStatus(evtSeed);
@@ -405,16 +412,75 @@ export function createChatStore(seed: string) {
     }
   }
 
-  async function submitAskAnswer(answer: string) {
-    setAskState({ question: "", options: [], allow_custom: true, show: false });
-    try {
-      await invoke("cmd_ask_response", { seed, text: answer });
-    } catch (e) { console.error(e); }
+  // ── Ask dialog helpers ──
+
+  function resetAskLifecycle() {
+    askLock = null;
+    askPending = false;
+    askQueue.length = 0;
+    setAskState({ askId: "", mode: "single" as AskMode, questions: [], show: false });
   }
 
-  function dismissAsk() { setAskState({ question: "", options: [], allow_custom: true, show: false }); }
+  function showAskDialog(json: Record<string, unknown>) {
+    const askId = typeof json.ask_id === "string" ? json.ask_id.trim() : "";
+    if (!askId) return;
+    const mode: AskMode = (json.mode as AskMode) || "single";
+    const questions: AskQuestion[] = Array.isArray(json.questions)
+      ? json.questions as unknown as AskQuestion[]
+      : [{ id: "q1", question: (json.question as string) || "", options: (json.options as string[]) || [], allow_custom: (json.allow_custom as boolean) !== false }];
+    const next = { askId, mode, questions, show: true };
+    if (askLock !== null) {
+      if (askLock !== askId && !askQueue.some(item => item.askId === askId)) askQueue.push(next);
+      return;
+    }
+    askLock = askId;
+    askPending = false;
+    setAskState(next);
+  }
+
+  function showNextAsk() {
+    const next = askQueue.shift();
+    if (next) {
+      askLock = next.askId;
+      askPending = false;
+      setAskState(next);
+    }
+  }
+
+  function handleAskResolved(askId: string) {
+    if (!askLock || askLock !== askId) return;
+    askLock = null;
+    askPending = false;
+    setAskState({ askId: "", mode: "single" as AskMode, questions: [], show: false });
+    showNextAsk();
+  }
+
+  function handleAskRejected(askId: string, message: string) {
+    if (askLock !== askId) return;
+    askPending = false;
+    setError(message);
+  }
+
+  async function submitAskAnswer(answers: AskAnswer[]) {
+    const askId = askLock;
+    if (!askId || askPending) return;
+    askPending = true;
+    try {
+      await invoke("cmd_ask_response", { seed, askId, answers });
+    } catch (e) { askPending = false; console.error(e); }
+  }
+
+  async function dismissAsk() {
+    const askId = askLock;
+    if (!askId || askPending) return;
+    askPending = true;
+    try {
+      await invoke("cmd_ask_dismiss", { seed, askId });
+    } catch (e) { askPending = false; console.error(e); }
+  }
 
   function loadSessionFromData(snapshot: { turns: Turn[]; info: SessionInfo }) {
+    resetAskLifecycle();
     setTurns(snapshot.turns);
     setSessionInfo(snapshot.info);
   }
@@ -452,5 +518,5 @@ export function createChatStore(seed: string) {
     setTurns(produce((prev) => { prev.unshift(...loaded); }));
   }
 
-  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, skillCatalog, activeSkillNames, loadActivityFromBackend, askState, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, compactText, metricHistory, handleCompactStart, handleCompactEnd, handleCompactDelta, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleSkillsChanged, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
+  return { turns, sessionInfo, isStreaming, inputDisabled, hasMore, setHasMore, workspace, setWorkspace, error, restoreText, tasks, recentEdits, activityLog, skillCatalog, activeSkillNames, loadActivityFromBackend, askState, showAskDialog, handleAskResolved, handleAskRejected, submitAskAnswer, dismissAsk, submitTaskAction, isCompacting, compactResult, compactText, metricHistory, handleCompactStart, handleCompactEnd, handleCompactDelta, handleToolNotice, handleTurnStart, handleRoundDelta, handleToolCallPreview, handleRoundComplete, handleToolResults, handleExecProgress, handleTurnEnd, handleSessionCreated, handleDashboard, handleSkillsChanged, handleAuditRecord, handleCancelled, handleDone, handleError, clearError, clear, clearTurns, undoTurn, loadSessionFromData, loadTurnsFromRestore, prependTurns };
 }

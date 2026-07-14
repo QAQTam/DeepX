@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "test:run": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -30,9 +31,11 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.5.0",
     "esbuild": "^0.25",
+    "jsdom": "^29.1.1",
     "rolldown": "^1.1.1",
     "typescript": "~6.0.3",
     "vite": "^8.0.0",
-    "vite-plugin-solid": "^2.11.0"
+    "vite-plugin-solid": "^2.11.0",
+    "vitest": "^4.1.10"
   }
 }

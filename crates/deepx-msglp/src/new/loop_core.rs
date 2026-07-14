@@ -54,14 +54,15 @@ use std::sync::mpsc;
 
 use deepx_proto::{Agent2Ui, Ui2Agent};
 
+use super::engine::Engine;
+use super::engine_compact::{CompactEngine, CompactMeta};
+use super::engine_input::InputEngine;
+use super::engine_misc::MiscEngine;
+use super::engine_session::SessionEngine;
+use super::engine_tool::PermissionDisposition;
+use super::types::*;
 use crate::agent::AgentState;
 use crate::notification;
-use super::engine::Engine;
-use super::types::*;
-use super::engine_session::SessionEngine;
-use super::engine_input::InputEngine;
-use super::engine_compact::{CompactEngine, CompactMeta};
-use super::engine_misc::MiscEngine;
 
 /// Number of recent turns sent on session restore for incremental loading.
 const INITIAL_LOAD_COUNT: usize = 20;
@@ -82,7 +83,9 @@ struct ChannelEmitter {
 
 impl Emitter for ChannelEmitter {
     fn emit(&self, event: Agent2Ui) {
-        if self.writer_dead.load(Ordering::SeqCst) { return; }
+        if self.writer_dead.load(Ordering::SeqCst) {
+            return;
+        }
         if self.tx.send(event).is_err() {
             log::error!("[AGENT] emit failed: writer thread dead");
         }
@@ -112,6 +115,9 @@ pub struct Loop {
     pending: PendingState,
     /// Set to true when the writer thread exits (stdout pipe broken).
     writer_dead: Arc<AtomicBool>,
+    /// A running turn already emitted its terminal transaction, but the
+    /// reader-thread interrupt frame still needs to be drained.
+    terminal_for_queued_interrupt: bool,
 
     // ── Session-scoped state (flushed/swapped on session change) ──
     /// The active session's data and engines.
@@ -180,7 +186,9 @@ impl Loop {
                                 cancel_for_reader.set();
                                 deepx_tools::CANCEL.store(true, Ordering::SeqCst);
                             }
-                            if cmd_tx.send(frame).is_err() { break; }
+                            if cmd_tx.send(frame).is_err() {
+                                break;
+                            }
                         }
                         Ok(None) | Err(_) => {
                             log::warn!("[AGENT] reader thread: stdin EOF — exiting");
@@ -210,19 +218,31 @@ impl Loop {
                         Ok(event) => {
                             let json = match serde_json::to_string(&event) {
                                 Ok(j) => j,
-                                Err(e) => { log::error!("[AGENT] serialize: {e}"); continue; }
+                                Err(e) => {
+                                    log::error!("[AGENT] serialize: {e}");
+                                    continue;
+                                }
                             };
-                            if writeln!(writer, "{}", json).is_err() { break; }
+                            if writeln!(writer, "{}", json).is_err() {
+                                break;
+                            }
                             // Drain backlog without intermediate flushes
                             while let Ok(event) = event_rx.try_recv() {
                                 if let Ok(json) = serde_json::to_string(&event) {
-                                    if writeln!(writer, "{}", json).is_err() { break; }
+                                    if writeln!(writer, "{}", json).is_err() {
+                                        break;
+                                    }
                                 }
                             }
                             let _ = writer.flush();
                         }
-                        Err(mpsc::RecvTimeoutError::Timeout) => { let _ = writer.flush(); }
-                        Err(mpsc::RecvTimeoutError::Disconnected) => { let _ = writer.flush(); break; }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            let _ = writer.flush();
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            let _ = writer.flush();
+                            break;
+                        }
                     }
                 }
             }));
@@ -236,10 +256,13 @@ impl Loop {
         });
 
         Loop {
-            cmd_rx, event_tx, cancel,
+            cmd_rx,
+            event_tx,
+            cancel,
             phase: LoopPhase::Idle,
             pending: PendingState::default(),
             writer_dead,
+            terminal_for_queued_interrupt: false,
             session: SessionBundle::new(agent),
             session_eng: SessionEngine::new(),
             input: InputEngine::new(),
@@ -313,6 +336,19 @@ impl Loop {
         self.pending_compact_rx = None;
 
         self.pending.clear();
+    }
+
+    /// Close any suspended transaction before replacing the active session.
+    /// An unanswered ask/tool round must never be persisted into, or resumed
+    /// against, the next session.
+    fn prepare_session_switch(&mut self) {
+        if self.session.turn.is_suspended() {
+            self.session.agent.msg.remove_last_step_if_incomplete();
+        }
+        self.session.flush();
+        self.reset_all_engines();
+        self.cancel.clear();
+        deepx_tools::CANCEL.store(false, Ordering::SeqCst);
     }
 
     /// Extract a human-readable message from a panic payload.
@@ -422,7 +458,10 @@ impl Loop {
 
             // ── Block for next command (with timeout to poll compact) ──
             let frame = match self.cmd_rx.recv_timeout(std::time::Duration::from_secs(1)) {
-                Ok(f) => { log::info!("[AGENT] received Ui2Agent frame"); f }
+                Ok(f) => {
+                    log::info!("[AGENT] received Ui2Agent frame");
+                    f
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     log::error!("[AGENT] cmd_rx closed — stdin pipe broken. Exiting.");
@@ -448,29 +487,41 @@ impl Loop {
         let has_seed = !self.session.agent.session.seed.is_empty();
 
         if let Some(seed) = resume_seed {
-            if self.session_eng.resume(&mut self.session.agent, &seed, &self.cancel) {
+            if self
+                .session_eng
+                .resume(&mut self.session.agent, &seed, &self.cancel)
+            {
                 let total = self.session.agent.msg.turn_count() as u32;
                 let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
                 let recent = crate::util::build_turns_from_context(
-                    &self.session.agent, Some(start), Some(INITIAL_LOAD_COUNT),
+                    &self.session.agent,
+                    Some(start),
+                    Some(INITIAL_LOAD_COUNT),
                 );
                 let _ = self.event_tx.send(Agent2Ui::SessionRestored {
                     seed: self.session.agent.session.seed.clone(),
-                    turns: recent, tokens_used: 0, cache_hit_pct: 0.0,
-                    total_turns: total, has_more: start > 0,
+                    turns: recent,
+                    tokens_used: 0,
+                    cache_hit_pct: 0.0,
+                    total_turns: total,
+                    has_more: start > 0,
                 });
             }
-            self.misc.emit_dashboard(&self.session.agent, &self.event_tx);
+            self.misc
+                .emit_dashboard(&self.session.agent, &self.event_tx);
             let _ = self.event_tx.send(Agent2Ui::Ready);
         } else if has_seed && !self.session.agent.session.from_resume {
-            self.session_eng.create_with_seed(&mut self.session.agent, &self.cancel);
+            self.session_eng
+                .create_with_seed(&mut self.session.agent, &self.cancel);
             let _ = self.event_tx.send(Agent2Ui::SessionCreated {
                 seed: self.session.agent.session.seed.clone(),
             });
-            self.misc.emit_dashboard(&self.session.agent, &self.event_tx);
+            self.misc
+                .emit_dashboard(&self.session.agent, &self.event_tx);
             let _ = self.event_tx.send(Agent2Ui::Ready);
         } else {
-            self.misc.emit_dashboard(&self.session.agent, &self.event_tx);
+            self.misc
+                .emit_dashboard(&self.session.agent, &self.event_tx);
             let _ = self.event_tx.send(Agent2Ui::Ready);
         }
     }
@@ -489,24 +540,36 @@ impl Loop {
         while let Ok(cmd) = self.cmd_rx.try_recv() {
             match cmd {
                 Ui2Agent::Cancel => {
+                    if std::mem::take(&mut self.terminal_for_queued_interrupt) {
+                        self.cancel.clear();
+                        deepx_tools::CANCEL.store(false, Ordering::SeqCst);
+                        continue;
+                    }
                     self.cancel.set();
                     deepx_tools::CANCEL.store(true, Ordering::SeqCst);
                     self.phase = LoopPhase::Idle;
                     let _ = self.event_tx.send(Agent2Ui::Cancelled);
                 }
                 Ui2Agent::ResumeSession { seed } => {
+                    let terminal_emitted = std::mem::take(&mut self.terminal_for_queued_interrupt);
                     self.cancel.set();
                     deepx_tools::CANCEL.store(true, Ordering::SeqCst);
                     self.pending.session = Some(seed);
-                    let _ = self.event_tx.send(Agent2Ui::Cancelled);
+                    if !terminal_emitted {
+                        let _ = self.event_tx.send(Agent2Ui::Cancelled);
+                    }
                 }
                 Ui2Agent::NewSession => {
+                    let terminal_emitted = std::mem::take(&mut self.terminal_for_queued_interrupt);
                     self.cancel.set();
                     deepx_tools::CANCEL.store(true, Ordering::SeqCst);
                     self.pending.new_session = true;
-                    let _ = self.event_tx.send(Agent2Ui::Cancelled);
+                    if !terminal_emitted {
+                        let _ = self.event_tx.send(Agent2Ui::Cancelled);
+                    }
                 }
                 Ui2Agent::Shutdown => {
+                    self.terminal_for_queued_interrupt = false;
                     self.pending.shutdown = true;
                 }
                 other if self.pending.is_empty() && !self.session.turn.is_suspended() => {
@@ -520,35 +583,45 @@ impl Loop {
 
         // ── Process deferred session switch ──
         if let Some(seed) = self.pending.session.take() {
-            // Flush current session before switching
-            self.session.flush();
-            if self.session_eng.resume(&mut self.session.agent, &seed, &self.cancel) {
+            self.prepare_session_switch();
+            if self
+                .session_eng
+                .resume(&mut self.session.agent, &seed, &self.cancel)
+            {
                 let total = self.session.agent.msg.turn_count() as u32;
                 let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
                 let recent = crate::util::build_turns_from_context(
-                    &self.session.agent, Some(start), Some(INITIAL_LOAD_COUNT),
+                    &self.session.agent,
+                    Some(start),
+                    Some(INITIAL_LOAD_COUNT),
                 );
                 let _ = self.event_tx.send(Agent2Ui::SessionRestored {
                     seed: self.session.agent.session.seed.clone(),
-                    turns: recent, tokens_used: 0, cache_hit_pct: 0.0,
-                    total_turns: total, has_more: start > 0,
+                    turns: recent,
+                    tokens_used: 0,
+                    cache_hit_pct: 0.0,
+                    total_turns: total,
+                    has_more: start > 0,
                 });
             }
             let _ = self.event_tx.send(Agent2Ui::Ready);
         }
         if self.pending.new_session {
             self.pending.new_session = false;
-            self.session.flush();
-            self.session_eng.create(&mut self.session.agent, &self.cancel);
+            self.prepare_session_switch();
+            self.session_eng
+                .create(&mut self.session.agent, &self.cancel);
             let _ = self.event_tx.send(Agent2Ui::SessionCreated {
                 seed: self.session.agent.session.seed.clone(),
             });
-            self.misc.emit_dashboard(&self.session.agent, &self.event_tx);
+            self.misc
+                .emit_dashboard(&self.session.agent, &self.event_tx);
             let _ = self.event_tx.send(Agent2Ui::Ready);
         }
         if self.pending.reload_config {
             self.pending.reload_config = false;
-            self.session_eng.reload_config(&mut self.session.agent, &self.cancel);
+            self.session_eng
+                .reload_config(&mut self.session.agent, &self.cancel);
         }
     }
 
@@ -562,7 +635,8 @@ impl Loop {
                         tx: self.event_tx.clone(),
                         writer_dead: self.writer_dead.clone(),
                     };
-                    let emitter_ref: &'static dyn Emitter = Box::leak(Box::new(emitter) as Box<dyn Emitter>);
+                    let emitter_ref: &'static dyn Emitter =
+                        Box::leak(Box::new(emitter) as Box<dyn Emitter>);
                     let mut ctx = RingContext {
                         agent: &mut self.session.agent,
                         emitter: emitter_ref,
@@ -616,7 +690,7 @@ impl Loop {
     ///
     /// 1. **Guard**: if turn is suspended, only accept commands matching the
     ///    suspension reason (PermissionResponse for PermissionPending,
-    ///    AskResponse/UserInput for AskUser, plus Cancel/session-switch/Shutdown)
+    ///    AskResponse/AskDismiss for AskUser, plus Cancel/session-switch/Shutdown)
     /// 2. **Engine chain**: try each engine's handler via explicit match
     /// 3. **Fallback**: commands needing direct event_tx access (Undo, SetMode,
     ///    LoadMoreTurns, Cancel, Shutdown)
@@ -626,18 +700,21 @@ impl Loop {
             match (&frame, reason) {
                 // Permission pending → only accept PermissionResponse
                 (Ui2Agent::PermissionResponse { .. }, YieldReason::PermissionPending) => {}
-                // AskUser pending → accept AskResponse or direct text input
+                // AskUser pending → accept only typed ask lifecycle commands.
                 (Ui2Agent::AskResponse { .. }, YieldReason::AskUser) => {}
-                (Ui2Agent::UserInput { .. }, YieldReason::AskUser) => {}
+                (Ui2Agent::AskDismiss { .. }, YieldReason::AskUser) => {}
                 // Always accepted regardless of suspension reason
                 (Ui2Agent::Cancel, _)
                 | (Ui2Agent::ResumeSession { .. }, _)
                 | (Ui2Agent::NewSession, _)
+                | (Ui2Agent::UndoTurn { .. }, _)
                 | (Ui2Agent::Shutdown, _) => {}
                 _ => {
                     log::warn!("[AGENT] dropping command during suspended turn");
                     let _ = self.event_tx.send(Agent2Ui::Error {
-                        message: "Turn is suspended — resolve pending permissions or ask_user first.".into(),
+                        message:
+                            "Turn is suspended — resolve pending permissions or ask_user first."
+                                .into(),
                     });
                     return;
                 }
@@ -655,16 +732,42 @@ impl Loop {
             Ui2Agent::Cancel => {
                 self.cancel.set();
                 deepx_tools::CANCEL.store(true, Ordering::SeqCst);
+                let suspended = self.session.turn.take_suspended_for_abort();
+                if suspended.is_some() {
+                    self.session.agent.msg.remove_last_step_if_incomplete();
+                }
                 // Cancel is a cross-engine reset: clear ALL mutable state
                 self.reset_all_engines();
                 self.phase = LoopPhase::Idle;
                 let _ = self.event_tx.send(Agent2Ui::Cancelled);
+                if let Some((turn_id, usage)) = suspended {
+                    self.session.flush();
+                    let _ = self.event_tx.send(Agent2Ui::TurnEnd {
+                        turn_id,
+                        stop_reason: Some("cancelled".into()),
+                        usage,
+                    });
+                    let _ = self.event_tx.send(Agent2Ui::Done);
+                }
             }
             Ui2Agent::Shutdown => {
                 let _ = self.event_tx.send(Agent2Ui::ShutdownAck);
                 self.pending.shutdown = true;
             }
             Ui2Agent::UndoTurn { turn_id } => {
+                if self
+                    .session
+                    .turn
+                    .suspended_turn_id()
+                    .is_some_and(|active_turn_id| active_turn_id != turn_id)
+                {
+                    let _ = self.event_tx.send(Agent2Ui::Error {
+                        message: format!(
+                            "Cannot undo {turn_id}: a different active turn is suspended"
+                        ),
+                    });
+                    return;
+                }
                 // ── Cross-engine undo transaction ──
                 // Undo is NOT just a message-store operation. It must also
                 // reset TurnEngine and ToolEngine because they may hold
@@ -672,16 +775,16 @@ impl Loop {
                 // approvals keyed by tool_call_id that no longer exists).
                 self.session.turn.reset();
                 self.session.tool.reset();
-                self.misc.handle_undo(
-                    &mut self.session.agent,
-                    &turn_id,
-                    &self.event_tx,
-                );
+                self.misc
+                    .handle_undo(&mut self.session.agent, &turn_id, &self.event_tx);
             }
             Ui2Agent::SetMode { mode } => {
                 self.misc.set_mode(&mut self.session.agent, &mode);
             }
-            Ui2Agent::LoadMoreTurns { before_turn_id, count } => {
+            Ui2Agent::LoadMoreTurns {
+                before_turn_id,
+                count,
+            } => {
                 let total = self.session.agent.msg.turn_count();
                 let idx: usize = before_turn_id
                     .strip_prefix('t')
@@ -691,7 +794,9 @@ impl Loop {
                 let end = idx.min(total);
                 let start = end.saturating_sub(count as usize);
                 let batch = crate::util::build_turns_from_context(
-                    &self.session.agent, Some(start), Some(count as usize),
+                    &self.session.agent,
+                    Some(start),
+                    Some(count as usize),
                 );
                 let _ = self.event_tx.send(Agent2Ui::MoreTurns {
                     turns: batch,
@@ -701,6 +806,7 @@ impl Loop {
             // Already handled by engine chain — unreachable here
             Ui2Agent::UserInput { .. }
             | Ui2Agent::AskResponse { .. }
+            | Ui2Agent::AskDismiss { .. }
             | Ui2Agent::CreateSession
             | Ui2Agent::ResumeSession { .. }
             | Ui2Agent::NewSession
@@ -725,45 +831,59 @@ impl Loop {
         // ── SessionEngine (doesn't need RingContext) ──
         match frame {
             Ui2Agent::CreateSession => {
-                self.session_eng.create(&mut self.session.agent, &self.cancel);
+                self.session_eng
+                    .create(&mut self.session.agent, &self.cancel);
                 let _ = self.event_tx.send(Agent2Ui::SessionCreated {
                     seed: self.session.agent.session.seed.clone(),
                 });
-                self.misc.emit_dashboard(&self.session.agent, &self.event_tx);
+                self.misc
+                    .emit_dashboard(&self.session.agent, &self.event_tx);
                 return Some(Outcome::Handled);
             }
             Ui2Agent::ResumeSession { seed } => {
-                self.session.flush();
-                if self.session_eng.resume(&mut self.session.agent, seed, &self.cancel) {
+                self.prepare_session_switch();
+                if self
+                    .session_eng
+                    .resume(&mut self.session.agent, seed, &self.cancel)
+                {
                     let total = self.session.agent.msg.turn_count() as u32;
                     let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
                     let recent = crate::util::build_turns_from_context(
-                        &self.session.agent, Some(start), Some(INITIAL_LOAD_COUNT),
+                        &self.session.agent,
+                        Some(start),
+                        Some(INITIAL_LOAD_COUNT),
                     );
                     let _ = self.event_tx.send(Agent2Ui::SessionRestored {
                         seed: self.session.agent.session.seed.clone(),
-                        turns: recent, tokens_used: 0, cache_hit_pct: 0.0,
-                        total_turns: total, has_more: start > 0,
+                        turns: recent,
+                        tokens_used: 0,
+                        cache_hit_pct: 0.0,
+                        total_turns: total,
+                        has_more: start > 0,
                     });
                 } else {
                     let _ = self.event_tx.send(Agent2Ui::Error {
                         message: format!("Failed to resume session: {seed}"),
                     });
                 }
-                self.misc.emit_dashboard(&self.session.agent, &self.event_tx);
+                self.misc
+                    .emit_dashboard(&self.session.agent, &self.event_tx);
                 return Some(Outcome::Handled);
             }
             Ui2Agent::NewSession => {
-                self.session.flush();
-                self.session_eng.create(&mut self.session.agent, &self.cancel);
+                self.prepare_session_switch();
+                self.session_eng
+                    .create(&mut self.session.agent, &self.cancel);
                 let _ = self.event_tx.send(Agent2Ui::SessionCreated {
                     seed: self.session.agent.session.seed.clone(),
                 });
-                self.misc.emit_dashboard(&self.session.agent, &self.event_tx);
+                self.misc
+                    .emit_dashboard(&self.session.agent, &self.event_tx);
                 return Some(Outcome::Handled);
             }
             Ui2Agent::ReloadConfig => {
-                self.session_eng.reload_config(&mut self.session.agent, &self.cancel);
+                self.session_eng
+                    .reload_config(&mut self.session.agent, &self.cancel);
                 return Some(Outcome::Handled);
             }
             Ui2Agent::ReloadSkills => {
@@ -810,66 +930,90 @@ impl Loop {
         };
 
         match frame {
-            Ui2Agent::UserInput { text } => {
-                if self.session.turn.is_suspended() {
-                    // User typed directly instead of clicking AskDialog — treat as ask_user answer
-                    let outcome = self.session.turn.resume(
-                        &mut ctx,
-                        &mut self.session.tool,
-                        super::engine_turn::ResumeReason::AskUserAnswer { answer: text.clone() },
-                    );
-                    Some(outcome)
-                } else {
-                    Some(self.input.handle_user_input(&mut ctx, text))
-                }
-            }
-            Ui2Agent::AskResponse { answer } => {
-                let outcome = self.session.turn.resume(
+            Ui2Agent::UserInput { text } => Some(self.input.handle_user_input(&mut ctx, text)),
+            Ui2Agent::AskResponse { ask_id, answers } => {
+                Some(self.session.turn.handle_ask_response(
                     &mut ctx,
                     &mut self.session.tool,
-                    super::engine_turn::ResumeReason::AskUserAnswer { answer: answer.clone() },
-                );
-                Some(outcome)
+                    ask_id,
+                    answers,
+                ))
             }
-            Ui2Agent::ToolCall { id, name, action, args } => {
-                self.session.tool.handle_ui_tool_call(&mut ctx, id, name, action, args);
+            Ui2Agent::AskDismiss { ask_id } => Some(self.session.turn.handle_ask_dismiss(
+                &mut ctx,
+                &mut self.session.tool,
+                ask_id,
+            )),
+            Ui2Agent::ToolCall {
+                id,
+                name,
+                action,
+                args,
+            } => {
+                self.session
+                    .tool
+                    .handle_ui_tool_call(&mut ctx, id, name, action, args);
                 Some(Outcome::Handled)
             }
-            Ui2Agent::PermissionResponse { tool_call_id, approved, trust_folder } => {
-                Some(self.session.tool.handle_permission_response(
-                    &mut ctx, tool_call_id, *approved, *trust_folder,
-                ))
+            Ui2Agent::PermissionResponse {
+                tool_call_id,
+                approved,
+                trust_folder,
+            } => {
+                match self.session.tool.handle_permission_response(
+                    &mut ctx,
+                    tool_call_id,
+                    *approved,
+                    *trust_folder,
+                ) {
+                    PermissionDisposition::Ignored | PermissionDisposition::UiHandled => {
+                        Some(Outcome::Handled)
+                    }
+                    PermissionDisposition::LlmResolved { call_id } => {
+                        Some(self.session.turn.handle_permission_resolved(
+                            &mut ctx,
+                            &mut self.session.tool,
+                            &call_id,
+                        ))
+                    }
+                }
             }
             Ui2Agent::Compact => {
                 if self.pending_compact_rx.is_some() {
                     return None; // already running
                 }
-                if let Some((prompt, kept, head, provider)) = self.compact.build_prompt_and_meta(&mut ctx) {
+                if let Some((prompt, kept, head, provider)) =
+                    self.compact.build_prompt_and_meta(&mut ctx)
+                {
                     // Step 2: spawn LLM call in background (catch_unwind so
                     // a panic still sends a result via the channel — otherwise
                     // the receiver disconnects and the frontend gets stuck).
                     let (tx, rx) = mpsc::channel();
                     let event_tx = self.event_tx.clone();
-                    std::thread::Builder::new().name("compact-worker".into()).spawn(move || {
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            super::engine_compact::run_compact_worker(
-                                prompt, provider, kept, head, event_tx,
-                            )
-                        }));
-                        let meta = match result {
-                            Ok(meta) => meta,
-                            Err(e) => {
-                                let msg = Self::panic_msg_from_err(e);
-                                CompactMeta {
-                                    summary: String::new(),
-                                    kept_user_count: kept,
-                                    head_user_count: head,
-                                    error: Some(format!("Compact worker panicked: {msg}")),
+                    std::thread::Builder::new()
+                        .name("compact-worker".into())
+                        .spawn(move || {
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    super::engine_compact::run_compact_worker(
+                                        prompt, provider, kept, head, event_tx,
+                                    )
+                                }));
+                            let meta = match result {
+                                Ok(meta) => meta,
+                                Err(e) => {
+                                    let msg = Self::panic_msg_from_err(e);
+                                    CompactMeta {
+                                        summary: String::new(),
+                                        kept_user_count: kept,
+                                        head_user_count: head,
+                                        error: Some(format!("Compact worker panicked: {msg}")),
+                                    }
                                 }
-                            }
-                        };
-                        let _ = tx.send(meta);
-                    }).ok();
+                            };
+                            let _ = tx.send(meta);
+                        })
+                        .ok();
                     self.pending_compact_rx = Some(rx);
                 }
                 Some(Outcome::Handled)
@@ -911,14 +1055,36 @@ impl Loop {
                 let _ = self.event_tx.send(Agent2Ui::Done);
                 self.phase = LoopPhase::Idle;
             }
-            Outcome::ContinueTurn { turn_id, round_num, usage } => {
+            Outcome::TurnAborted {
+                turn_id,
+                usage,
+                consume_queued_interrupt,
+            } => {
+                self.session.flush();
+                self.reset_all_engines();
+                self.terminal_for_queued_interrupt = consume_queued_interrupt;
+                let _ = self.event_tx.send(Agent2Ui::Cancelled);
+                let _ = self.event_tx.send(Agent2Ui::TurnEnd {
+                    turn_id,
+                    stop_reason: Some("cancelled".into()),
+                    usage,
+                });
+                let _ = self.event_tx.send(Agent2Ui::Done);
+                self.phase = LoopPhase::Idle;
+            }
+            Outcome::ContinueTurn {
+                turn_id,
+                round_num,
+                usage,
+            } => {
                 // Another lap: re-enter TurnEngine.
                 // Avoid borrow conflict by not using self.ctx() — build context inline.
                 let emitter = ChannelEmitter {
                     tx: self.event_tx.clone(),
                     writer_dead: self.writer_dead.clone(),
                 };
-                let emitter_ref: &'static dyn Emitter = Box::leak(Box::new(emitter) as Box<dyn Emitter>);
+                let emitter_ref: &'static dyn Emitter =
+                    Box::leak(Box::new(emitter) as Box<dyn Emitter>);
                 let mut ctx = RingContext {
                     agent: &mut self.session.agent,
                     emitter: emitter_ref,
@@ -930,8 +1096,11 @@ impl Loop {
                     notify: &self.notify,
                 };
                 let next_outcome = self.session.turn.run(
-                    &mut ctx, &mut self.session.tool,
-                    turn_id, round_num, usage,
+                    &mut ctx,
+                    &mut self.session.tool,
+                    turn_id,
+                    round_num,
+                    usage,
                 );
                 drop(ctx);
 
@@ -945,7 +1114,7 @@ impl Loop {
             }
             Outcome::YieldToUser { .. } => {
                 // Turn suspended. Loop returns to Idle. The next
-                // PermissionResponse or UserInput will trigger resume.
+                // PermissionResponse or a typed ask command will trigger resume.
             }
             Outcome::Handled => {}
             Outcome::Error(msg) => {

@@ -18,3 +18,5 @@ export type { AskMode } from "./AskMode";
 export type { AskQuestion } from "./AskQuestion";
 export type { AskAnswer } from "./AskAnswer";
 export type { AskResolution } from "./AskResolution";
+export type { SkillInfo } from "./SkillInfo";
+export type { SkillsStatus } from "./SkillsStatus";

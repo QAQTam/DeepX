@@ -524,9 +524,13 @@ impl MessageStore {
         }
         if let Some(turn) = self.turns.last_mut() {
             if let Some(step) = turn.steps.last_mut() {
-                log::warn!("push_tool_result: orphan tool_result {} — appending to last step", tool_call_id);
-                step.tool_results.push(tool_msg.clone());
-                self.save_msg(&tool_msg);
+                if step.has_tool_call(tool_call_id) {
+                    log::warn!("push_tool_result: tool_result {} matched by last-step fallback — appending", tool_call_id);
+                    step.tool_results.push(tool_msg.clone());
+                    self.save_msg(&tool_msg);
+                    return;
+                }
+                log::error!("push_tool_result: orphan tool_result {} — last step does not own this call_id, dropped", tool_call_id);
                 return;
             }
         }
@@ -578,15 +582,6 @@ impl MessageStore {
                                 }
                             }
                             v.push(msg);
-
-                            // Inject skill body as system message for skills(activate) calls
-                            if let Some(tc_id) = step.assistant_tool_ids().iter().find(|id| {
-                                step.tool_name_for_result(id) == Some("skills")
-                            }) {
-                                if let Some(skill_body) = skill_bodies.get(tc_id.as_str()) {
-                                    v.push(deepx_types::Message::system(skill_body));
-                                }
-                            }
                         } else {
                             let mut folded = tr.clone();
                             for block in &mut folded.content {
@@ -596,6 +591,19 @@ impl MessageStore {
                                 }
                             }
                             v.push(folded);
+                        }
+                    }
+                    // Inject skill body as system message AFTER all tool results (once per step).
+                    // Previously this was inside the tool_results loop, causing N duplicates
+                    // for a step with N tool results. Only the last step of the last turn
+                    // receives the ephemeral skill body injection.
+                    if is_last_step_of_last_turn {
+                        if let Some(tc_id) = step.assistant_tool_ids().iter().find(|id| {
+                            step.tool_name_for_result(id) == Some("skills")
+                        }) {
+                            if let Some(skill_body) = skill_bodies.get(tc_id.as_str()) {
+                                v.push(deepx_types::Message::system(skill_body));
+                            }
                         }
                     }
                 }

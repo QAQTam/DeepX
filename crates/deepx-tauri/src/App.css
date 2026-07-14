@@ -18,19 +18,19 @@
 
 /* ── DeepX Tauri App Styles ── */
 :root {
-  --bg-primary: #f5efe6;
-  --bg-secondary: #ede5d8;
-  --bg-tertiary: #e3d9c7;
-  --bg-hover: #e3dcd0;
-  --border-panel: rgba(0,0,0,0.10);
-  --border-card: rgba(0,0,0,0.08);
-  --border-input: rgba(0,0,0,0.12);
-  --border-secondary: rgba(0,0,0,0.10);
-  --border-divider: rgba(0,0,0,0.06);
-  --border: #d9d2c5;
-  --text-primary: #2c2416;
-  --text-secondary: #6b5e4a;
-  --text-muted: #9b8d7a;
+  --bg-primary: #f4f2ef;
+  --bg-secondary: #ebe8e3;
+  --bg-tertiary: #e0dcd6;
+  --bg-hover: #d5d1ca;
+  --border-panel: rgba(0,0,0,0.08);
+  --border-card: rgba(0,0,0,0.06);
+  --border-input: rgba(0,0,0,0.10);
+  --border-secondary: rgba(0,0,0,0.08);
+  --border-divider: rgba(0,0,0,0.05);
+  --border: #c8c4bc;
+  --text-primary: #1e1e1e;
+  --text-secondary: #555555;
+  --text-muted: #8a8a8a;
   --accent: #d4783c;
   --accent-rgb: 212,120,60;
   --accent-hover: #e08850;
@@ -43,38 +43,45 @@
   --purple: #8b6baa;
   --font-sans: "MiSans", "Noto Sans SC", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code", "MiSans", "Noto Sans SC", monospace;
+  --radius-sm: 3px;
   --radius: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-pill: 999px;
   --transition: 200ms ease;
 
-  /* Diff colors — light theme: warm paper bg, solid-tinted rows */
-  --text-diff-del: #b04030;
-  --text-diff-add: #3a6a30;
-  --text-diff-ctx: #5a5040;
-  --text-diff-hdr: #5a8ab5;
-  --text-diff-body: #444;
-  --bg-diff-del: rgba(196,85,61,0.22);
-  --bg-diff-add: rgba(90,138,74,0.22);
-  --bg-diff-hdr-border: rgba(0,0,0,0.08);
-  --text-diff-ln: #8a7a6a;
+  /* Panel geometry — shared across Sidebar & StatusPanel */
+  --panel-glass-blur: 14px;
+  --panel-glass-saturate: 1.2;
+  --panel-border: 0.5px solid var(--border-panel);
+  --overlay-glass-blur: 4px;
+
+  /* Diff colors — light theme */
+  --text-diff-del: #c03030;
+  --text-diff-add: #2a7a2a;
+  --text-diff-ctx: #5a5a5a;
+  --text-diff-hdr: #4a7ab5;
+  --text-diff-body: #3a3a3a;
+  --bg-diff-del: rgba(192,48,48,0.18);
+  --bg-diff-add: rgba(42,122,42,0.18);
+  --bg-diff-hdr-border: rgba(0,0,0,0.06);
+  --text-diff-ln: #8a8a8a;
 
   /* Frosted glass (light) */
-  --frost-bg: rgba(0,0,0,0.04);
+  --frost-bg: rgba(0,0,0,0.03);
   --frost-card-bg: rgba(0,0,0,0.02);
-  --frost-float-bg: rgba(0,0,0,0.06);
-  --frost-float-shadow: rgba(0,0,0,0.12);
+  --frost-float-bg: rgba(0,0,0,0.05);
+  --frost-float-shadow: rgba(0,0,0,0.10);
 
   /* Shadows */
-  --shadow-card: 0 8px 40px rgba(44,36,22,0.14), 0 2px 8px rgba(44,36,22,0.08);
-  --shadow-dialog: 0 16px 48px rgba(44,36,22,0.18);
-  --shadow-fab: 0 2px 8px rgba(44,36,22,0.10);
-  --shadow-toast: 0 4px 16px rgba(44,36,22,0.10);
+  --shadow-card: 0 8px 40px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-dialog: 0 16px 48px rgba(0,0,0,0.14);
+  --shadow-fab: 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-toast: 0 4px 16px rgba(0,0,0,0.08);
 
   /* Panel semi-transparent backgrounds */
-  --bg-glass-panel: rgba(245,239,230,0.82);
-  --bg-glass-bar: rgba(245,239,230,0.75);
+  --bg-glass-panel: rgba(244,242,239,0.82);
+  --bg-glass-bar: rgba(244,242,239,0.75);
 
   /* Heatmap (green scale) */
   --heatmap-l1: #c6e48b;
@@ -276,8 +283,8 @@ body { font-family: var(--font-sans); background: var(--bg-primary); color: var(
 /* ── Frosted Glass ── */
 .frost-panel {
   background: var(--frost-bg);
-  backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(var(--panel-glass-blur)) saturate(var(--panel-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--panel-glass-blur)) saturate(var(--panel-glass-saturate));
 }
 .frost-card {
   background: var(--frost-card-bg);

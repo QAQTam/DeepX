@@ -7,10 +7,10 @@
 //! Key design: a single admit() entry point for both UI and LLM paths.
 //! The old code had two separate code paths; now they converge here.
 
-    use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-use deepx_proto::Agent2Ui;
 use crate::agent::PendingApproval;
+use deepx_proto::{Agent2Ui, AskMode, AskQuestion};
 
 use super::types::*;
 
@@ -36,7 +36,10 @@ impl ToolEngine {
     pub fn handle_ui_tool_call(
         &mut self,
         ctx: &mut RingContext,
-        id: &str, name: &str, action: &str, args: &serde_json::Value,
+        id: &str,
+        name: &str,
+        action: &str,
+        args: &serde_json::Value,
     ) {
         let effective_name = crate::util::resolve_effective_name(name, action, args);
         let ws_root = Self::resolve_workspace();
@@ -69,26 +72,46 @@ impl ToolEngine {
                     tool_call_id: challenge.call_id.clone(),
                     tool_name: challenge.tool_name.clone(),
                     reason: challenge.reason.clone(),
-                    paths: challenge.resources.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+                    paths: challenge
+                        .resources
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect(),
                     category: cat_str,
-                    level: deepx_tools::permission::PermissionLevel::from_u8(ctx.agent.config.permission_level).to_u8(),
+                    level: deepx_tools::permission::PermissionLevel::from_u8(
+                        ctx.agent.config.permission_level,
+                    )
+                    .to_u8(),
                 });
-                self.pending.insert(challenge.call_id.clone(), PendingApproval {
-                    challenge, is_llm_tool: false,
-                });
+                self.pending.insert(
+                    challenge.call_id.clone(),
+                    PendingApproval {
+                        challenge,
+                        is_llm_tool: false,
+                    },
+                );
             }
             deepx_tools::bridge::Admission::Denied(reason) => {
                 let turn_id = format!("tc_{id}");
-                ctx.emitter.emit(Agent2Ui::TurnStart { turn_id: turn_id.clone(), user_text: format!("tool: {name}") });
+                ctx.emitter.emit(Agent2Ui::TurnStart {
+                    turn_id: turn_id.clone(),
+                    user_text: format!("tool: {name}"),
+                });
                 ctx.emitter.emit(Agent2Ui::ToolResults {
-                    turn_id: turn_id.clone(), round_num: 0,
+                    turn_id: turn_id.clone(),
+                    round_num: 0,
                     results: vec![deepx_proto::ToolResultDef {
                         tool_call_id: id.to_string(),
                         output: format!("[DENIED] '{name}' — {reason}"),
-                        success: false, file: None,
+                        success: false,
+                        file: None,
                     }],
                 });
-                ctx.emitter.emit(Agent2Ui::TurnEnd { turn_id, stop_reason: None, usage: None });
+                ctx.emitter.emit(Agent2Ui::TurnEnd {
+                    turn_id,
+                    stop_reason: None,
+                    usage: None,
+                });
             }
         }
     }
@@ -103,12 +126,12 @@ impl ToolEngine {
         tool_call_id: &str,
         approved: bool,
         trust_folder: bool,
-    ) -> Outcome {
+    ) -> PermissionDisposition {
         let pending = match self.pending.remove(tool_call_id) {
             Some(p) => p,
             None => {
                 log::warn!("[TOOL] unknown permission response: {tool_call_id}");
-                return Outcome::Handled;
+                return PermissionDisposition::Ignored;
             }
         };
 
@@ -127,15 +150,21 @@ impl ToolEngine {
                 if is_llm {
                     // LLM tool: push result directly into message store
                     let result = deepx_tools::bridge::execute_authorized(authorized, None);
-                    ctx.agent.msg.push_tool_result_direct(&call_id, &result.content, result.success);
+                    ctx.agent.msg.push_tool_result_direct(
+                        &call_id,
+                        &result.content,
+                        result.success,
+                    );
                     if let Some(activation) = result.skill_activation.clone() {
                         ctx.agent.activate_skill(&call_id, activation);
                     }
                     if let Some(ref delta) = result.code_delta {
                         ctx.stats.push_delta(delta.clone());
                         ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
-                            lines_added: delta.lines_added, lines_removed: delta.lines_removed,
-                            files_created: delta.files_created, files_deleted: delta.files_deleted,
+                            lines_added: delta.lines_added,
+                            lines_removed: delta.lines_removed,
+                            files_created: delta.files_created,
+                            files_deleted: delta.files_deleted,
                             file: delta.file.clone(),
                         });
                     }
@@ -169,29 +198,40 @@ impl ToolEngine {
             }
             Err(deepx_tools::bridge::ApprovalError::MissingOrReplayed) => {
                 log::warn!("[TOOL] replayed permission response: {call_id}");
+                if is_llm {
+                    ctx.agent.msg.push_tool_result_direct(
+                        &call_id,
+                        &format!(
+                            "[EXPIRED] Permission response is no longer valid for '{tool_name}'."
+                        ),
+                        false,
+                    );
+                }
             }
         }
 
-        // Signal that the turn can resume if all approvals resolved
-        Outcome::Handled
+        if is_llm {
+            PermissionDisposition::LlmResolved { call_id }
+        } else {
+            PermissionDisposition::UiHandled
+        }
     }
 
     // ═══════════════════════════════════════════════════
     // Batch admit for LLM tools (called from TurnEngine)
     // ═══════════════════════════════════════════════════
 
-    /// Admit a batch of LLM tool calls. Returns:
-    /// - authorized: tools that can run immediately
-    /// - pending_ids: tools awaiting user approval
+    /// Admit a batch of LLM tool calls.
     /// Denied tools are pushed directly into the message store.
     pub fn admit_batch(
         &mut self,
         ctx: &mut RingContext,
         tools: &[deepx_message::PendingTool],
-    ) -> (Vec<AdmittedTool>, Vec<String>) {
+    ) -> BatchAdmission {
         let ws_root = Self::resolve_workspace();
         let mut authorized = Vec::new();
-        let mut pending_ids = Vec::new();
+        let mut pending_permission_ids = Vec::new();
+        let mut pending_asks = VecDeque::new();
 
         for tool in tools {
             let inv = deepx_tools::bridge::ToolInvocation {
@@ -208,10 +248,46 @@ impl ToolEngine {
                 self.trusted.set(),
             ) {
                 deepx_tools::bridge::Admission::Authorized(auth) => {
-                    authorized.push(AdmittedTool {
-                        call_id: tool.id.clone(),
-                        auth: Box::new(auth), // Box to reduce enum size
-                    });
+                    if auth.tool_name() == "ask_user" {
+                        match deepx_tools::ask_user::normalize_ask_user(auth.args()) {
+                            Ok(normalized) => pending_asks.push_back(PendingAsk {
+                                call_id: auth.call_id().to_string(),
+                                mode: match normalized.mode {
+                                    deepx_tools::ask_user::NormalizedAskMode::Single => {
+                                        AskMode::Single
+                                    }
+                                    deepx_tools::ask_user::NormalizedAskMode::Batch => {
+                                        AskMode::Batch
+                                    }
+                                },
+                                questions: normalized
+                                    .questions
+                                    .into_iter()
+                                    .map(|question| AskQuestion {
+                                        id: question.id,
+                                        question: question.question,
+                                        options: question.options,
+                                        allow_custom: question.allow_custom,
+                                    })
+                                    .collect(),
+                            }),
+                            Err(error) => ctx.agent.msg.push_tool_result_direct(
+                                auth.call_id(),
+                                &serde_json::json!({
+                                    "status": "error",
+                                    "code": error.code,
+                                    "message": error.message,
+                                })
+                                .to_string(),
+                                false,
+                            ),
+                        }
+                    } else {
+                        authorized.push(AdmittedTool {
+                            call_id: tool.id.clone(),
+                            auth: Box::new(auth), // Box to reduce enum size
+                        });
+                    }
                 }
                 deepx_tools::bridge::Admission::ApprovalRequired(challenge) => {
                     let cat_str = Self::category_str(&challenge.category);
@@ -220,23 +296,44 @@ impl ToolEngine {
                         tool_call_id: call_id.clone(),
                         tool_name: challenge.tool_name.clone(),
                         reason: challenge.reason.clone(),
-                        paths: challenge.resources.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+                        paths: challenge
+                            .resources
+                            .iter()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect(),
                         category: cat_str,
-                        level: deepx_tools::permission::PermissionLevel::from_u8(ctx.agent.config.permission_level).to_u8(),
+                        level: deepx_tools::permission::PermissionLevel::from_u8(
+                            ctx.agent.config.permission_level,
+                        )
+                        .to_u8(),
                     });
-                    pending_ids.push(call_id.clone());
-                    self.pending.insert(call_id, PendingApproval { challenge, is_llm_tool: true });
+                    pending_permission_ids.push(call_id.clone());
+                    self.pending.insert(
+                        call_id,
+                        PendingApproval {
+                            challenge,
+                            is_llm_tool: true,
+                        },
+                    );
                 }
                 deepx_tools::bridge::Admission::Denied(reason) => {
                     ctx.agent.msg.push_tool_result_direct(
                         &tool.id,
-                        &format!("[timeis: {}]\n[DENIED] {}", crate::util::chrono_local_datetime(), reason),
+                        &format!(
+                            "[timeis: {}]\n[DENIED] {}",
+                            crate::util::chrono_local_datetime(),
+                            reason
+                        ),
                         false,
                     );
                 }
             }
         }
-        (authorized, pending_ids)
+        BatchAdmission {
+            authorized,
+            pending_permission_ids,
+            pending_asks,
+        }
     }
 
     // ═══════════════════════════════════════════════════
@@ -247,26 +344,42 @@ impl ToolEngine {
     fn execute_and_emit(
         &mut self,
         ctx: &mut RingContext,
-        id: &str, name: &str, args: &serde_json::Value,
+        id: &str,
+        name: &str,
+        args: &serde_json::Value,
         authorized: deepx_tools::bridge::AuthorizedToolCall,
         _approved: bool,
     ) {
         let turn_id = format!("tc_{id}");
-        let args_display: String = args.get("command").and_then(|v| v.as_str()).unwrap_or(name)
-            .chars().take(80).collect();
+        let args_display: String = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or(name)
+            .chars()
+            .take(80)
+            .collect();
 
-        ctx.emitter.emit(Agent2Ui::TurnStart { turn_id: turn_id.clone(), user_text: format!("tool: {name}") });
+        ctx.emitter.emit(Agent2Ui::TurnStart {
+            turn_id: turn_id.clone(),
+            user_text: format!("tool: {name}"),
+        });
         ctx.emitter.emit(Agent2Ui::RoundComplete {
-            turn_id: turn_id.clone(), round_num: 0,
-            thinking: None, answer: None,
+            turn_id: turn_id.clone(),
+            round_num: 0,
+            thinking: None,
+            answer: None,
             tool_calls: vec![deepx_proto::ToolCallDef {
-                id: id.to_string(), name: name.to_string(),
-                args_display: args_display.clone(), args_json: args.to_string(),
+                id: id.to_string(),
+                name: name.to_string(),
+                args_display: args_display.clone(),
+                args_json: args.to_string(),
             }],
             blocks: vec![deepx_proto::RoundBlock::Tool {
                 card: deepx_proto::ToolCallDef {
-                    id: id.to_string(), name: name.to_string(),
-                    args_display, args_json: args.to_string(),
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    args_display,
+                    args_json: args.to_string(),
                 },
             }],
             is_final: false,
@@ -275,23 +388,33 @@ impl ToolEngine {
         // Spawn tool thread
         let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
         let tool_id = id.to_string();
-        let handle = std::thread::Builder::new().stack_size(4*1024*1024).spawn(move || {
-            let result = deepx_tools::bridge::execute_authorized(authorized, Some(progress_tx));
-            (
-                tool_id,
-                result.content,
-                result.success,
-                result.code_delta,
-                result.skill_activation,
-            )
-        }).expect("failed to spawn tool thread");
+        let handle = std::thread::Builder::new()
+            .stack_size(4 * 1024 * 1024)
+            .spawn(move || {
+                let result = deepx_tools::bridge::execute_authorized(authorized, Some(progress_tx));
+                (
+                    tool_id,
+                    result.content,
+                    result.success,
+                    result.code_delta,
+                    result.skill_activation,
+                )
+            })
+            .expect("failed to spawn tool thread");
 
         // Drain progress
         self.drain_progress(ctx, progress_rx, &id.to_string());
 
-        let (tid, output, success, code_delta, skill_activation) = handle.join().unwrap_or_else(|_| {
-            (id.to_string(), "[ERROR] tool thread panicked".into(), false, None, None)
-        });
+        let (tid, output, success, code_delta, skill_activation) =
+            handle.join().unwrap_or_else(|_| {
+                (
+                    id.to_string(),
+                    "[ERROR] tool thread panicked".into(),
+                    false,
+                    None,
+                    None,
+                )
+            });
 
         if let Some(activation) = skill_activation {
             ctx.agent.activate_skill(&tid, activation);
@@ -300,17 +423,29 @@ impl ToolEngine {
         if let Some(ref delta) = code_delta {
             ctx.stats.push_delta(delta.clone());
             ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
-                lines_added: delta.lines_added, lines_removed: delta.lines_removed,
-                files_created: delta.files_created, files_deleted: delta.files_deleted,
+                lines_added: delta.lines_added,
+                lines_removed: delta.lines_removed,
+                files_created: delta.files_created,
+                files_deleted: delta.files_deleted,
                 file: delta.file.clone(),
             });
         }
 
         ctx.emitter.emit(Agent2Ui::ToolResults {
-            turn_id: turn_id.clone(), round_num: 0,
-            results: vec![deepx_proto::ToolResultDef { tool_call_id: tid, output, success, file: None }],
+            turn_id: turn_id.clone(),
+            round_num: 0,
+            results: vec![deepx_proto::ToolResultDef {
+                tool_call_id: tid,
+                output,
+                success,
+                file: None,
+            }],
         });
-        ctx.emitter.emit(Agent2Ui::TurnEnd { turn_id, stop_reason: None, usage: None });
+        ctx.emitter.emit(Agent2Ui::TurnEnd {
+            turn_id,
+            stop_reason: None,
+            usage: None,
+        });
     }
 
     // ═══════════════════════════════════════════════════
@@ -320,7 +455,8 @@ impl ToolEngine {
     /// Drain tool progress from external caller (TurnEngine).
     /// Unlike the internal drain_progress, this takes RingContext directly.
     pub fn drain_progress_external(
-        &self, ctx: &mut RingContext,
+        &self,
+        ctx: &mut RingContext,
         rx: std::sync::mpsc::Receiver<deepx_tools::ExecProgressEvent>,
         _default_id: &str,
     ) {
@@ -328,7 +464,9 @@ impl ToolEngine {
             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
                 Ok(first) => {
                     let mut events = vec![first];
-                    while let Ok(event) = rx.try_recv() { events.push(event); }
+                    while let Ok(event) = rx.try_recv() {
+                        events.push(event);
+                    }
                     for event in events {
                         ctx.emitter.emit_delta(Agent2Ui::ExecProgress {
                             tool_call_id: event.tool_call_id,
@@ -345,7 +483,8 @@ impl ToolEngine {
     }
 
     fn drain_progress(
-        &self, ctx: &mut RingContext,
+        &self,
+        ctx: &mut RingContext,
         rx: std::sync::mpsc::Receiver<deepx_tools::ExecProgressEvent>,
         _default_id: &str,
     ) {
@@ -353,7 +492,9 @@ impl ToolEngine {
             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
                 Ok(first) => {
                     let mut events = vec![first];
-                    while let Ok(event) = rx.try_recv() { events.push(event); }
+                    while let Ok(event) = rx.try_recv() {
+                        events.push(event);
+                    }
                     for event in events {
                         ctx.emitter.emit_delta(Agent2Ui::ExecProgress {
                             tool_call_id: event.tool_call_id,
@@ -371,20 +512,32 @@ impl ToolEngine {
 
     fn emit_denied(&self, ctx: &mut RingContext, call_id: &str, tool_name: &str, reason: &str) {
         let turn_id = format!("tc_{call_id}");
-        ctx.emitter.emit(Agent2Ui::TurnStart { turn_id: turn_id.clone(), user_text: format!("tool: {tool_name}") });
+        ctx.emitter.emit(Agent2Ui::TurnStart {
+            turn_id: turn_id.clone(),
+            user_text: format!("tool: {tool_name}"),
+        });
         ctx.emitter.emit(Agent2Ui::ToolResults {
-            turn_id: turn_id.clone(), round_num: 0,
+            turn_id: turn_id.clone(),
+            round_num: 0,
             results: vec![deepx_proto::ToolResultDef {
                 tool_call_id: call_id.to_string(),
                 output: format!("[DENIED] '{tool_name}' ({reason})"),
-                success: false, file: None,
+                success: false,
+                file: None,
             }],
         });
-        ctx.emitter.emit(Agent2Ui::TurnEnd { turn_id, stop_reason: None, usage: None });
+        ctx.emitter.emit(Agent2Ui::TurnEnd {
+            turn_id,
+            stop_reason: None,
+            usage: None,
+        });
     }
 
     fn resolve_workspace() -> std::path::PathBuf {
-        let ws = deepx_tools::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock").clone();
+        let ws = deepx_tools::CURRENT_WORKSPACE
+            .read()
+            .expect("CURRENT_WORKSPACE lock")
+            .clone();
         if ws.is_empty() || ws == "." {
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
         } else {
@@ -398,7 +551,8 @@ impl ToolEngine {
             deepx_tools::permission::ToolCategory::Write => "write",
             deepx_tools::permission::ToolCategory::Exec => "exec",
             deepx_tools::permission::ToolCategory::Net => "net",
-        }.to_string()
+        }
+        .to_string()
     }
 
     pub fn cancel_current(&self) {
@@ -418,4 +572,16 @@ impl ToolEngine {
 pub struct AdmittedTool {
     pub call_id: String,
     pub auth: Box<deepx_tools::bridge::AuthorizedToolCall>,
+}
+
+pub struct BatchAdmission {
+    pub authorized: Vec<AdmittedTool>,
+    pub pending_permission_ids: Vec<String>,
+    pub pending_asks: VecDeque<PendingAsk>,
+}
+
+pub enum PermissionDisposition {
+    Ignored,
+    UiHandled,
+    LlmResolved { call_id: String },
 }

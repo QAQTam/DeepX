@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, Show, onCleanup } from "solid-js";
 import { useI18n } from "../i18n";
 import type { ToolCallDef, ToolResultDef } from "../store/chat";
 import AnsiUp from "ansi-to-html";
@@ -9,12 +9,20 @@ function ansi() { return new AnsiUp({ escapeXML: true }); }
 function fileName(argsJson: string): string {
   try { const a = JSON.parse(argsJson); const p = a.path || a.new_path || a.source || a.dest || ""; return String(p).replace(/\\/g, "/").split("/").pop() || ""; } catch (_) { return ""; }
 }
-function execCmd(argsJson: string): string {
-  try { const a = JSON.parse(argsJson); if (a.argv && Array.isArray(a.argv)) return a.argv.join(" ").substring(0, 120); return String(a.command || "").substring(0, 120); } catch (_) { return ""; }
+function filePath(argsJson: string): string {
+  try { const a = JSON.parse(argsJson); const p = a.path || a.new_path || a.source || a.dest || ""; return String(p).replace(/\\/g, "/"); } catch (_) { return ""; }
 }
-function diffStats(output: string) {
+function execCmd(argsJson: string): string {
+  try { const a = JSON.parse(argsJson); if (a.argv && Array.isArray(a.argv)) return a.argv.join(" "); return String(a.command || ""); } catch (_) { return ""; }
+}
+function webQuery(argsJson: string): string {
+  try { const a = JSON.parse(argsJson); return String(a.query || a.url || ""); } catch (_) { return ""; }
+}
+function c7Lib(argsJson: string): string {
+  try { const a = JSON.parse(argsJson); return String(a.library_name || a.name || a.library || ""); } catch (_) { return ""; }
+}
+function diffStats(output: string): { adds: number; dels: number } | null {
   if (!output) return null;
-  // Try JSON first — pull diff from structured result
   try {
     const parsed = JSON.parse(output.trim());
     const d = parsed.diff || "";
@@ -24,33 +32,16 @@ function diffStats(output: string) {
         if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) continue;
         if (l.startsWith("+")) a++; else if (l.startsWith("-")) r++;
       }
-      if (a > 0 || r > 0) {
-        return (
-          <span class="diff-stat-inline">
-            {a > 0 && <span class="diff-stat-add">+{a}</span>}
-            {r > 0 && <span class="diff-stat-del">−{r}</span>}
-          </span>
-        );
-      }
-      return null;
+      return a > 0 || r > 0 ? { adds: a, dels: r } : null;
     }
-  } catch (_) { /* fall through */ }
-  // Legacy: parse diff from raw string
+  } catch (_) {}
   if (!isUnifiedDiff(output)) return null;
   let a = 0, r = 0;
   for (const l of output.split("\n")) {
     if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) continue;
     if (l.startsWith("+")) a++; else if (l.startsWith("-")) r++;
   }
-  if (a > 0 || r > 0) {
-    return (
-      <span class="diff-stat-inline">
-        {a > 0 && <span class="diff-stat-add">+{a}</span>}
-        {r > 0 && <span class="diff-stat-del">−{r}</span>}
-      </span>
-    );
-  }
-  return null;
+  return a > 0 || r > 0 ? { adds: a, dels: r } : null;
 }
 
 /** Map tool name → i18n status key */
@@ -68,62 +59,104 @@ function statusKey(name: string): string {
 export default function ToolRow(props: { call: ToolCallDef; result?: ToolResultDef; streamingOutput?: string }) {
   const { t } = useI18n();
   const [open, setOpen] = createSignal(false);
-  const name = props.call.name;
-  const hasResult = !!props.result;
-  const isOk = !hasResult || props.result!.success;
+  const [elapsed, setElapsed] = createSignal(0);
 
-  const verb = () => (t().tool.status as Record<string, string>)[statusKey(name)] ?? name;
+  const name = props.call.name;
+  const hasResult = () => !!props.result;
+  const isOk = () => !hasResult() || props.result!.success;
+  const verb = (t().tool.status as Record<string, string>)[statusKey(name)] ?? name;
 
   const fileTools = ["read", "write", "edit", "edit_block", "list", "search", "diff", "delete"];
   const execTools = ["exec", "exec_run"];
+  const webTools = ["web_search", "web_fetch"];
+  const c7Tools = ["web_context7_resolve", "web_context7_query"];
+  const expandable = fileTools.includes(name) || execTools.includes(name) || name === "sed";
 
-  const detail = () => {
-    if (fileTools.includes(name) || name === "sed") {
-      const f = fileName(props.call.args_json);
-      const stats = diffStats(props.result?.output || "");
-      return <>{f}{stats}</>;
+  // Timer: tracks elapsed seconds, auto-stops when result arrives
+  let timer: ReturnType<typeof setInterval> | null = null;
+  createEffect(() => {
+    if (hasResult()) {
+      if (timer) { clearInterval(timer); timer = null; }
+      return;
     }
-    if (execTools.includes(name)) return execCmd(props.call.args_json);
-    return null;
+    if (!timer) {
+      timer = setInterval(() => setElapsed(s => s + 1), 1000);
+    }
+    onCleanup(() => { if (timer) { clearInterval(timer); timer = null; } });
+  });
+
+  if (name === "ask_user") return null;
+
+  // ── Icon ──
+  const icon = (): string => {
+    if (fileTools.includes(name)) return "📄";
+    if (execTools.includes(name)) return ">";
+    if (webTools.includes(name)) return "@";
+    if (c7Tools.includes(name)) return "📚";
+    return "🔧";
   };
 
-  const expandable = fileTools.includes(name) || execTools.includes(name) || name === "sed";
+  // ── Detail text ──
+  const detailText = (): string => {
+    if (fileTools.includes(name)) {
+      const fp = filePath(props.call.args_json);
+      const stats = hasResult() ? diffStats(props.result!.output) : null;
+      let s = fp || "…";
+      if (stats) {
+        const parts: string[] = [];
+        if (stats.adds > 0) parts.push(`+${stats.adds}`);
+        if (stats.dels > 0) parts.push(`−${stats.dels}`);
+        if (parts.length) s += `  ${parts.join(" ")}`;
+      }
+      return s;
+    }
+    if (execTools.includes(name)) return execCmd(props.call.args_json);
+    if (webTools.includes(name)) return webQuery(props.call.args_json);
+    if (c7Tools.includes(name)) return c7Lib(props.call.args_json);
+    return "";
+  };
+
+  // ── Status badge ──
+  const badge = () => {
+    if (!hasResult()) {
+      return <span class="tc-badge running"><span class="tc-spinner" />{elapsed() > 0 ? `${elapsed()}s` : "…"}</span>;
+    }
+    if (isOk()) return <span class="tc-badge ok">✓</span>;
+    return <span class="tc-badge err">✗</span>;
+  };
+
+  // ── Body ──
   const bodyHtml = (): string => {
-    const raw = hasResult ? props.result!.output : (props.streamingOutput || "");
-    // Strip timestamp prefix (legacy format)
+    const raw = hasResult() ? props.result!.output : (props.streamingOutput || "");
     const clean = raw.replace(/^\[timeis:.*?\]\s*/gm, "")
       .replace(/^\[(OK|PARTIAL|DRY RUN)\].*\n/gm, "").trim();
 
-    // ── JSON result (new format): extract diff → styled, or content → plain ──
-    if (hasResult && clean.startsWith("{")) {
+    if (hasResult() && clean.startsWith("{")) {
       try {
         const parsed = JSON.parse(clean);
-        // Diff-style output (file_edit/file_write)
         if (parsed.diff && isUnifiedDiff(parsed.diff)) return renderDiffHtml(parsed.diff);
-        // exec output
         if (parsed.output) return `<pre class="diff-plain">${ansi().toHtml(parsed.output)}</pre>`;
-        // file_read / file_search / other content
         if (parsed.content) return `<pre class="diff-plain">${ansi().toHtml(parsed.content)}</pre>`;
-        // Fallback: show full JSON compactly
         return `<pre class="diff-plain">${ansi().toHtml(JSON.stringify(parsed, null, 2))}</pre>`;
-      } catch (_) { /* not valid JSON — fall through */ }
+      } catch (_) {}
     }
-
-    // ── Legacy format ──
     if (isUnifiedDiff(clean)) return renderDiffHtml(clean);
     return `<pre class="diff-plain">${ansi().toHtml(clean)}</pre>`;
   };
 
+  const statusCls = !hasResult() ? "running" : isOk() ? "ok" : "err";
+
   return (
-    <div class={`tool-row ${isOk ? "ok" : "err"} ${open() ? "open" : ""}`}>
-      <div class="tool-row-bar" onClick={() => expandable && setOpen(o => !o)}>
-        <svg class="tool-row-chevron" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <span class="tool-row-verb">{verb()}</span>
-        <span class="tool-row-detail">{detail()}</span>
-        {!hasResult && <span class="tool-row-dot" />}
+    <div class={`tool-card ${statusCls} ${open() ? "expanded" : ""}`}>
+      <div class="tc-bar" onClick={() => expandable && setOpen(o => !o)}>
+        {expandable && <svg class={`tc-chevron ${open() ? "open" : ""}`} viewBox="0 0 12 12"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>}
+        <span class="tc-icon">{icon()}</span>
+        <span class="tc-verb">{verb}</span>
+        <span class="tc-detail">{detailText()}</span>
+        {badge()}
       </div>
-      <Show when={open() && expandable && (hasResult || props.streamingOutput)}>
-        <div class="tool-row-body" innerHTML={bodyHtml()} />
+      <Show when={open() && expandable}>
+        <div class="tc-body" innerHTML={bodyHtml() || "<span class=\"tc-spinner\" />"} />
       </Show>
     </div>
   );

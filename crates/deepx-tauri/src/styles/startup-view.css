@@ -119,23 +119,21 @@
   gap: 8px;
 }
 .session-card-dot {
-  width: 8px; height: 8px;
+  width: 10px; height: 10px;
+  border: 2px solid var(--bg-hover);
+  border-top-color: var(--text-muted);
   border-radius: 50%;
-  background: var(--text-muted);
   flex-shrink: 0;
 }
 .session-card-dot.running {
-  animation: dot-pulse 1.5s ease-in-out infinite;
-  background: var(--green);
-  box-shadow: 0 0 6px var(--green);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
 }
 .session-card-dot.turso {
-  background: var(--green);
-  box-shadow: 0 0 4px rgba(var(--green-rgb), 0.4);
-}
-@keyframes dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+  border-top-color: var(--green);
+  border-color: var(--green);
+  opacity: 0.6;
+  animation: none;
 }
 .session-card-title {
   font-size: 14px;
@@ -164,8 +162,8 @@
 .session-card-badge {
   font-size: 10px;
   font-weight: 600;
-  color: var(--green);
-  background: rgba(var(--green-rgb), 0.12);
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
   padding: 2px 8px;
   border-radius: var(--radius-pill);
 }

@@ -1,20 +1,14 @@
 import { createSignal, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
+import type { PermissionRequest } from "../store/permissionQueue";
 
-export interface PermissionRequest {
-  tool_call_id: string;
-  tool_name: string;
-  reason: string;
-  paths: string[];
-  category: string;
-  level: number;
-}
+export type { PermissionRequest } from "../store/permissionQueue";
 
 interface Props {
   request: PermissionRequest;
   seed: string;
-  onClose: () => void;
+  onResolved: (seed: string, toolCallId: string) => void;
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -37,19 +31,23 @@ export default function PermissionDialog(props: Props) {
   };
 
   async function respond(approved: boolean) {
+    if (busy()) return;
+    const seed = props.seed;
+    const request = props.request;
+    const shouldTrustFolder = approved && trustFolder();
     setBusy(true);
     try {
       await invoke("cmd_permission_response", {
-        seed: props.seed,
-        toolCallId: props.request.tool_call_id,
+        seed,
+        toolCallId: request.tool_call_id,
         approved,
-        trustFolder: approved && trustFolder(),
+        trustFolder: shouldTrustFolder,
       });
+      props.onResolved(seed, request.tool_call_id);
     } catch (e) {
       console.error(`permission_response:`, e);
     } finally {
       setBusy(false);
-      props.onClose();
     }
   }
 

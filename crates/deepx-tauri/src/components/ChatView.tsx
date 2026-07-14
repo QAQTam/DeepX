@@ -5,6 +5,7 @@ import InputBar from "./InputBar";
 import type { SlashCommand } from "./SlashMenu";
 import InfoBar from "./InfoBar";
 import AskDialog from "./AskDialog";
+import AskForm from "./AskForm";
 
 interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; hasMore: boolean; onLoadMore: () => void; onSlashCommand: (cmd: SlashCommand) => void; }
 
@@ -82,6 +83,11 @@ export default function ChatView(props: ChatViewProps) {
         activeSkillNames={chat().activeSkillNames}
       />
       <AskDialog
+        state={chat().askState}
+        onSubmit={(a) => chat().submitAskAnswer(a)}
+        onDismiss={() => chat().dismissAsk()}
+      />
+      <AskForm
         state={chat().askState}
         onSubmit={(a) => chat().submitAskAnswer(a)}
         onDismiss={() => chat().dismissAsk()}

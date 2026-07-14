@@ -84,7 +84,7 @@ export default function MessageItem(props: MessageItemProps) {
                         <>
                           <Show when={round.thinking}><ThinkingBlock content={round.thinking!} streaming={props.status === "streaming"} elapsedMs={round.thinking_ms} /></Show>
                           <Show when={round.answer}><MarkdownBody class="md-body" content={round.answer!} final={!!(round.blocks && round.blocks.length > 0) || props.status === "complete"} /></Show>
-                          <div class="tool-capsules-row">
+                          <div class="tool-cards-row">
                             <Index each={mergedToolCalls()}>
                               {(item) => <ToolRow call={item().call} result={item().result} streamingOutput={item().streamOutput} />}
                             </Index>
