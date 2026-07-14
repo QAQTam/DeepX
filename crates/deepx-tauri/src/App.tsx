@@ -8,12 +8,14 @@ import type { SlashCommand } from "./components/SlashMenu";
 import ChatView from "./components/ChatView";
 import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
+import SkillsView from "./components/SkillsView";
 import TaskSidebar from "./components/shell/TaskSidebar";
 import "./styles/git-diff-panel.css";
 import "./styles/context-panel.css";
 import "./styles/slash-menu.css";
 import "./styles/permission-dialog.css";
 import "./styles/changelog.css";
+import "./styles/skills.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
 import PermissionPrompt from "./components/interactions/PermissionPrompt";
 import { createPermissionQueue } from "./store/permissionQueue";
@@ -23,7 +25,7 @@ import ChangelogModal from "./components/ChangelogModal";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
 
-type View = "home" | "chat" | "settings";
+type View = "home" | "chat" | "settings" | "skills";
 export type ThemeMode = "system" | "light" | "dark" | "dark-gray";
 
 const LS_KEY = "deepx:seed";
@@ -511,7 +513,7 @@ export default function App() {
           onNew={() => { void newSession(); setHasChosenSession(true); }}
           onOpen={seed => void resumeSession(seed)}
           onDelete={seed => void deleteSession(seed)}
-          onSkills={() => setView("home")}
+          onSkills={() => setView("skills")}
           onSettings={() => setView("settings")}
         />
         <aside class="sidebar frost-panel">
@@ -530,6 +532,10 @@ export default function App() {
             }} title={t().nav.chat}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               <span>{t().nav.chat}</span>
+            </button>
+            <button class={`sidebar-btn ${view() === "skills" ? "active" : ""}`} onClick={() => setView("skills")} title={t().skills.title}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="15.5"/><polyline points="22 8.5 12 15.5 2 8.5"/></svg>
+              <span>{t().skills.title}</span>
             </button>
             <button class={`sidebar-btn ${view() === "settings" ? "active" : ""}`} onClick={() => setView("settings")} title={t().nav.settings}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
@@ -615,6 +621,16 @@ export default function App() {
           <Switch>
             <Match when={view() === "settings"}>
               <SettingsView lang={configLang} onLangChange={switchLang} theme={theme} onThemeChange={switchTheme} />
+            </Match>
+            <Match when={view() === "skills"}>
+              <SkillsView
+                seed={activeSeed()}
+                available={activeChat()?.skillCatalog() ?? []}
+                active={activeChat()?.activeSkillNames() ?? []}
+                onActivate={async (name) => { await invoke("cmd_activate_skill", { seed: activeSeed(), name }); }}
+                onUnload={async (name) => { await invoke("cmd_unload_skill", { seed: activeSeed(), name }); }}
+                onReload={async () => { await invoke("cmd_reload_skills", { seed: activeSeed() }); }}
+              />
             </Match>
             <Match when={view() === "home"}>
               <StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} showHeatmap={false} />
