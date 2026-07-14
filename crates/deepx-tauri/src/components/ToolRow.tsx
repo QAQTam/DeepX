@@ -18,9 +18,6 @@ function execCmd(argsJson: string): string {
 function webQuery(argsJson: string): string {
   try { const a = JSON.parse(argsJson); return String(a.query || a.url || ""); } catch (_) { return ""; }
 }
-function c7Lib(argsJson: string): string {
-  try { const a = JSON.parse(argsJson); return String(a.library_name || a.name || a.library || ""); } catch (_) { return ""; }
-}
 function diffStats(output: string): { adds: number; dels: number } | null {
   if (!output) return null;
   try {
@@ -51,8 +48,6 @@ function statusKey(name: string): string {
   if (name === "exec" || name === "exec_run") return "exec";
   if (name === "web_search") return "web";
   if (name === "web_fetch") return "webFetch";
-  if (name === "web_context7_resolve") return "docResolve";
-  if (name === "web_context7_query") return "docQuery";
   return name;
 }
 
@@ -69,7 +64,6 @@ export default function ToolRow(props: { call: ToolCallDef; result?: ToolResultD
   const fileTools = ["read", "write", "edit", "edit_block", "list", "search", "diff", "delete"];
   const execTools = ["exec", "exec_run"];
   const webTools = ["web_search", "web_fetch"];
-  const c7Tools = ["web_context7_resolve", "web_context7_query"];
   const expandable = fileTools.includes(name) || execTools.includes(name) || name === "sed";
 
   // Timer: tracks elapsed seconds, auto-stops when result arrives
@@ -92,7 +86,6 @@ export default function ToolRow(props: { call: ToolCallDef; result?: ToolResultD
     if (fileTools.includes(name)) return "📄";
     if (execTools.includes(name)) return ">";
     if (webTools.includes(name)) return "@";
-    if (c7Tools.includes(name)) return "📚";
     return "🔧";
   };
 
@@ -112,7 +105,6 @@ export default function ToolRow(props: { call: ToolCallDef; result?: ToolResultD
     }
     if (execTools.includes(name)) return execCmd(props.call.args_json);
     if (webTools.includes(name)) return webQuery(props.call.args_json);
-    if (c7Tools.includes(name)) return c7Lib(props.call.args_json);
     return "";
   };
 

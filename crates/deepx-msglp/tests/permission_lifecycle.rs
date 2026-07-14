@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use deepx_msglp::new::loop_core::Loop;
 use deepx_msglp::agent::AgentState;
-use deepx_proto::{Agent2Ui, Ui2Agent};
+use deepx_msglp::new::loop_core::Loop;
+use deepx_proto::{Agent2Ui, PermissionRisk, Ui2Agent};
 use serde_json::json;
 use tiny_http::{Header, Response, Server};
 
@@ -401,7 +401,21 @@ fn llm_approval_resumes_original_turn_once() {
                     text: "read it".into(),
                 },
             );
-            assert_eq!(permission_id(receiver), "llm-read");
+            match expect_event(receiver, Duration::from_secs(5), |event| {
+                matches!(event, Agent2Ui::PermissionRequest { .. })
+            }) {
+                Agent2Ui::PermissionRequest {
+                    tool_call_id,
+                    risk,
+                    consequence,
+                    ..
+                } => {
+                    assert_eq!(tool_call_id, "llm-read");
+                    assert_eq!(risk, PermissionRisk::Low);
+                    assert!(!consequence.is_empty());
+                }
+                _ => unreachable!(),
+            }
             assert_no_round_completion(receiver);
             send(
                 writer,

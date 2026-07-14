@@ -3,18 +3,21 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{ToolHandler, ToolRisk, ToolCallCtx, ToolResult, handler, JsonArgs};
 use super::file_shared::{
-    unified_diff, diff_stats, normalize_newlines, closest_line,
-    disambiguate_match, apply_diff_and_format, is_binary_read_error,
+    apply_diff_and_format, closest_line, diff_stats, disambiguate_match, is_binary_read_error,
+    normalize_newlines, unified_diff,
 };
+use crate::{JsonArgs, ToolCallCtx, ToolHandler, ToolResult, ToolRisk, handler};
 
 // ── Shared helpers ──
 
 fn format_diff_result(prefix: &str, path: &str, diff: &str, label: &str, _success: bool) -> String {
     let (added, removed, first_line) = diff_stats(diff);
-    let summary = format!("[{prefix}] {path}:{first_line} +{added} -{removed} | {label}",
-        added = added.max(1), removed = removed.max(1));
+    let summary = format!(
+        "[{prefix}] {path}:{first_line} +{added} -{removed} | {label}",
+        added = added.max(1),
+        removed = removed.max(1)
+    );
     // Always include the diff body — LLM context is truncated later in build_context_for_gate.
     // The frontend and audit trail need the full diff.
     format!("{}\n\n{}", summary, diff.trim_end())
@@ -39,15 +42,34 @@ fn build_fuzzy_hint(content: &str, old: &str) -> String {
     "\n[HINT] String not found. Use read to check current file content, then retry.".to_string()
 }
 
-fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: bool, _path: &str) -> (String, Match) {
+fn apply_one(
+    content: &str,
+    old: &str,
+    new: &str,
+    use_regex: bool,
+    replace_all: bool,
+    _path: &str,
+) -> (String, Match) {
     if use_regex {
         let re = match regex::Regex::new(old) {
             Ok(r) => r,
-            Err(e) => return (content.to_string(), Match::Error { msg: format!("Invalid regex: {e}") }),
+            Err(e) => {
+                return (
+                    content.to_string(),
+                    Match::Error {
+                        msg: format!("Invalid regex: {e}"),
+                    },
+                );
+            }
         };
         let count = re.find_iter(content).count();
         if count == 0 {
-            return (content.to_string(), Match::NoMatch { msg: format!("regex no matches") });
+            return (
+                content.to_string(),
+                Match::NoMatch {
+                    msg: format!("regex no matches"),
+                },
+            );
         }
         let escaped_new = new.replace('$', "$$");
         let new_content = if replace_all {
@@ -55,7 +77,11 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
         } else {
             re.replacen(content, 1, &escaped_new).to_string()
         };
-        let msg = if replace_all { format!("regex replaced {count} matches") } else { "regex replaced 1 match".into() };
+        let msg = if replace_all {
+            format!("regex replaced {count} matches")
+        } else {
+            "regex replaced 1 match".into()
+        };
         (new_content, Match::Ok { msg })
     } else if replace_all {
         // Exact match first; fallback to trim_end for trailing-whitespace tolerance.
@@ -67,18 +93,33 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
                 trimmed
             } else {
                 let hint = build_fuzzy_hint(content, old);
-                return (content.to_string(), Match::NoMatch { msg: format!("no occurrences{hint}") });
+                return (
+                    content.to_string(),
+                    Match::NoMatch {
+                        msg: format!("no occurrences{hint}"),
+                    },
+                );
             }
         };
         let count = content.matches(matcher).count();
         let new_content = content.replace(matcher, new);
-        (new_content, Match::Ok { msg: format!("replaced {count} occurrences") })
+        (
+            new_content,
+            Match::Ok {
+                msg: format!("replaced {count} occurrences"),
+            },
+        )
     } else {
         match content.find(old) {
             Some(pos) => {
                 let line = content[..pos].lines().count() + 1;
                 let new_content = content.replacen(old, new, 1);
-                (new_content, Match::Ok { msg: format!("line {line}: +{} -{}", new.len(), old.len()) })
+                (
+                    new_content,
+                    Match::Ok {
+                        msg: format!("line {line}: +{} -{}", new.len(), old.len()),
+                    },
+                )
             }
             None => {
                 let trimmed = old.trim_end();
@@ -87,16 +128,35 @@ fn apply_one(content: &str, old: &str, new: &str, use_regex: bool, replace_all: 
                         Some(pos) => {
                             let line = content[..pos].lines().count() + 1;
                             let new_content = content.replacen(trimmed, new, 1);
-                            (new_content, Match::Ok { msg: format!("line {line} [trim-end match]: +{} -{}", new.len(), trimmed.len()) })
+                            (
+                                new_content,
+                                Match::Ok {
+                                    msg: format!(
+                                        "line {line} [trim-end match]: +{} -{}",
+                                        new.len(),
+                                        trimmed.len()
+                                    ),
+                                },
+                            )
                         }
                         None => {
                             let hint = build_fuzzy_hint(content, old);
-                            (content.to_string(), Match::NoMatch { msg: format!("string not found{hint}") })
+                            (
+                                content.to_string(),
+                                Match::NoMatch {
+                                    msg: format!("string not found{hint}"),
+                                },
+                            )
                         }
                     }
                 } else {
                     let hint = build_fuzzy_hint(content, old);
-                    (content.to_string(), Match::NoMatch { msg: format!("string not found{hint}") })
+                    (
+                        content.to_string(),
+                        Match::NoMatch {
+                            msg: format!("string not found{hint}"),
+                        },
+                    )
                 }
             }
         }
@@ -119,22 +179,49 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
 
     if append {
         use std::io::Write;
-        let mut file = match std::fs::OpenOptions::new().append(true).create(true).open(&path) {
+        let mut file = match std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+        {
             Ok(f) => f,
-            Err(e) => return format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.", path, e),
+            Err(e) => {
+                return format!(
+                    "[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.",
+                    path, e
+                );
+            }
         };
         match file.write_all(content.as_bytes()) {
             Ok(_) => {
                 crate::file_state::record_write(&path, line_count);
                 if let Some(ref old) = old_content {
                     let old_line_count = old.lines().count();
-                    let first_line = if old_line_count == 0 { 1u32 } else { old_line_count as u32 + 1 };
-                    format!("[OK] {path}:{first_line} +{line_count} -0 | write_file\n\n+{content_trim}", path = path, first_line = first_line, line_count = line_count, content_trim = content.trim_end())
+                    let first_line = if old_line_count == 0 {
+                        1u32
+                    } else {
+                        old_line_count as u32 + 1
+                    };
+                    format!(
+                        "[OK] {path}:{first_line} +{line_count} -0 | write_file\n\n+{content_trim}",
+                        path = path,
+                        first_line = first_line,
+                        line_count = line_count,
+                        content_trim = content.trim_end()
+                    )
                 } else {
-                    format!("[OK] {} — appended {} bytes, {} lines (new file)", path, content.len(), line_count)
+                    format!(
+                        "[OK] {} — appended {} bytes, {} lines (new file)",
+                        path,
+                        content.len(),
+                        line_count
+                    )
                 }
             }
-            Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.", path, e),
+            Err(e) => format!(
+                "[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.",
+                path, e
+            ),
         }
     } else {
         match std::fs::write(&path, &content) {
@@ -146,15 +233,28 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
                     let (new_norm, _) = normalize_newlines(&content);
                     let diff = unified_diff(&old_norm, &new_norm, &path);
                     if diff.is_empty() {
-                        format!("[OK] {} — {} bytes, {} lines (no changes)", path, content.len(), line_count)
+                        format!(
+                            "[OK] {} — {} bytes, {} lines (no changes)",
+                            path,
+                            content.len(),
+                            line_count
+                        )
                     } else {
                         format_diff_result("OK", &path, &diff, "write_file", true)
                     }
                 } else {
-                    format!("[OK] {} — {} bytes, {} lines (new file)", path, content.len(), line_count)
+                    format!(
+                        "[OK] {} — {} bytes, {} lines (new file)",
+                        path,
+                        content.len(),
+                        line_count
+                    )
                 }
             }
-            Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.", path, e),
+            Err(e) => format!(
+                "[ERROR] Cannot write {}: {}\n[HINT] Verify the parent directory exists and is writable. Use list on its parent directory or exec_run with argv [\"ls\", \"-la\"] to check.",
+                path, e
+            ),
         }
     }
 }
@@ -166,7 +266,8 @@ handler!(handle_write_file, exec_write_file);
 pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
     let path = crate::resolve_workspace_path(&args.s("path"));
     if path.is_empty() {
-        return "[ERROR] edit_file: no path specified\n[HINT] Provide 'path' (string) to the file.".into();
+        return "[ERROR] edit_file: no path specified\n[HINT] Provide 'path' (string) to the file."
+            .into();
     }
     let old_str = args.s("old_string");
     if old_str.is_empty() {
@@ -188,7 +289,9 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
     };
 
     let (orig, was_crlf) = normalize_newlines(&raw);
-    if was_crlf { log::info!("edit_file: {path} had CRLF, normalized to LF"); }
+    if was_crlf {
+        log::info!("edit_file: {path} had CRLF, normalized to LF");
+    }
 
     let old = old_str.replace("\r\n", "\n").replace('\r', "\n");
     let new = new_str.replace("\r\n", "\n").replace('\r', "\n");
@@ -196,7 +299,9 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
     match m {
         Match::Ok { msg: _ } => {}
         Match::NoMatch { msg } => {
-            return format!("[PARTIAL] {path} — pattern did not match\n[HINT] {msg}\n       Use read to check current content, then retry.");
+            return format!(
+                "[PARTIAL] {path} — pattern did not match\n[HINT] {msg}\n       Use read to check current content, then retry."
+            );
         }
         Match::Error { msg } => {
             return format!("[ERROR] {path}: {msg}");
@@ -208,7 +313,11 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
         return format_diff_result("DRY RUN", &path, &diff, "edit_file", false);
     }
 
-    let write_content = if was_crlf { content.replace('\n', "\r\n") } else { content.clone() };
+    let write_content = if was_crlf {
+        content.replace('\n', "\r\n")
+    } else {
+        content.clone()
+    };
     match std::fs::write(&path, &write_content) {
         Ok(_) => {
             crate::file_state::record_edit(&path, 0);
@@ -240,13 +349,24 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
             "path": path,
             "message": format!("{} does not exist", path),
             "hint": "Use list to verify."
-        }).to_string();
+        })
+        .to_string();
     }
 
     let trash_root = trash_dir();
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    let ws = crate::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock").clone();
-    let project_root = if !ws.is_empty() && ws != "." { Path::new(&ws) } else { Path::new(".") };
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let ws = crate::CURRENT_WORKSPACE
+        .read()
+        .expect("CURRENT_WORKSPACE lock")
+        .clone();
+    let project_root = if !ws.is_empty() && ws != "." {
+        Path::new(&ws)
+    } else {
+        Path::new(".")
+    };
     let rel = if let Ok(stripped) = p.strip_prefix(project_root) {
         stripped.to_string_lossy().to_string()
     } else if let Some(name) = p.file_name() {
@@ -291,7 +411,8 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
                     "path": path,
                     "message": e2.to_string(),
                     "hint": "Check permissions and disk space."
-                }).to_string()
+                })
+                .to_string()
             } else {
                 match std::fs::remove_file(p) {
                     Ok(_) => {
@@ -304,18 +425,19 @@ pub(super) fn exec_delete_file(args: &serde_json::Value) -> String {
                         "content": format!("Moved to trash (cross-device): .deepx/trash/{}", trash_path.file_name().unwrap_or_default().to_string_lossy()),
                         "hint": format!("Restore with exec_run argv [\"cp\", \"{}\", \"{}\"]", trash_path.display(), path),
                 }).to_string()
+                    }
+                    Err(e2) => serde_json::json!({
+                        "timeis": crate::now_utc8(),
+                        "status": "ok",
+                        "path": path,
+                        "warning": format!("Copied to trash but could not remove original: {}", e2),
+                        "content": format!("Copied to trash, original still at {}", path),
+                    })
+                    .to_string(),
                 }
-                Err(e2) => serde_json::json!({
-                    "timeis": crate::now_utc8(),
-                    "status": "ok",
-                    "path": path,
-                    "warning": format!("Copied to trash but could not remove original: {}", e2),
-                    "content": format!("Copied to trash, original still at {}", path),
-                }).to_string(),
             }
         }
     }
-}
 }
 
 handler!(handle_delete_file, exec_delete_file);
@@ -323,37 +445,83 @@ handler!(handle_delete_file, exec_delete_file);
 // ── exec_edit_fuzzy (was file_edit_diff) ──
 
 pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
-    let path = crate::resolve_workspace_path(
-        args.get("path").and_then(|v| v.as_str()).unwrap_or("")
-    );
+    let path =
+        crate::resolve_workspace_path(args.get("path").and_then(|v| v.as_str()).unwrap_or(""));
     if path.is_empty() {
-        return format!("[ERROR] edit_block: MISSING_PATH — path is required\n[HINT] Provide a file path to edit.");
+        return format!(
+            "[ERROR] edit_block: MISSING_PATH — path is required\n[HINT] Provide a file path to edit."
+        );
     }
-    let old_lines: Vec<String> = args.get("old_lines").and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let new_lines: Vec<String> = args.get("new_lines").and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let context_before: Vec<String> = args.get("context_before").and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let context_after: Vec<String> = args.get("context_after").and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
-    let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-    let start_line: Option<usize> = args.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
-    let end_line: Option<usize> = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
+    let old_lines: Vec<String> = args
+        .get("old_lines")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let new_lines: Vec<String> = args
+        .get("new_lines")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let context_before: Vec<String> = args
+        .get("context_before")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let context_after: Vec<String> = args
+        .get("context_after")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let dry_run = args
+        .get("dry_run")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let start_line: Option<usize> = args
+        .get("start_line")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+    let end_line: Option<usize> = args
+        .get("end_line")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
 
     let err = |code: &str, msg: &str, hint: &str| -> String {
         format!("[ERROR] {path}: {code} — {msg}\n[HINT] {hint}")
     };
 
     if old_lines.is_empty() && start_line.is_none() {
-        return err("MISSING_PARAM", "old_lines or start_line is required",
-            "Provide old_lines for content matching or start_line for line-number editing.");
+        return err(
+            "MISSING_PARAM",
+            "old_lines or start_line is required",
+            "Provide old_lines for content matching or start_line for line-number editing.",
+        );
     }
     if old_lines.len() > 100 && start_line.is_none() {
-        return err("TOO_LARGE",
+        return err(
+            "TOO_LARGE",
             &format!("old_lines too large ({} lines, max 100)", old_lines.len()),
-            "Reduce the diff scope, use write for full rewrites, or set start_line (no old_lines needed) for line-range replacement.");
+            "Reduce the diff scope, use write for full rewrites, or set start_line (no old_lines needed) for line-range replacement.",
+        );
     }
 
     let raw = match std::fs::read_to_string(&path) {
@@ -367,14 +535,18 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
                     "path": path,
                     "message": "Binary file, cannot display as text",
                     "hint": "Use exec with hex dump tool."
-                }).to_string();
+                })
+                .to_string();
             }
             return err("READ_FAILED", &e.to_string(), "Use list first.");
         }
     };
     let (content, was_crlf) = normalize_newlines(&raw);
     if was_crlf {
-        log::info!("file_edit_diff: {} had CRLF, normalized to LF for matching", path);
+        log::info!(
+            "file_edit_diff: {} had CRLF, normalized to LF for matching",
+            path
+        );
     }
     let file_lines: Vec<&str> = content.lines().collect();
 
@@ -382,21 +554,33 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
         let s = start.saturating_sub(1);
         let e = end_line.map(|n| n.saturating_sub(1)).unwrap_or(s);
         if s >= file_lines.len() {
-            return err("LINE_OUT_OF_RANGE",
-                &format!("start_line {start} past end of file ({} lines)", file_lines.len()),
-                "Use read to check the file length.");
+            return err(
+                "LINE_OUT_OF_RANGE",
+                &format!(
+                    "start_line {start} past end of file ({} lines)",
+                    file_lines.len()
+                ),
+                "Use read to check the file length.",
+            );
         }
         let e = e.min(file_lines.len().saturating_sub(1));
         if s > e {
-            return err("LINE_RANGE_INVALID",
-                &format!("start_line {start} > end_line {}", end_line.unwrap_or(start)),
-                "end_line must be >= start_line.");
+            return err(
+                "LINE_RANGE_INVALID",
+                &format!(
+                    "start_line {start} > end_line {}",
+                    end_line.unwrap_or(start)
+                ),
+                "end_line must be >= start_line.",
+            );
         }
         let win = e - s + 1;
         if !old_lines.is_empty() {
             let actual: Vec<&str> = file_lines[s..=e].iter().map(|l| *l).collect();
-            let norm_actual: Vec<String> = actual.iter().map(|l| l.trim_end().to_string()).collect();
-            let norm_old: Vec<String> = old_lines.iter().map(|l| l.trim_end().to_string()).collect();
+            let norm_actual: Vec<String> =
+                actual.iter().map(|l| l.trim_end().to_string()).collect();
+            let norm_old: Vec<String> =
+                old_lines.iter().map(|l| l.trim_end().to_string()).collect();
             if norm_actual != norm_old {
                 let mut ctx = String::new();
                 for (i, line) in actual.iter().enumerate() {
@@ -409,33 +593,67 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
                 }
                 return crate::json_err(
                     "LINE_MISMATCH",
-                    &format!("start_line={start}: old_lines do not match actual file content at lines {}-{}", s + 1, e + 1),
-                    &format!("Mismatch:\n{ctx}File content has changed. Use read to re-read and retry with corrected old_lines.")
+                    &format!(
+                        "start_line={start}: old_lines do not match actual file content at lines {}-{}",
+                        s + 1,
+                        e + 1
+                    ),
+                    &format!(
+                        "Mismatch:\n{ctx}File content has changed. Use read to re-read and retry with corrected old_lines."
+                    ),
                 );
             }
         }
-        return apply_diff_and_format(&path, &file_lines, s, win, &new_lines, description, false, dry_run, was_crlf);
+        return apply_diff_and_format(
+            &path,
+            &file_lines,
+            s,
+            win,
+            &new_lines,
+            description,
+            false,
+            dry_run,
+            was_crlf,
+        );
     }
 
     let norm_old: Vec<String> = old_lines.iter().map(|l| l.trim_end().to_string()).collect();
     let win = norm_old.len();
     if win > file_lines.len() {
-        return err("TOO_LARGE",
-            &format!("old_lines ({} lines) longer than file ({} lines)", win, file_lines.len()),
-            "Check the file content with read first.");
+        return err(
+            "TOO_LARGE",
+            &format!(
+                "old_lines ({} lines) longer than file ({} lines)",
+                win,
+                file_lines.len()
+            ),
+            "Check the file content with read first.",
+        );
     }
 
     let mut candidates: Vec<usize> = Vec::new();
     let mut was_fuzzy = false;
     for i in 0..=file_lines.len() - win {
-        let window: Vec<String> = file_lines[i..i+win].iter().map(|l| l.trim_end().to_string()).collect();
-        if window == norm_old { candidates.push(i); }
+        let window: Vec<String> = file_lines[i..i + win]
+            .iter()
+            .map(|l| l.trim_end().to_string())
+            .collect();
+        if window == norm_old {
+            candidates.push(i);
+        }
     }
     if candidates.is_empty() {
         was_fuzzy = true;
         for i in 0..=file_lines.len() - win {
-            let window: Vec<String> = file_lines[i..i+win].iter().map(|l| l.trim_end().to_string()).collect();
-            if window.iter().zip(&norm_old).all(|(w, o)| w.trim() == o.trim()) {
+            let window: Vec<String> = file_lines[i..i + win]
+                .iter()
+                .map(|l| l.trim_end().to_string())
+                .collect();
+            if window
+                .iter()
+                .zip(&norm_old)
+                .all(|(w, o)| w.trim() == o.trim())
+            {
                 candidates.push(i);
             }
         }
@@ -454,16 +672,36 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
                 "hint": format!("Use read first, then retry with start_line={line_num} or corrected old_lines."),
             }).to_string();
         }
-        return err("NO_MATCH", "old_lines not found",
-            "Verify current file content or use start_line/end_line for line-number editing.");
+        return err(
+            "NO_MATCH",
+            "old_lines not found",
+            "Verify current file content or use start_line/end_line for line-number editing.",
+        );
     }
 
-    let match_idx = match disambiguate_match(&candidates, &context_before, &context_after, &file_lines, &path, win) {
+    let match_idx = match disambiguate_match(
+        &candidates,
+        &context_before,
+        &context_after,
+        &file_lines,
+        &path,
+        win,
+    ) {
         Ok(idx) => idx,
         Err(msg) => return msg,
     };
 
-    apply_diff_and_format(&path, &file_lines, match_idx, win, &new_lines, description, was_fuzzy, dry_run, was_crlf)
+    apply_diff_and_format(
+        &path,
+        &file_lines,
+        match_idx,
+        win,
+        &new_lines,
+        description,
+        was_fuzzy,
+        dry_run,
+        was_crlf,
+    )
 }
 
 handler!(handle_edit_file_diff, exec_edit_fuzzy);
@@ -481,7 +719,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     });
     mgr.register(ToolHandler {
         key: "edit".to_string(),
-        description: "String replacement in files. Supports exact match, regex (with capture groups). Default to dry_run=true for complex changes. For fuzzy or line-number addressing use edit_block.",
+        description: "String replacement in files. Supports exact match, regex (with capture groups). Set dry_run=true to preview the diff before applying. For fuzzy or line-number addressing use edit_block.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file. Use for complex edits; call again with false to apply.","default":false}},"required":["path"],"additionalProperties":false}),
         handler: handle_edit_file,
         risk: ToolRisk::Write,

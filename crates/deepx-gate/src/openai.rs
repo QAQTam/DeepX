@@ -3,12 +3,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use deepx_types::{ContentBlock, Message, ToolDef, UsageInfo};
 use deepx_types::{CacheTokenField, ThinkingParamMode};
+use deepx_types::{ContentBlock, Message, ToolDef, UsageInfo};
 
 use super::types::{ProviderConfig, StreamEvent};
 
@@ -168,7 +168,8 @@ pub fn chat_stream_openai(
             return Err(anyhow::anyhow!("cancelled by user"));
         }
 
-        let resp = agent.post(&url)
+        let resp = agent
+            .post(&url)
             .header("Authorization", &format!("Bearer {}", provider.api_key))
             .header("Content-Type", "application/json")
             .send_json(&body);
@@ -190,7 +191,8 @@ pub fn chat_stream_openai(
 
                 let delay = backoff_delay(attempt);
                 on_event(StreamEvent::Retrying {
-                    attempt, max_retries: MAX_RETRIES,
+                    attempt,
+                    max_retries: MAX_RETRIES,
                     delay_secs: delay.as_secs(),
                     error: format!("HTTP {} ({})", status, code_desc),
                 });
@@ -208,7 +210,8 @@ pub fn chat_stream_openai(
 
                 let delay = backoff_delay(attempt);
                 on_event(StreamEvent::Retrying {
-                    attempt, max_retries: MAX_RETRIES,
+                    attempt,
+                    max_retries: MAX_RETRIES,
                     delay_secs: delay.as_secs(),
                     error: format!("{e}"),
                 });
@@ -309,7 +312,9 @@ fn stream_sse(
                             // DSML tool call detection in content stream
                             dsml_buf.push_str(&t);
                             let mut search_from = 0usize;
-                            while let Some(start) = dsml_buf[search_from..].find("<｜DSML｜invoke name=\"") {
+                            while let Some(start) =
+                                dsml_buf[search_from..].find("<｜DSML｜invoke name=\"")
+                            {
                                 let abs_start = search_from + start;
                                 let after_tag = abs_start + "<｜DSML｜invoke name=\"".len();
                                 if let Some(rest) = dsml_buf.get(after_tag..) {
@@ -342,17 +347,24 @@ fn stream_sse(
                         // Tool calls (native OpenAI format)
                         if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
                             for tc in tcs {
-                                let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                let idx =
+                                    tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                                 let entry = tool_acc.entry(idx).or_insert_with(|| {
-                                    let tid = tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                    let tname = tc.get("function")
+                                    let tid = tc
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let tname = tc
+                                        .get("function")
                                         .and_then(|f| f.get("name"))
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("")
                                         .to_string();
                                     (tid, tname, String::new())
                                 });
-                                if let Some(args) = tc.get("function")
+                                if let Some(args) = tc
+                                    .get("function")
                                     .and_then(|f| f.get("arguments"))
                                     .and_then(|v| v.as_str())
                                 {
@@ -373,26 +385,36 @@ fn stream_sse(
             // Usage info (may appear in any chunk)
             if let Some(u) = ev.get("usage") {
                 let pt = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let ct = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let ct = u
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
                 let (hit, miss) = match provider.cache_field {
                     CacheTokenField::PromptCacheHitTokens => (
-                        u.get("prompt_cache_hit_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                        u.get("prompt_cache_miss_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                        u.get("prompt_cache_hit_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32,
+                        u.get("prompt_cache_miss_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32,
                     ),
                     CacheTokenField::PromptDetailsCached => {
-                        let cached = u.get("prompt_tokens_details")
+                        let cached = u
+                            .get("prompt_tokens_details")
                             .and_then(|d| d.get("cached_tokens"))
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0) as u32;
                         (cached, 0)
                     }
                     CacheTokenField::UsageCachedTokens => {
-                        let cached = u.get("cached_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let cached =
+                            u.get("cached_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                         (cached, 0)
                     }
                     CacheTokenField::None => (0, 0),
                 };
-                let rt = u.get("completion_tokens_details")
+                let rt = u
+                    .get("completion_tokens_details")
                     .and_then(|d| d.get("reasoning_tokens"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
@@ -408,7 +430,6 @@ fn stream_sse(
                 on_event(StreamEvent::UsageUpdate(usage_info.clone().unwrap()));
             }
         }
-
     }
 
     // Build final message from accumulated content
@@ -427,7 +448,14 @@ fn stream_sse(
         let base_idx = tool_acc.len();
         for (i, tc) in dsml_tcs.iter().enumerate() {
             let idx = base_idx + i;
-            tool_acc.insert(idx, (tc.id.clone(), tc.function.name.clone(), tc.function.arguments.to_string()));
+            tool_acc.insert(
+                idx,
+                (
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    tc.function.arguments.to_string(),
+                ),
+            );
         }
         if !cleaned.is_empty() {
             blocks.push(ContentBlock::text(&cleaned));
@@ -458,7 +486,11 @@ fn stream_sse(
         content: blocks,
     };
 
-    on_event(StreamEvent::Done { raw_message, usage: usage_info, stop_reason });
+    on_event(StreamEvent::Done {
+        raw_message,
+        usage: usage_info,
+        stop_reason,
+    });
 
     Ok(())
 }
@@ -483,7 +515,10 @@ fn filter_stateful_messages(messages: Vec<Message>) -> Vec<Message> {
     #[cfg(debug_assertions)]
     {
         let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
-        eprintln!("[filter] 输入: {:?} | last_asst={:?} start={}", roles, last_asst_idx, start);
+        eprintln!(
+            "[filter] 输入: {:?} | last_asst={:?} start={}",
+            roles, last_asst_idx, start
+        );
     }
 
     let mut out: Vec<Message> = Vec::new();
@@ -592,7 +627,12 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
             }
             "tool" => {
                 for block in &msg.content {
-                    if let ContentBlock::ToolResult { tool_use_id, content, .. } = block {
+                    if let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } = block
+                    {
                         out.push(serde_json::json!({
                             "role": "tool",
                             "tool_call_id": tool_use_id,
@@ -610,7 +650,12 @@ fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde
 
 // ── Synchronous (non-streaming) chat ──
 
-pub fn chat_sync_openai(provider: &ProviderConfig, model: &str, messages: Vec<Message>, max_tokens: u32) -> Result<String, String> {
+pub fn chat_sync_openai(
+    provider: &ProviderConfig,
+    model: &str,
+    messages: Vec<Message>,
+    max_tokens: u32,
+) -> Result<String, String> {
     let messages = if provider.stateful {
         filter_stateful_messages(messages)
     } else {
@@ -640,7 +685,9 @@ pub fn chat_sync_openai(provider: &ProviderConfig, model: &str, messages: Vec<Me
         .send_json(&body)
         .map_err(|e| format!("compact request failed: {e}"))?;
 
-    let json: serde_json::Value = resp.into_body().read_json()
+    let json: serde_json::Value = resp
+        .into_body()
+        .read_json()
         .map_err(|e| format!("compact parse failed: {e}"))?;
 
     json["choices"][0]["message"]["content"]

@@ -90,7 +90,10 @@ fn scenarios() -> HashMap<&'static str, Vec<SseEvent>> {
 
     m.insert(
         "HTTP 401 error",
-        vec![SseEvent::HttpError(401, json!({"error":{"message":"Invalid API key"}}))],
+        vec![SseEvent::HttpError(
+            401,
+            json!({"error":{"message":"Invalid API key"}}),
+        )],
     );
 
     m.insert(
@@ -237,7 +240,12 @@ fn read_http_request(stream: &mut TcpStream) -> Option<HttpRequest> {
         let _ = reader.read_exact(&mut body);
     }
 
-    Some(HttpRequest { method, path, headers, body })
+    Some(HttpRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
 }
 
 fn write_status(stream: &mut TcpStream, status: &str) {
@@ -485,7 +493,10 @@ fn main() {
     println!("╔══════════════════════════════════════════════╗");
     println!("║  DeepX · Gate Test Harness                  ║");
     println!("╠══════════════════════════════════════════════╣");
-    println!("║  Mock API : http://127.0.0.1:{:<4}             ║", mock_port);
+    println!(
+        "║  Mock API : http://127.0.0.1:{:<4}             ║",
+        mock_port
+    );
     println!("║  Test UI  : http://127.0.0.1:3000           ║");
     println!("╚══════════════════════════════════════════════╝");
 
@@ -546,7 +557,8 @@ fn handle_chat(
         &base_url,
         "sk-test-key",
         "test-model",
-        None, None,
+        None,
+        None,
         Default::default(),
         Default::default(),
         false,
@@ -654,5 +666,3 @@ fn handle_chat(
         }
     }
 }
-
-

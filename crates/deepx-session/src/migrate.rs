@@ -42,20 +42,28 @@ struct LegacySessionFile {
 /// Try to migrate old-format sessions found in `sessions_dir`.
 /// Safe to call on every startup — skips already-migrated sessions.
 pub fn run(sessions_dir: &Path) {
-    let Ok(entries) = fs::read_dir(sessions_dir) else { return };
+    let Ok(entries) = fs::read_dir(sessions_dir) else {
+        return;
+    };
 
     let mut migrated = 0u32;
 
     for entry in entries.flatten() {
         let dir = entry.path();
-        if !dir.is_dir() { continue; }
+        if !dir.is_dir() {
+            continue;
+        }
 
         let toml_path = dir.join("session.toml");
-        if !toml_path.exists() { continue; }
+        if !toml_path.exists() {
+            continue;
+        }
 
         // Already migrated — skip
         let meta_path = dir.join("meta.json");
-        if meta_path.exists() { continue; }
+        if meta_path.exists() {
+            continue;
+        }
 
         log::info!("[MIGRATE] found legacy session: {}", dir.display());
 
@@ -83,23 +91,20 @@ pub fn run(sessions_dir: &Path) {
 }
 
 fn migrate_one(dir: &Path, toml_path: &Path) -> Result<String, String> {
-    let data = fs::read_to_string(toml_path)
-        .map_err(|e| format!("read: {e}"))?;
-    let legacy: LegacySessionFile = toml::from_str(&data)
-        .map_err(|e| format!("parse TOML: {e}"))?;
+    let data = fs::read_to_string(toml_path).map_err(|e| format!("read: {e}"))?;
+    let legacy: LegacySessionFile =
+        toml::from_str(&data).map_err(|e| format!("parse TOML: {e}"))?;
 
     let seed = legacy.seed.clone();
 
     // Write messages.jsonl
     let msg_path = dir.join("messages.jsonl");
     {
-        let mut file = fs::File::create(&msg_path)
-            .map_err(|e| format!("create messages.jsonl: {e}"))?;
+        let mut file =
+            fs::File::create(&msg_path).map_err(|e| format!("create messages.jsonl: {e}"))?;
         for msg in &legacy.messages {
-            let line = serde_json::to_string(msg)
-                .map_err(|e| format!("serialize msg: {e}"))?;
-            writeln!(file, "{line}")
-                .map_err(|e| format!("write msg: {e}"))?;
+            let line = serde_json::to_string(msg).map_err(|e| format!("serialize msg: {e}"))?;
+            writeln!(file, "{line}").map_err(|e| format!("write msg: {e}"))?;
         }
         file.flush().map_err(|e| format!("flush: {e}"))?;
     }
@@ -127,12 +132,18 @@ fn migrate_one(dir: &Path, toml_path: &Path) -> Result<String, String> {
     let new_dir = parent.join(&seed);
     if new_dir != *dir {
         if new_dir.exists() {
-            log::warn!("[MIGRATE] target dir {} already exists, removing old", new_dir.display());
+            log::warn!(
+                "[MIGRATE] target dir {} already exists, removing old",
+                new_dir.display()
+            );
             let _ = fs::remove_dir_all(&new_dir);
         }
-        fs::rename(dir, &new_dir)
-            .map_err(|e| format!("rename dir: {e}"))?;
-        log::info!("[MIGRATE] renamed {} → {}", dir.display(), new_dir.display());
+        fs::rename(dir, &new_dir).map_err(|e| format!("rename dir: {e}"))?;
+        log::info!(
+            "[MIGRATE] renamed {} → {}",
+            dir.display(),
+            new_dir.display()
+        );
     }
 
     Ok(seed)

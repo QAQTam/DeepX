@@ -7,7 +7,7 @@
 //! - `TrustedFolderSet` persists cross-workspace folder trust decisions.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 // ──────────────────────────────────────
 // Tool category taxonomy
@@ -17,15 +17,60 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCategory {
     /// No side effects: file_read, explore, search, list, git_diff/log/show/status,
-    /// memory_read, plan_list, process_check.
+    /// plan_list, process_check.
     Read,
     /// Mutates files or state: file_write/edit/delete/move/copy, git_add/commit,
-    /// memory_write/clear, plan_create/submit, task_create/update/delete.
+    /// plan_create/submit, task_create/update/delete.
     Write,
     /// Executes arbitrary code: exec_run, spawn_subagent.
     Exec,
-    /// Outbound network: web_fetch, web_search, context7_query.
+    /// Outbound network: web_fetch, web_search.
     Net,
+}
+
+/// Intrinsic impact of the requested action, independent of the configured
+/// permission policy level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionRisk {
+    Low,
+    Medium,
+    High,
+}
+
+impl PermissionRisk {
+    pub fn consequence(self) -> &'static str {
+        match self {
+            Self::Low => "Reads data without changing it.",
+            Self::Medium => "Changes files inside the current workspace.",
+            Self::High => "May affect external resources or execute arbitrary actions.",
+        }
+    }
+}
+
+/// Classify action impact from authoritative category and normalized resources.
+pub fn classify_risk(
+    category: ToolCategory,
+    paths: &[PathBuf],
+    workspace: &Path,
+) -> PermissionRisk {
+    if matches!(category, ToolCategory::Exec | ToolCategory::Net) {
+        return PermissionRisk::High;
+    }
+
+    let workspace = resolve_target_path(workspace.to_path_buf());
+    if paths
+        .iter()
+        .map(|path| resolve_target_path(path.clone()))
+        .any(|path| !path.starts_with(&workspace))
+    {
+        return PermissionRisk::High;
+    }
+
+    match category {
+        ToolCategory::Read => PermissionRisk::Low,
+        ToolCategory::Write => PermissionRisk::Medium,
+        ToolCategory::Exec | ToolCategory::Net => PermissionRisk::High,
+    }
 }
 
 /// Classify a tool by its registered name.
@@ -33,13 +78,13 @@ pub fn categorize_tool(name: &str) -> ToolCategory {
     match name {
         // ── Read ──
         "read" | "list" | "search" | "diff" | "skills" | "ask_user" | "explore_scan"
-        | "git_diff" | "git_log" | "git_show" | "git_status" | "memory_read" | "plan_list"
-        | "plan_submit" | "process_check" | "process_wait" | "context7" => ToolCategory::Read,
+        | "git_diff" | "git_log" | "git_show" | "git_status" | "plan_list" | "plan_submit"
+        | "process_check" | "process_wait" => ToolCategory::Read,
 
         // ── Write ──
         "write" | "edit" | "edit_block" | "delete" | "git_add" | "git_commit" | "git_branch"
-        | "git_checkout" | "git_merge" | "git_restore" | "memory_write" | "memory_clear"
-        | "plan_create" | "task_create" | "task_update" | "task_delete" => ToolCategory::Write,
+        | "git_checkout" | "git_merge" | "git_restore" | "plan_create" | "task_create"
+        | "task_update" | "task_delete" => ToolCategory::Write,
 
         // ── Exec ──
         "exec_run" | "spawn_subagent" => ToolCategory::Exec,
@@ -141,31 +186,64 @@ pub fn extract_target_paths(tool_name: &str, args: &serde_json::Value) -> Vec<Pa
         }
     }
 
-    // Canonicalize where possible for reliable boundary checks
-    paths
-        .into_iter()
-        .filter_map(|p| {
-            if p.is_absolute() {
-                Some(std::fs::canonicalize(&p).ok().unwrap_or(p))
-            } else {
-                // Relative paths: resolve against current directory
-                Some(
-                    std::env::current_dir()
-                        .ok()
-                        .map(|cwd| cwd.join(&p))
-                        .and_then(|abs| std::fs::canonicalize(&abs).ok().or(Some(abs)))
-                        .unwrap_or(p),
-                )
+    paths.into_iter().map(resolve_target_path).collect()
+}
+
+/// Resolve symlinks/junctions in the nearest existing ancestor, then append
+/// any missing suffix. This keeps authorization checks correct for new files.
+fn resolve_target_path(path: PathBuf) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&path))
+            .unwrap_or(path)
+    };
+    let normalized = normalize_lexically(&absolute);
+    let mut ancestor = normalized.as_path();
+    let mut missing = Vec::new();
+
+    while !ancestor.exists() {
+        let Some(name) = ancestor.file_name() else {
+            return normalized;
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = ancestor.parent() else {
+            return normalized;
+        };
+        ancestor = parent;
+    }
+
+    let Ok(mut resolved) = std::fs::canonicalize(ancestor) else {
+        return normalized;
+    };
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    resolved
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
             }
-        })
-        .collect()
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+        }
+    }
+    normalized
 }
 
 /// Check if ALL target paths are inside the workspace root.
 fn all_within_workspace(paths: &[PathBuf], workspace: &Path) -> bool {
     if paths.is_empty() {
         return true;
-    } // tools without paths (e.g. memory_read) are considered safe
+    } // tools without paths (e.g. ask_user) are considered safe
     paths.iter().all(|p| p.starts_with(workspace))
 }
 
@@ -191,6 +269,10 @@ pub enum PermissionDecision {
         paths: Vec<PathBuf>,
         /// Whether the tool is Read/Write/Exec/Net.
         category: ToolCategory,
+        /// Intrinsic impact of this action, independent of policy level.
+        risk: PermissionRisk,
+        /// User-facing description of the effect of approving the action.
+        consequence: String,
     },
 }
 
@@ -222,6 +304,9 @@ pub fn needs_permission(
 
     let category = categorize_tool(tool_name);
     let paths = extract_target_paths(tool_name, args);
+    let workspace_root = resolve_target_path(workspace_root.to_path_buf());
+    let risk = classify_risk(category, &paths, &workspace_root);
+    let consequence = risk.consequence().to_string();
 
     // Level 1: everything requires confirmation
     if level == PermissionLevel::MaxLockdown {
@@ -229,6 +314,8 @@ pub fn needs_permission(
             reason: format!("Level 1: '{}' requires confirmation.", tool_name),
             paths,
             category,
+            risk,
+            consequence,
         };
     }
 
@@ -240,14 +327,17 @@ pub fn needs_permission(
     // Level 3+: Within-workspace auto-approve; check boundary for Write/Exec/Net
     if level >= PermissionLevel::WorkspaceFree {
         // If no paths or all paths within workspace, auto-approve
-        if all_within_workspace(&paths, workspace_root) {
+        if all_within_workspace(&paths, &workspace_root) {
             return PermissionDecision::AutoApprove;
         }
 
         // Cross-workspace: check trusted folders
-        if let Some(outside) = first_outside_workspace(&paths, workspace_root) {
+        if let Some(outside) = first_outside_workspace(&paths, &workspace_root) {
             let dir: &Path = outside.parent().unwrap_or(outside);
-            if trusted_dirs.iter().any(|d| d == dir) {
+            if trusted_dirs
+                .iter()
+                .any(|trusted| resolve_target_path(trusted.clone()) == dir)
+            {
                 return PermissionDecision::AutoApprove;
             }
         }
@@ -270,6 +360,8 @@ pub fn needs_permission(
         reason,
         paths,
         category,
+        risk,
+        consequence,
     }
 }
 
@@ -343,6 +435,60 @@ fn trusted_folders_path(seed: &str) -> PathBuf {
 mod tests {
     use super::*;
 
+    struct LinkedTempTree {
+        root: PathBuf,
+        link: PathBuf,
+    }
+
+    impl Drop for LinkedTempTree {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            let _ = std::fs::remove_dir(&self.link);
+            #[cfg(unix)]
+            let _ = std::fs::remove_file(&self.link);
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn linked_temp_tree() -> (LinkedTempTree, PathBuf, PathBuf) {
+        let unique = format!(
+            "deepx-permission-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before Unix epoch")
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let workspace = root.join("workspace");
+        let outside = root.join("outside");
+        let link = workspace.join("external-link");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        std::fs::create_dir_all(&outside).expect("create outside directory");
+
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .status()
+                .expect("create directory junction");
+            assert!(status.success(), "mklink /J failed: {status}");
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).expect("create directory symlink");
+
+        (
+            LinkedTempTree {
+                root,
+                link: link.clone(),
+            },
+            workspace,
+            link.join("new.txt"),
+        )
+    }
+
     #[test]
     fn ask_user_does_not_open_a_second_permission_dialog() {
         assert_eq!(categorize_tool("ask_user"), ToolCategory::Read);
@@ -355,5 +501,77 @@ mod tests {
         );
 
         assert!(matches!(decision, PermissionDecision::AutoApprove));
+    }
+
+    #[test]
+    fn permission_risk_distinguishes_read_workspace_write_and_exec() {
+        let workspace = resolve_target_path(PathBuf::from("C:/repo"));
+
+        assert_eq!(
+            classify_risk(ToolCategory::Read, &[], &workspace),
+            PermissionRisk::Low
+        );
+        assert_eq!(
+            classify_risk(
+                ToolCategory::Write,
+                &[workspace.join("src/lib.rs")],
+                &workspace,
+            ),
+            PermissionRisk::Medium
+        );
+        assert_eq!(
+            classify_risk(ToolCategory::Exec, &[], &workspace),
+            PermissionRisk::High
+        );
+        assert_eq!(
+            classify_risk(
+                ToolCategory::Write,
+                &[resolve_target_path(PathBuf::from("C:/outside/file"))],
+                &workspace,
+            ),
+            PermissionRisk::High
+        );
+    }
+
+    #[test]
+    fn workspace_free_requires_approval_for_missing_file_beneath_external_link() {
+        let (_temp, workspace, target) = linked_temp_tree();
+
+        let decision = needs_permission(
+            PermissionLevel::WorkspaceFree,
+            "write",
+            &serde_json::json!({"path": target}),
+            &workspace,
+            &HashSet::new(),
+        );
+
+        assert!(
+            matches!(decision, PermissionDecision::AskUser { .. }),
+            "a missing file beneath an external directory link must not auto-approve"
+        );
+    }
+
+    #[test]
+    fn workspace_free_requires_approval_for_missing_file_after_parent_traversal() {
+        let (_temp, workspace, _) = linked_temp_tree();
+        let target = workspace
+            .join("missing")
+            .join("..")
+            .join("..")
+            .join("outside")
+            .join("new.txt");
+
+        let decision = needs_permission(
+            PermissionLevel::WorkspaceFree,
+            "write",
+            &serde_json::json!({"path": target}),
+            &workspace,
+            &HashSet::new(),
+        );
+
+        assert!(
+            matches!(decision, PermissionDecision::AskUser { .. }),
+            "parent traversal to a missing file outside the workspace must not auto-approve"
+        );
     }
 }

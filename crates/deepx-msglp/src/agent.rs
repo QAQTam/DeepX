@@ -2,7 +2,7 @@ use deepx_config::Config;
 use deepx_session::SessionMeta;
 
 use deepx_message::{ToolExecReport, ToolExecRequest};
-use deepx_tools::bridge;
+use deepx_tools::runtime;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -59,14 +59,9 @@ impl AgentState {
                 Config::default()
             }
         };
-        bridge::init_tools(caller, &[], vec![]);
-        if let Some(ref key) = config.context7_api_key {
-            if !key.is_empty() {
-                bridge::set_context7_key(key);
-            }
-        }
+        runtime::init_tools(caller, &[], vec![]);
         let mut agent = Self::new(config);
-        agent.tool_defs = bridge::all_tools(); // all tools, no allowlist
+        agent.tool_defs = runtime::all_tools(); // all tools, no allowlist
         agent
     }
 
@@ -86,15 +81,10 @@ impl AgentState {
                 allowed_tools.push(required.to_string());
             }
         }
-        bridge::init_tools("subagent", &[deepx_subagent::register], allowed_tools);
-        if let Some(ref key) = config.context7_api_key {
-            if !key.is_empty() {
-                bridge::set_context7_key(key);
-            }
-        }
+        runtime::init_tools("subagent", &[deepx_subagent::register], allowed_tools);
         let mut agent = Self::new(config);
         agent.ephemeral = ephemeral;
-        agent.tool_defs = bridge::all_tools(); // full set — LLM cache friendly
+        agent.tool_defs = runtime::all_tools(); // full set — LLM cache friendly
         agent
     }
 
@@ -111,7 +101,9 @@ impl AgentState {
         if !fs.is_empty() {
             annotations.push(fs);
         }
-        let context = self.msg.build_context_for_gate(&annotations, &self.active_skill_bodies);
+        let context = self
+            .msg
+            .build_context_for_gate(&annotations, &self.active_skill_bodies);
         // Clear ephemeral skill bodies after building context — they're
         // injected in the same turn and should not persist.
         self.active_skill_bodies.clear();
@@ -127,8 +119,10 @@ impl AgentState {
             return;
         }
         // Remove any previous catalog messages (identified by the numbered format prefix)
-        self.msg.remove_system_messages_by_prefix("Available skills");
-        self.msg.push_system(deepx_types::Message::system(&numbered));
+        self.msg
+            .remove_system_messages_by_prefix("Available skills");
+        self.msg
+            .push_system(deepx_types::Message::system(&numbered));
     }
 
     fn refresh_skill_catalog(&mut self, workspace: &str) -> &SkillCatalogSnapshot {
@@ -164,9 +158,14 @@ impl AgentState {
     /// Apply a trusted, typed activation produced by the tool runtime.
     /// The skill body is stored ephemerally (per-turn), keyed by tool_call_id,
     /// and injected into the context after the skills(activate) tool result.
-    pub fn activate_skill(&mut self, tool_call_id: &str, activation: deepx_skills::SkillActivation) {
+    pub fn activate_skill(
+        &mut self,
+        tool_call_id: &str,
+        activation: deepx_skills::SkillActivation,
+    ) {
         let content = deepx_skills::render_activation(&activation);
-        self.active_skill_bodies.insert(tool_call_id.to_string(), content);
+        self.active_skill_bodies
+            .insert(tool_call_id.to_string(), content);
     }
 
     /// Host-side activation for explicit `$skill-name` mentions.
@@ -234,7 +233,7 @@ impl AgentState {
 
     pub fn rebind_store(&mut self) {
         self.msg.set_tool_executor(Box::new(|req: ToolExecRequest| {
-            let result = deepx_tools::bridge::execute_tool_with_id_full(
+            let result = deepx_tools::execution::execute_with_context(
                 &req.name,
                 "",
                 &req.args.to_string(),
@@ -359,7 +358,11 @@ mod tests {
         ));
         // Catalog is no longer auto-inserted by build_context() —
         // it must be explicitly injected via inject_catalog()
-        assert_eq!(before.len(), 1, "only base system message without catalog injection");
+        assert_eq!(
+            before.len(),
+            1,
+            "only base system message without catalog injection"
+        );
 
         // After inject_catalog, the numbered catalog appears
         agent.inject_catalog(&temp.path().to_string_lossy());
@@ -387,7 +390,7 @@ mod tests {
 /// Holds the immutable challenge — only the stored fields are used for
 /// authorization; the approval response must not supply replacement values.
 pub struct PendingApproval {
-    pub challenge: deepx_tools::bridge::PermissionChallenge,
+    pub challenge: deepx_tools::authorization::PermissionChallenge,
     pub is_llm_tool: bool,
 }
 

@@ -26,13 +26,20 @@ fn plan_path() -> std::path::PathBuf {
 
     // One-time migration: copy old PLAN.md → .deepx/PLAN.md
     if !new_path.exists() {
-        let ws = crate::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock").clone();
+        let ws = crate::CURRENT_WORKSPACE
+            .read()
+            .expect("CURRENT_WORKSPACE lock")
+            .clone();
         if !ws.is_empty() && ws != "." {
             let old_path = Path::new(&ws).join("PLAN.md");
             if old_path.exists() {
                 let _ = std::fs::create_dir_all(&dir);
                 if std::fs::copy(&old_path, &new_path).is_ok() {
-                    log::info!("plan: migrated PLAN.md from {} to {}", old_path.display(), new_path.display());
+                    log::info!(
+                        "plan: migrated PLAN.md from {} to {}",
+                        old_path.display(),
+                        new_path.display()
+                    );
                 }
             }
         }
@@ -80,7 +87,8 @@ fn parse_plan(content: &str) -> Vec<PlanItem> {
                     } else {
                         (remainder.trim().to_string(), String::new())
                     };
-                    let (title, description) = if let Some((t, d)) = title_desc.split_once(" — ") {
+                    let (title, description) = if let Some((t, d)) = title_desc.split_once(" — ")
+                    {
                         (t.trim().to_string(), d.trim().to_string())
                     } else {
                         (title_desc.clone(), String::new())
@@ -95,12 +103,20 @@ fn parse_plan(content: &str) -> Vec<PlanItem> {
                         } else if p.starts_with("Effort:") {
                             effort = p.strip_prefix("Effort:").unwrap_or("").trim().to_string();
                         } else if !p.is_empty() {
-                            if !clean_desc.is_empty() { clean_desc.push_str("。"); }
+                            if !clean_desc.is_empty() {
+                                clean_desc.push_str("。");
+                            }
                             clean_desc.push_str(p);
                         }
                     }
                     items.push(PlanItem {
-                        id, title, description: clean_desc, status: status.to_string(), deps, effort, comment,
+                        id,
+                        title,
+                        description: clean_desc,
+                        status: status.to_string(),
+                        deps,
+                        effort,
+                        comment,
                     });
                 }
             }
@@ -113,7 +129,11 @@ fn next_id(items: &[PlanItem]) -> u32 {
     let mut max = 0u32;
     for item in items {
         if let Some(num) = item.id.strip_prefix('P') {
-            if let Ok(n) = num.parse::<u32>() { if n > max { max = n; } }
+            if let Ok(n) = num.parse::<u32>() {
+                if n > max {
+                    max = n;
+                }
+            }
         }
     }
     max + 1
@@ -124,18 +144,33 @@ fn next_id(items: &[PlanItem]) -> u32 {
 fn handle_plan_list(_ctx: ToolCallCtx) -> ToolResult {
     let content = match read_plan() {
         Ok(c) => c,
-        Err(e) => return ToolResult { success: false, content: crate::json_err("READ_FAILED", &e, "Check PLAN.md permissions.") },
+        Err(e) => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err("READ_FAILED", &e, "Check PLAN.md permissions."),
+            };
+        }
     };
     let items = parse_plan(&content);
     let json = serde_json::to_string(&items).unwrap_or_default();
-    ToolResult { success: true, content: crate::json_ok(serde_json::json!({"items": items, "content": json})) }
+    ToolResult {
+        success: true,
+        content: crate::json_ok(serde_json::json!({"items": items, "content": json})),
+    }
 }
 
 fn handle_plan_create(ctx: ToolCallCtx) -> ToolResult {
     let title = ctx.get_str("title").unwrap_or("");
     let description = ctx.get_str("description").unwrap_or("");
     if title.is_empty() {
-        return ToolResult { success: false, content: crate::json_err("MISSING_TITLE", "title is required", "Provide a short title for this plan item.") };
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "MISSING_TITLE",
+                "title is required",
+                "Provide a short title for this plan item.",
+            ),
+        };
     }
 
     let _lock = PLAN_LOCK.lock();
@@ -149,22 +184,50 @@ fn handle_plan_create(ctx: ToolCallCtx) -> ToolResult {
     let deps = ctx.get_str("deps").unwrap_or("none");
     let effort = ctx.get_str("effort").unwrap_or("");
     let mut meta_parts = vec![format!("Deps: {deps}")];
-    if !effort.is_empty() { meta_parts.push(format!("Effort: {effort}")); }
+    if !effort.is_empty() {
+        meta_parts.push(format!("Effort: {effort}"));
+    }
 
-    let line = format!("\n- [ ] P{id}: {title} — {description}。{}。\n",
-        meta_parts.join("。"));
+    let line = format!(
+        "\n- [ ] P{id}: {title} — {description}。{}。\n",
+        meta_parts.join("。")
+    );
 
-    let mut file = match std::fs::OpenOptions::new().append(true).create(true)
-        .open(&path) {
+    let mut file = match std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+    {
         Ok(f) => f,
-        Err(e) => return ToolResult { success: false, content: crate::json_err("WRITE_FAILED", &format!("open PLAN.md: {e}"), "Check permissions.") },
+        Err(e) => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err(
+                    "WRITE_FAILED",
+                    &format!("open PLAN.md: {e}"),
+                    "Check permissions.",
+                ),
+            };
+        }
     };
     if let Err(e) = file.write_all(line.as_bytes()) {
-        return ToolResult { success: false, content: crate::json_err("WRITE_FAILED", &format!("write PLAN.md: {e}"), "Check disk space.") };
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "WRITE_FAILED",
+                &format!("write PLAN.md: {e}"),
+                "Check disk space.",
+            ),
+        };
     }
     file.flush().ok();
 
-    ToolResult { success: true, content: crate::json_ok(serde_json::json!({"plan_id": format!("P{id}"), "title": title, "content": format!("Plan item P{id} created: {title}")})) }
+    ToolResult {
+        success: true,
+        content: crate::json_ok(
+            serde_json::json!({"plan_id": format!("P{id}"), "title": title, "content": format!("Plan item P{id} created: {title}")}),
+        ),
+    }
 }
 
 #[allow(dead_code)] // kept for frontend cmd_update_plan via admin server
@@ -173,7 +236,14 @@ fn handle_plan_update(ctx: ToolCallCtx) -> ToolResult {
     let status = ctx.get_str("status").unwrap_or("");
     let comment = ctx.get_str("comment").unwrap_or("");
     if id.is_empty() || status.is_empty() {
-        return ToolResult { success: false, content: crate::json_err("MISSING_PARAM", "id and status are required", "Provide the plan ID and new status.") };
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "MISSING_PARAM",
+                "id and status are required",
+                "Provide the plan ID and new status.",
+            ),
+        };
     }
 
     let _lock = PLAN_LOCK.lock();
@@ -183,52 +253,92 @@ fn handle_plan_update(ctx: ToolCallCtx) -> ToolResult {
     let content = std::fs::read_to_string(&path).unwrap_or_default();
 
     let mut found = false;
-    let lines: Vec<String> = content.lines().map(|l| {
-        let trimmed = l.trim();
-        if trimmed.starts_with("- [") && trimmed.contains(&format!(" {id}: ")) && !found {
-            found = true;
-            let new_marker = match status {
-                "approved" => "- [✓]",
-                "rejected" => "- [-]",
-                _ => "- [ ]",
-            };
-            let base = l.replacen("- [", new_marker, 1);
-            if comment.is_empty() { base } else { format!("{base} | {comment}") }
-        } else {
-            l.to_string()
-        }
-    }).collect();
+    let lines: Vec<String> = content
+        .lines()
+        .map(|l| {
+            let trimmed = l.trim();
+            if trimmed.starts_with("- [") && trimmed.contains(&format!(" {id}: ")) && !found {
+                found = true;
+                let new_marker = match status {
+                    "approved" => "- [✓]",
+                    "rejected" => "- [-]",
+                    _ => "- [ ]",
+                };
+                let base = l.replacen("- [", new_marker, 1);
+                if comment.is_empty() {
+                    base
+                } else {
+                    format!("{base} | {comment}")
+                }
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
 
     if !found {
-        return ToolResult { success: false, content: crate::json_err("NOT_FOUND", &format!("Plan item '{id}' not found"), "Check the plan ID with plan_list.") };
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "NOT_FOUND",
+                &format!("Plan item '{id}' not found"),
+                "Check the plan ID with plan_list.",
+            ),
+        };
     }
 
     if let Err(e) = std::fs::write(&path, lines.join("\n") + "\n") {
-        return ToolResult { success: false, content: crate::json_err("WRITE_FAILED", &format!("write PLAN.md: {e}"), "Check permissions.") };
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "WRITE_FAILED",
+                &format!("write PLAN.md: {e}"),
+                "Check permissions.",
+            ),
+        };
     }
 
-    ToolResult { success: true, content: crate::json_ok(serde_json::json!({"plan_id": id, "status": status, "content": format!("Plan item {id} updated to {status}")})) }
+    ToolResult {
+        success: true,
+        content: crate::json_ok(
+            serde_json::json!({"plan_id": id, "status": status, "content": format!("Plan item {id} updated to {status}")}),
+        ),
+    }
 }
 
 fn handle_plan_submit(_ctx: ToolCallCtx) -> ToolResult {
     let content = match read_plan() {
         Ok(c) => c,
-        Err(e) => return ToolResult { success: false, content: crate::json_err("READ_FAILED", &e, "Check PLAN.md permissions.") },
+        Err(e) => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err("READ_FAILED", &e, "Check PLAN.md permissions."),
+            };
+        }
     };
     if content.trim().is_empty() {
-        return ToolResult { success: false, content: crate::json_err("EMPTY", "PLAN.md is empty", "Use plan_create to add items first.") };
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "EMPTY",
+                "PLAN.md is empty",
+                "Use plan_create to add items first.",
+            ),
+        };
     }
     ToolResult {
         success: true,
-        content: crate::json_ok(serde_json::json!({"content": format!("Plan submitted for review.\n\n{}", content)})),
+        content: crate::json_ok(
+            serde_json::json!({"content": format!("Plan submitted for review.\n\n{}", content)}),
+        ),
     }
 }
 
 // ── registration ──
 
 pub fn register(mgr: &mut crate::ToolManager) {
-    use std::time::Duration;
     use crate::{ToolHandler, ToolRisk};
+    use std::time::Duration;
 
     mgr.register(ToolHandler {
         key: "plan_list".to_string(),

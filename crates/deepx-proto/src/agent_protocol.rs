@@ -200,10 +200,22 @@ pub struct TaskInfo {
 #[ts(export)]
 pub struct RoundData {
     pub round_num: u32,
+    #[serde(default)]
+    pub is_final: bool,
     pub thinking: Option<String>,
     pub answer: Option<String>,
     pub tool_calls: Vec<ToolCallDef>,
     pub tool_results: Vec<ToolResultDef>,
+}
+
+/// Backend-owned intrinsic impact of a permission-gated action.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PermissionRisk {
+    Low,
+    Medium,
+    High,
 }
 
 /// One full turn (user message + all rounds).
@@ -529,6 +541,10 @@ pub enum Agent2Ui {
         category: String,
         /// Current permission level (1-4).
         level: u8,
+        /// Intrinsic action impact, computed by the backend.
+        risk: PermissionRisk,
+        /// Plain-language effect of approving the action.
+        consequence: String,
     },
 
     /// Ask-user prompt (v6). Agent suspends turn and waits for user response.

@@ -1,6 +1,6 @@
-
-
-use deepx_types::{ConfigStore, PersistentConfig, PersistentDatabaseConfig, PersistentSubagentConfig};
+use deepx_types::{
+    ConfigStore, PersistentConfig, PersistentDatabaseConfig, PersistentSubagentConfig,
+};
 use std::collections::HashMap; // still used by profiles
 
 /// Subagent default configuration.
@@ -21,8 +21,12 @@ pub struct SubagentConfig {
     pub default_tools: Vec<String>,
 }
 
-fn default_subagent_max_tokens() -> u32 { 4096 }
-fn default_subagent_timeout() -> u64 { 120 }
+fn default_subagent_max_tokens() -> u32 {
+    4096
+}
+fn default_subagent_timeout() -> u64 {
+    120
+}
 
 impl Default for SubagentConfig {
     fn default() -> Self {
@@ -32,9 +36,7 @@ impl Default for SubagentConfig {
             api_key: String::new(),
             max_tokens: 4096,
             timeout_secs: 120,
-            default_tools: vec![
-                "file".into(), "exec".into(), "explore".into(),
-            ],
+            default_tools: vec!["file".into(), "exec".into(), "explore".into()],
         }
     }
 }
@@ -69,7 +71,6 @@ pub struct Config {
     pub reasoning_effort: String,
     pub profiles: HashMap<String, deepx_types::ProfileConfig>,
     pub active_profile: String,
-    pub context7_api_key: Option<String>,
     pub lang: Option<String>,
     pub subagent: SubagentConfig,
     /// Compliance / content-filter configuration.
@@ -91,20 +92,28 @@ impl Default for Config {
         let model = crate::registry::default_model_for(&provider_id, &endpoint);
 
         let mut profiles = HashMap::new();
-        profiles.insert("default".into(), deepx_types::ProfileConfig {
-            model: model.clone(), max_tokens: 16384,
-            effort: Some("high".into()), context_limit: 1_000_000,
-            base_url: base_url.clone(),
-            endpoint: None,
-        });
+        profiles.insert(
+            "default".into(),
+            deepx_types::ProfileConfig {
+                model: model.clone(),
+                max_tokens: 16384,
+                effort: Some("high".into()),
+                context_limit: 1_000_000,
+                base_url: base_url.clone(),
+                endpoint: None,
+            },
+        );
         Self {
-            api_key: String::new(), base_url,
-            model, max_tokens: 16384, context_limit: 1_000_000,
+            api_key: String::new(),
+            base_url,
+            model,
+            max_tokens: 16384,
+            context_limit: 1_000_000,
             provider_id,
             endpoint,
             reasoning_effort: "high".into(),
-            profiles, active_profile: "default".into(),
-            context7_api_key: None,
+            profiles,
+            active_profile: "default".into(),
             lang: None,
             subagent: SubagentConfig::default(),
             compliance_enabled: true,
@@ -126,7 +135,8 @@ impl Config {
         let pc_toml = store.load();
 
         // Step 2: if database mirror is enabled, try ConfigDb (which may have newer data)
-        let db_enabled = pc_toml.as_ref()
+        let db_enabled = pc_toml
+            .as_ref()
             .and_then(|pc| pc.database.as_ref())
             .and_then(|db| db.enabled)
             .unwrap_or(true); // default: enabled
@@ -168,9 +178,7 @@ impl Config {
             };
             cfg.provider_id = provider_id;
             // New endpoint field takes priority over backward-compat migration
-            cfg.endpoint = pc.endpoint
-                .filter(|e| !e.is_empty())
-                .unwrap_or(endpoint);
+            cfg.endpoint = pc.endpoint.filter(|e| !e.is_empty()).unwrap_or(endpoint);
 
             // ── Resolve base_url from endpoint (user override takes priority) ──
             let endpoint_base_url = crate::registry::base_url_for(&cfg.provider_id, &cfg.endpoint);
@@ -190,58 +198,110 @@ impl Config {
                     cfg.context_limit = profile.context_limit;
                     cfg.base_url = profile.base_url.clone();
                     if let Some(ref ep) = profile.endpoint
-                        && !ep.is_empty() {
-                            cfg.endpoint = ep.clone();
-                            let ep_burl = crate::registry::base_url_for(&cfg.provider_id, ep);
-                            if !ep_burl.is_empty() && ep_burl != cfg.base_url {
-                                cfg.base_url = ep_burl;
-                            }
+                        && !ep.is_empty()
+                    {
+                        cfg.endpoint = ep.clone();
+                        let ep_burl = crate::registry::base_url_for(&cfg.provider_id, ep);
+                        if !ep_burl.is_empty() && ep_burl != cfg.base_url {
+                            cfg.base_url = ep_burl;
                         }
-                }
-            }
-            if let Some(k) = pc.api_key && !k.is_empty() { cfg.api_key = k; }
-            if let Some(m) = pc.model && !m.is_empty() { cfg.model = m; }
-            // User base_url override: only apply if differs from all known endpoint defaults
-            if let Some(ref u) = pc.base_url
-                && !u.is_empty() {
-                    let is_ep_default = crate::registry::all_providers().iter()
-                        .flat_map(|p| &p.endpoints)
-                        .any(|e| e.base_url == *u || e.models_url.as_deref() == Some(u.as_str()));
-                    if !is_ep_default {
-                        cfg.base_url = u.clone();
                     }
                 }
-            if let Some(mt) = pc.max_tokens { cfg.max_tokens = mt; }
-            if let Some(cl) = pc.context_limit { cfg.context_limit = cl; }
-            if let Some(ref re) = pc.reasoning_effort && !re.is_empty() { cfg.reasoning_effort = re.clone(); }
-            if let Some(ref k) = pc.context7_api_key && !k.is_empty() { cfg.context7_api_key = Some(k.clone()); }
-            if let Some(ref l) = pc.lang && !l.is_empty() { cfg.lang = Some(l.clone()); }
+            }
+            if let Some(k) = pc.api_key
+                && !k.is_empty()
+            {
+                cfg.api_key = k;
+            }
+            if let Some(m) = pc.model
+                && !m.is_empty()
+            {
+                cfg.model = m;
+            }
+            // User base_url override: only apply if differs from all known endpoint defaults
+            if let Some(ref u) = pc.base_url
+                && !u.is_empty()
+            {
+                let is_ep_default = crate::registry::all_providers()
+                    .iter()
+                    .flat_map(|p| &p.endpoints)
+                    .any(|e| e.base_url == *u || e.models_url.as_deref() == Some(u.as_str()));
+                if !is_ep_default {
+                    cfg.base_url = u.clone();
+                }
+            }
+            if let Some(mt) = pc.max_tokens {
+                cfg.max_tokens = mt;
+            }
+            if let Some(cl) = pc.context_limit {
+                cfg.context_limit = cl;
+            }
+            if let Some(ref l) = pc.lang
+                && !l.is_empty()
+            {
+                cfg.lang = Some(l.clone());
+            }
+            if let Some(ref l) = pc.lang
+                && !l.is_empty()
+            {
+                cfg.lang = Some(l.clone());
+            }
             // ── Subagent defaults ──
             if let Some(ref s) = pc.subagent {
-                if let Some(ref m) = s.model && !m.is_empty() { cfg.subagent.model = m.clone(); }
-                if let Some(ref u) = s.base_url && !u.is_empty() { cfg.subagent.base_url = u.clone(); }
-                if let Some(ref k) = s.api_key && !k.is_empty() { cfg.subagent.api_key = k.clone(); }
-                if let Some(mt) = s.max_tokens { cfg.subagent.max_tokens = mt; }
-                if let Some(ts) = s.timeout_secs { cfg.subagent.timeout_secs = ts; }
-                if let Some(ref tools) = s.default_tools { cfg.subagent.default_tools = tools.clone(); }
+                if let Some(ref m) = s.model
+                    && !m.is_empty()
+                {
+                    cfg.subagent.model = m.clone();
+                }
+                if let Some(ref u) = s.base_url
+                    && !u.is_empty()
+                {
+                    cfg.subagent.base_url = u.clone();
+                }
+                if let Some(ref k) = s.api_key
+                    && !k.is_empty()
+                {
+                    cfg.subagent.api_key = k.clone();
+                }
+                if let Some(mt) = s.max_tokens {
+                    cfg.subagent.max_tokens = mt;
+                }
+                if let Some(ts) = s.timeout_secs {
+                    cfg.subagent.timeout_secs = ts;
+                }
+                if let Some(ref tools) = s.default_tools {
+                    cfg.subagent.default_tools = tools.clone();
+                }
             }
 
             // ── Compliance ──
-            if let Some(enabled) = pc.compliance_enabled { cfg.compliance_enabled = enabled; }
-            if let Some(ref keywords) = pc.compliance_extra_keywords { cfg.compliance_extra_keywords = keywords.clone(); }
-            if let Some(ref allowlist) = pc.compliance_allowlist { cfg.compliance_allowlist = allowlist.clone(); }
+            if let Some(enabled) = pc.compliance_enabled {
+                cfg.compliance_enabled = enabled;
+            }
+            if let Some(ref keywords) = pc.compliance_extra_keywords {
+                cfg.compliance_extra_keywords = keywords.clone();
+            }
+            if let Some(ref allowlist) = pc.compliance_allowlist {
+                cfg.compliance_allowlist = allowlist.clone();
+            }
 
             // ── Database (Turso mirror) ──
             if let Some(ref db) = pc.database {
-                if let Some(enabled) = db.enabled { cfg.database.enabled = enabled; }
+                if let Some(enabled) = db.enabled {
+                    cfg.database.enabled = enabled;
+                }
                 cfg.database.url = db.url.clone();
             }
 
             // ── Permission ──
-            if let Some(pl) = pc.permission_level { cfg.permission_level = pl; }
+            if let Some(pl) = pc.permission_level {
+                cfg.permission_level = pl;
+            }
 
             // ── Tokenizer ──
-            if let Some(ref tp) = pc.tokenizer_path { cfg.tokenizer_path = Some(tp.clone()); }
+            if let Some(ref tp) = pc.tokenizer_path {
+                cfg.tokenizer_path = Some(tp.clone());
+            }
         }
 
         // TOML is authoritative for database.enabled (prevents stale ConfigDb value)
@@ -254,12 +314,17 @@ impl Config {
         }
 
         if !cfg.profiles.contains_key("default") {
-            cfg.profiles.insert("default".into(), deepx_types::ProfileConfig {
-                model: cfg.model.clone(), max_tokens: cfg.max_tokens,
-                effort: Some(cfg.reasoning_effort.clone()), context_limit: cfg.context_limit,
-                base_url: cfg.base_url.clone(),
-                endpoint: Some(cfg.endpoint.clone()),
-            });
+            cfg.profiles.insert(
+                "default".into(),
+                deepx_types::ProfileConfig {
+                    model: cfg.model.clone(),
+                    max_tokens: cfg.max_tokens,
+                    effort: Some(cfg.reasoning_effort.clone()),
+                    context_limit: cfg.context_limit,
+                    base_url: cfg.base_url.clone(),
+                    endpoint: Some(cfg.endpoint.clone()),
+                },
+            );
         }
 
         // Initialize tokenizer if configured
@@ -273,14 +338,23 @@ impl Config {
     pub fn save(&self) -> Result<(), String> {
         let store = ConfigStore::default_location();
         let mut profiles = self.profiles.clone();
-        profiles.insert(self.active_profile.clone(), deepx_types::ProfileConfig {
-            model: self.model.clone(), max_tokens: self.max_tokens,
-            effort: Some(self.reasoning_effort.clone()), context_limit: self.context_limit,
-            base_url: self.base_url.clone(),
-            endpoint: Some(self.endpoint.clone()),
-        });
+        profiles.insert(
+            self.active_profile.clone(),
+            deepx_types::ProfileConfig {
+                model: self.model.clone(),
+                max_tokens: self.max_tokens,
+                effort: Some(self.reasoning_effort.clone()),
+                context_limit: self.context_limit,
+                base_url: self.base_url.clone(),
+                endpoint: Some(self.endpoint.clone()),
+            },
+        );
         let pc = PersistentConfig {
-            api_key: if self.api_key.is_empty() { None } else { Some(self.api_key.clone()) },
+            api_key: if self.api_key.is_empty() {
+                None
+            } else {
+                Some(self.api_key.clone())
+            },
             model: Some(self.model.clone()),
             base_url: Some(self.base_url.clone()),
             max_tokens: Some(self.max_tokens),
@@ -291,18 +365,41 @@ impl Config {
             profiles: Some(profiles),
             active_profile: Some(self.active_profile.clone()),
             lang: self.lang.clone(),
-            context7_api_key: self.context7_api_key.clone(),
             subagent: Some(PersistentSubagentConfig {
-                model: if self.subagent.model.is_empty() { None } else { Some(self.subagent.model.clone()) },
-                base_url: if self.subagent.base_url.is_empty() { None } else { Some(self.subagent.base_url.clone()) },
-                api_key: if self.subagent.api_key.is_empty() { None } else { Some(self.subagent.api_key.clone()) },
+                model: if self.subagent.model.is_empty() {
+                    None
+                } else {
+                    Some(self.subagent.model.clone())
+                },
+                base_url: if self.subagent.base_url.is_empty() {
+                    None
+                } else {
+                    Some(self.subagent.base_url.clone())
+                },
+                api_key: if self.subagent.api_key.is_empty() {
+                    None
+                } else {
+                    Some(self.subagent.api_key.clone())
+                },
                 max_tokens: Some(self.subagent.max_tokens),
                 timeout_secs: Some(self.subagent.timeout_secs),
-                default_tools: if self.subagent.default_tools.is_empty() { None } else { Some(self.subagent.default_tools.clone()) },
+                default_tools: if self.subagent.default_tools.is_empty() {
+                    None
+                } else {
+                    Some(self.subagent.default_tools.clone())
+                },
             }),
             compliance_enabled: Some(self.compliance_enabled),
-            compliance_extra_keywords: if self.compliance_extra_keywords.is_empty() { None } else { Some(self.compliance_extra_keywords.clone()) },
-            compliance_allowlist: if self.compliance_allowlist.is_empty() { None } else { Some(self.compliance_allowlist.clone()) },
+            compliance_extra_keywords: if self.compliance_extra_keywords.is_empty() {
+                None
+            } else {
+                Some(self.compliance_extra_keywords.clone())
+            },
+            compliance_allowlist: if self.compliance_allowlist.is_empty() {
+                None
+            } else {
+                Some(self.compliance_allowlist.clone())
+            },
             database: Some(PersistentDatabaseConfig {
                 enabled: Some(self.database.enabled),
                 url: self.database.url.clone(),
@@ -311,7 +408,10 @@ impl Config {
             tokenizer_path: self.tokenizer_path.clone(),
         };
         if !store.save(&pc) {
-            return Err(format!("Failed to save config to {}", deepx_types::platform::config_path().display()));
+            return Err(format!(
+                "Failed to save config to {}",
+                deepx_types::platform::config_path().display()
+            ));
         }
 
         // Dual-write: mirror to SQLite when database is enabled
@@ -391,25 +491,36 @@ impl Config {
     }
 
     pub fn save_profile(&mut self, name: &str) {
-        self.profiles.insert(name.to_string(), deepx_types::ProfileConfig {
-            model: self.model.clone(), max_tokens: self.max_tokens,
-            effort: Some(self.reasoning_effort.clone()), context_limit: self.context_limit,
-            base_url: self.base_url.clone(),
-            endpoint: Some(self.endpoint.clone()),
-        });
+        self.profiles.insert(
+            name.to_string(),
+            deepx_types::ProfileConfig {
+                model: self.model.clone(),
+                max_tokens: self.max_tokens,
+                effort: Some(self.reasoning_effort.clone()),
+                context_limit: self.context_limit,
+                base_url: self.base_url.clone(),
+                endpoint: Some(self.endpoint.clone()),
+            },
+        );
         self.active_profile = name.to_string();
         let _ = self.save();
     }
 
     pub fn delete_profile(&mut self, name: &str) -> bool {
-        if name == "default" { return false; }
+        if name == "default" {
+            return false;
+        }
         if self.profiles.remove(name).is_some() {
             let _ = self.save();
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
-    pub fn is_ready(&self) -> bool { !self.api_key.is_empty() }
+    pub fn is_ready(&self) -> bool {
+        !self.api_key.is_empty()
+    }
 
     /// Whether per-session Turso SQLite mirroring is enabled.
     pub fn turso_enabled(&self) -> bool {

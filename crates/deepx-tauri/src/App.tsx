@@ -8,17 +8,17 @@ import type { SlashCommand } from "./components/SlashMenu";
 import ChatView from "./components/ChatView";
 import StartupView from "./components/StartupView";
 import SettingsView from "./components/SettingsView";
-import InfoBar from "./components/InfoBar";
-import StatusPanel from "./components/StatusPanel";
-import TokenChart from "./components/TokenChart";
+import TaskSidebar from "./components/shell/TaskSidebar";
 import "./styles/git-diff-panel.css";
 import "./styles/context-panel.css";
 import "./styles/slash-menu.css";
 import "./styles/permission-dialog.css";
 import "./styles/changelog.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
-import PermissionDialog from "./components/PermissionDialog";
+import PermissionPrompt from "./components/interactions/PermissionPrompt";
 import { createPermissionQueue } from "./store/permissionQueue";
+import { createRawSessionState, reduceAgentEvent, resolvePendingInteraction } from "./store/sessionEventReducer";
+import type { RawSessionState } from "./store/rawSession";
 import ChangelogModal from "./components/ChangelogModal";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
@@ -45,6 +45,7 @@ function applyTheme(mode: ThemeMode) {
 // ── Multi-session store registry ──
 // Each open session gets its own ChatStore, keyed by seed.
 type ChatStore = ReturnType<typeof createChatStore>;
+type RawStore = ReturnType<typeof createSignal<RawSessionState>>;
 
 export default function App() {
   const i18n = createI18n(((localStorage.getItem("deepx:lang") ?? "en") as Lang));
@@ -78,6 +79,7 @@ export default function App() {
 
   // Registry of open session ChatStores
   const chatStores = new Map<string, ChatStore>();
+  const rawSessions = new Map<string, RawStore>();
   // Per-seed unlisten functions for event listeners
   const unlistenMap = new Map<string, () => void>();
   // Pending store creations — deduplicate concurrent getOrCreateChatStore calls
@@ -97,6 +99,7 @@ export default function App() {
     const creation = (async () => {
       const s = createChatStore(seed);
       chatStores.set(seed, s);
+      rawSessions.set(seed, createSignal(createRawSessionState(seed)));
       // Subscribe to per-seed agent events
       const eventName = `agent-${seed}-event`;
       await listen<Record<string, unknown>>(eventName, (e) => {
@@ -121,14 +124,22 @@ export default function App() {
     return chatStores.get(seed);
   }
 
+  function activeRawSession(): RawSessionState | undefined {
+    const seed = activeSeed();
+    if (!seed) return undefined;
+    return rawSessions.get(seed)?.[0]();
+  }
+
   /** Handle incoming agent events for a specific store. */
   function handleAgentEvent(chat: ChatStore, p: Record<string, unknown>, listenerSeed: string) {
+    const raw = rawSessions.get(listenerSeed);
+    if (raw) raw[1](current => reduceAgentEvent(current, p as Agent2Ui));
     switch (p.type as string) {
       case "ready": break;
       case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
       case "round_delta": chat.handleRoundDelta((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.kind ?? "") as string, (p.delta ?? "") as string); break;
       case "tool_call_preview": chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
-      case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined); break;
+      case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined, p.is_final as boolean | undefined); break;
       case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
       case "ask_user": {
         chat.showAskDialog({ ask_id: p.ask_id, mode: p.mode, questions: p.questions });
@@ -158,6 +169,11 @@ export default function App() {
         if (evtSeed !== listenerSeed) {
           chatStores.delete(listenerSeed);
           chatStores.set(evtSeed, chat);
+          const rawStore = rawSessions.get(listenerSeed);
+          if (rawStore) {
+            rawSessions.delete(listenerSeed);
+            rawSessions.set(evtSeed, rawStore);
+          }
           setActiveSeed(evtSeed);
         }
         refreshSessions();
@@ -227,6 +243,8 @@ export default function App() {
           paths: (Array.isArray(p.paths) ? p.paths : []) as string[],
           category: (p.category ?? "") as string,
           level: (p.level ?? 4) as number,
+          risk: (p.risk ?? "low") as "low" | "medium" | "high",
+          consequence: (p.consequence ?? "") as string,
         });
         break;
       }
@@ -306,6 +324,7 @@ export default function App() {
         const unlisten = unlistenMap.get(seed);
         if (unlisten) { unlisten(); unlistenMap.delete(seed); }
         chatStores.delete(seed);
+        rawSessions.delete(seed);
         localStorage.removeItem(LS_KEY);
         setActiveSeed("");
         setHasChosenSession(false);
@@ -478,7 +497,7 @@ export default function App() {
     }
   }
 
-  async function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("deepx:lang", l); try { await invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l, context7ApiKey: "", subagentModel: "", subagentBaseUrl: "", subagentApiKey: "", subagentMaxTokens: 0, subagentTimeoutSecs: 0, subagentDefaultTools: [] }); } catch (e) { console.error(e); } }
+  async function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("deepx:lang", l); try { await invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l, subagentModel: "", subagentBaseUrl: "", subagentApiKey: "", subagentMaxTokens: 0, subagentTimeoutSecs: 0, subagentDefaultTools: [] }); } catch (e) { console.error(e); } }
   function switchTheme(t: ThemeMode) { setTheme(t); localStorage.setItem(LS_THEME, t); applyTheme(t); }
 
   const isActive = (seed: string) => activeSeed() === seed;
@@ -486,6 +505,15 @@ export default function App() {
   return (
     <I18nCtx.Provider value={{ t: i18n.t, lang: () => i18n.lang(), setLang: switchLang }}>
       <div class="app-container">
+        <TaskSidebar
+          sessions={sessions()}
+          activeSeed={activeSeed()}
+          onNew={() => { void newSession(); setHasChosenSession(true); }}
+          onOpen={seed => void resumeSession(seed)}
+          onDelete={seed => void deleteSession(seed)}
+          onSkills={() => setView("home")}
+          onSettings={() => setView("settings")}
+        />
         <aside class="sidebar frost-panel">
           <div class="sidebar-brand"><span class="sidebar-logo">{">"}</span><span class="sidebar-title">{t().app.title}</span></div>
           <nav class="sidebar-nav">
@@ -584,50 +612,17 @@ export default function App() {
           />
         </aside>
         <main class="main-content">
-          <Show when={chatStores.size > 0}>
-          <div class="open-tabs">
-            <For each={[...chatStores.keys()]}>
-              {(seed) => (
-                <button
-                  class={`tab-btn ${seed === activeSeed() ? "active" : ""}`}
-                  onClick={() => { setActiveSeed(seed); setHasChosenSession(true); setView("chat"); }}
-                >
-                  <span>{seed.substring(0, 8)}</span>
-                  <span
-                    class="tab-close"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      invoke("cmd_close_session", { seed }).catch(console.error);
-                      // Unregister event listener to prevent ghost updates
-                      const unlisten = unlistenMap.get(seed);
-                      if (unlisten) { unlisten(); unlistenMap.delete(seed); }
-                      chatStores.delete(seed);
-                      if (activeSeed() === seed) {
-                        const remaining = [...chatStores.keys()];
-                        setActiveSeed(remaining.length > 0 ? remaining[remaining.length - 1] : "");
-                      }
-                    }}
-                  >×</span>
-                </button>
-              )}
-            </For>
-          </div>
-          </Show>
           <Switch>
             <Match when={view() === "settings"}>
               <SettingsView lang={configLang} onLangChange={switchLang} theme={theme} onThemeChange={switchTheme} />
             </Match>
             <Match when={view() === "home"}>
-              <div class="home-dashboard">
-                <TokenChart refreshKey={refreshKey()} />
-                <StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} showHeatmap={true} />
-              </div>
+              <StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} showHeatmap={false} />
             </Match>
             <Match when={view() === "chat"}>
               <Show when={hasChosenSession() && activeSeed() && activeChat()}>
                 <div class="chat-area">
-                  <ChatView chat={activeChat()!} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} onSlashCommand={handleSlashCommand} />
-                  <StatusPanel tasks={activeChat()!.tasks} recentEdits={activeChat()!.recentEdits} activityLog={activeChat()!.activityLog} seed={activeSeed()} loadActivityFromBackend={activeChat()!.loadActivityFromBackend} onTaskAction={(action, taskId, subject, desc) => activeChat()!.submitTaskAction(action, taskId, subject, desc)} skillCatalog={activeChat()!.skillCatalog} activeSkillNames={activeChat()!.activeSkillNames} />
+                  <ChatView chat={activeChat()!} rawSession={activeRawSession} hasMore={activeChat()!.hasMore()} onLoadMore={loadMoreTurns} onSlashCommand={handleSlashCommand} />
                 </div>
               </Show>
             </Match>
@@ -638,11 +633,22 @@ export default function App() {
       <ToastContainer ctrl={toastCtrl} />
       <Show keyed when={permissionQueue.active()}>
         {(permission) => (
-          <PermissionDialog
+          <div class="interaction-overlay">
+          <PermissionPrompt
             request={permission.request}
-            seed={permission.seed}
-            onResolved={(seed, toolCallId) => permissionQueue.resolve(seed, toolCallId)}
+            onRespond={async (approved, trustFolder) => {
+              await invoke("cmd_permission_response", {
+                seed: permission.seed,
+                toolCallId: permission.request.tool_call_id,
+                approved,
+                trustFolder,
+              });
+              const raw = rawSessions.get(permission.seed);
+              raw?.[1](state => resolvePendingInteraction(state, permission.request.tool_call_id, approved ? "approved" : "rejected"));
+              permissionQueue.resolve(permission.seed, permission.request.tool_call_id);
+            }}
           />
+          </div>
         )}
       </Show>
       <Show when={showChangelog()}>

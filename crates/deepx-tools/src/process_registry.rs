@@ -41,7 +41,10 @@ pub struct ProcessRegistry {
 
 impl ProcessRegistry {
     fn new() -> Self {
-        Self { entries: HashMap::new(), next_id: 1 }
+        Self {
+            entries: HashMap::new(),
+            next_id: 1,
+        }
     }
 
     fn with<R>(f: impl FnOnce(&mut ProcessRegistry) -> R) -> R {
@@ -55,17 +58,20 @@ impl ProcessRegistry {
         Self::with(|r| {
             let id = r.next_id;
             r.next_id += 1;
-            r.entries.insert(id, ProcEntry {
+            r.entries.insert(
                 id,
-                name: name.to_string(),
-                status: Arc::new(Mutex::new(ProcStatus::Running)),
-                started: Instant::now(),
-                output: Arc::new(Mutex::new(String::new())),
-                stderr: Arc::new(Mutex::new(String::new())),
-                answer: Arc::new(Mutex::new(None)),
-                child: Arc::new(Mutex::new(None)),
-                pty_writer: Arc::new(Mutex::new(None)),
-            });
+                ProcEntry {
+                    id,
+                    name: name.to_string(),
+                    status: Arc::new(Mutex::new(ProcStatus::Running)),
+                    started: Instant::now(),
+                    output: Arc::new(Mutex::new(String::new())),
+                    stderr: Arc::new(Mutex::new(String::new())),
+                    answer: Arc::new(Mutex::new(None)),
+                    child: Arc::new(Mutex::new(None)),
+                    pty_writer: Arc::new(Mutex::new(None)),
+                },
+            );
             id
         })
     }
@@ -98,7 +104,8 @@ impl ProcessRegistry {
                     None
                 }
             })
-        }).ok_or_else(|| format!("process {id} not found or not running"))?;
+        })
+        .ok_or_else(|| format!("process {id} not found or not running"))?;
 
         let mut guard = writer_arc.lock().map_err(|e| format!("lock: {e}"))?;
         match guard.as_mut() {
@@ -221,9 +228,15 @@ impl ProcessRegistry {
                 return Self::get_info(id);
             }
             let exited = Self::with(|r| {
-                r.entries.get(&id).map(|e| {
-                    matches!(*e.status.lock().unwrap(), ProcStatus::Exited(_) | ProcStatus::Killed)
-                }).unwrap_or(true)
+                r.entries
+                    .get(&id)
+                    .map(|e| {
+                        matches!(
+                            *e.status.lock().unwrap(),
+                            ProcStatus::Exited(_) | ProcStatus::Killed
+                        )
+                    })
+                    .unwrap_or(true)
             });
             if exited {
                 return Self::get_info(id);

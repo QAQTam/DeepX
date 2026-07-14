@@ -40,12 +40,17 @@ pub fn ensure_deepx_dir() -> std::io::Result<PathBuf> {
 /// Append `.deepx/` to workspace `.gitignore` if missing.
 fn auto_gitignore(deepx_dir: &Path) {
     let ws = deepx_dir.parent().unwrap_or(Path::new("."));
-    if !ws.join(".git").exists() { return; }
+    if !ws.join(".git").exists() {
+        return;
+    }
 
     let gitignore_path = ws.join(".gitignore");
     let current = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
 
-    if !current.lines().any(|l| l.trim() == ".deepx/" || l.trim() == ".deepx") {
+    if !current
+        .lines()
+        .any(|l| l.trim() == ".deepx/" || l.trim() == ".deepx")
+    {
         let new_content = if current.is_empty() || current.ends_with('\n') {
             format!("{current}.deepx/\n")
         } else {
@@ -54,6 +59,27 @@ fn auto_gitignore(deepx_dir: &Path) {
         if std::fs::write(&gitignore_path, new_content).is_ok() {
             log::info!("workspace: added .deepx/ to {}", gitignore_path.display());
         }
+    }
+}
+
+/// Bind the global session identifier used by tools and code-delta tracking.
+pub fn set_current_session(seed: &str) {
+    crate::set_current_session(seed);
+}
+
+/// Load and activate the workspace persisted for a session.
+pub fn load_session_workspace(seed: &str) {
+    let dir = deepx_types::platform::sessions_dir().join(seed);
+    let workspace = std::fs::read_to_string(dir.join("workspace.txt")).unwrap_or_default();
+    let workspace = workspace.trim();
+    set_process_workspace(if workspace.is_empty() { "." } else { workspace });
+}
+
+/// Update tool path resolution and the process working directory together.
+pub fn set_process_workspace(path: &str) {
+    crate::set_workspace(path);
+    if let Err(error) = std::env::set_current_dir(path) {
+        log::warn!("set_process_workspace: cannot cd to '{}': {error}", path);
     }
 }
 

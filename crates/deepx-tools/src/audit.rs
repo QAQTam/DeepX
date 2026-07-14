@@ -4,9 +4,9 @@
 //! `<data_dir>/audit.csv`. The audit provides a tamper-evident trail
 //! (via SHA-256 argument hashes) for security review.
 
+use sha2::Digest;
 use std::fs::OpenOptions;
 use std::io::Write;
-use sha2::Digest;
 
 /// A single audit entry for a tool invocation.
 #[derive(Debug, Clone)]
@@ -33,11 +33,7 @@ pub fn append_audit(entry: &AuditEntry) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let mut file = match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(f) => f,
         Err(e) => {
             log::error!("audit: cannot open {}: {e}", path.display());

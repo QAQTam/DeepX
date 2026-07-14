@@ -7,9 +7,9 @@ use common::mock_server::{self, MockServer, SseChunk};
 
 use deepx_gate::{ProviderConfig, StreamEvent};
 use deepx_types::{ContentBlock, Message, ToolDef, ToolFunction};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -18,8 +18,8 @@ fn make_provider(mock: &MockServer) -> ProviderConfig {
         &mock.base_url(),
         "sk-test-key",
         "test-model",
-        None,  // user_id_mode
-        None,  // chat_path
+        None, // user_id_mode
+        None, // chat_path
         Default::default(),
         Default::default(),
         false, // supports_thinking
@@ -38,8 +38,8 @@ fn collect_events(
         tools,
         4096,
         Some("high".into()),
-        None,   // user_id
-        None,   // cancel
+        None, // user_id
+        None, // cancel
         &mut |ev| events.push(ev),
     );
     assert!(result.is_ok(), "chat_stream failed: {:?}", result);
@@ -76,14 +76,20 @@ fn _event_error(ev: &StreamEvent) -> Option<&str> {
 
 fn _event_retrying(ev: &StreamEvent) -> Option<(u32, u32)> {
     match ev {
-        StreamEvent::Retrying { attempt, max_retries, .. } => Some((*attempt, *max_retries)),
+        StreamEvent::Retrying {
+            attempt,
+            max_retries,
+            ..
+        } => Some((*attempt, *max_retries)),
         _ => None,
     }
 }
 
 fn event_tool_progress(ev: &StreamEvent) -> Option<(usize, &str, &str)> {
     match ev {
-        StreamEvent::ToolCallProgress { index, id, name, .. } => Some((*index, id.as_str(), name.as_str())),
+        StreamEvent::ToolCallProgress {
+            index, id, name, ..
+        } => Some((*index, id.as_str(), name.as_str())),
         _ => None,
     }
 }
@@ -111,10 +117,14 @@ fn basic_text_stream() {
     assert!(done_msg.is_some(), "should have a Done event");
     let msg = done_msg.unwrap();
     assert_eq!(msg.role, "assistant");
-    let combined: String = msg.content.iter().filter_map(|b| match b {
-        ContentBlock::Text { text } => Some(text.as_str()),
-        _ => None,
-    }).collect();
+    let combined: String = msg
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(combined, "Hello, world!");
 }
 
@@ -137,7 +147,10 @@ fn reasoning_then_text() {
     assert_eq!(texts, vec!["The answer is 42."]);
 
     let done_msg = events.iter().find_map(event_done).unwrap();
-    let has_reasoning = done_msg.content.iter().any(|b| matches!(b, ContentBlock::Reasoning { .. }));
+    let has_reasoning = done_msg
+        .content
+        .iter()
+        .any(|b| matches!(b, ContentBlock::Reasoning { .. }));
     assert!(has_reasoning, "Done should include reasoning block");
 }
 
@@ -153,13 +166,19 @@ fn native_tool_call() {
     let provider = make_provider(&mock);
     let events = collect_events(&provider, vec![Message::user("Read test.txt")], None);
 
-    let tool_events: Vec<(usize, &str, &str)> = events.iter().filter_map(event_tool_progress).collect();
-    assert!(!tool_events.is_empty(), "should have tool call progress events");
+    let tool_events: Vec<(usize, &str, &str)> =
+        events.iter().filter_map(event_tool_progress).collect();
+    assert!(
+        !tool_events.is_empty(),
+        "should have tool call progress events"
+    );
     assert_eq!(tool_events[0].0, 0, "index should be 0");
     assert_eq!(tool_events[0].2, "read_file");
 
     let done_msg = events.iter().find_map(event_done).unwrap();
-    let tool_blocks: Vec<&ContentBlock> = done_msg.content.iter()
+    let tool_blocks: Vec<&ContentBlock> = done_msg
+        .content
+        .iter()
         .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
         .collect();
     assert_eq!(tool_blocks.len(), 1, "should have 1 ToolUse block");
@@ -181,9 +200,14 @@ fn finish_with_usage() {
     let provider = make_provider(&mock);
     let events = collect_events(&provider, vec![Message::user("Hi")], None);
 
-    let done_ev = events.iter().find(|ev| matches!(ev, StreamEvent::Done { .. })).unwrap();
+    let done_ev = events
+        .iter()
+        .find(|ev| matches!(ev, StreamEvent::Done { .. }))
+        .unwrap();
     match done_ev {
-        StreamEvent::Done { usage, stop_reason, .. } => {
+        StreamEvent::Done {
+            usage, stop_reason, ..
+        } => {
             let u = usage.clone().expect("usage should be present");
             assert_eq!(u.prompt_tokens, 10);
             assert_eq!(u.completion_tokens, 20);
@@ -203,7 +227,10 @@ fn http_error_401() {
         &provider,
         vec![Message::user("hi")],
         None,
-        4096, None, None, None,
+        4096,
+        None,
+        None,
+        None,
         &mut |_| {},
     );
     assert!(result.is_err(), "401 should return error");
@@ -228,14 +255,25 @@ fn retry_then_success() {
         &provider,
         vec![Message::user("retry test")],
         None,
-        4096, None, None, None,
+        4096,
+        None,
+        None,
+        None,
         &mut |ev| events.push(ev),
     );
     assert!(result.is_ok(), "should succeed after retry");
     let texts: Vec<&str> = events.iter().filter_map(event_text).collect();
     assert_eq!(texts, vec!["Success after retry!"], "should get final text");
-    assert!(events.iter().any(|ev| matches!(ev, StreamEvent::Retrying { .. })), "should have retry event");
-    assert!(mock.request_count.load(std::sync::atomic::Ordering::SeqCst) >= 2, "should retry at least once");
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, StreamEvent::Retrying { .. })),
+        "should have retry event"
+    );
+    assert!(
+        mock.request_count.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+        "should retry at least once"
+    );
 }
 
 #[test]
@@ -259,7 +297,9 @@ fn cancel_during_stream() {
             &provider,
             vec![Message::user("cancel me")],
             None,
-            4096, None, None,
+            4096,
+            None,
+            None,
             Some(&cancel_flag),
             &mut |ev| {
                 match &ev {
@@ -282,7 +322,12 @@ fn cancel_during_stream() {
     });
     // On some platforms the cancel may abort before Error is emitted;
     // the important thing is the result is an Err (checked inside thread).
-    assert!(events.iter().any(|ev| matches!(ev, StreamEvent::ContentDelta(_))), "should have at least first chunk");
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, StreamEvent::ContentDelta(_))),
+        "should have at least first chunk"
+    );
 }
 
 #[test]
@@ -295,16 +340,15 @@ fn messages_are_sent_correctly() {
     let mock = MockServer::new(scenario);
     let provider = make_provider(&mock);
 
-    let messages = vec![
-        Message::system("Be helpful"),
-        Message::user("Say echo"),
-    ];
+    let messages = vec![Message::system("Be helpful"), Message::user("Say echo")];
     let _events = collect_events(&provider, messages, None);
 
     let req_json = mock.last_request_json().expect("should have request body");
     assert_eq!(req_json["model"], "test-model");
     assert_eq!(req_json["stream"], true);
-    let msgs = req_json["messages"].as_array().expect("should have messages");
+    let msgs = req_json["messages"]
+        .as_array()
+        .expect("should have messages");
     assert_eq!(msgs.len(), 2);
     assert_eq!(msgs[0]["role"], "system");
     assert_eq!(msgs[0]["content"], "Be helpful");
@@ -392,7 +436,11 @@ fn system_message_between_tool_and_assistant_accepted() {
             }],
         },
         // ── tool result (just "OK") ──
-        Message::tool("call_skill_1", "[OK] skill 'unsafe-checker' activated", true),
+        Message::tool(
+            "call_skill_1",
+            "[OK] skill 'unsafe-checker' activated",
+            true,
+        ),
         // ── injected system message (skill body) ──
         Message::system(concat!(
             "[DEEPX_SKILL_V1]\nname: unsafe-checker\n",
@@ -409,23 +457,43 @@ fn system_message_between_tool_and_assistant_accepted() {
 
     // Verify the request was accepted and processed
     let req_json = mock.last_request_json().expect("should have request body");
-    let msgs = req_json["messages"].as_array().expect("should have messages");
+    let msgs = req_json["messages"]
+        .as_array()
+        .expect("should have messages");
 
     // Check the message structure
-    assert_eq!(msgs[0]["role"], "system", "first message should be [IDENTITY]");
+    assert_eq!(
+        msgs[0]["role"], "system",
+        "first message should be [IDENTITY]"
+    );
     assert_eq!(msgs[1]["role"], "system", "second should be catalog");
     assert_eq!(msgs[2]["role"], "user");
     assert_eq!(msgs[3]["role"], "assistant");
-    assert!(msgs[3]["tool_calls"].is_array(), "assistant should have tool_calls");
+    assert!(
+        msgs[3]["tool_calls"].is_array(),
+        "assistant should have tool_calls"
+    );
     assert_eq!(msgs[4]["role"], "tool", "tool result follows assistant");
     assert_eq!(msgs[4]["content"], "[OK] skill 'unsafe-checker' activated");
-    assert_eq!(msgs[5]["role"], "system", "SYSTEM message follows tool result ← critical");
-    assert!(msgs[5]["content"].as_str().unwrap_or("").contains("[DEEPX_SKILL_V1]"),
-        "system message should contain skill body");
+    assert_eq!(
+        msgs[5]["role"], "system",
+        "SYSTEM message follows tool result ← critical"
+    );
+    assert!(
+        msgs[5]["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains("[DEEPX_SKILL_V1]"),
+        "system message should contain skill body"
+    );
 
     // The mock server responded successfully (no HTTP error)
-    assert!(events.iter().any(|ev| matches!(ev, StreamEvent::ContentDelta(_))),
-        "should have text response from assistant");
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, StreamEvent::ContentDelta(_))),
+        "should have text response from assistant"
+    );
 }
 
 #[test]
@@ -445,7 +513,9 @@ fn system_between_tool_and_user_accepted() {
         Message::system("[IDENTITY]"),
         Message::user("activate skill"),
         Message {
-            msg_id: None, role: "assistant".into(), name: None,
+            msg_id: None,
+            role: "assistant".into(),
+            name: None,
             content: vec![ContentBlock::ToolUse {
                 id: "call_s1".into(),
                 name: "skills".into(),
@@ -462,15 +532,24 @@ fn system_between_tool_and_user_accepted() {
     let events = collect_events(&provider, messages, None);
 
     let req_json = mock.last_request_json().expect("should have request body");
-    let msgs = req_json["messages"].as_array().expect("should have messages");
+    let msgs = req_json["messages"]
+        .as_array()
+        .expect("should have messages");
 
     // Verify the system message appears between first turn's tool result
     // and second turn's user message
     assert_eq!(msgs[3]["role"], "tool", "tool result at index 3");
-    assert_eq!(msgs[4]["role"], "system", "injected skill body at index 4 ← between tool and user");
+    assert_eq!(
+        msgs[4]["role"], "system",
+        "injected skill body at index 4 ← between tool and user"
+    );
     assert_eq!(msgs[5]["role"], "user", "next user message at index 5");
 
-    assert!(events.iter().any(|ev| matches!(ev, StreamEvent::ContentDelta(_))));
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, StreamEvent::ContentDelta(_)))
+    );
 }
 
 // ── Model understanding verification ───────────────────────────────────
@@ -490,7 +569,9 @@ fn system_message_between_tool_and_assistant_model_acknowledges() {
         // Assistant responds with content that should only be possible
         // if it read the skill body system message
         SseChunk::text("Per the unsafe-checker rules, unsaf"),
-        SseChunk::text("e is only valid for FFI. Your code uses it for convenience — this is an anti-pattern."),
+        SseChunk::text(
+            "e is only valid for FFI. Your code uses it for convenience — this is an anti-pattern.",
+        ),
         SseChunk::finish("stop", Some(mock_server::usage(80, 40))),
         SseChunk::done(),
     ];
@@ -502,7 +583,9 @@ fn system_message_between_tool_and_assistant_model_acknowledges() {
         Message::system("S1: unsafe-checker — Use for unsafe code review"),
         Message::user("Check my code: unsafe { *ptr }"),
         Message {
-            msg_id: None, role: "assistant".into(), name: None,
+            msg_id: None,
+            role: "assistant".into(),
+            name: None,
             content: vec![ContentBlock::ToolUse {
                 id: "call_sk1".into(),
                 name: "skills".into(),
@@ -525,18 +608,27 @@ fn system_message_between_tool_and_assistant_model_acknowledges() {
     let events = collect_events(&provider, messages, None);
 
     // Verify the assistant response references skill content
-    let all_text: String = events.iter()
-        .filter_map(event_text)
-        .collect();
-    assert!(all_text.contains("unsafe-checker") || all_text.contains("FFI"),
-        "assistant should reference skill content: got '{}'", all_text);
+    let all_text: String = events.iter().filter_map(event_text).collect();
+    assert!(
+        all_text.contains("unsafe-checker") || all_text.contains("FFI"),
+        "assistant should reference skill content: got '{}'",
+        all_text
+    );
 
     let req_json = mock.last_request_json().expect("should have request body");
     let msgs = req_json["messages"].as_array().expect("messages array");
     assert_eq!(msgs[4]["role"], "tool", "tool result");
-    assert_eq!(msgs[5]["role"], "system", "system message follows tool ← critical position");
-    assert!(msgs[5]["content"].as_str().unwrap_or("").contains("[DEEPX_SKILL_V1]"),
-        "system msg should carry skill body");
+    assert_eq!(
+        msgs[5]["role"], "system",
+        "system message follows tool ← critical position"
+    );
+    assert!(
+        msgs[5]["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains("[DEEPX_SKILL_V1]"),
+        "system msg should carry skill body"
+    );
 }
 
 // ── DSML integration (via tool_parser as used by gate) ──
@@ -566,20 +658,28 @@ fn dsml_tool_call_in_content() {
         &provider,
         vec![Message::user("read /tmp/test.txt")],
         None,
-        4096, None, None, None,
+        4096,
+        None,
+        None,
+        None,
         &mut |ev| events.push(ev),
     );
     assert!(result.is_ok(), "chat_stream should succeed");
 
     let done_msg = events.iter().find_map(event_done);
     let msg = done_msg.expect("should have Done event");
-    let tool_blocks: Vec<&ContentBlock> = msg.content.iter()
+    let tool_blocks: Vec<&ContentBlock> = msg
+        .content
+        .iter()
         .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
         .collect();
     assert!(!tool_blocks.is_empty(), "should have ToolUse from DSML");
-    assert_eq!(tool_blocks[0], &ContentBlock::ToolUse {
-        id: "dsml_tc_0".into(),
-        name: "read_file".into(),
-        input: json!({"path": "/tmp/test.txt"}),
-    });
+    assert_eq!(
+        tool_blocks[0],
+        &ContentBlock::ToolUse {
+            id: "dsml_tc_0".into(),
+            name: "read_file".into(),
+            input: json!({"path": "/tmp/test.txt"}),
+        }
+    );
 }

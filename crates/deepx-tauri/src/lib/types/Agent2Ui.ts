@@ -3,6 +3,7 @@ import type { AskMode } from "./AskMode";
 import type { AskQuestion } from "./AskQuestion";
 import type { AskResolution } from "./AskResolution";
 import type { DocInfo } from "./DocInfo";
+import type { PermissionRisk } from "./PermissionRisk";
 import type { RoundBlock } from "./RoundBlock";
 import type { RoundDeltaKind } from "./RoundDeltaKind";
 import type { SkillInfo } from "./SkillInfo";
@@ -68,7 +69,15 @@ category: string,
 /**
  * Current permission level (1-4).
  */
-level: number, } | { "type": "ask_user",
+level: number,
+/**
+ * Intrinsic action impact, computed by the backend.
+ */
+risk: PermissionRisk,
+/**
+ * Plain-language effect of approving the action.
+ */
+consequence: string, } | { "type": "ask_user",
 /**
  * Turn containing the original ask_user tool call.
  */

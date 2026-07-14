@@ -1,10 +1,10 @@
 //! Session lifecycle commands: send message, create/resume/close session,
 //! cancel, set mode, dashboard, activity, undo, compact, load more turns.
 
-use deepx_proto::Ui2Agent;
-use super::super::registry::{ensure_agent, send_to_agent, AgentRegistry};
-use super::super::util::read_file_preview;
 use super::super::config::resolve_deepx_dir;
+use super::super::registry::{AgentRegistry, ensure_agent, send_to_agent};
+use super::super::util::read_file_preview;
+use deepx_proto::Ui2Agent;
 
 /// prepending their content to the user text.
 #[tauri::command]

@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 struct FileEntry {
     op: &'static str,
     line_count: usize,
-    order: u64,         // monotonically increasing for recency sort
+    order: u64, // monotonically increasing for recency sort
 }
 
 static STATE: OnceLock<Mutex<HashMap<String, FileEntry>>> = OnceLock::new();
@@ -33,7 +33,14 @@ fn next_order() -> u64 {
 
 fn insert(path: &str, op: &'static str, line_count: usize) {
     let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
-    s.insert(path.to_string(), FileEntry { op, line_count, order: next_order() });
+    s.insert(
+        path.to_string(),
+        FileEntry {
+            op,
+            line_count,
+            order: next_order(),
+        },
+    );
 }
 
 /// Record a file read (full file, no range).
@@ -46,7 +53,11 @@ pub fn record_read(path: &str, content: &str, line_count: usize) {
 pub fn record_write(path: &str, line_count: usize) {
     crate::file_cache::invalidate(path);
     let s = state().lock().unwrap_or_else(|e| e.into_inner());
-    let op = if s.contains_key(path) { "edited" } else { "created" };
+    let op = if s.contains_key(path) {
+        "edited"
+    } else {
+        "created"
+    };
     drop(s);
     insert(path, op, line_count);
 }
@@ -69,7 +80,14 @@ pub fn record_move(source: &str, dest: &str) {
     crate::file_cache::invalidate(dest);
     let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
     s.remove(source);
-    s.insert(dest.to_string(), FileEntry { op: "moved", line_count: 0, order: next_order() });
+    s.insert(
+        dest.to_string(),
+        FileEntry {
+            op: "moved",
+            line_count: 0,
+            order: next_order(),
+        },
+    );
 }
 
 /// Generate file state summary. Capped at 20 most recently touched files.
@@ -90,14 +108,18 @@ pub fn summary() -> String {
         } else {
             String::new()
         };
-        out.push_str(&format!("  {:<50} {:>6}  ({})\n",
+        out.push_str(&format!(
+            "  {:<50} {:>6}  ({})\n",
             path,
             if lines.is_empty() { "—" } else { &lines },
             e.op,
         ));
     }
     if total > MAX_SUMMARY_FILES {
-        out.push_str(&format!("  ... ({} more files)\n", total - MAX_SUMMARY_FILES));
+        out.push_str(&format!(
+            "  ... ({} more files)\n",
+            total - MAX_SUMMARY_FILES
+        ));
     }
     out.push_str("</file_state>");
     out

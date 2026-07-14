@@ -6,15 +6,15 @@ use super::ToolManager;
 use super::exec;
 use super::explore;
 use super::web;
-use super::context7;
+
 use super::file_mutate;
 use super::file_query;
 
-use super::task;
-use super::plan;
 use super::ask_user;
+use super::plan;
 use super::process_inspect;
-use super::memory;
+use super::task;
+
 use super::skill;
 
 /// 工具注册器函数签名。
@@ -40,17 +40,11 @@ pub fn build_tool_manager(extra_registrars: &[ToolRegistrar]) -> ToolManager {
     // ── PLAN ──
     plan::register(&mut mgr);
 
-    // ── Context7 ──
-    context7::register(&mut mgr);
-
     // ── 交互 ──
     ask_user::register(&mut mgr);
 
     // ── 进程巡查 ──
     process_inspect::register(&mut mgr);
-
-    // ── 跨会话记忆 ──
-    memory::register(&mut mgr);
 
     // ── Agent Skills ──
     skill::register(&mut mgr);

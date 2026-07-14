@@ -23,8 +23,8 @@ mod conflict;
 mod dashboard;
 pub mod lifecycle;
 pub mod logger;
+pub mod new;
 mod notification;
 #[cfg(windows)]
 mod toast_com;
-pub mod util;
-pub mod new; // Ring-architecture Loop (primary)
+pub mod util; // Ring-architecture Loop (primary)

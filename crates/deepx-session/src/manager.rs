@@ -15,13 +15,13 @@ use deepx_types::{Message, SessionMeta};
 use crate::store;
 
 #[cfg(feature = "turso-backend")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::store::turso_backend::TursoBackend;
 #[cfg(feature = "turso-backend")]
 use std::collections::HashMap;
 #[cfg(feature = "turso-backend")]
 use std::sync::Mutex;
 #[cfg(feature = "turso-backend")]
-use crate::store::turso_backend::TursoBackend;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static INSTANCE: OnceLock<SessionManager> = OnceLock::new();
 
@@ -61,12 +61,16 @@ impl SessionManager {
         };
         // Migrate old TOML sessions on first startup of v0.4.0
         crate::migrate::run(&mgr.sessions_dir);
-        INSTANCE.set(mgr).expect("SessionManager already initialized");
+        INSTANCE
+            .set(mgr)
+            .expect("SessionManager already initialized");
     }
 
     /// Access the global instance.
     pub fn global() -> &'static Self {
-        INSTANCE.get().expect("SessionManager not initialized — call init() first")
+        INSTANCE
+            .get()
+            .expect("SessionManager not initialized — call init() first")
     }
 
     /// Toggle Turso mirroring at runtime (no restart needed).
@@ -93,7 +97,9 @@ impl SessionManager {
             if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if !path.is_dir() { continue; }
+                    if !path.is_dir() {
+                        continue;
+                    }
                     let seed = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     // Turso-first meta read, JSON fallback
                     let meta = {
@@ -103,10 +109,18 @@ impl SessionManager {
                                 if let Some(db) = dbs.get(seed) {
                                     if let Ok(Some(m)) = db.load_meta(seed) {
                                         Some(m)
-                                    } else { None }
-                                } else { None }
-                            } else { None }
-                        } else { None }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
                         #[cfg(not(feature = "turso-backend"))]
                         None
                     };
@@ -124,11 +138,11 @@ impl SessionManager {
 
     /// Delete a session: removes the session directory and its index entry.
     pub fn delete(&self, seed: &str) -> Result<(), String> {
-        let dir = self.session_dir(seed)
+        let dir = self
+            .session_dir(seed)
             .ok_or_else(|| format!("Session not found: {seed}"))?;
 
-        std::fs::remove_dir_all(&dir)
-            .map_err(|e| format!("Failed to delete session: {e}"))?;
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("Failed to delete session: {e}"))?;
 
         store::remove_from_index(&self.sessions_dir, seed);
 
@@ -160,7 +174,10 @@ impl SessionManager {
                 if let Some(db) = dbs.get(seed) {
                     if let Ok(msgs) = db.load_messages(seed) {
                         if !msgs.is_empty() {
-                            log::info!("SessionManager: loaded {} msgs from Turso for {seed}", msgs.len());
+                            log::info!(
+                                "SessionManager: loaded {} msgs from Turso for {seed}",
+                                msgs.len()
+                            );
                             return Some(msgs);
                         }
                     }
@@ -173,7 +190,9 @@ impl SessionManager {
 
     /// Check whether a session exists (directory on disk or Turso DB).
     pub fn exists(&self, seed: &str) -> bool {
-        if self.session_dir(seed).is_some() { return true; }
+        if self.session_dir(seed).is_some() {
+            return true;
+        }
         #[cfg(feature = "turso-backend")]
         if self.turso_enabled.load(Ordering::Relaxed) {
             return self.is_turso_backed(seed);
@@ -203,7 +222,9 @@ impl SessionManager {
             if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if !path.is_dir() { continue; }
+                    if !path.is_dir() {
+                        continue;
+                    }
                     if let Some(seed) = path.file_name().and_then(|n| n.to_str()) {
                         if path.join("messages.jsonl").exists() && !self.is_turso_backed(seed) {
                             count += 1;
@@ -236,16 +257,25 @@ impl SessionManager {
 
             for entry in entries {
                 let path = entry.path();
-                let Some(seed) = path.file_name().and_then(|n| n.to_str()) else { continue };
+                let Some(seed) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
                 let jsonl = path.join("messages.jsonl");
-                if !jsonl.exists() { continue; }
-                if self.is_turso_backed(seed) { continue; } // already done
+                if !jsonl.exists() {
+                    continue;
+                }
+                if self.is_turso_backed(seed) {
+                    continue;
+                } // already done
 
-                let msgs = store::read_messages(&path)
-                    .map_err(|e| format!("read {}: {e}", seed))?;
-                if msgs.is_empty() { continue; }
+                let msgs =
+                    store::read_messages(&path).map_err(|e| format!("read {}: {e}", seed))?;
+                if msgs.is_empty() {
+                    continue;
+                }
 
-                let dbs = self.get_or_open_db(seed)
+                let dbs = self
+                    .get_or_open_db(seed)
                     .ok_or_else(|| "failed to open Turso db".to_string())?;
                 let db = dbs.get(seed).unwrap();
 
@@ -257,7 +287,10 @@ impl SessionManager {
                     let _ = db.upsert_meta(seed, &meta);
                 }
 
-                log::info!("SessionManager: migrated {} messages to Turso for {seed}", count);
+                log::info!(
+                    "SessionManager: migrated {} messages to Turso for {seed}",
+                    count
+                );
                 migrated += 1;
                 total_msgs += count;
             }
@@ -324,9 +357,7 @@ impl SessionManager {
     ) {
         let now = Self::now_epoch();
         let dir = self.session_path_dir(seed);
-        let created_at = self.load_meta(seed)
-            .map(|m| m.created_at)
-            .unwrap_or(now);
+        let created_at = self.load_meta(seed).map(|m| m.created_at).unwrap_or(now);
         let total = store::count_message_lines(&dir).unwrap_or(0);
 
         // Extract summary: read last few messages for title
@@ -379,9 +410,7 @@ impl SessionManager {
         let dir = self.session_path_dir(seed);
         let _ = std::fs::create_dir_all(&dir);
 
-        let created_at = self.load_meta(seed)
-            .map(|m| m.created_at)
-            .unwrap_or(now);
+        let created_at = self.load_meta(seed).map(|m| m.created_at).unwrap_or(now);
 
         let existing_mode = self.load_meta(seed).map(|m| m.mode).unwrap_or(0);
         let last_summary = Self::extract_summary(messages);
@@ -433,15 +462,15 @@ impl SessionManager {
         compact_skip: usize,
         turn_count: usize,
     ) {
-        if new_messages.is_empty() { return; }
+        if new_messages.is_empty() {
+            return;
+        }
 
         let now = Self::now_epoch();
         let dir = self.session_path_dir(seed);
         let _ = std::fs::create_dir_all(&dir);
 
-        let created_at = self.load_meta(seed)
-            .map(|m| m.created_at)
-            .unwrap_or(now);
+        let created_at = self.load_meta(seed).map(|m| m.created_at).unwrap_or(now);
 
         // Append messages
         if let Err(e) = store::append_messages(&dir, new_messages) {
@@ -489,7 +518,8 @@ impl SessionManager {
     /// Truncate messages.jsonl to `keep_lines` lines.
     /// Returns the truncated messages.
     pub fn truncate_messages(&self, seed: &str, keep_lines: usize) -> Result<Vec<Message>, String> {
-        let dir = self.session_dir(seed)
+        let dir = self
+            .session_dir(seed)
             .ok_or_else(|| format!("Session not found: {seed}"))?;
         let truncated = store::truncate_messages(&dir, keep_lines)?;
         #[cfg(feature = "turso-backend")]
@@ -509,7 +539,8 @@ impl SessionManager {
 
     /// Read the currently active session seed.
     pub fn active_seed(&self) -> Option<String> {
-        std::fs::read_to_string(&self.active_path).ok()
+        std::fs::read_to_string(&self.active_path)
+            .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     }
@@ -533,8 +564,8 @@ impl SessionManager {
 
     /// Generate a new session seed (8 hex chars from hashed time + PID).
     pub fn generate_seed() -> String {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -558,8 +589,13 @@ impl SessionManager {
     // ── Private ──
 
     #[cfg(feature = "turso-backend")]
-    fn get_or_open_db(&self, seed: &str) -> Option<std::sync::MutexGuard<'_, HashMap<String, TursoBackend>>> {
-        if !self.turso_enabled.load(Ordering::Relaxed) { return None; }
+    fn get_or_open_db(
+        &self,
+        seed: &str,
+    ) -> Option<std::sync::MutexGuard<'_, HashMap<String, TursoBackend>>> {
+        if !self.turso_enabled.load(Ordering::Relaxed) {
+            return None;
+        }
         let mut dbs = self.dbs.lock().unwrap();
         if !dbs.contains_key(seed) {
             let dir = self.session_path_dir(seed);
@@ -588,21 +624,35 @@ impl SessionManager {
 
     fn session_dir(&self, seed: &str) -> Option<PathBuf> {
         let dir = self.session_path_dir(seed);
-        if dir.exists() && dir.is_dir() { Some(dir) } else { None }
+        if dir.exists() && dir.is_dir() {
+            Some(dir)
+        } else {
+            None
+        }
     }
 
     fn extract_summary(messages: &[Message]) -> String {
-        messages.iter().rev()
+        messages
+            .iter()
+            .rev()
             .find(|m| m.role == "assistant" && !m.content.is_empty())
-            .and_then(|m| m.content.iter().find_map(|b| {
-                if let deepx_types::ContentBlock::Text { text } = b {
-                    Some(text.lines().next().unwrap_or(text))
-                } else { None }
-            }))
+            .and_then(|m| {
+                m.content.iter().find_map(|b| {
+                    if let deepx_types::ContentBlock::Text { text } = b {
+                        Some(text.lines().next().unwrap_or(text))
+                    } else {
+                        None
+                    }
+                })
+            })
             .map(|s| {
-                if s.len() <= 80 { return s.to_string(); }
+                if s.len() <= 80 {
+                    return s.to_string();
+                }
                 let mut end = 80;
-                while !s.is_char_boundary(end) { end -= 1; }
+                while !s.is_char_boundary(end) {
+                    end -= 1;
+                }
                 format!("{}..", &s[..end])
             })
             .unwrap_or_default()

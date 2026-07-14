@@ -1,18 +1,25 @@
-import { createSignal } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import MessageList from "./MessageList";
-import InputBar from "./InputBar";
+import { open } from "@tauri-apps/plugin-shell";
 import type { SlashCommand } from "./SlashMenu";
-import InfoBar from "./InfoBar";
 import AskDialog from "./AskDialog";
 import AskForm from "./AskForm";
+import ConversationTranscript from "./conversation/ConversationTranscript";
+import { projectSession } from "../presentation/useConversationView";
+import type { RawSessionState } from "../store/rawSession";
+import ThreadHeader from "./shell/ThreadHeader";
+import EnvironmentPopover from "./shell/EnvironmentPopover";
+import ComposerDock from "./composer/ComposerDock";
+import { createFollowUpQueue } from "../store/followUpQueue";
 
-interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; hasMore: boolean; onLoadMore: () => void; onSlashCommand: (cmd: SlashCommand) => void; }
+interface ChatViewProps { chat: ReturnType<typeof import("../store/chat").createChatStore>; rawSession: () => RawSessionState | undefined; hasMore: boolean; onLoadMore: () => void; onSlashCommand: (cmd: SlashCommand) => void; }
 
 export default function ChatView(props: ChatViewProps) {
   const chat = () => props.chat;
   const seed = () => chat().sessionInfo.seed;
   const [mode, setMode] = createSignal("plan");
+  const [environmentOpen, setEnvironmentOpen] = createSignal(false);
+  const [branch, setBranch] = createSignal("");
 
   async function handleSetMode(m: string) {
     setMode(m);
@@ -43,44 +50,45 @@ export default function ChatView(props: ChatViewProps) {
     } catch (e) { console.error(e); }
   }
 
+  const followUps = createFollowUpQueue(seed(), handleSend);
+  let wasStreaming = chat().isStreaming();
+  createEffect(() => {
+    const streaming = chat().isStreaming();
+    if (wasStreaming && !streaming) {
+      void followUps.drainAfterTurnEnd({ hasPendingGate: !!props.rawSession?.()?.pendingInteraction });
+    }
+    wasStreaming = streaming;
+  });
+
+  createEffect(() => {
+    if (!environmentOpen()) return;
+    invoke<string>("cmd_get_git_branch", { seed: seed() }).then(setBranch).catch(() => setBranch(""));
+  });
+
   return (
     <div class="chat-view">
-      <InfoBar
-        model={chat().sessionInfo.model}
-        seed={chat().sessionInfo.seed}
-        context_tokens={chat().sessionInfo.context_tokens}
-        context_limit={chat().sessionInfo.context_limit}
-        prompt_cache_hit={chat().sessionInfo.prompt_cache_hit}
-        metricHistory={chat().metricHistory()}
-        prompt_cache_miss={chat().sessionInfo.prompt_cache_miss}
-        isStreaming={chat().isStreaming()}
-        error={chat().error()}
-        onDismissError={() => chat().clearError()}
-        isCompacting={chat().isCompacting}
-        compactResult={chat().compactResult}
+      <ThreadHeader
+        title={props.rawSession?.()?.session.title || seed().slice(0, 8)}
+        environmentOpen={environmentOpen()}
+        onToggleEnvironment={() => setEnvironmentOpen(value => !value)}
+        onOpenLocation={() => { if (chat().workspace()) void open(chat().workspace()); }}
         onCompact={handleCompact}
       />
-      <MessageList
-        turns={chat().turns}
-        isStreaming={chat().isStreaming}
-        isCompacting={chat().isCompacting}
-        compactText={chat().compactText}
-        onUndo={(id) => chat().undoTurn(id)}
-        hasMore={props.hasMore}
-        onLoadMore={props.onLoadMore}
-      />
-      <InputBar
+      <Show when={environmentOpen() && props.rawSession?.()}>
+        {raw => <EnvironmentPopover session={raw()} workspace={chat().workspace()} branch={branch()} />}
+      </Show>
+      <Show when={props.rawSession()}>
+        {(raw) => <ConversationTranscript turns={projectSession(raw())} />}
+      </Show>
+      <ComposerDock
         onSend={handleSend}
         onStop={handleStop}
         isStreaming={chat().isStreaming}
-        disabled={chat().inputDisabled()}
-        restoreText={chat().restoreText}
+        hasPendingGate={() => !!props.rawSession?.()?.pendingInteraction}
+        queue={followUps}
         mode={mode()}
         onModeChange={handleSetMode}
-        onSlashCommand={props.onSlashCommand}
-        seed={seed()}
-        skillCatalog={chat().skillCatalog}
-        activeSkillNames={chat().activeSkillNames}
+        model={chat().sessionInfo.model}
       />
       <AskDialog
         state={chat().askState}

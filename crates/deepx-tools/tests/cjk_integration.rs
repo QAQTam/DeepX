@@ -6,8 +6,10 @@
 fn cjk_no_unsafe_byte_slices() {
     // CARGO_MANIFEST_DIR is crates/deepx-tools, navigate up to project root
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap();
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     let script = root.join("scripts").join("check-cjk-split.py");
 
     if !script.exists() {
@@ -39,8 +41,6 @@ fn cjk_no_unsafe_byte_slices() {
             maybe_count.saturating_sub(unsafe_count)
         );
     } else {
-        panic!(
-            "CJK UNSAFE byte slices found:\n\n{stdout}\n{stderr}"
-        );
+        panic!("CJK UNSAFE byte slices found:\n\n{stdout}\n{stderr}");
     }
 }

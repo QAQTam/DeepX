@@ -1,7 +1,7 @@
 //! Permission dialog and ask_user response commands.
 
-use deepx_proto::Ui2Agent;
 use super::super::registry::{ensure_agent, send_to_agent};
+use deepx_proto::Ui2Agent;
 
 #[tauri::command]
 pub fn cmd_permission_response(

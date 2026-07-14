@@ -1,10 +1,10 @@
 //! Plan/task management, context stats, token stats, migration commands.
 
-use tauri::{AppHandle, Emitter};
-use deepx_proto::Ui2Agent;
+use super::super::config::resolve_deepx_dir;
 use super::super::registry::send_to_agent;
 use super::super::util::parse_plan_items;
-use super::super::config::resolve_deepx_dir;
+use deepx_proto::Ui2Agent;
+use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
 pub fn cmd_migration_count() -> Result<String, String> {

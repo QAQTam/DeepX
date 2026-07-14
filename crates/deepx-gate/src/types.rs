@@ -87,5 +87,10 @@ pub enum StreamEvent {
     UsageUpdate(deepx_types::UsageInfo),
     Error(String),
     /// Emitted when the gate is retrying after a retryable error.
-    Retrying { attempt: u32, max_retries: u32, delay_secs: u64, error: String },
+    Retrying {
+        attempt: u32,
+        max_retries: u32,
+        delay_secs: u64,
+        error: String,
+    },
 }

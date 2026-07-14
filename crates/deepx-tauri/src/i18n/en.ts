@@ -47,7 +47,6 @@ const en = {
       task: "Task",
       plan: "Plan",
       ask: "Ask",
-      memory: "Memory",
       process: "Process",
     },
     activityLabel: {
@@ -87,8 +86,6 @@ const en = {
     contextLimit: "Context Limit",
     reasoningEffort: "Reasoning Effort",
     language: "Language",
-    context7Key: "Context7 API Key",
-    context7KeyHint: "API key for Context7 documentation lookup. Leave empty to disable.",
     show: "Show",
     hide: "Hide",
     save: "Save",

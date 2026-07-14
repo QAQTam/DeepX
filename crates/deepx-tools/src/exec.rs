@@ -8,7 +8,10 @@
 use crate::{ExecOutputStream, ExecProgressEvent, ExecProgressSender, ToolCallCtx, ToolResult};
 use serde::Serialize;
 use std::io::Read;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 /// Stream read from a pipe, capped at `max_bytes`.
 ///
@@ -87,8 +90,8 @@ fn forward_progress(
             }
             Err(error) if error.valid_up_to() > 0 => {
                 let valid_up_to = error.valid_up_to();
-                let prefix = String::from_utf8(pending[..valid_up_to].to_vec())
-                    .expect("valid UTF-8 prefix");
+                let prefix =
+                    String::from_utf8(pending[..valid_up_to].to_vec()).expect("valid UTF-8 prefix");
                 pending.drain(..valid_up_to);
                 send_progress(tx, tool_call_id, stream, seq, prefix);
             }
@@ -124,8 +127,12 @@ fn decode_captured(bytes: &[u8]) -> String {
 
 #[cfg(windows)]
 fn decode_windows_oem(bytes: &[u8]) -> Option<String> {
-    if bytes.is_empty() { return Some(String::new()); }
-    if bytes.len() > i32::MAX as usize { return None; }
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+    if bytes.len() > i32::MAX as usize {
+        return None;
+    }
 
     #[link(name = "Kernel32")]
     unsafe extern "system" {
@@ -147,16 +154,26 @@ fn decode_windows_oem(bytes: &[u8]) -> Option<String> {
     let byte_len = bytes.len() as i32;
     let wide_len = unsafe {
         MultiByteToWideChar(
-            code_page, MB_ERR_INVALID_CHARS, bytes.as_ptr(), byte_len,
-            std::ptr::null_mut(), 0,
+            code_page,
+            MB_ERR_INVALID_CHARS,
+            bytes.as_ptr(),
+            byte_len,
+            std::ptr::null_mut(),
+            0,
         )
     };
-    if wide_len <= 0 { return None; }
+    if wide_len <= 0 {
+        return None;
+    }
     let mut wide = vec![0u16; wide_len as usize];
     let written = unsafe {
         MultiByteToWideChar(
-            code_page, MB_ERR_INVALID_CHARS, bytes.as_ptr(), byte_len,
-            wide.as_mut_ptr(), wide_len,
+            code_page,
+            MB_ERR_INVALID_CHARS,
+            bytes.as_ptr(),
+            byte_len,
+            wide.as_mut_ptr(),
+            wide_len,
         )
     };
     (written == wide_len).then(|| String::from_utf16_lossy(&wide))
@@ -169,7 +186,9 @@ fn send_progress(
     seq: &Arc<AtomicU64>,
     chunk: String,
 ) {
-    if chunk.is_empty() { return; }
+    if chunk.is_empty() {
+        return;
+    }
     if let Some(tx) = tx {
         tx.try_send(ExecProgressEvent {
             tool_call_id: tool_call_id.to_string(),
@@ -191,9 +210,15 @@ fn find_token_boundary(text: &str, target_tokens: u32) -> usize {
             | '\u{3000}'..='\u{303f}' | '\u{ff00}'..='\u{ffef}'
             | '\u{3040}'..='\u{30ff}'
         );
-        if is_cjk { cjk_count += 1; } else { char_count += 1; }
+        if is_cjk {
+            cjk_count += 1;
+        } else {
+            char_count += 1;
+        }
         let est = char_count as f64 / 3.3 + cjk_count as f64 / 1.67;
-        if est >= target_f64 { return i; }
+        if est >= target_f64 {
+            return i;
+        }
     }
     text.len()
 }
@@ -210,9 +235,15 @@ fn find_token_boundary_reverse(text: &str, target_tokens: u32) -> usize {
             | '\u{3000}'..='\u{303f}' | '\u{ff00}'..='\u{ffef}'
             | '\u{3040}'..='\u{30ff}'
         );
-        if is_cjk { cjk_count += 1; } else { char_count += 1; }
+        if is_cjk {
+            cjk_count += 1;
+        } else {
+            char_count += 1;
+        }
         let est = char_count as f64 / 3.3 + cjk_count as f64 / 1.67;
-        if est >= target_f64 { return *i; }
+        if est >= target_f64 {
+            return *i;
+        }
     }
     0
 }
@@ -220,7 +251,9 @@ fn find_token_boundary_reverse(text: &str, target_tokens: u32) -> usize {
 /// Token-aware smart truncation: keeps head (70%) + tail (30%).
 fn token_truncate(text: &str, max_tokens: u32) -> String {
     let total = deepx_types::token::count_tokens(text);
-    if total <= max_tokens { return text.to_string(); }
+    if total <= max_tokens {
+        return text.to_string();
+    }
     let head_tokens = (max_tokens as f64 * 0.7).max(1.0) as u32;
     let tail_tokens = (max_tokens as f64 * 0.3).max(1.0) as u32;
     let head_end = find_token_boundary(text, head_tokens);
@@ -229,13 +262,17 @@ fn token_truncate(text: &str, max_tokens: u32) -> String {
         let end = find_token_boundary(text, max_tokens);
         format!(
             "{}\n...[TRUNCATED: {}/{} tokens. Call exec_run again with narrower argv or a filtering command.]",
-            &text[..end], max_tokens, total
+            &text[..end],
+            max_tokens,
+            total
         )
     } else {
         let tail = &text[tail_start..];
         format!(
             "{}\n\n...[TRUNCATED: {}/{} tokens, {} lines dropped. Call exec_run again with narrower argv or a filtering command.]\n\n{}",
-            &text[..head_end], max_tokens, total,
+            &text[..head_end],
+            max_tokens,
+            total,
             text[head_end..tail_start].lines().count(),
             tail.trim_start(),
         )
@@ -254,29 +291,48 @@ fn direct_exec(
     tool_call_id: &str,
 ) -> ExecOutput {
     let start_time = std::time::Instant::now();
-    let display_name = if argv.len() > 1 { format!("{} ...", argv[0]) } else { argv[0].clone() };
+    let display_name = if argv.len() > 1 {
+        format!("{} ...", argv[0])
+    } else {
+        argv[0].clone()
+    };
     const HARD_BYTE_CAP: usize = 5 * 1024 * 1024;
 
     let mut cmd = std::process::Command::new(&argv[0]);
-    if argv.len() > 1 { cmd.args(&argv[1..]); }
-    #[cfg(windows)] {
+    if argv.len() > 1 {
+        cmd.args(&argv[1..]);
+    }
+    #[cfg(windows)]
+    {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    if let Some(dir) = cwd { cmd.current_dir(dir); }
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return ExecOutput {
-            status: "completed", command: display_name, exit_code: Some(-1),
-            output: format!("SPAWN FAILED: {e}"), wall_time_seconds: 0.0,
-            original_tokens: 0, truncated: false, timed_out: false, cancelled: false,
-            stdout_bytes: 0, stderr_bytes: 0, ui_dropped_bytes: 0,
-        },
+        Err(e) => {
+            return ExecOutput {
+                status: "completed",
+                command: display_name,
+                exit_code: Some(-1),
+                output: format!("SPAWN FAILED: {e}"),
+                wall_time_seconds: 0.0,
+                original_tokens: 0,
+                truncated: false,
+                timed_out: false,
+                cancelled: false,
+                stdout_bytes: 0,
+                stderr_bytes: 0,
+                ui_dropped_bytes: 0,
+            };
+        }
     };
 
     // Start background pipe readers
@@ -288,19 +344,37 @@ fn direct_exec(
         let tool_call_id = tool_call_id.to_string();
         let progress_seq = progress_seq.clone();
         std::thread::spawn(move || {
-            let (s, t) = read_stream(p, HARD_BYTE_CAP, progress_tx, tool_call_id, ExecOutputStream::Stdout, progress_seq);
+            let (s, t) = read_stream(
+                p,
+                HARD_BYTE_CAP,
+                progress_tx,
+                tool_call_id,
+                ExecOutputStream::Stdout,
+                progress_seq,
+            );
             let _ = stdout_tx.send((s, t));
         });
-    } else { let _ = stdout_tx.send((Vec::new(), false)); }
+    } else {
+        let _ = stdout_tx.send((Vec::new(), false));
+    }
     if let Some(p) = child.stderr.take() {
         let progress_tx = progress_tx.clone();
         let tool_call_id = tool_call_id.to_string();
         let progress_seq = progress_seq.clone();
         std::thread::spawn(move || {
-            let (s, t) = read_stream(p, HARD_BYTE_CAP, progress_tx, tool_call_id, ExecOutputStream::Stderr, progress_seq);
+            let (s, t) = read_stream(
+                p,
+                HARD_BYTE_CAP,
+                progress_tx,
+                tool_call_id,
+                ExecOutputStream::Stderr,
+                progress_seq,
+            );
             let _ = stderr_tx.send((s, t));
         });
-    } else { let _ = stderr_tx.send((Vec::new(), false)); }
+    } else {
+        let _ = stderr_tx.send((Vec::new(), false));
+    }
 
     // Poll child with timeout
     let deadline = start_time + std::time::Duration::from_secs(timeout_secs);
@@ -309,7 +383,10 @@ fn direct_exec(
     let mut cancelled = false;
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => { exit_code = status.code(); break; }
+            Ok(Some(status)) => {
+                exit_code = status.code();
+                break;
+            }
             Ok(None) => {
                 if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
                     || crate::CANCEL.load(std::sync::atomic::Ordering::SeqCst)
@@ -319,7 +396,12 @@ fn direct_exec(
                     cancelled = true;
                     break;
                 }
-                if std::time::Instant::now() >= deadline { let _ = child.kill(); let _ = child.wait(); timed_out = true; break; }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    timed_out = true;
+                    break;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(_) => break,
@@ -327,21 +409,28 @@ fn direct_exec(
     }
 
     // Collect pipe output (threads finish after child exits)
-    let (stdout_out, stdout_trunc) = stdout_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or_else(|_| {
-        (b"[WARN] stdout pipe timed out\n".to_vec(), true)
-    });
-    let (stderr_out, stderr_trunc) = stderr_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or_else(|_| {
-        (b"[WARN] stderr pipe timed out\n".to_vec(), true)
-    });
+    let (stdout_out, stdout_trunc) = stdout_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap_or_else(|_| (b"[WARN] stdout pipe timed out\n".to_vec(), true));
+    let (stderr_out, stderr_trunc) = stderr_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap_or_else(|_| (b"[WARN] stderr pipe timed out\n".to_vec(), true));
 
     let stdout_bytes = stdout_out.len() as u64;
     let stderr_bytes = stderr_out.len() as u64;
-    let ui_dropped_bytes = progress_tx.as_ref().map_or(0, ExecProgressSender::dropped_bytes);
+    let ui_dropped_bytes = progress_tx
+        .as_ref()
+        .map_or(0, ExecProgressSender::dropped_bytes);
     let stdout_out = decode_captured(&stdout_out);
     let stderr_out = decode_captured(&stderr_out);
 
     let mut combined = String::new();
-    if !stderr_out.is_empty() { combined.push_str(&stderr_out); if !stdout_out.is_empty() { combined.push('\n'); } }
+    if !stderr_out.is_empty() {
+        combined.push_str(&stderr_out);
+        if !stdout_out.is_empty() {
+            combined.push('\n');
+        }
+    }
     combined.push_str(&stdout_out);
 
     let hard_trunc = stderr_trunc || stdout_trunc;
@@ -354,10 +443,18 @@ fn direct_exec(
     };
 
     ExecOutput {
-        status: if cancelled { "cancelled" } else { "completed" }, command: display_name, exit_code,
-        output: output_str, wall_time_seconds: start_time.elapsed().as_secs_f64(),
-        original_tokens: total_tokens, truncated, timed_out, cancelled,
-        stdout_bytes, stderr_bytes, ui_dropped_bytes,
+        status: if cancelled { "cancelled" } else { "completed" },
+        command: display_name,
+        exit_code,
+        output: output_str,
+        wall_time_seconds: start_time.elapsed().as_secs_f64(),
+        original_tokens: total_tokens,
+        truncated,
+        timed_out,
+        cancelled,
+        stdout_bytes,
+        stderr_bytes,
+        ui_dropped_bytes,
     }
 }
 
@@ -381,7 +478,8 @@ pub(crate) struct ExecOutput {
 
 impl ExecOutput {
     fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| r#"{"status":"error","output":"serialization failed"}"#.into())
+        serde_json::to_string(self)
+            .unwrap_or_else(|_| r#"{"status":"error","output":"serialization failed"}"#.into())
     }
 }
 
@@ -389,21 +487,47 @@ impl ExecOutput {
 
 pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
     let argv: Vec<String> = match ctx.args.get("argv").and_then(|v| v.as_array()) {
-        Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         None => {
-            return ToolResult { success: false, content: crate::json_err("MISSING_ARGV", "exec_run requires an argv array", "Example: [\"cargo\", \"check\"]") };
+            return ToolResult {
+                success: false,
+                content: crate::json_err(
+                    "MISSING_ARGV",
+                    "exec_run requires an argv array",
+                    "Example: [\"cargo\", \"check\"]",
+                ),
+            };
         }
     };
     if argv.is_empty() {
-        return ToolResult { success: false, content: crate::json_err("EMPTY_ARGV", "argv array is empty", "Provide at least one element.") };
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "EMPTY_ARGV",
+                "argv array is empty",
+                "Provide at least one element.",
+            ),
+        };
     }
-    let max_output_tokens = ctx.get_u64("max_output_tokens").filter(|&n| n >= 100 && n <= 50000).unwrap_or(10000) as u32;
-    let timeout_secs = ctx.get_u64("timeout_secs").filter(|&n| n > 0 && n <= 3600)
+    let max_output_tokens = ctx
+        .get_u64("max_output_tokens")
+        .filter(|&n| n >= 100 && n <= 50000)
+        .unwrap_or(10000) as u32;
+    let timeout_secs = ctx
+        .get_u64("timeout_secs")
+        .filter(|&n| n > 0 && n <= 3600)
         .unwrap_or_else(|| ctx.timeout_secs.unwrap_or(30).clamp(1, 3600));
     // Fall back to workspace root when the caller doesn't supply cwd
     let cwd: Option<String> = ctx.get_str("cwd").map(String::from).or_else(|| {
         let ws = crate::CURRENT_WORKSPACE.read().ok()?;
-        if ws.is_empty() || *ws == "." { None } else { Some(ws.clone()) }
+        if ws.is_empty() || *ws == "." {
+            None
+        } else {
+            Some(ws.clone())
+        }
     });
     let cwd_ref: Option<&str> = cwd.as_deref();
     let result = direct_exec(
@@ -420,7 +544,10 @@ pub(super) fn handle_run(ctx: ToolCallCtx) -> ToolResult {
         Some(_) => false,
         None => !result.timed_out && !result.cancelled,
     };
-    ToolResult { success, content: result.to_json() }
+    ToolResult {
+        success,
+        content: result.to_json(),
+    }
 }
 
 // ── Output helpers ──
@@ -437,12 +564,16 @@ fn strip_ansi(s: &str) -> String {
         match chars.next() {
             Some('[') => {
                 while let Some(next) = chars.next() {
-                    if ('@'..='~').contains(&next) { break; }
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
                 }
             }
             Some(']' | 'P' | '_' | '^') => {
                 while let Some(next) = chars.next() {
-                    if next == '\x07' { break; }
+                    if next == '\x07' {
+                        break;
+                    }
                     if next == '\x1b' && chars.peek() == Some(&'\\') {
                         chars.next();
                         break;
@@ -489,8 +620,10 @@ mod tests {
     fn test_git_status_returns_output() {
         let argv = vec!["git".to_string(), "status".to_string()];
         let result = direct_exec(&argv, None, 10000, 10, None, None, "test");
-        eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
-            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
+        eprintln!(
+            "exit_code={:?} timed_out={} time={:.3}s tokens={}",
+            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens
+        );
         assert!(!result.timed_out, "timed out");
         assert!(!result.output.is_empty(), "no output");
     }
@@ -499,17 +632,26 @@ mod tests {
     fn test_git_diff_returns_output() {
         let argv = vec!["git".to_string(), "diff".to_string(), "--stat".to_string()];
         let result = direct_exec(&argv, None, 10000, 10, None, None, "test");
-        eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
-            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
+        eprintln!(
+            "exit_code={:?} timed_out={} time={:.3}s tokens={}",
+            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens
+        );
         assert!(!result.timed_out, "timed out");
     }
 
     #[test]
     fn test_cargo_check_returns_output() {
-        let argv = vec!["cargo".to_string(), "check".to_string(), "-p".to_string(), "deepx-types".to_string()];
+        let argv = vec![
+            "cargo".to_string(),
+            "check".to_string(),
+            "-p".to_string(),
+            "deepx-types".to_string(),
+        ];
         let result = direct_exec(&argv, None, 10000, 60, None, None, "test");
-        eprintln!("exit_code={:?} timed_out={} time={:.3}s tokens={}",
-            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens);
+        eprintln!(
+            "exit_code={:?} timed_out={} time={:.3}s tokens={}",
+            result.exit_code, result.timed_out, result.wall_time_seconds, result.original_tokens
+        );
         assert!(!result.timed_out, "timed out");
         assert!(!result.output.is_empty(), "no output");
     }
@@ -530,14 +672,19 @@ mod tests {
         });
 
         let result = direct_exec(&argv, None, 100, 10, Some(cancel.as_ref()), None, "test");
-        assert!(result.cancelled, "per-call cancellation should stop the child");
+        assert!(
+            result.cancelled,
+            "per-call cancellation should stop the child"
+        );
     }
 
     #[test]
     fn truncated_output_instructs_the_model_to_retry_narrowly() {
         let text = "token ".repeat(1_000);
         let truncated = token_truncate(&text, 10);
-        assert!(truncated.contains("Call exec_run again with narrower argv or a filtering command."));
+        assert!(
+            truncated.contains("Call exec_run again with narrower argv or a filtering command.")
+        );
     }
 
     #[test]
@@ -555,18 +702,25 @@ mod tests {
         let chunks: Vec<_> = rx.try_iter().collect();
         assert_eq!(output, b"first\nsecond\n");
         assert!(!truncated);
-        assert_eq!(chunks, vec![ExecProgressEvent {
-            tool_call_id: "call-stream-1".to_string(),
-            stream: ExecOutputStream::Stdout,
-            seq: 0,
-            chunk: "first\nsecond\n".to_string(),
-        }]);
+        assert_eq!(
+            chunks,
+            vec![ExecProgressEvent {
+                tool_call_id: "call-stream-1".to_string(),
+                stream: ExecOutputStream::Stdout,
+                seq: 0,
+                chunk: "first\nsecond\n".to_string(),
+            }]
+        );
     }
 
     #[cfg(windows)]
     #[test]
     fn exec_forwards_stdout_to_the_progress_channel_before_returning() {
-        let argv = vec!["cmd".to_string(), "/C".to_string(), "echo streamed-output".to_string()];
+        let argv = vec![
+            "cmd".to_string(),
+            "/C".to_string(),
+            "echo streamed-output".to_string(),
+        ];
         let (tx, rx) = crate::bounded_exec_progress_channel();
 
         let result = direct_exec(&argv, None, 100, 10, None, Some(tx), "call-stream-2");
@@ -586,8 +740,12 @@ mod tests {
         let mut input = vec![b'a'; 8191];
         input.extend_from_slice("中".as_bytes());
         let (_output, truncated) = read_stream(
-            std::io::Cursor::new(input), 16 * 1024, Some(tx), "utf8".to_string(),
-            ExecOutputStream::Stdout, Arc::new(AtomicU64::new(0)),
+            std::io::Cursor::new(input),
+            16 * 1024,
+            Some(tx),
+            "utf8".to_string(),
+            ExecOutputStream::Stdout,
+            Arc::new(AtomicU64::new(0)),
         );
         assert!(!truncated);
         let text: String = rx.try_iter().map(|event| event.chunk).collect();

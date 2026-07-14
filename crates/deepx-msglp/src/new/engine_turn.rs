@@ -574,7 +574,7 @@ impl TurnEngine {
                                         let auth = admitted.auth;
                                         let cid = call_id.clone();
                                         move || {
-                                            let result = deepx_tools::bridge::execute_authorized(
+                                            let result = deepx_tools::execution::execute_authorized(
                                                 *auth,
                                                 Some(tx),
                                             );
@@ -652,7 +652,7 @@ impl TurnEngine {
                                 .spawn({
                                     let auth = admitted.auth;
                                     move || {
-                                        let result = deepx_tools::bridge::execute_authorized(
+                                        let result = deepx_tools::execution::execute_authorized(
                                             *auth,
                                             Some(progress_tx),
                                         );

@@ -22,7 +22,8 @@ pub struct TursoBackend {
 
 /// Helper: get a reference to the shared runtime, or return an error.
 fn runtime() -> Result<&'static tokio::runtime::Runtime, String> {
-    RT.as_ref().ok_or_else(|| "turso: tokio runtime unavailable".to_string())
+    RT.as_ref()
+        .ok_or_else(|| "turso: tokio runtime unavailable".to_string())
 }
 
 impl std::fmt::Debug for TursoBackend {
@@ -66,7 +67,10 @@ impl TursoBackend {
                 .await
                 .map_err(|e| format!("init tables: {e}"))?;
             // Checkpoint flushes WAL → main db file.
-            let _ = self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", ()).await;
+            let _ = self
+                .conn
+                .execute("PRAGMA wal_checkpoint(TRUNCATE)", ())
+                .await;
             Ok(())
         })
     }
@@ -129,7 +133,10 @@ impl TursoBackend {
         runtime()?.block_on(async {
             let mut rows = self
                 .conn
-                .query("SELECT meta_json FROM sessions ORDER BY updated_at DESC", [0i32; 0])
+                .query(
+                    "SELECT meta_json FROM sessions ORDER BY updated_at DESC",
+                    [0i32; 0],
+                )
                 .await
                 .map_err(|e| format!("list: {e}"))?;
             let mut v = Vec::new();
@@ -160,7 +167,8 @@ impl TursoBackend {
                 .await
                 .map_err(|e| format!("count msgs: {e}"))?;
             if let Some(row) = rows.next().await.map_err(|e| format!("rows: {e}"))? {
-                let count: i64 = row.get_value(0)
+                let count: i64 = row
+                    .get_value(0)
                     .map_err(|e| format!("get: {e}"))?
                     .as_integer()
                     .copied()
@@ -191,7 +199,8 @@ impl TursoBackend {
                 let json = serde_json::to_string(msg).unwrap_or_default();
                 let mid = msg.msg_id.map(|v| v as i64);
                 let role = msg.role.clone();
-                if let Err(e) = self.conn
+                if let Err(e) = self
+                    .conn
                     .execute(
                         "INSERT OR REPLACE INTO messages (session_seed, msg_id, role, content_json)
                          VALUES (?1, ?2, ?3, ?4)",
@@ -211,7 +220,10 @@ impl TursoBackend {
                 .map_err(|e| format!("commit tx: {e}"))?;
 
             // Passive checkpoint — flushes committed WAL pages into main db.
-            let _ = self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)", ()).await;
+            let _ = self
+                .conn
+                .execute("PRAGMA wal_checkpoint(PASSIVE)", ())
+                .await;
 
             Ok(())
         })
@@ -306,7 +318,8 @@ impl TursoBackend {
                 let json = serde_json::to_string(msg).unwrap_or_default();
                 let mid = msg.msg_id.map(|v| v as i64);
                 let role = msg.role.clone();
-                if let Err(e) = self.conn
+                if let Err(e) = self
+                    .conn
                     .execute(
                         "INSERT INTO messages (session_seed, msg_id, role, content_json)
                          VALUES (?1, ?2, ?3, ?4)",
@@ -324,7 +337,10 @@ impl TursoBackend {
                 .await
                 .map_err(|e| format!("commit tx: {e}"))?;
 
-            let _ = self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)", ()).await;
+            let _ = self
+                .conn
+                .execute("PRAGMA wal_checkpoint(PASSIVE)", ())
+                .await;
             Ok(())
         })
     }
@@ -340,10 +356,7 @@ impl TursoBackend {
                 .await
                 .map_err(|e| format!("del msgs: {e}"))?;
             self.conn
-                .execute(
-                    "DELETE FROM sessions WHERE seed = ?1",
-                    turso::params![seed],
-                )
+                .execute("DELETE FROM sessions WHERE seed = ?1", turso::params![seed])
                 .await
                 .map_err(|e| format!("del session: {e}"))?;
             Ok(())

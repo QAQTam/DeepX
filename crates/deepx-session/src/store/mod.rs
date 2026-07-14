@@ -22,7 +22,8 @@ pub fn write_meta(session_dir: &Path, meta: &SessionMeta) -> Result<(), String> 
     let json = serde_json::to_string_pretty(meta).map_err(|e| format!("serialize meta: {e}"))?;
     {
         let mut f = fs::File::create(&tmp).map_err(|e| format!("create meta tmp: {e}"))?;
-        f.write_all(json.as_bytes()).map_err(|e| format!("write meta tmp: {e}"))?;
+        f.write_all(json.as_bytes())
+            .map_err(|e| format!("write meta tmp: {e}"))?;
         f.flush().map_err(|e| format!("flush meta tmp: {e}"))?;
         f.sync_all().map_err(|e| format!("sync meta tmp: {e}"))?;
     }
@@ -90,9 +91,11 @@ pub fn read_messages(session_dir: &Path) -> Result<Vec<Message>, String> {
     let mut dup_count = 0u32;
     for (i, line) in reader.lines().enumerate() {
         let line = line.map_err(|e| format!("read line {i}: {e}"))?;
-        if line.trim().is_empty() { continue; }
-        let msg: Message = serde_json::from_str(&line)
-            .map_err(|e| format!("parse line {i}: {e}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let msg: Message =
+            serde_json::from_str(&line).map_err(|e| format!("parse line {i}: {e}"))?;
         // Skip duplicate msg_ids (prior bug: from_messages re-persisted).
         if let Some(mid) = msg.msg_id {
             if !seen_ids.insert(mid) {
@@ -103,7 +106,9 @@ pub fn read_messages(session_dir: &Path) -> Result<Vec<Message>, String> {
         msgs.push(msg);
     }
     if dup_count > 0 {
-        log::warn!("[read_messages] skipped {dup_count} duplicate messages (msg_id collision) — will rewrite cleanly on next save_full");
+        log::warn!(
+            "[read_messages] skipped {dup_count} duplicate messages (msg_id collision) — will rewrite cleanly on next save_full"
+        );
     }
     Ok(msgs)
 }
@@ -142,7 +147,9 @@ pub fn truncate_messages(session_dir: &Path, keep_lines: usize) -> Result<Vec<Me
 /// Count lines in messages.jsonl (fast, reads line-by-line without parsing JSON).
 pub fn count_message_lines(session_dir: &Path) -> Result<usize, String> {
     let path = session_dir.join("messages.jsonl");
-    if !path.exists() { return Ok(0); }
+    if !path.exists() {
+        return Ok(0);
+    }
     let file = fs::File::open(&path).map_err(|e| format!("open: {e}"))?;
     let reader = BufReader::new(file);
     Ok(reader.lines().count())
@@ -153,23 +160,30 @@ pub fn count_message_lines(session_dir: &Path) -> Result<usize, String> {
 /// Read the central session index.
 pub fn read_index(sessions_dir: &Path) -> Vec<SessionMeta> {
     let path = sessions_dir.join("index.json");
-    let Ok(data) = fs::read_to_string(&path) else { return vec![] };
+    let Ok(data) = fs::read_to_string(&path) else {
+        return vec![];
+    };
     serde_json::from_str(&data).unwrap_or_default()
 }
 
 /// Write the central session index atomically.
 pub fn write_index(sessions_dir: &Path, metas: &[SessionMeta]) {
-    let Ok(json) = serde_json::to_string_pretty(metas) else { return };
+    let Ok(json) = serde_json::to_string_pretty(metas) else {
+        return;
+    };
     let tmp = sessions_dir.join(".index.tmp");
     let dst = sessions_dir.join("index.json");
     let write_and_sync = || -> Result<(), String> {
         let mut f = std::fs::File::create(&tmp).map_err(|e| format!("create index tmp: {e}"))?;
-        f.write_all(json.as_bytes()).map_err(|e| format!("write index tmp: {e}"))?;
+        f.write_all(json.as_bytes())
+            .map_err(|e| format!("write index tmp: {e}"))?;
         f.flush().map_err(|e| format!("flush index tmp: {e}"))?;
         f.sync_all().map_err(|e| format!("sync index tmp: {e}"))?;
         Ok(())
     };
-    if write_and_sync().is_err() { return; }
+    if write_and_sync().is_err() {
+        return;
+    }
     let _ = fs::rename(&tmp, &dst);
 }
 
@@ -198,7 +212,9 @@ impl IndexLock {
                 Err(_) => {
                     // Can't acquire lock — proceed without it (better than hanging)
                     log::warn!("[IndexLock] cannot create lock file, proceeding unlocked");
-                    return IndexLock { lock_path: std::path::PathBuf::new() };
+                    return IndexLock {
+                        lock_path: std::path::PathBuf::new(),
+                    };
                 }
             }
         }

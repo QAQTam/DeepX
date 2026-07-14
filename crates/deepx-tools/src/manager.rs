@@ -61,7 +61,15 @@ pub(crate) struct PreparedCall {
 
 impl ToolManager {
     pub fn new() -> Self {
-        Self { handlers: BTreeMap::new(), allowed: None, inflight_tasks: BTreeMap::new(), stats_total: 0, stats_failures: 0, files_read: Vec::new(), files_written: Vec::new() }
+        Self {
+            handlers: BTreeMap::new(),
+            allowed: None,
+            inflight_tasks: BTreeMap::new(),
+            stats_total: 0,
+            stats_failures: 0,
+            files_read: Vec::new(),
+            files_written: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, handler: ToolHandler) {
@@ -73,7 +81,11 @@ impl ToolManager {
     }
 
     pub fn apply_init(&mut self, allowed_tools: Vec<String>, session_seed: &str) {
-        self.allowed = if allowed_tools.is_empty() { None } else { Some(allowed_tools) };
+        self.allowed = if allowed_tools.is_empty() {
+            None
+        } else {
+            Some(allowed_tools)
+        };
         crate::set_current_session(session_seed);
     }
 
@@ -83,7 +95,11 @@ impl ToolManager {
 
     pub fn filtered_defs(&self) -> Vec<deepx_types::ToolDef> {
         match &self.allowed {
-            Some(allowed) => self.all_defs().into_iter().filter(|d| allowed.contains(&d.function.name)).collect(),
+            Some(allowed) => self
+                .all_defs()
+                .into_iter()
+                .filter(|d| allowed.contains(&d.function.name))
+                .collect(),
             None => self.all_defs(),
         }
     }
@@ -92,15 +108,33 @@ impl ToolManager {
 
     /// Phase 1: validate, safety-check, register inflight. Returns a [`PreparedCall`]
     /// that can be executed without the manager lock.
-    pub(crate) fn prepare_req(&mut self, id: String, name: &str, action: &str, args: serde_json::Value, timeout_secs: Option<u64>, progress_tx: Option<crate::ExecProgressSender>) -> Result<PreparedCall, ToolExecReport> {
+    pub(crate) fn prepare_req(
+        &mut self,
+        id: String,
+        name: &str,
+        action: &str,
+        args: serde_json::Value,
+        timeout_secs: Option<u64>,
+        progress_tx: Option<crate::ExecProgressSender>,
+    ) -> Result<PreparedCall, ToolExecReport> {
         if let Some(ref allowed) = self.allowed {
             if !allowed.contains(&name.to_string()) {
-                let msg = format!("[ERROR] Tool '{}' is not in the allowed list for this subagent. Allowed tools: [{}]", name, allowed.join(", "));
+                let msg = format!(
+                    "[ERROR] Tool '{}' is not in the allowed list for this subagent. Allowed tools: [{}]",
+                    name,
+                    allowed.join(", ")
+                );
                 return Err(ToolExecReport {
                     success: false,
                     content: msg.clone(),
                     files_affected: Vec::new(),
-                    meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() },
+                    meta: ToolExecMeta {
+                        name: name.to_string(),
+                        elapsed_ms: 0,
+                        output_size: msg.len(),
+                        success: false,
+                        args_summary: String::new(),
+                    },
                 });
             }
         }
@@ -113,7 +147,13 @@ impl ToolManager {
                     success: false,
                     content: msg.clone(),
                     files_affected: Vec::new(),
-                    meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() },
+                    meta: ToolExecMeta {
+                        name: name.to_string(),
+                        elapsed_ms: 0,
+                        output_size: msg.len(),
+                        success: false,
+                        args_summary: String::new(),
+                    },
                 });
             }
         };
@@ -139,7 +179,13 @@ impl ToolManager {
                     success: false,
                     content: msg.clone(),
                     files_affected: Vec::new(),
-                    meta: ToolExecMeta { name: name.to_string(), elapsed_ms: 0, output_size: msg.len(), success: false, args_summary: String::new() },
+                    meta: ToolExecMeta {
+                        name: name.to_string(),
+                        elapsed_ms: 0,
+                        output_size: msg.len(),
+                        success: false,
+                        args_summary: String::new(),
+                    },
                 });
             }
             SafetyVerdict::Allow => {}
@@ -148,13 +194,33 @@ impl ToolManager {
         self.inflight_tasks.insert(id.clone(), cancel_flag.clone());
 
         let audit_args = args.clone();
-        let ctx = crate::ToolCallCtx { id: id.clone(), name: name.to_string(), action: action.to_string(), args, tx_progress: progress_tx, timeout_secs: Some(timeout_secs), cancel: cancel_flag, skill_activation };
+        let ctx = crate::ToolCallCtx {
+            id: id.clone(),
+            name: name.to_string(),
+            action: action.to_string(),
+            args,
+            tx_progress: progress_tx,
+            timeout_secs: Some(timeout_secs),
+            cancel: cancel_flag,
+            skill_activation,
+        };
 
-        Ok(PreparedCall { id, name: name.to_string(), handler_fn: handler.handler, ctx, audit_args })
+        Ok(PreparedCall {
+            id,
+            name: name.to_string(),
+            handler_fn: handler.handler,
+            ctx,
+            audit_args,
+        })
     }
 
     /// Phase 3: deregister inflight, accumulate stats, build report.
-    pub(crate) fn finalize_req(&mut self, prepared: PreparedCall, result: crate::ToolResult, elapsed_ms: u64) -> ToolExecReport {
+    pub(crate) fn finalize_req(
+        &mut self,
+        prepared: PreparedCall,
+        result: crate::ToolResult,
+        elapsed_ms: u64,
+    ) -> ToolExecReport {
         self.inflight_tasks.remove(&prepared.id);
 
         let output_size = result.content.len();
@@ -188,12 +254,28 @@ impl ToolManager {
                 _ => {}
             }
         }
-        let meta = ToolExecMeta { name: prepared.name, elapsed_ms, output_size, success, args_summary };
-        ToolExecReport { success, content: result.content, meta, files_affected }
+        let meta = ToolExecMeta {
+            name: prepared.name,
+            elapsed_ms,
+            output_size,
+            success,
+            args_summary,
+        };
+        ToolExecReport {
+            success,
+            content: result.content,
+            meta,
+            files_affected,
+        }
     }
 
     pub fn stats(&self) -> ToolStats {
-        ToolStats { calls_total: self.stats_total, failures: self.stats_failures, files_read: self.files_read.clone(), files_written: self.files_written.clone() }
+        ToolStats {
+            calls_total: self.stats_total,
+            failures: self.stats_failures,
+            files_read: self.files_read.clone(),
+            files_written: self.files_written.clone(),
+        }
     }
 
     pub fn reset_stats(&mut self) {
@@ -251,11 +333,20 @@ fn is_path_in_workspace(ctx: &crate::ToolCallCtx) -> bool {
         if path.is_empty() || path == "." {
             return true;
         }
-        let ws = crate::CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock");
+        let ws = crate::CURRENT_WORKSPACE
+            .read()
+            .expect("CURRENT_WORKSPACE lock");
         if ws.is_empty() || *ws == "." {
             return true;
         }
-        let abs_path = if std::path::Path::new(path).is_absolute() { path.to_string() } else { std::path::Path::new(&*ws).join(path).to_string_lossy().to_string() };
+        let abs_path = if std::path::Path::new(path).is_absolute() {
+            path.to_string()
+        } else {
+            std::path::Path::new(&*ws)
+                .join(path)
+                .to_string_lossy()
+                .to_string()
+        };
         abs_path.starts_with(&*ws)
     } else {
         // No path arg — assume workspace operation (e.g. task, memory, ask_user)
@@ -271,7 +362,9 @@ fn audit_args_summary(_tool: &str, args: &serde_json::Value) -> String {
     };
     // Show path-like args first, then command, then truncate to 80 chars
     let mut parts: Vec<String> = Vec::new();
-    for key in ["path", "file_a", "file_b", "dest", "target", "command", "pattern", "query", "question"] {
+    for key in [
+        "path", "file_a", "file_b", "dest", "target", "command", "pattern", "query", "question",
+    ] {
         if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
             let short = if v.len() > 50 {
                 // Show last path segment

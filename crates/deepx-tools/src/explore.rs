@@ -5,8 +5,8 @@
 use std::sync::atomic::Ordering;
 
 use crate::CANCEL;
-use crate::{ToolCallCtx, ToolResult};
 use crate::CURRENT_WORKSPACE;
+use crate::{ToolCallCtx, ToolResult};
 
 // ── Handler ──
 
@@ -16,7 +16,8 @@ pub(super) fn handle_explore(ctx: ToolCallCtx) -> ToolResult {
         let ws = ws_guard.as_str();
         if ws.is_empty() || ws == "." {
             std::fs::read_to_string(deepx_types::platform::workspace_path())
-                .ok().filter(|s| !s.trim().is_empty())
+                .ok()
+                .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| ".".into())
         } else {
             ws.to_string()
@@ -30,15 +31,28 @@ fn exec_architecture(path: &str) -> String {
     let root = std::path::Path::new(path);
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
-        Err(e) => return crate::json_err("CURRENT_DIR_FAILED", &format!("Cannot determine current directory: {e}"), "Check the working directory."),
+        Err(e) => {
+            return crate::json_err(
+                "CURRENT_DIR_FAILED",
+                &format!("Cannot determine current directory: {e}"),
+                "Check the working directory.",
+            );
+        }
     };
-    let abs = if root.is_absolute() { root.to_path_buf() } else { cwd.join(root) };
+    let abs = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        cwd.join(root)
+    };
     let abs_str = crate::display_path(&abs.to_string_lossy());
 
     let is_rust = abs.join("Cargo.toml").exists();
     let is_go = abs.join("go.mod").exists();
     let markers: Vec<&str> = ["Cargo.toml", "package.json", "go.mod", "pyproject.toml"]
-        .iter().filter(|m| abs.join(m).exists()).copied().collect();
+        .iter()
+        .filter(|m| abs.join(m).exists())
+        .copied()
+        .collect();
 
     let mut out = format!("[ARCHITECTURE]\npath: {abs_str}\n");
     if !markers.is_empty() {
@@ -50,10 +64,16 @@ fn exec_architecture(path: &str) -> String {
     } else if is_go {
         out.push_str(&architecture_go(&abs));
     } else {
-        out.push_str("[HINT] Unknown project type. Use list to browse and read to inspect files.\n");
+        out.push_str(
+            "[HINT] Unknown project type. Use list to browse and read to inspect files.\n",
+        );
     }
 
-    out.push_str(&format!("\n── {} chars, {} .rs files ──", out.len(), count_rs_files(&abs)));
+    out.push_str(&format!(
+        "\n── {} chars, {} .rs files ──",
+        out.len(),
+        count_rs_files(&abs)
+    ));
     crate::json_ok(serde_json::json!({"content": out}))
 }
 
@@ -85,31 +105,65 @@ fn architecture_rust(root: &std::path::Path) -> String {
     // 3. Public API + test counts per file
     let mut per_file: Vec<(String, Vec<String>, usize, usize)> = Vec::new();
     for entry in walk_rs_files(root) {
-        if CANCEL.load(Ordering::Relaxed) { break; }
-        let Ok(content) = std::fs::read_to_string(&entry) else { continue };
-        let relative = entry.strip_prefix(root).unwrap_or(&entry).display().to_string();
+        if CANCEL.load(Ordering::Relaxed) {
+            break;
+        }
+        let Ok(content) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        let relative = entry
+            .strip_prefix(root)
+            .unwrap_or(&entry)
+            .display()
+            .to_string();
         let mut tests = 0usize;
         let mut pub_items: Vec<String> = Vec::new();
 
         for line in content.lines() {
             let t = line.trim();
-            if t.starts_with("#[test]") || t.starts_with("#[cfg(test)]") { tests += 1; }
+            if t.starts_with("#[test]") || t.starts_with("#[cfg(test)]") {
+                tests += 1;
+            }
             let sig = if t.starts_with("pub fn ") {
-                t.trim_start_matches("pub fn ").split('(').next().map(|n| format!("fn {}", n.trim()))
+                t.trim_start_matches("pub fn ")
+                    .split('(')
+                    .next()
+                    .map(|n| format!("fn {}", n.trim()))
             } else if t.starts_with("pub async fn ") {
-                t.trim_start_matches("pub async fn ").split('(').next().map(|n| format!("async fn {}", n.trim()))
+                t.trim_start_matches("pub async fn ")
+                    .split('(')
+                    .next()
+                    .map(|n| format!("async fn {}", n.trim()))
             } else if t.starts_with("pub struct ") {
-                t.trim_start_matches("pub struct ").split(&[' ', '{', '<'][..]).next().map(|n| format!("struct {}", n.trim()))
+                t.trim_start_matches("pub struct ")
+                    .split(&[' ', '{', '<'][..])
+                    .next()
+                    .map(|n| format!("struct {}", n.trim()))
             } else if t.starts_with("pub enum ") {
-                t.trim_start_matches("pub enum ").split(&[' ', '{'][..]).next().map(|n| format!("enum {}", n.trim()))
+                t.trim_start_matches("pub enum ")
+                    .split(&[' ', '{'][..])
+                    .next()
+                    .map(|n| format!("enum {}", n.trim()))
             } else if t.starts_with("pub trait ") {
-                t.trim_start_matches("pub trait ").split(&[' ', '{', '<'][..]).next().map(|n| format!("trait {}", n.trim()))
+                t.trim_start_matches("pub trait ")
+                    .split(&[' ', '{', '<'][..])
+                    .next()
+                    .map(|n| format!("trait {}", n.trim()))
             } else if t.starts_with("pub mod ") {
-                t.trim_start_matches("pub mod ").trim_end_matches(';').trim().split(' ').next().map(|n| format!("mod {}", n.trim()))
-            } else { None };
+                t.trim_start_matches("pub mod ")
+                    .trim_end_matches(';')
+                    .trim()
+                    .split(' ')
+                    .next()
+                    .map(|n| format!("mod {}", n.trim()))
+            } else {
+                None
+            };
 
             if let Some(s) = sig {
-                if s.len() < 100 { pub_items.push(s); }
+                if s.len() < 100 {
+                    pub_items.push(s);
+                }
             }
         }
 
@@ -128,7 +182,10 @@ fn architecture_rust(root: &std::path::Path) -> String {
 
         for (rel, items, lines, tests) in &per_file {
             // Group header when directory changes
-            if let Some(dir) = std::path::Path::new(rel).parent().map(|p| p.to_string_lossy().to_string()) {
+            if let Some(dir) = std::path::Path::new(rel)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+            {
                 if dir != current_dir {
                     current_dir = dir.clone();
                     out.push_str(&format!("  {}/\n", dir));
@@ -136,7 +193,9 @@ fn architecture_rust(root: &std::path::Path) -> String {
             }
 
             let mut entry = format!("    {} ({}L", rel, lines);
-            if *tests > 0 { entry.push_str(&format!(", {} tests", tests)); }
+            if *tests > 0 {
+                entry.push_str(&format!(", {} tests", tests));
+            }
             entry.push(')');
 
             if !items.is_empty() {
@@ -242,7 +301,11 @@ fn parse_single_crate(dir: &std::path::Path) -> Option<(String, Vec<String>)> {
             continue;
         }
         if in_deps || in_ws_deps {
-            if let Some(dep_name) = t.split('=').next().map(|n| n.trim().trim_matches('"').to_string()) {
+            if let Some(dep_name) = t
+                .split('=')
+                .next()
+                .map(|n| n.trim().trim_matches('"').to_string())
+            {
                 if !dep_name.is_empty() {
                     deps.push(dep_name);
                 }
@@ -256,7 +319,9 @@ fn parse_single_crate(dir: &std::path::Path) -> Option<(String, Vec<String>)> {
 
 fn architecture_go(root: &std::path::Path) -> String {
     let go_mod = std::fs::read_to_string(root.join("go.mod")).unwrap_or_default();
-    let module = go_mod.lines().find(|l| l.starts_with("module "))
+    let module = go_mod
+        .lines()
+        .find(|l| l.starts_with("module "))
         .map(|l| l.trim_start_matches("module ").trim().to_string())
         .unwrap_or_else(|| "?".into());
 
@@ -269,29 +334,48 @@ fn derive_go_graph_stripped(root: &std::path::Path) -> String {
     let mut out = String::new();
     let mut seen_packages: Vec<String> = Vec::new();
     for entry in walk_ext_files(root, ".go") {
-        if CANCEL.load(Ordering::Relaxed) { break; }
-        let Ok(content) = std::fs::read_to_string(&entry) else { continue };
-        let relative = entry.strip_prefix(root).unwrap_or(&entry).display().to_string();
+        if CANCEL.load(Ordering::Relaxed) {
+            break;
+        }
+        let Ok(content) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        let relative = entry
+            .strip_prefix(root)
+            .unwrap_or(&entry)
+            .display()
+            .to_string();
         let mut exports: Vec<String> = Vec::new();
 
         for line in content.lines() {
             let t = line.trim();
             if t.starts_with("func ") {
-                let name = t.trim_start_matches("func ").split('(').next().unwrap_or("").trim().to_string();
+                let name = t
+                    .trim_start_matches("func ")
+                    .split('(')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 if name.chars().next().map_or(false, |c| c.is_uppercase()) {
                     exports.push(name);
                 }
             }
         }
         if !exports.is_empty() {
-            let pkg = std::path::Path::new(&relative).parent()
-                .map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            let pkg = std::path::Path::new(&relative)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
             if !seen_packages.contains(&pkg) {
                 seen_packages.push(pkg);
             }
             out.push_str(&format!("  {}: {}\n", relative, exports.join(", ")));
         }
-        if out.len() > 4000 { out.push_str("  ... truncated\n"); break; }
+        if out.len() > 4000 {
+            out.push_str("  ... truncated\n");
+            break;
+        }
     }
     out
 }
@@ -303,8 +387,13 @@ fn walk_rs_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            if name.starts_with('.') || name == "target" || name == "node_modules" { continue; }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if name.starts_with('.') || name == "target" || name == "node_modules" {
+                continue;
+            }
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 files.extend(walk_rs_files(&path));
             } else if name.ends_with(".rs") {
@@ -321,8 +410,17 @@ fn walk_ext_files(dir: &std::path::Path, ext: &str) -> Vec<std::path::PathBuf> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            if name.starts_with('.') || name == "target" || name == "node_modules" || name == "vendor" { continue; }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if name.starts_with('.')
+                || name == "target"
+                || name == "node_modules"
+                || name == "vendor"
+            {
+                continue;
+            }
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 files.extend(walk_ext_files(&path, ext));
             } else if name.ends_with(ext) {
@@ -339,8 +437,13 @@ fn count_rs_files(dir: &std::path::Path) -> usize {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            if name.starts_with('.') || name == "target" || name == "node_modules" { continue; }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if name.starts_with('.') || name == "target" || name == "node_modules" {
+                continue;
+            }
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 count += count_rs_files(&path);
             } else if name.ends_with(".rs") {

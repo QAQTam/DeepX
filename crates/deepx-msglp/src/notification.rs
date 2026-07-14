@@ -75,7 +75,10 @@ impl NotificationThread {
                 }
             })
             .expect("failed to spawn notification thread");
-        Self { tx, _thread: thread }
+        Self {
+            tx,
+            _thread: thread,
+        }
     }
 
     /// Send a simple one-way toast notification.
@@ -93,7 +96,9 @@ impl NotificationThread {
     #[allow(dead_code)]
     pub(crate) fn notify_input(&self, body: String) -> mpsc::Receiver<Option<String>> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        let _ = self.tx.send(NotifyMessage::ToastWithInput { body, reply_tx });
+        let _ = self
+            .tx
+            .send(NotifyMessage::ToastWithInput { body, reply_tx });
         reply_rx
     }
 }
@@ -110,7 +115,8 @@ fn ensure_aumid() -> &'static str {
             );
             log::info!("SetCurrentProcessExplicitAppUserModelID({our_id}) → {hr:?}");
         }
-        let ps_id = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
+        let ps_id =
+            "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
         log::info!("Using PowerShell AUMID for toast");
         ps_id.to_string()
     })
@@ -168,7 +174,11 @@ fn show_toast_with_input_windows(body: &str, reply_tx: mpsc::Sender<Option<Strin
 
     let doc = match windows::Data::Xml::Dom::XmlDocument::new() {
         Ok(d) => d,
-        Err(e) => { let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("XmlDocument::new failed: {e:?}"); return; }
+        Err(e) => {
+            let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+            log::error!("XmlDocument::new failed: {e:?}");
+            return;
+        }
     };
     if let Err(e) = doc.LoadXml(&windows::core::HSTRING::from(xml.as_str())) {
         let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
@@ -177,16 +187,25 @@ fn show_toast_with_input_windows(body: &str, reply_tx: mpsc::Sender<Option<Strin
     }
     let toast = match windows::UI::Notifications::ToastNotification::CreateToastNotification(&doc) {
         Ok(t) => t,
-        Err(e) => { let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("CreateToastNotification failed: {e:?}"); return; }
+        Err(e) => {
+            let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+            log::error!("CreateToastNotification failed: {e:?}");
+            return;
+        }
     };
 
     let aumid = ensure_aumid();
-    let notifier = match windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
-        &windows::core::HSTRING::from(aumid),
-    ) {
-        Ok(n) => n,
-        Err(e) => { let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok()); log::error!("CreateToastNotifierWithId({aumid}) failed: {e:?}"); return; }
-    };
+    let notifier =
+        match windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
+            &windows::core::HSTRING::from(aumid),
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+                log::error!("CreateToastNotifierWithId({aumid}) failed: {e:?}");
+                return;
+            }
+        };
 
     if let Err(e) = notifier.Show(&toast) {
         log::error!("show_toast_input: Show failed: {e:?}");
@@ -209,7 +228,10 @@ fn show_toast_windows(body: &str) {
 
     let doc = match windows::Data::Xml::Dom::XmlDocument::new() {
         Ok(d) => d,
-        Err(e) => { log::error!("show_toast: XmlDocument::new failed: {e:?}"); return; }
+        Err(e) => {
+            log::error!("show_toast: XmlDocument::new failed: {e:?}");
+            return;
+        }
     };
     if let Err(e) = doc.LoadXml(&windows::core::HSTRING::from(xml.as_str())) {
         log::error!("show_toast: LoadXml failed: {e:?}");
@@ -217,15 +239,22 @@ fn show_toast_windows(body: &str) {
     }
     let toast = match windows::UI::Notifications::ToastNotification::CreateToastNotification(&doc) {
         Ok(t) => t,
-        Err(e) => { log::error!("show_toast: CreateToastNotification failed: {e:?}"); return; }
+        Err(e) => {
+            log::error!("show_toast: CreateToastNotification failed: {e:?}");
+            return;
+        }
     };
 
-    let notifier = match windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
-        &windows::core::HSTRING::from(aumid),
-    ) {
-        Ok(n) => n,
-        Err(e) => { log::error!("show_toast: CreateToastNotifierWithId({aumid}) failed: {e:?}"); return; }
-    };
+    let notifier =
+        match windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
+            &windows::core::HSTRING::from(aumid),
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                log::error!("show_toast: CreateToastNotifierWithId({aumid}) failed: {e:?}");
+                return;
+            }
+        };
 
     if let Err(e) = notifier.Show(&toast) {
         log::error!("show_toast: Show failed: {e:?}");

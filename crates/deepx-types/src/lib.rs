@@ -6,13 +6,13 @@
 
 // ── Sub-module declarations (each file = one logical group) ──
 
-pub mod message;
-pub mod tool_def;
-pub mod state;
-pub mod config;
-pub mod session;
 pub mod api_types;
+pub mod config;
+pub mod message;
 pub mod provider;
+pub mod session;
+pub mod state;
+pub mod tool_def;
 
 // Unified arg parsing (shared across dsx-agent, dsx-tools)
 pub mod arg;
@@ -24,17 +24,20 @@ pub mod token;
 
 // ── Re-exports: flat public API ──
 
-pub use message::{Message, ContentBlock, ToolCall, FunctionCall};
-pub use tool_def::{ToolDef, ToolFunction};
-pub use state::DebugLevel;
-pub use config::{PersistentConfig, ProfileConfig, ConfigStore, BalanceInfo, PersistentSubagentConfig, PersistentDatabaseConfig};
-pub use provider::{EndpointSpec, ProviderSpec, UserSendMode, ThinkingParamMode, CacheTokenField};
-pub use session::SessionMeta;
 pub use api_types::UsageInfo;
+pub use config::{
+    BalanceInfo, ConfigStore, PersistentConfig, PersistentDatabaseConfig, PersistentSubagentConfig,
+    ProfileConfig,
+};
+pub use message::{ContentBlock, FunctionCall, Message, ToolCall};
+pub use provider::{CacheTokenField, EndpointSpec, ProviderSpec, ThinkingParamMode, UserSendMode};
+pub use session::SessionMeta;
+pub use state::DebugLevel;
+pub use tool_def::{ToolDef, ToolFunction};
 
 // ── Unified arg parsers ──
 pub use arg::{
-    parse_arg, parse_arg_or, parse_opt, parse_opt_u64, tool_action, parse_file_arg, parse_cmd_arg,
+    parse_arg, parse_arg_or, parse_cmd_arg, parse_file_arg, parse_opt, parse_opt_u64, tool_action,
 };
 
 // ── Shared utilities ──

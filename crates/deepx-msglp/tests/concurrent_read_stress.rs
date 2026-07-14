@@ -6,8 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use deepx_msglp::new::loop_core::Loop;
 use deepx_msglp::agent::AgentState;
+use deepx_msglp::new::loop_core::Loop;
 use deepx_proto::{Agent2Ui, Ui2Agent};
 
 #[test]

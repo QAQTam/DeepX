@@ -5,7 +5,9 @@ use std::path::PathBuf;
 /// - Unix: `HOME`
 pub fn home_dir() -> PathBuf {
     if cfg!(target_os = "windows") {
-        std::env::var("USERPROFILE").map(PathBuf::from).unwrap_or_default()
+        std::env::var("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_default()
     } else {
         std::env::var("HOME").map(PathBuf::from).unwrap_or_default()
     }
@@ -55,13 +57,17 @@ pub fn workspace_path() -> PathBuf {
 /// - Unix: `kill -9`
 pub fn kill_process(pid: u32) {
     if cfg!(target_os = "windows") {
-        drop(std::process::Command::new("taskkill")
-            .args(["/F", "/PID", &pid.to_string()])
-            .output());
+        drop(
+            std::process::Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .output(),
+        );
     } else {
-        drop(std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .output());
+        drop(
+            std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .output(),
+        );
     }
 }
 
@@ -80,4 +86,3 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
 }
-

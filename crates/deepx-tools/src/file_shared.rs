@@ -15,8 +15,11 @@ pub(super) fn normalize_newlines(content: &str) -> (String, bool) {
 /// Returns (line_number, line_content).
 pub(super) fn closest_line(content: &str, search: &str) -> Option<(usize, String)> {
     let needle = search.lines().next().unwrap_or(search).trim();
-    if needle.is_empty() { return None; }
-    content.lines()
+    if needle.is_empty() {
+        return None;
+    }
+    content
+        .lines()
         .enumerate()
         .map(|(i, l)| (i, l, l.trim().len() as i64 - needle.len() as i64))
         .filter(|(_, l, _)| l.contains(needle) || needle.contains(l.trim()))
@@ -80,10 +83,20 @@ pub(super) fn disambiguate_match(
     if candidates.len() == 1 {
         return Ok(candidates[0]);
     }
-    let norm_before: Vec<String> = context_before.iter().map(|l| l.trim_end().to_string()).collect();
-    let norm_after: Vec<String> = context_after.iter().map(|l| l.trim_end().to_string()).collect();
+    let norm_before: Vec<String> = context_before
+        .iter()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    let norm_after: Vec<String> = context_after
+        .iter()
+        .map(|l| l.trim_end().to_string())
+        .collect();
     if norm_before.is_empty() && norm_after.is_empty() {
-        let locs: Vec<String> = candidates.iter().take(5).map(|&i| format!("L{}", i+1)).collect();
+        let locs: Vec<String> = candidates
+            .iter()
+            .take(5)
+            .map(|&i| format!("L{}", i + 1))
+            .collect();
         return Err(serde_json::json!({
             "timeis": crate::now_utc8(),
             "status": "error",
@@ -102,17 +115,36 @@ pub(super) fn disambiguate_match(
             let fi = pos as i32 - norm_before.len() as i32 + j as i32;
             if fi >= 0 && (fi as usize) < file_lines.len() {
                 let fl = file_lines[fi as usize].trim_end().to_string();
-                if fl == *cl { score += 3; } else if fl.trim() == cl.trim() { score += 1; } else { score -= 1; }
-            } else { score -= 2; }
+                if fl == *cl {
+                    score += 3;
+                } else if fl.trim() == cl.trim() {
+                    score += 1;
+                } else {
+                    score -= 1;
+                }
+            } else {
+                score -= 2;
+            }
         }
         for (j, cl) in norm_after.iter().enumerate() {
             let fi = pos + win + j;
             if fi < file_lines.len() {
                 let fl = file_lines[fi].trim_end().to_string();
-                if fl == *cl { score += 3; } else if fl.trim() == cl.trim() { score += 1; } else { score -= 1; }
-            } else { score -= 2; }
+                if fl == *cl {
+                    score += 3;
+                } else if fl.trim() == cl.trim() {
+                    score += 1;
+                } else {
+                    score -= 1;
+                }
+            } else {
+                score -= 2;
+            }
         }
-        if score > best_score { best = pos; best_score = score; }
+        if score > best_score {
+            best = pos;
+            best_score = score;
+        }
     }
     Ok(best)
 }
@@ -144,11 +176,19 @@ pub(super) fn apply_diff_and_format(
         if was_fuzzy {
             result.push_str("\u{26a0} fuzzy match (indentation normalized)\n");
         }
-        result.push_str(&format!("[DRY RUN] {path} — preview, no changes written\n\n"));
+        result.push_str(&format!(
+            "[DRY RUN] {path} — preview, no changes written\n\n"
+        ));
         result.push_str(&format!("--- a/{}\n+++ b/{}\n", path, path));
         let ctx_line = file_lines.get(match_idx.saturating_sub(1)).unwrap_or(&"");
-        result.push_str(&format!("@@ -{},{} +{},{} @@ {}\n",
-            line, removed.max(1), line, added.max(1), ctx_line));
+        result.push_str(&format!(
+            "@@ -{},{} +{},{} @@ {}\n",
+            line,
+            removed.max(1),
+            line,
+            added.max(1),
+            ctx_line
+        ));
         let ctx_start = match_idx.saturating_sub(2);
         for i in ctx_start..match_idx {
             result.push_str(&format!(" {}\n", file_lines[i]));
@@ -163,8 +203,14 @@ pub(super) fn apply_diff_and_format(
         for i in (match_idx + win)..ctx_end {
             result.push_str(&format!(" {}\n", out_lines[i]));
         }
-        let desc = if description.is_empty() { "edit_file_diff" } else { description };
-        result.push_str(&format!("\n[DRY RUN] {path}:{line} +{added} -{removed} | {desc} (dry run)"));
+        let desc = if description.is_empty() {
+            "edit_file_diff"
+        } else {
+            description
+        };
+        result.push_str(&format!(
+            "\n[DRY RUN] {path}:{line} +{added} -{removed} | {desc} (dry run)"
+        ));
         return result;
     }
 
@@ -185,7 +231,11 @@ pub(super) fn apply_diff_and_format(
             if was_fuzzy {
                 result.push_str("\u{26a0} fuzzy match (indentation normalized)\n");
             }
-            let desc = if description.is_empty() { "edit_file_diff" } else { description };
+            let desc = if description.is_empty() {
+                "edit_file_diff"
+            } else {
+                description
+            };
             let disp = crate::display_path(&path);
             // On success, omit the full diff body — the LLM already knows what it changed.
             // Saves ~80-90% of tool result tokens per edit.
@@ -193,7 +243,11 @@ pub(super) fn apply_diff_and_format(
             let _ = write!(result, "[OK] {disp}:{line} +{added} -{removed} | {desc}");
             result
         }
-        Err(e) => format!("[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.", crate::display_path(&path), e),
+        Err(e) => format!(
+            "[ERROR] Cannot write {}: {}\n[HINT] Verify parent directory exists and is writable.",
+            crate::display_path(&path),
+            e
+        ),
     }
 }
 
@@ -209,8 +263,7 @@ pub(crate) fn rust_grep(
     glob: Option<&str>,
     max_results: usize,
 ) -> Result<Vec<String>, String> {
-    let re = regex::Regex::new(pattern)
-        .map_err(|e| format!("invalid regex: {e}"))?;
+    let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {e}"))?;
     let p = std::path::Path::new(path);
     let mut results = Vec::new();
 
@@ -281,7 +334,10 @@ fn walk_dir(
             Err(_) => continue,
         };
         let path = entry.path();
-        let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+        let fname = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
 
         if path.is_dir() {
             if fname == ".git" || fname == "target" || fname == "node_modules" {
@@ -328,7 +384,10 @@ fn walk_dir_flat(
             if results.len() >= max_results {
                 return Ok(());
             }
-            let fname = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+            let fname = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
             if let Some(g) = glob {
                 if !simple_glob_match(g, &fname) {
                     continue;
@@ -365,7 +424,8 @@ fn is_binary_file(path: &std::path::Path) -> bool {
             if check.contains(&0u8) {
                 return true;
             }
-            let non_printable = check.iter()
+            let non_printable = check
+                .iter()
                 .filter(|&&b| b != 0x09 && b != 0x0A && b != 0x0D && (b < 0x20 || b > 0x7E))
                 .count();
             non_printable as f64 / check.len().max(1) as f64 > 0.30
@@ -376,6 +436,8 @@ fn is_binary_file(path: &std::path::Path) -> bool {
 
 /// Check if a file read error indicates a binary (non-UTF-8) file.
 pub(super) fn is_binary_read_error(err: &str) -> bool {
-    err.contains("valid UTF-8") || err.contains("utf8") || err.contains("utf-8")
+    err.contains("valid UTF-8")
+        || err.contains("utf8")
+        || err.contains("utf-8")
         || err.contains("UTF-8")
 }

@@ -1,4 +1,4 @@
-use deepx_types::{ToolCall, FunctionCall, ToolDef};
+use deepx_types::{FunctionCall, ToolCall, ToolDef};
 
 pub fn has_dsml(content: &str) -> bool {
     // Trigger only when <｜DSML｜tool_calls> wrapper is present.
@@ -34,9 +34,8 @@ pub fn parse_xml_tool_calls(content: &str, tool_names: &[String]) -> (String, Ve
     let mut tool_calls = Vec::new();
     let mut tc_index = 0u32;
 
-    let mut tag_map: Vec<(String, String)> = tool_names.iter()
-        .map(|n| (n.clone(), n.clone()))
-        .collect();
+    let mut tag_map: Vec<(String, String)> =
+        tool_names.iter().map(|n| (n.clone(), n.clone())).collect();
     for (alias, name) in &[("read", "file"), ("write", "file"), ("edit", "file")] {
         if tool_names.iter().any(|n| n == name) {
             tag_map.push((alias.to_string(), name.to_string()));
@@ -78,7 +77,10 @@ pub fn parse_xml_tool_calls(content: &str, tool_names: &[String]) -> (String, Ve
 
         let after_lt = &remaining[tc_start..];
         if let Some(end) = after_lt.find('>') {
-            let tag_name = after_lt.strip_prefix('<').and_then(|s| s.get(..end - 1)).unwrap_or("");
+            let tag_name = after_lt
+                .strip_prefix('<')
+                .and_then(|s| s.get(..end - 1))
+                .unwrap_or("");
             let closing = format!("</{tag_name}>");
 
             if let Some((_, tool_name)) = tag_map.iter().find(|(tag, _)| *tag == tag_name) {
@@ -128,7 +130,9 @@ fn parse_tool_use_block(s: &str) -> Option<(String, String, &str)> {
     let after_ns = &block[ns + n_open.len()..];
     let ne = after_ns.find(n_close)?;
     let name = after_ns[..ne].trim().to_string();
-    if name.is_empty() { return None; }
+    if name.is_empty() {
+        return None;
+    }
     let args_text = after_ns[ne + n_close.len()..].trim().to_string();
     Some((name, args_text, rest))
 }
@@ -136,7 +140,9 @@ fn parse_tool_use_block(s: &str) -> Option<(String, String, &str)> {
 fn parse_invoke_block(s: &str) -> Option<(String, String, &str)> {
     let s = s.strip_prefix("<invoke ")?;
     let name = extract_attr_value(s, "name")?.trim().to_string();
-    if name.is_empty() { return None; }
+    if name.is_empty() {
+        return None;
+    }
     let close_tag = s.find('>')?;
     let after_open = &s[close_tag + 1..];
     let end_tag = "</invoke>";
@@ -155,7 +161,9 @@ fn parse_invoke_block(s: &str) -> Option<(String, String, &str)> {
         let str_attr = extract_attr_value(after_p, "string").unwrap_or_default();
         let Some(gt) = after_p.find('>') else { break };
         let content_start = &after_p[gt + 1..];
-        let Some(close) = content_start.find(param_close) else { break };
+        let Some(close) = content_start.find(param_close) else {
+            break;
+        };
         let value = content_start[..close].trim();
         rem = &content_start[close + param_close.len()..];
 
@@ -225,7 +233,10 @@ pub fn parse_dsml_tool_calls(content: &str, tool_defs: &[ToolDef]) -> (String, V
     // Normalize double-bar variant ￌￌDSMLￌￌ → ￌDSMLￌ
     let normalized;
     let content = if content.contains("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}") {
-        normalized = content.replace("\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}", "\u{ff5c}DSML\u{ff5c}");
+        normalized = content.replace(
+            "\u{ff5c}\u{ff5c}DSML\u{ff5c}\u{ff5c}",
+            "\u{ff5c}DSML\u{ff5c}",
+        );
         normalized.as_str()
     } else {
         content
@@ -240,9 +251,17 @@ pub fn parse_dsml_tool_calls(content: &str, tool_defs: &[ToolDef]) -> (String, V
     let param_close = format!("</{dsml}parameter>");
 
     // Build schema lookup: function_name → property_name → {type}
-    let mut schema_map: std::collections::HashMap<&str, &serde_json::Map<String, serde_json::Value>> = std::collections::HashMap::new();
+    let mut schema_map: std::collections::HashMap<
+        &str,
+        &serde_json::Map<String, serde_json::Value>,
+    > = std::collections::HashMap::new();
     for td in tool_defs {
-        if let Some(props) = td.function.parameters.get("properties").and_then(|v| v.as_object()) {
+        if let Some(props) = td
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|v| v.as_object())
+        {
             schema_map.insert(td.function.name.as_str(), props);
         }
     }
@@ -269,13 +288,19 @@ pub fn parse_dsml_tool_calls(content: &str, tool_defs: &[ToolDef]) -> (String, V
 
         let mut bq = block;
         loop {
-            let Some(inv_pos) = bq.find(&invoke_tag) else { break };
+            let Some(inv_pos) = bq.find(&invoke_tag) else {
+                break;
+            };
             let after_inv = &bq[inv_pos + invoke_tag.len()..];
             let name = extract_attr_value(after_inv, "name").unwrap_or_default();
             let name = name.trim().to_string();
-            if name.is_empty() { break; }
+            if name.is_empty() {
+                break;
+            }
 
-            let Some(inv_end) = after_inv.find(&invoke_close) else { break };
+            let Some(inv_end) = after_inv.find(&invoke_close) else {
+                break;
+            };
             let body = &after_inv[..inv_end];
             bq = &after_inv[inv_end + invoke_close.len()..];
 
@@ -285,7 +310,10 @@ pub fn parse_dsml_tool_calls(content: &str, tool_defs: &[ToolDef]) -> (String, V
             tool_calls.push(ToolCall {
                 id: format!("dsml_tc_{idx}"),
                 call_type: "function".to_string(),
-                function: FunctionCall { name, arguments: args },
+                function: FunctionCall {
+                    name,
+                    arguments: args,
+                },
             });
             idx += 1;
         }
@@ -311,7 +339,8 @@ fn repair_param_dict(
         if map.len() == 1 && !allowed.contains(wrapper) {
             if let Some(inner) = map.get(*wrapper) {
                 if let Some(obj) = inner.as_object() {
-                    let obj_keys: std::collections::HashSet<&str> = obj.keys().map(|k| k.as_str()).collect();
+                    let obj_keys: std::collections::HashSet<&str> =
+                        obj.keys().map(|k| k.as_str()).collect();
                     if obj_keys.is_subset(&allowed) {
                         return obj.clone();
                     }
@@ -327,21 +356,20 @@ fn convert_param_value(value: &str, param_type: Option<&str>) -> serde_json::Val
         return serde_json::Value::Null;
     }
     match param_type {
-        Some("integer") | Some("int") => {
-            match value.parse::<i64>() {
-                Ok(n) => serde_json::json!(n),
-                Err(_) => serde_json::json!(value),
-            }
-        }
-        Some("number") | Some("float") => {
-            value.parse::<f64>().map(|f| {
+        Some("integer") | Some("int") => match value.parse::<i64>() {
+            Ok(n) => serde_json::json!(n),
+            Err(_) => serde_json::json!(value),
+        },
+        Some("number") | Some("float") => value
+            .parse::<f64>()
+            .map(|f| {
                 if f == f.trunc() && f.is_finite() {
                     serde_json::json!(f as i64)
                 } else {
                     serde_json::json!(f)
                 }
-            }).unwrap_or_else(|_| serde_json::json!(value))
-        }
+            })
+            .unwrap_or_else(|_| serde_json::json!(value)),
         Some("boolean") | Some("bool") => {
             let v = value.trim().to_lowercase();
             serde_json::json!(v == "true" || v == "1")
@@ -367,19 +395,27 @@ fn extract_dsml_params_typed(
     loop {
         let Some(p) = rem.find(param_tag) else { break };
         let after = &rem[p + param_tag.len()..];
-        let name = extract_attr_value(after, "name").unwrap_or_default().trim().to_string();
+        let name = extract_attr_value(after, "name")
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         let str_attr = extract_attr_value(after, "string").unwrap_or_default();
 
         let Some(gte) = after.find('>') else { break };
         let after_gt = &after[gte + 1..];
-        let Some(end) = after_gt.find(param_close) else { break };
+        let Some(end) = after_gt.find(param_close) else {
+            break;
+        };
         let value_text = after_gt[..end].trim();
         rem = &after_gt[end + param_close.len()..];
 
         let value = if str_attr == "true" {
             serde_json::json!(value_text)
         } else {
-            let param_type = param_types.and_then(|pt| pt.get(&name)).and_then(|s| s.get("type")).and_then(|t| t.as_str());
+            let param_type = param_types
+                .and_then(|pt| pt.get(&name))
+                .and_then(|s| s.get("type"))
+                .and_then(|t| t.as_str());
             convert_param_value(value_text, param_type)
         };
         map.insert(name, value);
@@ -394,31 +430,44 @@ fn extract_dsml_params_typed(
 
 /// Convert HP tool_calls JSON (flat or nested) to ToolCall vec.
 pub fn parse_tool_calls(tcs: &serde_json::Value) -> Vec<ToolCall> {
-    let arr = match tcs.as_array() { Some(a) => a, None => return vec![] };
-    arr.iter().filter_map(|tc| {
-        let id = tc.get("id").and_then(|i| i.as_str()).unwrap_or("");
-        let (name, arguments) = if let Some(func) = tc.get("function") {
-            let n = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let a = func.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
-            (n, a)
-        } else {
-            let n = tc.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let a = tc.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
-            (n, a)
-        };
-        if id.is_empty() || name.is_empty() { return None; }
-        Some(ToolCall {
-            id: id.to_string(),
-            call_type: "function".to_string(),
-            function: FunctionCall { name: name.to_string(), arguments: arguments.to_string() },
+    let arr = match tcs.as_array() {
+        Some(a) => a,
+        None => return vec![],
+    };
+    arr.iter()
+        .filter_map(|tc| {
+            let id = tc.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            let (name, arguments) = if let Some(func) = tc.get("function") {
+                let n = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let a = func
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}");
+                (n, a)
+            } else {
+                let n = tc.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let a = tc.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+                (n, a)
+            };
+            if id.is_empty() || name.is_empty() {
+                return None;
+            }
+            Some(ToolCall {
+                id: id.to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: name.to_string(),
+                    arguments: arguments.to_string(),
+                },
+            })
         })
-    }).collect()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deepx_types::{ToolFunction, ToolDef};
+    use deepx_types::{ToolDef, ToolFunction};
 
     #[test]
     fn test_parse_invoke_inside_tool_calls() {
@@ -451,7 +500,13 @@ mod tests {
         let (_cleaned, tcs) = parse_xml_tool_calls(&content, &tool_names);
 
         // Should only extract the REAL one (outside fence), not the example
-        assert_eq!(tcs.len(), 1, "Expected 1 real tool call, got {}: {:?}", tcs.len(), tcs);
+        assert_eq!(
+            tcs.len(),
+            1,
+            "Expected 1 real tool call, got {}: {:?}",
+            tcs.len(),
+            tcs
+        );
         let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
         assert_eq!(args["path"], "real.rs");
     }
@@ -476,7 +531,13 @@ mod tests {
         }];
 
         let (_cleaned, tcs) = parse_dsml_tool_calls(&content, &tool_defs);
-        assert_eq!(tcs.len(), 1, "Expected 1 real tool call, got {}: {:?}", tcs.len(), tcs);
+        assert_eq!(
+            tcs.len(),
+            1,
+            "Expected 1 real tool call, got {}: {:?}",
+            tcs.len(),
+            tcs
+        );
         let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
         assert_eq!(args["path"], "real.rs");
     }
@@ -499,7 +560,10 @@ mod tests {
     fn test_halfwidth_dsml_parsing() {
         let content = "I'll read the file.\n\n<|DSML|tool_calls>\n<|DSML|invoke name=\"read_file\">\n<|DSML|parameter name=\"path\" string=\"true\">/tmp/test.txt\n</|DSML|parameter>\n<|DSML|parameter name=\"start_line\" string=\"false\">1\n</|DSML|parameter>\n</|DSML|invoke>\n</|DSML|tool_calls>";
 
-        assert!(has_dsml(content), "Fuzzy detection should catch halfwidth DSML");
+        assert!(
+            has_dsml(content),
+            "Fuzzy detection should catch halfwidth DSML"
+        );
 
         let tool_defs: Vec<ToolDef> = vec![ToolDef {
             call_type: "function".into(),
@@ -517,12 +581,21 @@ mod tests {
         }];
 
         let (cleaned, tcs) = parse_dsml_tool_calls(content, &tool_defs);
-        assert_eq!(tcs.len(), 1, "Expected 1 tool call, got {}: {:?}", tcs.len(), tcs);
+        assert_eq!(
+            tcs.len(),
+            1,
+            "Expected 1 tool call, got {}: {:?}",
+            tcs.len(),
+            tcs
+        );
         assert_eq!(tcs[0].function.name, "read_file");
         let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
         assert_eq!(args["path"], "/tmp/test.txt");
         assert_eq!(args["start_line"], 1);
-        assert!(!cleaned.contains("DSML"), "Cleaned content should not contain DSML tags");
+        assert!(
+            !cleaned.contains("DSML"),
+            "Cleaned content should not contain DSML tags"
+        );
     }
 
     #[test]
@@ -546,12 +619,16 @@ mod tests {
         }];
 
         let (cleaned, tcs) = parse_dsml_tool_calls(content, &tool_defs);
-        assert_eq!(tcs.len(), 1, "Expected 1 tool call, got {}: {:?}", tcs.len(), tcs);
+        assert_eq!(
+            tcs.len(),
+            1,
+            "Expected 1 tool call, got {}: {:?}",
+            tcs.len(),
+            tcs
+        );
         assert_eq!(tcs[0].function.name, "exec");
         let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
         assert_eq!(args["command"], "ls");
         assert!(!cleaned.contains("DSML"));
     }
 }
-
-

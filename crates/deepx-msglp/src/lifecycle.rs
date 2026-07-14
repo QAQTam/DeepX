@@ -2,8 +2,8 @@
 
 use crate::agent::AgentState;
 use crate::util::chrono_local_date;
-use deepx_tools;
 use deepx_session::SessionManager;
+use deepx_tools;
 
 /// Load session from disk via [`SessionManager`].
 ///
@@ -30,14 +30,22 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 agent.session = meta;
                 agent.session.from_resume = true;
                 agent.session.tokens = 0;
-                let (msg, repairs) = deepx_message::MessageStore::from_messages(&agent.session.seed, &messages, agent.session.compact_skip);
-                log::info!("[LIFECYCLE] from_messages done, {} turns, {} repairs", msg.turn_count(), repairs.len());
+                let (msg, repairs) = deepx_message::MessageStore::from_messages(
+                    &agent.session.seed,
+                    &messages,
+                    agent.session.compact_skip,
+                );
+                log::info!(
+                    "[LIFECYCLE] from_messages done, {} turns, {} repairs",
+                    msg.turn_count(),
+                    repairs.len()
+                );
                 agent.msg = msg;
 
-                deepx_tools::bridge::set_current_session(&agent.session.seed);
-                deepx_tools::bridge::load_workspace(&agent.session.seed);
+                deepx_tools::workspace::set_current_session(&agent.session.seed);
+                deepx_tools::workspace::load_session_workspace(&agent.session.seed);
                 // Hot-load latest tool schema (order-stable: new tools appended at end)
-                agent.tool_defs = deepx_tools::bridge::all_tools();
+                agent.tool_defs = deepx_tools::runtime::all_tools();
                 log::info!(
                     "deepx-agent: restored session {} ({} msgs, {} tokens)",
                     agent.session.seed,
@@ -71,15 +79,20 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     } else {
         deepx_message::MessageStore::new(&seed)
     };
-    deepx_tools::bridge::set_current_session(&agent.session.seed);
-    deepx_tools::bridge::load_workspace(&agent.session.seed);
+    deepx_tools::workspace::set_current_session(&agent.session.seed);
+    deepx_tools::workspace::load_session_workspace(&agent.session.seed);
     agent.msg.push_system(deepx_types::Message::system(
         &deepx_config::prompt::full_system_prompt_with_date(
             &chrono_local_date(),
-            deepx_config::prompt::OS_INFO.get().map(|s| s.as_str()).unwrap_or(""),
-        )
+            deepx_config::prompt::OS_INFO
+                .get()
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+        ),
     ));
-    agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
+    agent
+        .msg
+        .flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session {}", agent.session.seed);
     true
 }
@@ -95,15 +108,20 @@ pub fn create_session(agent: &mut AgentState) {
     } else {
         deepx_message::MessageStore::new(&agent.session.seed)
     };
-    deepx_tools::bridge::set_current_session(&agent.session.seed);
-    deepx_tools::bridge::load_workspace(&agent.session.seed);
+    deepx_tools::workspace::set_current_session(&agent.session.seed);
+    deepx_tools::workspace::load_session_workspace(&agent.session.seed);
     agent.msg.push_system(deepx_types::Message::system(
         &deepx_config::prompt::full_system_prompt_with_date(
             &chrono_local_date(),
-            deepx_config::prompt::OS_INFO.get().map(|s| s.as_str()).unwrap_or(""),
-        )
+            deepx_config::prompt::OS_INFO
+                .get()
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+        ),
     ));
-    agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
+    agent
+        .msg
+        .flush_meta(&agent.config.model, &agent.config.reasoning_effort);
     log::info!("deepx-agent: new session {}", agent.session.seed);
 }
 
@@ -117,14 +135,22 @@ pub fn create_session_with_seed(agent: &mut AgentState) {
     } else {
         deepx_message::MessageStore::new(&agent.session.seed)
     };
-    deepx_tools::bridge::set_current_session(&agent.session.seed);
-    deepx_tools::bridge::load_workspace(&agent.session.seed);
+    deepx_tools::workspace::set_current_session(&agent.session.seed);
+    deepx_tools::workspace::load_session_workspace(&agent.session.seed);
     agent.msg.push_system(deepx_types::Message::system(
         &deepx_config::prompt::full_system_prompt_with_date(
             &chrono_local_date(),
-            deepx_config::prompt::OS_INFO.get().map(|s| s.as_str()).unwrap_or(""),
-        )
+            deepx_config::prompt::OS_INFO
+                .get()
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+        ),
     ));
-    agent.msg.flush_meta(&agent.config.model, &agent.config.reasoning_effort);
-    log::info!("deepx-agent: new session with preset seed {}", agent.session.seed);
+    agent
+        .msg
+        .flush_meta(&agent.config.model, &agent.config.reasoning_effort);
+    log::info!(
+        "deepx-agent: new session with preset seed {}",
+        agent.session.seed
+    );
 }

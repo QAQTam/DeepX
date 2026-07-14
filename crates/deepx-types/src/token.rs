@@ -9,8 +9,7 @@ static TOKENIZER: OnceLock<tokenizers::Tokenizer> = OnceLock::new();
 /// Must be called once at startup. Returns Ok(()) on success.
 #[cfg(feature = "tokenizers")]
 pub fn init_tokenizer(path: &str) -> Result<(), String> {
-    let tok = tokenizers::Tokenizer::from_file(path)
-        .map_err(|e| format!("load tokenizer: {e}"))?;
+    let tok = tokenizers::Tokenizer::from_file(path).map_err(|e| format!("load tokenizer: {e}"))?;
     let _ = TOKENIZER.set(tok);
     Ok(())
 }
@@ -20,7 +19,8 @@ pub fn init_tokenizer(path: &str) -> Result<(), String> {
 pub fn count_tokens(text: &str) -> u32 {
     #[cfg(feature = "tokenizers")]
     if let Some(tok) = TOKENIZER.get() {
-        return tok.encode(text, false)
+        return tok
+            .encode(text, false)
             .map(|e| e.get_ids().len() as u32)
             .unwrap_or_else(|_| count_tokens_heuristic(text));
     }

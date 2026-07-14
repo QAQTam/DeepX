@@ -28,8 +28,15 @@ pub fn full_system_prompt() -> String {
 ///   {{TOOLS}}  → TOOLS_INFO (toolchain versions detected at startup)
 pub fn full_system_prompt_with_date(today: &str, os_info: &str) -> String {
     let shells = detect_shells();
-    let tools = TOOLS_INFO.get().map(|s| s.as_str()).unwrap_or("(not detected)");
-    let os = if os_info.is_empty() { std::env::consts::OS } else { os_info };
+    let tools = TOOLS_INFO
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or("(not detected)");
+    let os = if os_info.is_empty() {
+        std::env::consts::OS
+    } else {
+        os_info
+    };
     let env_block = OS_ENV_TEMPLATE
         .replace("{{DATE}}", today)
         .replace("{{OS}}", os)
@@ -52,13 +59,17 @@ fn detect_shells() -> String {
             shells.push("pwsh (PowerShell 7)");
         }
         // Legacy Windows PowerShell
-        if std::path::Path::new(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe").exists() {
+        if std::path::Path::new(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+            .exists()
+        {
             shells.push("powershell (Windows PowerShell 5)");
         }
     } else {
         shells.push("bash");
         shells.push("sh");
-        if std::path::Path::new("/bin/zsh").exists() { shells.push("zsh"); }
+        if std::path::Path::new("/bin/zsh").exists() {
+            shells.push("zsh");
+        }
     }
     shells.join(", ")
 }

@@ -15,15 +15,13 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 
-use windows::core::{GUID, HRESULT, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{S_OK, WIN32_ERROR};
-use windows::Win32::System::Com::{
-    CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE,
-};
+use windows::Win32::System::Com::{CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
-    KEY_WRITE, REG_CREATE_KEY_DISPOSITION, REG_OPTION_NON_VOLATILE, REG_SZ,
+    HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_CREATE_KEY_DISPOSITION, REG_OPTION_NON_VOLATILE,
+    REG_SZ, RegCloseKey, RegCreateKeyExW, RegSetValueExW,
 };
+use windows::core::{GUID, HRESULT, HSTRING, PCWSTR};
 
 // ═══════════════════════════════════════════════════════
 // Raw FFI for CoRegisterClassObject (avoids IntoParam<IUnknown>)
@@ -46,19 +44,31 @@ unsafe extern "system" {
 
 /// CLSID for our INotificationActivationCallback implementation.
 const ACTIVATOR_CLSID: GUID = GUID::from_values(
-    0x7E6D8F1A, 0x23B4, 0x4A9C, [0x8F, 0x3D, 0x12, 0xAB, 0xCD, 0xEF, 0x56, 0x78],
+    0x7E6D8F1A,
+    0x23B4,
+    0x4A9C,
+    [0x8F, 0x3D, 0x12, 0xAB, 0xCD, 0xEF, 0x56, 0x78],
 );
 
 const IID_IUNKNOWN: GUID = GUID::from_values(
-    0x00000000, 0x0000, 0x0000, [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+    0x00000000,
+    0x0000,
+    0x0000,
+    [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
 );
 
 const IID_ICLASSFACTORY: GUID = GUID::from_values(
-    0x00000001, 0x0000, 0x0000, [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+    0x00000001,
+    0x0000,
+    0x0000,
+    [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
 );
 
 const IID_INOTIFICATION_ACTIVATION_CALLBACK: GUID = GUID::from_values(
-    0x53E31837, 0x6600, 0x4A81, [0x93, 0x95, 0x75, 0xCF, 0xFE, 0x74, 0x6F, 0x94],
+    0x53E31837,
+    0x6600,
+    0x4A81,
+    [0x93, 0x95, 0x75, 0xCF, 0xFE, 0x74, 0x6F, 0x94],
 );
 
 // ═══════════════════════════════════════════════════════
@@ -325,7 +335,9 @@ fn try_register() -> Result<(), HRESULT> {
 
     if hr != S_OK {
         // Clean up on failure.
-        unsafe { drop(Box::from_raw(factory_ptr as *mut ClassFactory)); }
+        unsafe {
+            drop(Box::from_raw(factory_ptr as *mut ClassFactory));
+        }
         return Err(hr);
     }
     // cookie is leaked — class factory lives for process lifetime.

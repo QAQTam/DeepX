@@ -40,12 +40,12 @@
 //!    `compact.rs`, `conflict.rs` (keep `agent.rs`, `lifecycle.rs`, `notification.rs`,
 //!    `toast_com.rs`, `dashboard.rs`, `logger.rs`, `util.rs`)
 
-pub mod types;
 pub mod engine;
-pub mod loop_core;
-pub mod engine_turn;
-pub mod engine_tool;
-pub mod engine_session;
-pub mod engine_input;
 pub mod engine_compact;
+pub mod engine_input;
 pub mod engine_misc;
+pub mod engine_session;
+pub mod engine_tool;
+pub mod engine_turn;
+pub mod loop_core;
+pub mod types;

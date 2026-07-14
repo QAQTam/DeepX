@@ -12,8 +12,7 @@ pub enum UserSendMode {
     Body,
 }
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub enum ThinkingParamMode {
     /// thinking: {type: "enabled"} at top-level body. DeepSeek, GLM, Kimi, MiMo, Doubao, OpenAI.
     #[default]
@@ -24,8 +23,7 @@ pub enum ThinkingParamMode {
     MiniMaxAdaptive,
 }
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub enum CacheTokenField {
     /// usage.prompt_cache_hit_tokens + usage.prompt_cache_miss_tokens. DeepSeek.
     #[default]
@@ -37,8 +35,6 @@ pub enum CacheTokenField {
     /// No cache info returned. MiMo, MiniMax.
     None,
 }
-
-
 
 #[derive(Debug, Clone)]
 pub struct EndpointSpec {

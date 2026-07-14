@@ -11,7 +11,10 @@ fn main() {
         } else {
             "unknown panic".to_string()
         };
-        let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
         eprintln!("[FATAL] panicked at {loc}: {msg}");
         log::error!("[FATAL] panicked at {loc}: {msg}");
         log::logger().flush();
@@ -61,7 +64,9 @@ fn run_agent(is_subagent: bool) {
     let mut max_tokens_override: Option<u32> = None;
 
     let subagent_defaults = if is_subagent {
-        deepx_config::Config::load().map(|c| c.subagent).unwrap_or_default()
+        deepx_config::Config::load()
+            .map(|c| c.subagent)
+            .unwrap_or_default()
     } else {
         Default::default()
     };
@@ -71,30 +76,51 @@ fn run_agent(is_subagent: bool) {
     while i < args.len() {
         match args[i].as_str() {
             "--resume-seed" => {
-                if i + 1 < args.len() { resume_seed = Some(args[i + 1].clone()); i += 1; }
-            }
-            "--seed" => {
-                if i + 1 < args.len() { new_seed = Some(args[i + 1].clone()); i += 1; }
-            }
-            "--tools" => {
                 if i + 1 < args.len() {
-                    if let Ok(list) = serde_json::from_str::<Vec<String>>(&args[i + 1]) { tools_allowlist = list; }
+                    resume_seed = Some(args[i + 1].clone());
                     i += 1;
                 }
             }
-            "--ephemeral" => { ephemeral = true; }
+            "--seed" => {
+                if i + 1 < args.len() {
+                    new_seed = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--tools" => {
+                if i + 1 < args.len() {
+                    if let Ok(list) = serde_json::from_str::<Vec<String>>(&args[i + 1]) {
+                        tools_allowlist = list;
+                    }
+                    i += 1;
+                }
+            }
+            "--ephemeral" => {
+                ephemeral = true;
+            }
             "--model" => {
-                if i + 1 < args.len() { model_override = Some(args[i + 1].clone()); i += 1; }
+                if i + 1 < args.len() {
+                    model_override = Some(args[i + 1].clone());
+                    i += 1;
+                }
             }
             "--base-url" => {
-                if i + 1 < args.len() { base_url_override = Some(args[i + 1].clone()); i += 1; }
+                if i + 1 < args.len() {
+                    base_url_override = Some(args[i + 1].clone());
+                    i += 1;
+                }
             }
             "--api-key" => {
-                if i + 1 < args.len() { api_key_override = Some(args[i + 1].clone()); i += 1; }
+                if i + 1 < args.len() {
+                    api_key_override = Some(args[i + 1].clone());
+                    i += 1;
+                }
             }
             "--max-tokens" => {
                 if i + 1 < args.len() {
-                    if let Ok(v) = args[i + 1].parse::<u32>() { max_tokens_override = Some(v); }
+                    if let Ok(v) = args[i + 1].parse::<u32>() {
+                        max_tokens_override = Some(v);
+                    }
                     i += 1;
                 }
             }
@@ -122,21 +148,37 @@ fn run_agent(is_subagent: bool) {
     }
 
     let _ = deepx_msglp::logger::init_agent_logger(&deepx_types::platform::data_dir());
-    let turso_enabled = deepx_config::Config::load().map(|c| c.turso_enabled()).unwrap_or(true);
+    let turso_enabled = deepx_config::Config::load()
+        .map(|c| c.turso_enabled())
+        .unwrap_or(true);
     deepx_session::SessionManager::init(deepx_types::platform::data_dir(), turso_enabled);
 
-    let mut agent = if tools_allowlist.is_empty() && model_override.is_none() && base_url_override.is_none() && !ephemeral {
+    let mut agent = if tools_allowlist.is_empty()
+        && model_override.is_none()
+        && base_url_override.is_none()
+        && !ephemeral
+    {
         deepx_msglp::agent::AgentState::init("cli")
     } else {
         deepx_msglp::agent::AgentState::init_subagent(&tools_allowlist, ephemeral)
     };
 
-    if let Some(m) = model_override { agent.config.model = m; }
-    if let Some(u) = base_url_override { agent.config.base_url = u; }
-    if let Some(k) = api_key_override { agent.config.api_key = k; }
-    if let Some(mt) = max_tokens_override { agent.config.max_tokens = mt; }
+    if let Some(m) = model_override {
+        agent.config.model = m;
+    }
+    if let Some(u) = base_url_override {
+        agent.config.base_url = u;
+    }
+    if let Some(k) = api_key_override {
+        agent.config.api_key = k;
+    }
+    if let Some(mt) = max_tokens_override {
+        agent.config.max_tokens = mt;
+    }
 
-    if let Some(seed) = resume_seed { agent.session.resume_seed = Some(seed); }
+    if let Some(seed) = resume_seed {
+        agent.session.resume_seed = Some(seed);
+    }
     if let Some(seed) = new_seed {
         agent.session.seed = seed;
         agent.session.created_at = deepx_session::SessionManager::now_epoch();
@@ -186,7 +228,14 @@ fn run_config() {
     println!();
 
     println!("[1/3] API Key");
-    print!("  API Key [{}]: ", if api_key.is_empty() { "(not set)" } else { "****" });
+    print!(
+        "  API Key [{}]: ",
+        if api_key.is_empty() {
+            "(not set)"
+        } else {
+            "****"
+        }
+    );
     std::io::stdout().flush().ok();
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).ok();
@@ -216,7 +265,10 @@ fn run_config() {
     if !trimmed.is_empty() {
         match trimmed.parse::<u32>() {
             Ok(v) => context_limit = v,
-            Err(_) => println!("  [ERROR] Invalid number '{}', using default {}", trimmed, context_limit),
+            Err(_) => println!(
+                "  [ERROR] Invalid number '{}', using default {}",
+                trimmed, context_limit
+            ),
         }
     }
 
@@ -230,7 +282,10 @@ fn run_config() {
 
     if store.save(&pc) {
         println!();
-        println!("Config saved to {}", deepx_types::platform::config_path().display());
+        println!(
+            "Config saved to {}",
+            deepx_types::platform::config_path().display()
+        );
         println!("Run `deepx-tauri` to start.");
     } else {
         eprintln!("Error saving config");

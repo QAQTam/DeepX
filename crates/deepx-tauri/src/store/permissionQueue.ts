@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import type { PermissionRisk } from "../lib/types";
 
 export interface PermissionRequest {
   tool_call_id: string;
@@ -7,6 +8,8 @@ export interface PermissionRequest {
   paths: string[];
   category: string;
   level: number;
+  risk: PermissionRisk;
+  consequence: string;
 }
 
 export interface QueuedPermission {

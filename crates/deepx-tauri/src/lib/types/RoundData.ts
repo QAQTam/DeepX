@@ -5,4 +5,4 @@ import type { ToolResultDef } from "./ToolResultDef";
 /**
  * One round of a turn (one API call).
  */
-export type RoundData = { round_num: number, thinking: string | null, answer: string | null, tool_calls: Array<ToolCallDef>, tool_results: Array<ToolResultDef>, };
+export type RoundData = { round_num: number, is_final: boolean, thinking: string | null, answer: string | null, tool_calls: Array<ToolCallDef>, tool_results: Array<ToolResultDef>, };

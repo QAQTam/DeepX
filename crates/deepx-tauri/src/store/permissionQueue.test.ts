@@ -11,6 +11,8 @@ function request(id: string) {
     paths: [],
     category: "exec",
     level: 2,
+    risk: "high" as const,
+    consequence: "May execute arbitrary actions.",
   };
 }
 

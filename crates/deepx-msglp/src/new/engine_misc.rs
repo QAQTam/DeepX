@@ -24,7 +24,9 @@ const INITIAL_LOAD_COUNT: usize = 20;
 pub struct MiscEngine;
 
 impl MiscEngine {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
     pub fn reset(&mut self) {}
 
     // ── Undo ──
@@ -37,18 +39,29 @@ impl MiscEngine {
         turn_id: &str,
         tx: &mpsc::SyncSender<Agent2Ui>,
     ) {
-        log::info!("[MISC] UndoTurn {turn_id} — turns before: {}", agent.msg.turn_count());
+        log::info!(
+            "[MISC] UndoTurn {turn_id} — turns before: {}",
+            agent.msg.turn_count()
+        );
         if agent.msg.truncate_before_turn(turn_id) {
-            log::info!("[MISC] UndoTurn — truncated, turns after: {}", agent.msg.turn_count());
-            agent.msg.snapshot_full(&agent.config.model, &agent.config.reasoning_effort);
+            log::info!(
+                "[MISC] UndoTurn — truncated, turns after: {}",
+                agent.msg.turn_count()
+            );
+            agent
+                .msg
+                .snapshot_full(&agent.config.model, &agent.config.reasoning_effort);
             let total = agent.msg.turn_count() as u32;
             let start = total.saturating_sub(INITIAL_LOAD_COUNT as u32) as usize;
-            let recent = util::build_turns_from_context(agent, Some(start), Some(INITIAL_LOAD_COUNT));
+            let recent =
+                util::build_turns_from_context(agent, Some(start), Some(INITIAL_LOAD_COUNT));
             let _ = tx.send(Agent2Ui::SessionRestored {
                 seed: agent.session.seed.clone(),
                 turns: recent,
-                tokens_used: 0, cache_hit_pct: 0.0,
-                total_turns: total, has_more: start > 0,
+                tokens_used: 0,
+                cache_hit_pct: 0.0,
+                total_turns: total,
+                has_more: start > 0,
             });
         } else {
             log::info!("[MISC] UndoTurn — no changes");
@@ -57,14 +70,18 @@ impl MiscEngine {
 
     // ── Dashboard ──
 
-    pub fn emit_dashboard(
-        &self,
-        agent: &AgentState,
-        tx: &mpsc::SyncSender<Agent2Ui>,
-    ) {
+    pub fn emit_dashboard(&self, agent: &AgentState, tx: &mpsc::SyncSender<Agent2Ui>) {
         // Write context stats to disk
-        let (chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt, thinking_blocks, tool_call_blocks) =
-            agent.msg.compute_context_stats(Some(&agent.tool_defs));
+        let (
+            chat_text,
+            thinking,
+            tool_calls,
+            tool_results,
+            tools_schema,
+            system_prompt,
+            thinking_blocks,
+            tool_call_blocks,
+        ) = agent.msg.compute_context_stats(Some(&agent.tool_defs));
         let stats = serde_json::json!({
             "chat_text": chat_text, "thinking": thinking,
             "tool_calls": tool_calls, "tool_results": tool_results,
@@ -80,8 +97,10 @@ impl MiscEngine {
             hp_connected: true,
             session_seed: agent.session.seed.clone(),
             context_limit: agent.config.context_limit,
-            tool_calls_total: 0, tool_failures: 0,
-            current_phase: "single".into(), streaming: false,
+            tool_calls_total: 0,
+            tool_failures: 0,
+            current_phase: "single".into(),
+            streaming: false,
             dsml_compat_count: agent.dsml_compat_count,
             documents: dashboard::build_documents(),
             recent_edits: dashboard::build_recent_edits(),
@@ -100,7 +119,7 @@ impl MiscEngine {
             "code" => 2,
             _ => 0,
         };
-        deepx_tools::bridge::set_mode(m);
+        deepx_tools::runtime::set_mode(m);
         if !agent.session.seed.is_empty() {
             deepx_session::SessionManager::global().persist_mode(&agent.session.seed, m);
         }
@@ -109,16 +128,26 @@ impl MiscEngine {
 
     // ── After-turn notification ──
 
-    pub fn maybe_notify(&self, agent: &AgentState, notify_tx: &mpsc::Sender<crate::notification::NotifyMessage>) {
-        let preview = agent.msg.turns().last()
+    pub fn maybe_notify(
+        &self,
+        agent: &AgentState,
+        notify_tx: &mpsc::Sender<crate::notification::NotifyMessage>,
+    ) {
+        let preview = agent
+            .msg
+            .turns()
+            .last()
             .and_then(|t| t.steps.last())
             .map(|s| {
-                s.assistant.content.iter()
+                s.assistant
+                    .content
+                    .iter()
                     .filter_map(|b| match b {
                         deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
                         _ => None,
                     })
-                    .collect::<Vec<_>>().join(" ")
+                    .collect::<Vec<_>>()
+                    .join(" ")
             })
             .unwrap_or_default();
         if !preview.is_empty() {

@@ -61,8 +61,7 @@ mod tests {
         // Verify the struct layout is intact after module split
         let stdin: Arc<Mutex<Box<dyn Write + Send>>> =
             Arc::new(Mutex::new(Box::new(std::io::sink())));
-        let child: Arc<Mutex<Option<std::process::Child>>> =
-            Arc::new(Mutex::new(None));
+        let child: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
         let shutdown = Arc::new(AtomicBool::new(false));
 
         let inst = AgentInstance {

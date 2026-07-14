@@ -8,7 +8,7 @@ use std::sync::Mutex;
 static TASK_LOCK: Mutex<()> = Mutex::new(());
 
 fn tasks_path() -> std::path::PathBuf {
-    let session = crate::bridge::runtime_context()
+    let session = crate::runtime::context()
         .map(|ctx| ctx.active_session)
         .unwrap_or_default();
     if session.is_empty() {
@@ -23,7 +23,9 @@ fn tasks_path() -> std::path::PathBuf {
 
 fn read_tasks() -> Vec<String> {
     let path = tasks_path();
-    if !path.exists() { return Vec::new(); }
+    if !path.exists() {
+        return Vec::new();
+    }
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     content
         .lines()
@@ -48,7 +50,9 @@ fn next_id(lines: &[String]) -> u32 {
             if let Some(id_str) = body.splitn(2, ':').next() {
                 if id_str.starts_with('T') {
                     if let Ok(n) = id_str.strip_prefix('T').unwrap_or("").parse::<u32>() {
-                        if n > max { max = n; }
+                        if n > max {
+                            max = n;
+                        }
                     }
                 }
             }
@@ -64,7 +68,8 @@ fn find_task(lines: &[String], id: u32) -> Option<usize> {
 
 fn parse_id(args: &serde_json::Value) -> Result<u32, String> {
     let val = args.get("id").ok_or("missing 'id'")?;
-    let n = val.as_u64()
+    let n = val
+        .as_u64()
         .or_else(|| val.as_str().and_then(|s| s.parse::<u64>().ok()))
         .ok_or("'id' must be a positive integer")?;
     if n == 0 || n > u32::MAX as u64 {
@@ -76,20 +81,31 @@ fn parse_id(args: &serde_json::Value) -> Result<u32, String> {
 /// Parse stored task lines into TaskInfo structs for dashboard/status.
 pub fn get_task_infos() -> Vec<deepx_proto::TaskInfo> {
     let lines = read_tasks();
-    lines.iter().filter_map(|l| {
-        let trimmed = l.trim_start();
-        // Format: "- [status] T{id}: subject — description"
-        if !trimmed.starts_with("- [") { return None; }
-        let after_bracket = trimmed.split_once("] ")?.1;
-        let status = &trimmed[3..trimmed.find(']')?];
-        let (id_part, rest) = after_bracket.split_once(": ")?;
-        let id = id_part.trim().to_string();
-        let (subject, description) = rest.split_once(" — ").map_or(
-            (rest.to_string(), String::new()),
-            |(s, d)| (s.to_string(), d.to_string()),
-        );
-        Some(deepx_proto::TaskInfo { id, subject, description, status: status.to_string() })
-    }).collect()
+    lines
+        .iter()
+        .filter_map(|l| {
+            let trimmed = l.trim_start();
+            // Format: "- [status] T{id}: subject — description"
+            if !trimmed.starts_with("- [") {
+                return None;
+            }
+            let after_bracket = trimmed.split_once("] ")?.1;
+            let status = &trimmed[3..trimmed.find(']')?];
+            let (id_part, rest) = after_bracket.split_once(": ")?;
+            let id = id_part.trim().to_string();
+            let (subject, description) = rest
+                .split_once(" — ")
+                .map_or((rest.to_string(), String::new()), |(s, d)| {
+                    (s.to_string(), d.to_string())
+                });
+            Some(deepx_proto::TaskInfo {
+                id,
+                subject,
+                description,
+                status: status.to_string(),
+            })
+        })
+        .collect()
 }
 
 pub(super) fn exec_task_create(args: &serde_json::Value) -> String {
@@ -98,10 +114,18 @@ pub(super) fn exec_task_create(args: &serde_json::Value) -> String {
     let description = args.s("description");
 
     if subject.is_empty() || subject.chars().count() > 100 {
-        return crate::json_err("INVALID_INPUT", "task_create: subject must be 1-100 chars", "Keep the subject short and imperative, e.g. 'Add login API'");
+        return crate::json_err(
+            "INVALID_INPUT",
+            "task_create: subject must be 1-100 chars",
+            "Keep the subject short and imperative, e.g. 'Add login API'",
+        );
     }
     if description.chars().count() > 200 {
-        return crate::json_err("INVALID_INPUT", "task_create: description max 200 chars", "Write a concise 1-sentence description.");
+        return crate::json_err(
+            "INVALID_INPUT",
+            "task_create: description max 200 chars",
+            "Write a concise 1-sentence description.",
+        );
     }
 
     let mut lines = read_tasks();
@@ -123,13 +147,24 @@ pub(super) fn exec_task_update(args: &serde_json::Value) -> String {
         Ok(n) => n,
         Err(e) => {
             let msg = format!("task_update: {}", e);
-            return crate::json_err("INVALID_INPUT", &msg, "Check the task ID using task_list().");
+            return crate::json_err(
+                "INVALID_INPUT",
+                &msg,
+                "Check the task ID using task_list().",
+            );
         }
     };
     let status = args.s("status");
 
-    if !matches!(status.as_str(), "pending" | "in_progress" | "completed" | "cancelled") {
-        return crate::json_err("INVALID_INPUT", "task_update: status must be pending, in_progress, completed, or cancelled", "Use one of these status values: pending, in_progress, completed, cancelled");
+    if !matches!(
+        status.as_str(),
+        "pending" | "in_progress" | "completed" | "cancelled"
+    ) {
+        return crate::json_err(
+            "INVALID_INPUT",
+            "task_update: status must be pending, in_progress, completed, or cancelled",
+            "Use one of these status values: pending, in_progress, completed, cancelled",
+        );
     }
 
     let mut lines = read_tasks();
@@ -150,7 +185,9 @@ pub(super) fn exec_task_update(args: &serde_json::Value) -> String {
         }
     }
     write_tasks(&lines);
-    crate::json_ok(serde_json::json!({"task_id": format!("T{}", id), "status": status, "content": format!("Task T{} → {}", id, status)}))
+    crate::json_ok(
+        serde_json::json!({"task_id": format!("T{}", id), "status": status, "content": format!("Task T{} → {}", id, status)}),
+    )
 }
 
 pub(super) fn exec_task_delete(args: &serde_json::Value) -> String {
@@ -174,22 +211,35 @@ pub(super) fn exec_task_delete(args: &serde_json::Value) -> String {
 
     let removed = lines.remove(idx);
     let subject = removed
-        .split(" — ").next()
+        .split(" — ")
+        .next()
         .and_then(|s| s.split(": ").nth(1))
         .unwrap_or("?");
     write_tasks(&lines);
-    crate::json_ok(serde_json::json!({"task_id": format!("T{}", id), "subject": subject, "content": format!("Task T{} deleted: {}", id, subject)}))
+    crate::json_ok(
+        serde_json::json!({"task_id": format!("T{}", id), "subject": subject, "content": format!("Task T{} deleted: {}", id, subject)}),
+    )
 }
 
 pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
-    let filter_status = args.get("status").and_then(|v| v.as_str()).map(String::from).unwrap_or_default();
+    let filter_status = args
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_default();
 
     let lines = read_tasks();
     if lines.is_empty() {
-        return crate::json_ok(serde_json::json!({"content": "No tasks yet. Use task_create(subject=..., description=...) to create one."}));
+        return crate::json_ok(
+            serde_json::json!({"content": "No tasks yet. Use task_create(subject=..., description=...) to create one."}),
+        );
     }
 
-    let marker = if filter_status.is_empty() { None } else { Some(format!("[{}]", filter_status)) };
+    let marker = if filter_status.is_empty() {
+        None
+    } else {
+        Some(format!("[{}]", filter_status))
+    };
     let filtered: Vec<&String> = if let Some(ref m) = marker {
         lines.iter().filter(|l| l.contains(m.as_str())).collect()
     } else {
@@ -200,7 +250,9 @@ pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
         return if filter_status.is_empty() {
             crate::json_ok(serde_json::json!({"content": "No tasks."}))
         } else {
-            crate::json_ok(serde_json::json!({"content": format!("No tasks with status '{}'.", filter_status)}))
+            crate::json_ok(
+                serde_json::json!({"content": format!("No tasks with status '{}'.", filter_status)}),
+            )
         };
     }
 
@@ -215,11 +267,17 @@ pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
     let mut content = format!("Tasks ({}):\n", filtered.len());
     for line in &filtered {
         let trimmed = line.trim_start_matches("- ");
-        let status = if trimmed.contains("[pending]") { "pending" }
-            else if trimmed.contains("[in_progress]") { "in_progress" }
-            else if trimmed.contains("[completed]") { "completed" }
-            else if trimmed.contains("[cancelled]") { "cancelled" }
-            else { "?" };
+        let status = if trimmed.contains("[pending]") {
+            "pending"
+        } else if trimmed.contains("[in_progress]") {
+            "in_progress"
+        } else if trimmed.contains("[completed]") {
+            "completed"
+        } else if trimmed.contains("[cancelled]") {
+            "cancelled"
+        } else {
+            "?"
+        };
         content.push_str(&format!("{} {}\n", icon(status), trimmed));
     }
     crate::json_ok(serde_json::json!({"content": content}))
@@ -227,7 +285,7 @@ pub(super) fn exec_task_list(args: &serde_json::Value) -> String {
 
 // ── Registration ──
 
-use crate::{ToolHandler, ToolRisk, ToolCallCtx, ToolResult, JsonArgs};
+use crate::{JsonArgs, ToolCallCtx, ToolHandler, ToolResult, ToolRisk};
 use std::time::Duration;
 
 fn handle_task_create(ctx: ToolCallCtx) -> ToolResult {

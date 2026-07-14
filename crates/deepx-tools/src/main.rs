@@ -9,23 +9,23 @@
 use std::env;
 
 fn main() {
-    deepx_tools::bridge::init_tools("cli", &[], vec![]);
-    deepx_tools::bridge::set_runtime_context("cli", 4);
+    deepx_tools::runtime::init_tools("cli", &[], vec![]);
+    deepx_tools::runtime::set_context("cli", 4);
     let cwd = env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".into());
-    deepx_tools::bridge::set_workspace(&cwd);
+    deepx_tools::workspace::set_process_workspace(&cwd);
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-    eprintln!("Usage: deepx-tools <tool> [json_args]");
-    eprintln!("       deepx-tools list");
+        eprintln!("Usage: deepx-tools <tool> [json_args]");
+        eprintln!("       deepx-tools list");
         std::process::exit(1);
     }
 
     let tool = &args[1];
     if tool == "list" {
-        let defs = deepx_tools::bridge::all_tools();
+        let defs = deepx_tools::runtime::all_tools();
         println!("Available tools:");
         for def in &defs {
             println!("  {} — {}", def.function.name, def.function.description);
@@ -40,7 +40,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let r = deepx_tools::bridge::execute_tool_with_id_full(
+    let r = deepx_tools::execution::execute_with_context(
         tool,
         "",
         &parsed_args.to_string(),
@@ -49,5 +49,7 @@ fn main() {
     );
 
     println!("{}", r.content);
-    if !r.success { std::process::exit(1); }
+    if !r.success {
+        std::process::exit(1);
+    }
 }

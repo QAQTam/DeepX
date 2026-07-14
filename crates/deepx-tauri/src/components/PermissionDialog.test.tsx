@@ -29,6 +29,8 @@ it("keeps the permission active after delivery failure and resolves after retry"
             paths: [],
             category: "exec",
             level: 2,
+            risk: "high",
+            consequence: "May execute arbitrary actions.",
           }}
           onResolved={onResolved}
         />
@@ -77,6 +79,8 @@ it("acknowledges the exact permission captured before invoke", async () => {
             paths: [],
             category: "exec",
             level: 2,
+            risk: "high",
+            consequence: "May execute arbitrary actions.",
           }}
           onResolved={onResolved}
         />

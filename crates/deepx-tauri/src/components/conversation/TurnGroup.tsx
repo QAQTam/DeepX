@@ -1,0 +1,20 @@
+import { Show } from "solid-js";
+import type { TurnViewModel } from "../../presentation/turnProjection";
+import ProcessDisclosure from "../process/ProcessDisclosure";
+import ProcessTimeline from "../process/ProcessTimeline";
+import AssistantAnswer from "./AssistantAnswer";
+import UserPromptBubble from "./UserPromptBubble";
+
+export default function TurnGroup(props: { turn: TurnViewModel }) {
+  return <article class="conversation-turn" data-turn={props.turn.turnId}>
+    <UserPromptBubble text={props.turn.userPrompt} />
+    <div data-part="process">
+      <ProcessDisclosure process={props.turn.process}>
+        <ProcessTimeline items={props.turn.process.items} />
+      </ProcessDisclosure>
+    </div>
+    <Show when={props.turn.finalAnswer}>
+      {(answer) => <AssistantAnswer markdown={answer().markdown} />}
+    </Show>
+  </article>;
+}

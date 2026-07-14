@@ -8,16 +8,21 @@ use unicode_normalization::UnicodeNormalization;
 
 /// NFKC-normalized blocked keyword patterns (10 pairs).
 const BLOCKED_PATTERNS: &[&str] = &[
-    "心理咨询", "情感陪伴", "自杀", "自残",
-    "密钥", "密码", "api_key",
-    "色情", "赌博", "毒品",
+    "心理咨询",
+    "情感陪伴",
+    "自杀",
+    "自残",
+    "密钥",
+    "密码",
+    "api_key",
+    "色情",
+    "赌博",
+    "毒品",
 ];
 
 /// Allowlist prefixes — if the trimmed input starts with any of these,
 /// the guard passes regardless of blocked keywords.
-const ALLOWLIST_PREFIXES: &[&str] = &[
-    "research:", "academic:", "crypto:",
-];
+const ALLOWLIST_PREFIXES: &[&str] = &["research:", "academic:", "crypto:"];
 
 /// Check user input against the compliance content filter.
 ///
@@ -43,7 +48,9 @@ pub fn content_guard(input: &str) -> Result<(), String> {
     // ── Blocked-pattern check ──
     for pattern in BLOCKED_PATTERNS {
         if pattern_found(&lowered, pattern) {
-            return Err(format!("Content blocked by compliance filter (pattern: '{pattern}')"));
+            return Err(format!(
+                "Content blocked by compliance filter (pattern: '{pattern}')"
+            ));
         }
     }
 
@@ -66,10 +73,9 @@ fn pattern_found(text: &str, pattern: &str) -> bool {
 
         if is_pure_ascii {
             // Check word boundaries before / after
-            let left_ok = abs_start == 0
-                || !text_bytes[abs_start - 1].is_ascii_alphanumeric();
-            let right_ok = abs_end >= text_bytes.len()
-                || !text_bytes[abs_end].is_ascii_alphanumeric();
+            let left_ok = abs_start == 0 || !text_bytes[abs_start - 1].is_ascii_alphanumeric();
+            let right_ok =
+                abs_end >= text_bytes.len() || !text_bytes[abs_end].is_ascii_alphanumeric();
             if left_ok && right_ok {
                 return true;
             }

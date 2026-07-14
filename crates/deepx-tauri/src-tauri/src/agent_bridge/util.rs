@@ -3,11 +3,7 @@
 use deepx_proto::Ui2Agent;
 
 /// Read a file preview: up to `max_lines` lines or `max_chars` characters.
-pub fn read_file_preview(
-    path: &str,
-    max_lines: usize,
-    max_chars: usize,
-) -> Result<String, String> {
+pub fn read_file_preview(path: &str, max_lines: usize, max_chars: usize) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
     let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
     let reader = BufReader::new(file);
@@ -201,7 +197,8 @@ mod tests {
 
     #[test]
     fn test_parse_plan_items_complete() {
-        let content = "- [ ] P1: 审计持久化 — 确保所有操作落盘。Deps: none。Effort: 2h\n- [✓] P2: 重构模块";
+        let content =
+            "- [ ] P1: 审计持久化 — 确保所有操作落盘。Deps: none。Effort: 2h\n- [✓] P2: 重构模块";
 
         let items = parse_plan_items(content);
         assert_eq!(items.len(), 2);
@@ -254,7 +251,10 @@ mod tests {
             "user_input"
         );
         assert_eq!(agent2ui_event_name_for_ui(&Ui2Agent::Cancel), "cancel");
-        assert_eq!(agent2ui_event_name_for_ui(&Ui2Agent::CreateSession), "create_session");
+        assert_eq!(
+            agent2ui_event_name_for_ui(&Ui2Agent::CreateSession),
+            "create_session"
+        );
         assert_eq!(agent2ui_event_name_for_ui(&Ui2Agent::Shutdown), "shutdown");
         assert_eq!(agent2ui_event_name_for_ui(&Ui2Agent::Compact), "compact");
         assert_eq!(

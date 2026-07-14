@@ -477,7 +477,7 @@ impl Loop {
         }
 
         // ── Cleanup ──
-        deepx_tools::bridge::shutdown_tools();
+        deepx_tools::runtime::shutdown_tools();
         self.session.flush();
     }
 

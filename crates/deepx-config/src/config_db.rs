@@ -16,7 +16,8 @@ static RT: LazyLock<Option<tokio::runtime::Runtime>> = LazyLock::new(|| {
 });
 
 fn runtime() -> Result<&'static tokio::runtime::Runtime, String> {
-    RT.as_ref().ok_or_else(|| "config_db: tokio runtime unavailable".to_string())
+    RT.as_ref()
+        .ok_or_else(|| "config_db: tokio runtime unavailable".to_string())
 }
 
 pub struct ConfigDb {
@@ -30,7 +31,9 @@ impl ConfigDb {
         let db = runtime()?
             .block_on(turso::Builder::new_local(path_str).build())
             .map_err(|e| format!("open config db: {e}"))?;
-        let conn = db.connect().map_err(|e| format!("connect config db: {e}"))?;
+        let conn = db
+            .connect()
+            .map_err(|e| format!("connect config db: {e}"))?;
         Ok(Self { _db: db, conn })
     }
 
@@ -47,7 +50,10 @@ impl ConfigDb {
                 )
                 .await
                 .map_err(|e| format!("init config table: {e}"))?;
-            let _ = self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", ()).await;
+            let _ = self
+                .conn
+                .execute("PRAGMA wal_checkpoint(TRUNCATE)", ())
+                .await;
             Ok(())
         })
     }
@@ -64,7 +70,10 @@ impl ConfigDb {
                 )
                 .await
                 .map_err(|e| format!("save config: {e}"))?;
-            let _ = self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)", ()).await;
+            let _ = self
+                .conn
+                .execute("PRAGMA wal_checkpoint(PASSIVE)", ())
+                .await;
             Ok(())
         })
     }
@@ -74,10 +83,7 @@ impl ConfigDb {
         runtime()?.block_on(async {
             let mut rows = self
                 .conn
-                .query(
-                    "SELECT value FROM config WHERE key = 'main'",
-                    [0i32; 0],
-                )
+                .query("SELECT value FROM config WHERE key = 'main'", [0i32; 0])
                 .await
                 .map_err(|e| format!("load config: {e}"))?;
             if let Some(row) = rows.next().await.map_err(|e| format!("rows: {e}"))? {

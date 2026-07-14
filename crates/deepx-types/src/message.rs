@@ -7,13 +7,9 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
-    Text {
-        text: String,
-    },
+    Text { text: String },
     #[serde(rename = "reasoning")]
-    Reasoning {
-        reasoning: String,
-    },
+    Reasoning { reasoning: String },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -31,7 +27,9 @@ pub enum ContentBlock {
 
 impl ContentBlock {
     pub fn text(text: &str) -> Self {
-        ContentBlock::Text { text: text.to_string() }
+        ContentBlock::Text {
+            text: text.to_string(),
+        }
     }
 }
 
@@ -106,5 +104,3 @@ pub struct FunctionCall {
     pub name: String,
     pub arguments: String,
 }
-
-

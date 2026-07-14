@@ -10,7 +10,9 @@ use super::types::*;
 pub struct InputEngine;
 
 impl InputEngine {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 
     /// Handle user input. Returns an Outcome telling the Loop whether
     /// to start a turn, yield, or report an error.
@@ -29,7 +31,7 @@ impl InputEngine {
         ctx.cancel.clear();
         deepx_tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
 
-        deepx_tools::bridge::set_runtime_context(
+        deepx_tools::runtime::set_context(
             &ctx.agent.session.seed,
             ctx.agent.config.permission_level,
         );
@@ -38,7 +40,9 @@ impl InputEngine {
         if ctx.agent.config.compliance_enabled {
             if let Err(reason) = deepx_gate::guard::content_guard(text) {
                 log::info!("[INPUT] compliance blocked: {reason}");
-                ctx.emitter.emit(Agent2Ui::Error { message: reason.clone() });
+                ctx.emitter.emit(Agent2Ui::Error {
+                    message: reason.clone(),
+                });
                 ctx.emitter.emit(Agent2Ui::TurnEnd {
                     turn_id: "blocked".into(),
                     stop_reason: Some("compliance_block".into()),
@@ -63,10 +67,9 @@ impl InputEngine {
 
         // Push user message
         ctx.agent.msg.push_user(text);
-        ctx.agent.msg.flush_meta(
-            &ctx.agent.config.model,
-            &ctx.agent.config.reasoning_effort,
-        );
+        ctx.agent
+            .msg
+            .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
 
         let turn_id = format!("t{}", ctx.agent.msg.turn_count());
         ctx.emitter.emit(Agent2Ui::TurnStart {

@@ -9,16 +9,16 @@
 //! boundaries.  The clippy `string_slice` lint is allowed at the crate
 //! level (see Cargo.toml).
 
-mod types;
-mod openai;
 pub mod guard;
+mod openai;
 pub mod tool_parser;
+mod types;
 
 pub use types::{ProviderConfig, ProviderKind, StreamEvent};
 
 use deepx_types::{Message, ToolDef};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 /// Send a chat completion request with SSE streaming.
 ///
@@ -38,12 +38,23 @@ pub fn chat_stream(
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> anyhow::Result<()> {
     openai::chat_stream_openai(
-        provider, &provider.model, messages, tools,
-        max_tokens, effort, user_id, cancel, on_event,
+        provider,
+        &provider.model,
+        messages,
+        tools,
+        max_tokens,
+        effort,
+        user_id,
+        cancel,
+        on_event,
     )
 }
 
 /// Synchronous (non-streaming) chat for internal use (compact, etc.).
-pub fn chat_sync(provider: &ProviderConfig, messages: Vec<Message>, max_tokens: u32) -> Result<String, String> {
+pub fn chat_sync(
+    provider: &ProviderConfig,
+    messages: Vec<Message>,
+    max_tokens: u32,
+) -> Result<String, String> {
     openai::chat_sync_openai(provider, &provider.model, messages, max_tokens)
 }

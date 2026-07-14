@@ -149,7 +149,9 @@ pub fn commit_all(workspace: &str, message: &str) -> Result<String, String> {
     index.write().map_err(|e| format!("index write: {e}"))?;
 
     let tree_oid = index.write_tree().map_err(|e| format!("write_tree: {e}"))?;
-    let tree = repo.find_tree(tree_oid).map_err(|e| format!("find_tree: {e}"))?;
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(|e| format!("find_tree: {e}"))?;
 
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     let parents: Vec<&git2::Commit> = parent.iter().collect();

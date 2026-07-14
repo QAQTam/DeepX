@@ -50,7 +50,9 @@ information in this summary to assist with your own analysis:";
 pub struct CompactEngine;
 
 impl CompactEngine {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
     pub fn reset(&mut self) {}
 
     /// Step 1: Token-split, serialize, build prompt — fast, synchronous.
@@ -64,16 +66,24 @@ impl CompactEngine {
         let turns_total = ctx.agent.msg.turn_count();
         log::info!("[COMPACT] {} turns", turns_total);
 
-        let all = ctx.agent.msg.build_context_for_gate(&[], &std::collections::HashMap::new());
+        let all = ctx
+            .agent
+            .msg
+            .build_context_for_gate(&[], &std::collections::HashMap::new());
         let msgs: Vec<&deepx_types::Message> = all.iter().filter(|m| m.role != "system").collect();
-        if msgs.is_empty() { return None; }
+        if msgs.is_empty() {
+            return None;
+        }
 
         let estimate = |s: &str| -> usize { s.chars().count() / 4 };
         let mut kept_idx = msgs.len();
         let mut kept_tokens = 0usize;
         for (i, m) in msgs.iter().enumerate().rev() {
             let t = estimate(&serde_json::to_string(m).unwrap_or_default());
-            if kept_tokens + t > KEEP_TOKENS { kept_idx = i + 1; break; }
+            if kept_tokens + t > KEEP_TOKENS {
+                kept_idx = i + 1;
+                break;
+            }
             kept_tokens += t;
             kept_idx = i;
         }
@@ -97,11 +107,18 @@ impl CompactEngine {
         let contexts = serialize_messages(head_msgs, &msgs[kept_idx..]);
         let timeline = {
             let created = ctx.agent.session.created_at;
-            let updated = ctx.agent.session.updated_at.max(SessionManager::now_epoch());
+            let updated = ctx
+                .agent
+                .session
+                .updated_at
+                .max(SessionManager::now_epoch());
             let start_str = util::epoch_to_date(created);
             let dur = updated.saturating_sub(created);
-            format!("- Session started: {start_str} (UTC)\n- Session duration: {}h {}m real-time",
-                dur / 3600, (dur % 3600) / 60)
+            format!(
+                "- Session started: {start_str} (UTC)\n- Session duration: {}h {}m real-time",
+                dur / 3600,
+                (dur % 3600) / 60
+            )
         };
 
         let previous_summary = ctx.agent.msg.previous_compact_summary();
@@ -130,8 +147,14 @@ impl CompactEngine {
         };
 
         let provider = deepx_gate::ProviderConfig::openai(
-            &ctx.agent.config.base_url, &ctx.agent.config.api_key, &ctx.agent.config.model,
-            None, None, Default::default(), Default::default(), false,
+            &ctx.agent.config.base_url,
+            &ctx.agent.config.api_key,
+            &ctx.agent.config.model,
+            None,
+            None,
+            Default::default(),
+            Default::default(),
+            false,
         );
         Some((prompt, kept_user_count, head_user_count, provider))
     }
@@ -139,16 +162,36 @@ impl CompactEngine {
     /// Step 2: Apply compact result on the live message store (called from main thread).
     pub(crate) fn apply_result(&self, ctx: &mut RingContext, meta: &CompactMeta) {
         if let Some(ref err) = meta.error {
-            ctx.emitter.emit(Agent2Ui::Error { message: err.clone() });
-            ctx.emitter.emit(Agent2Ui::CompactEnd { summary_chars: 0, turns_compacted: 0 });
+            ctx.emitter.emit(Agent2Ui::Error {
+                message: err.clone(),
+            });
+            ctx.emitter.emit(Agent2Ui::CompactEnd {
+                summary_chars: 0,
+                turns_compacted: 0,
+            });
             return;
         }
         let chars = meta.summary.chars().count();
-        ctx.agent.msg.apply_compact(&meta.summary, meta.kept_user_count);
-        ctx.agent.msg.snapshot_full(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+        ctx.agent
+            .msg
+            .apply_compact(&meta.summary, meta.kept_user_count);
+        ctx.agent
+            .msg
+            .snapshot_full(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
 
-        let (chat_text, thinking, tool_calls, tool_results, tools_schema, system_prompt, thinking_blocks, tool_call_blocks) =
-            ctx.agent.msg.compute_context_stats(Some(&ctx.agent.tool_defs));
+        let (
+            chat_text,
+            thinking,
+            tool_calls,
+            tool_results,
+            tools_schema,
+            system_prompt,
+            thinking_blocks,
+            tool_call_blocks,
+        ) = ctx
+            .agent
+            .msg
+            .compute_context_stats(Some(&ctx.agent.tool_defs));
         let stats = serde_json::json!({
             "messages": ctx.agent.msg.turn_count(),
             "chat_text": chat_text, "thinking": thinking,
@@ -192,33 +235,44 @@ pub(crate) fn run_compact_worker(
     let msgs_vec = vec![deepx_types::Message::user(&prompt)];
     let mut summary = String::new();
 
-    let mut on_event = |ev: deepx_gate::StreamEvent| {
-        match ev {
-            deepx_gate::StreamEvent::ContentDelta(delta) => {
-                summary.push_str(&delta);
-                let _ = event_tx.send(deepx_proto::Agent2Ui::CompactDelta { delta });
-            }
-            deepx_gate::StreamEvent::ReasoningDelta(delta) => {
-                summary.push_str(&delta);
-                let _ = event_tx.send(deepx_proto::Agent2Ui::CompactDelta { delta });
-            }
-            _ => {}
+    let mut on_event = |ev: deepx_gate::StreamEvent| match ev {
+        deepx_gate::StreamEvent::ContentDelta(delta) => {
+            summary.push_str(&delta);
+            let _ = event_tx.send(deepx_proto::Agent2Ui::CompactDelta { delta });
         }
+        deepx_gate::StreamEvent::ReasoningDelta(delta) => {
+            summary.push_str(&delta);
+            let _ = event_tx.send(deepx_proto::Agent2Ui::CompactDelta { delta });
+        }
+        _ => {}
     };
 
     match deepx_gate::chat_stream(
-        &provider, msgs_vec, None, 20480,
-        None, None, None, &mut on_event,
+        &provider,
+        msgs_vec,
+        None,
+        20480,
+        None,
+        None,
+        None,
+        &mut on_event,
     ) {
         Ok(()) if !summary.trim().is_empty() => CompactMeta {
-            summary, kept_user_count, head_user_count, error: None,
+            summary,
+            kept_user_count,
+            head_user_count,
+            error: None,
         },
         Ok(()) => CompactMeta {
-            summary: String::new(), kept_user_count, head_user_count,
+            summary: String::new(),
+            kept_user_count,
+            head_user_count,
             error: Some("Compact failed: model returned empty response.".into()),
         },
         Err(e) => CompactMeta {
-            summary: String::new(), kept_user_count, head_user_count,
+            summary: String::new(),
+            kept_user_count,
+            head_user_count,
             error: Some(format!("{e}")),
         },
     }
@@ -228,32 +282,49 @@ pub(crate) fn run_compact_worker(
 // Message serialization helpers
 // ═══════════════════════════════════════════════════════
 
-fn serialize_messages(head: &[&deepx_types::Message], kept: &[&deepx_types::Message]) -> Vec<String> {
+fn serialize_messages(
+    head: &[&deepx_types::Message],
+    kept: &[&deepx_types::Message],
+) -> Vec<String> {
     let mut out = Vec::new();
     for m in head {
         let role = &m.role;
-        let lines: Vec<String> = m.content.iter().filter_map(|b| match b {
-            deepx_types::ContentBlock::Text { text } => Some(format!("[{role}]: {text}")),
-            deepx_types::ContentBlock::Reasoning { .. } => None,
-            deepx_types::ContentBlock::ToolUse { name, input, .. } => {
-                let args = serde_json::to_string(input).unwrap_or_default();
-                let end = args.floor_char_boundary(args.len().min(120));
-                Some(format!("[{role} tool call]: {}({})", name, &args[..end]))
-            }
-            deepx_types::ContentBlock::ToolResult { content, .. } => {
-                let compact: String = content.lines().take(5)
-                    .map(|l| l.chars().take(200).collect::<String>()).collect::<Vec<_>>().join(" | ");
-                let end = compact.floor_char_boundary(compact.len().min(600));
-                Some(format!("[Tool result]: {}", &compact[..end]))
-            }
-        }).collect();
-        if !lines.is_empty() { out.push(lines.join("\n")); }
+        let lines: Vec<String> = m
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                deepx_types::ContentBlock::Text { text } => Some(format!("[{role}]: {text}")),
+                deepx_types::ContentBlock::Reasoning { .. } => None,
+                deepx_types::ContentBlock::ToolUse { name, input, .. } => {
+                    let args = serde_json::to_string(input).unwrap_or_default();
+                    let end = args.floor_char_boundary(args.len().min(120));
+                    Some(format!("[{role} tool call]: {}({})", name, &args[..end]))
+                }
+                deepx_types::ContentBlock::ToolResult { content, .. } => {
+                    let compact: String = content
+                        .lines()
+                        .take(5)
+                        .map(|l| l.chars().take(200).collect::<String>())
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    let end = compact.floor_char_boundary(compact.len().min(600));
+                    Some(format!("[Tool result]: {}", &compact[..end]))
+                }
+            })
+            .collect();
+        if !lines.is_empty() {
+            out.push(lines.join("\n"));
+        }
     }
     for m in kept {
         if m.role == "tool" {
             if let Some(deepx_types::ContentBlock::ToolResult { content, .. }) = m.content.first() {
-                let compact: String = content.lines().take(3)
-                    .map(|l| l.chars().take(200).collect::<String>()).collect::<Vec<_>>().join(" | ");
+                let compact: String = content
+                    .lines()
+                    .take(3)
+                    .map(|l| l.chars().take(200).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
                 let end = compact.floor_char_boundary(compact.len().min(400));
                 out.push(format!("[Tool result (recent)]: {}", &compact[..end]));
             }

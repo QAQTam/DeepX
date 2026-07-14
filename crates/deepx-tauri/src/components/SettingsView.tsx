@@ -23,7 +23,6 @@ export default function SettingsView(props: SettingsViewProps) {
   const [maxTokens, setMaxTokens] = createSignal(16384);
   const [contextLimit, setContextLimit] = createSignal(1000000);
   const [reasoningEffort, setReasoningEffort] = createSignal("high");
-  const [context7Key, setContext7Key] = createSignal("");
   const [complianceEnabled, setComplianceEnabled] = createSignal(true);
   const [databaseEnabled, setDatabaseEnabled] = createSignal(true);
   const [migrationPending, setMigrationPending] = createSignal(0);
@@ -35,7 +34,6 @@ export default function SettingsView(props: SettingsViewProps) {
   const [saved, setSaved] = createSignal(false);
   let dbToggled = false;  // track whether database switch changed
   const [showApiKey, setShowApiKey] = createSignal(false);
-  const [showC7Key, setShowC7Key] = createSignal(false);
 
   // Subagent
   const [subModel, setSubModel] = createSignal("");
@@ -68,7 +66,6 @@ export default function SettingsView(props: SettingsViewProps) {
     if (data.max_tokens) setMaxTokens(data.max_tokens);
     if (data.context_limit) setContextLimit(data.context_limit);
     if (data.reasoning_effort) setReasoningEffort(data.reasoning_effort);
-    if (data.context7_api_key) setContext7Key(data.context7_api_key === "****" ? "" : data.context7_api_key);
     if (data.compliance_enabled !== undefined) setComplianceEnabled(data.compliance_enabled);
     if (data.database?.enabled !== undefined) setDatabaseEnabled(data.database.enabled);
     if (data.subagent) {
@@ -116,7 +113,6 @@ export default function SettingsView(props: SettingsViewProps) {
         providerId: providerId(), endpoint: endpointId(),
         maxTokens: maxTokens(), contextLimit: contextLimit(),
         reasoningEffort: reasoningEffort(), lang: props.lang(),
-        context7ApiKey: context7Key(),
         subagentModel: subModel(), subagentBaseUrl: subBaseUrl(),
         subagentApiKey: subApiKey(), subagentMaxTokens: subMaxTokens(),
         subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
@@ -205,7 +201,6 @@ export default function SettingsView(props: SettingsViewProps) {
         providerId: providerId(), endpoint: endpointId(),
         maxTokens: maxTokens(), contextLimit: contextLimit(),
         reasoningEffort: reasoningEffort(), lang: props.lang(),
-        context7ApiKey: context7Key(),
         subagentModel: subModel(), subagentBaseUrl: subBaseUrl(),
         subagentApiKey: subApiKey(), subagentMaxTokens: subMaxTokens(),
         subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
@@ -319,16 +314,6 @@ export default function SettingsView(props: SettingsViewProps) {
               </div>
             </div>
             <div class="settings-row">
-              <label>{t().settings.context7Key}</label>
-              <div class="settings-input-group">
-                <div class="settings-secret-row">
-                  <input type={showC7Key() ? "text" : "password"} value={context7Key()} onInput={(e) => setContext7Key(e.currentTarget.value)} placeholder="c7-..." />
-                  <button class="settings-eye-btn" onClick={() => setShowC7Key(v => !v)} title={showC7Key() ? t().settings.hide : t().settings.show}>
-                    <EyeIcon show={showC7Key()} />
-                  </button>
-                </div>
-                <div class="settings-hint">{t().settings.context7KeyHint}</div>
-              </div>
             </div>
           </section>
 

@@ -69,10 +69,11 @@ mod imp {
                 .unwrap_or_default()
                 .as_secs_f64();
             let started = now - (elapsed_ms as f64 / 1000.0);
-            let params: serde_json::Value =
-                serde_json::from_str(params_json).unwrap_or(serde_json::Value::String(params_json.to_string()));
+            let params: serde_json::Value = serde_json::from_str(params_json)
+                .unwrap_or(serde_json::Value::String(params_json.to_string()));
             let res: serde_json::Value = serde_json::Value::String(result.to_string());
-            if let Err(e) = RT.block_on(self.agent.tools.record(name, started, now, &params, &res)) {
+            if let Err(e) = RT.block_on(self.agent.tools.record(name, started, now, &params, &res))
+            {
                 log::warn!("[agentfs] record_tool({name}/{action}) failed: {e}");
             }
         }
@@ -102,7 +103,9 @@ mod imp {
             ensure_dir(&dir);
             let dir = data_dir().join("tools");
             ensure_dir(&dir);
-            Some(Self { session_id: session_id.to_string() })
+            Some(Self {
+                session_id: session_id.to_string(),
+            })
         }
 
         pub fn kv_set(&self, key: &str, value: &str) {
@@ -195,13 +198,7 @@ pub fn try_kv_delete(key: &str) {
     }
 }
 
-pub fn try_record_tool(
-    name: &str,
-    action: &str,
-    params_json: &str,
-    result: &str,
-    elapsed_ms: u64,
-) {
+pub fn try_record_tool(name: &str, action: &str, params_json: &str, result: &str, elapsed_ms: u64) {
     if let Some(ref inner) = *BRIDGE.lock().unwrap() {
         inner.record_tool(name, action, params_json, result, elapsed_ms);
     }

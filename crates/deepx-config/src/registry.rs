@@ -14,22 +14,20 @@ fn deepseek() -> ProviderSpec {
     ProviderSpec {
         id: "deepseek".into(),
         display: "DeepSeek".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "openai".into(),
-                display: "OpenAI-compatible".into(),
-                protocol: "openai".into(),
-                base_url: "https://api.deepseek.com".into(),
-                default_model: String::new(),
-                models: vec![],
-                models_url: Some("https://api.deepseek.com".into()),
-                user_id_mode: Some(UserSendMode::Body),
-                // chat_path: None → "/chat/completions" (default)
-                // thinking_mode: OpenAi (default)
-                // cache_field: PromptCacheHitTokens (default)
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "openai".into(),
+            display: "OpenAI-compatible".into(),
+            protocol: "openai".into(),
+            base_url: "https://api.deepseek.com".into(),
+            default_model: String::new(),
+            models: vec![],
+            models_url: Some("https://api.deepseek.com".into()),
+            user_id_mode: Some(UserSendMode::Body),
+            // chat_path: None → "/chat/completions" (default)
+            // thinking_mode: OpenAi (default)
+            // cache_field: PromptCacheHitTokens (default)
+            ..Default::default()
+        }],
     }
 }
 
@@ -37,22 +35,20 @@ fn qwen() -> ProviderSpec {
     ProviderSpec {
         id: "qwen".into(),
         display: "Qwen (阿里百炼)".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "openai".into(),
-                display: "OpenAI-compatible".into(),
-                protocol: "openai".into(),
-                base_url: "https://dashscope.aliyuncs.com".into(),
-                default_model: String::new(),
-                models: vec![],
-                models_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".into()),
-                chat_path: Some("/compatible-mode/v1/chat/completions".into()),
-                thinking_mode: ThinkingParamMode::QwenEnableThinking,
-                cache_field: CacheTokenField::PromptDetailsCached,
-                has_balance: false,
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "openai".into(),
+            display: "OpenAI-compatible".into(),
+            protocol: "openai".into(),
+            base_url: "https://dashscope.aliyuncs.com".into(),
+            default_model: String::new(),
+            models: vec![],
+            models_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".into()),
+            chat_path: Some("/compatible-mode/v1/chat/completions".into()),
+            thinking_mode: ThinkingParamMode::QwenEnableThinking,
+            cache_field: CacheTokenField::PromptDetailsCached,
+            has_balance: false,
+            ..Default::default()
+        }],
     }
 }
 
@@ -60,21 +56,19 @@ fn glm() -> ProviderSpec {
     ProviderSpec {
         id: "glm".into(),
         display: "GLM (智谱AI)".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "openai".into(),
-                display: "OpenAI-compatible".into(),
-                protocol: "openai".into(),
-                base_url: "https://open.bigmodel.cn".into(),
-                default_model: String::new(),
-                models: vec![],
-                models_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
-                chat_path: Some("/api/paas/v4/chat/completions".into()),
-                cache_field: CacheTokenField::PromptDetailsCached,
-                has_balance: false,
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "openai".into(),
+            display: "OpenAI-compatible".into(),
+            protocol: "openai".into(),
+            base_url: "https://open.bigmodel.cn".into(),
+            default_model: String::new(),
+            models: vec![],
+            models_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
+            chat_path: Some("/api/paas/v4/chat/completions".into()),
+            cache_field: CacheTokenField::PromptDetailsCached,
+            has_balance: false,
+            ..Default::default()
+        }],
     }
 }
 
@@ -82,20 +76,18 @@ fn kimi() -> ProviderSpec {
     ProviderSpec {
         id: "kimi".into(),
         display: "Kimi (月之暗面)".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "openai".into(),
-                display: "OpenAI-compatible".into(),
-                protocol: "openai".into(),
-                base_url: "https://api.moonshot.cn/v1".into(),
-                default_model: String::new(),
-                models: vec![],
-                models_url: Some("https://api.moonshot.cn/v1".into()),
-                balance_path: Some("/users/me/balance".into()),
-                cache_field: CacheTokenField::UsageCachedTokens,
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "openai".into(),
+            display: "OpenAI-compatible".into(),
+            protocol: "openai".into(),
+            base_url: "https://api.moonshot.cn/v1".into(),
+            default_model: String::new(),
+            models: vec![],
+            models_url: Some("https://api.moonshot.cn/v1".into()),
+            balance_path: Some("/users/me/balance".into()),
+            cache_field: CacheTokenField::UsageCachedTokens,
+            ..Default::default()
+        }],
     }
 }
 
@@ -103,20 +95,18 @@ fn mimo() -> ProviderSpec {
     ProviderSpec {
         id: "mimo".into(),
         display: "MiMo (小米)".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "openai".into(),
-                display: "OpenAI-compatible".into(),
-                protocol: "openai".into(),
-                base_url: "https://api.xiaomimimo.com/v1".into(),
-                default_model: String::new(),
-                models: vec![],
-                models_url: Some("https://api.xiaomimimo.com/v1".into()),
-                cache_field: CacheTokenField::None,
-                has_balance: false,
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "openai".into(),
+            display: "OpenAI-compatible".into(),
+            protocol: "openai".into(),
+            base_url: "https://api.xiaomimimo.com/v1".into(),
+            default_model: String::new(),
+            models: vec![],
+            models_url: Some("https://api.xiaomimimo.com/v1".into()),
+            cache_field: CacheTokenField::None,
+            has_balance: false,
+            ..Default::default()
+        }],
     }
 }
 
@@ -124,21 +114,19 @@ fn minimax() -> ProviderSpec {
     ProviderSpec {
         id: "minimax".into(),
         display: "MiniMax (稀宇)".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "openai".into(),
-                display: "OpenAI-compatible".into(),
-                protocol: "openai".into(),
-                base_url: "https://api.minimaxi.com/v1".into(),
-                default_model: String::new(),
-                models: vec![],
-                models_url: Some("https://api.minimaxi.com/v1".into()),
-                thinking_mode: ThinkingParamMode::MiniMaxAdaptive,
-                cache_field: CacheTokenField::None,
-                has_balance: false,
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "openai".into(),
+            display: "OpenAI-compatible".into(),
+            protocol: "openai".into(),
+            base_url: "https://api.minimaxi.com/v1".into(),
+            default_model: String::new(),
+            models: vec![],
+            models_url: Some("https://api.minimaxi.com/v1".into()),
+            thinking_mode: ThinkingParamMode::MiniMaxAdaptive,
+            cache_field: CacheTokenField::None,
+            has_balance: false,
+            ..Default::default()
+        }],
     }
 }
 
@@ -146,19 +134,17 @@ fn doubao() -> ProviderSpec {
     ProviderSpec {
         id: "doubao".into(),
         display: "Doubao (火山方舟)".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "openai".into(),
-                display: "OpenAI-compatible".into(),
-                protocol: "openai".into(),
-                base_url: "https://ark.cn-beijing.volces.com".into(),
-                default_model: String::new(),
-                models: vec![],
-                models_url: Some("https://ark.cn-beijing.volces.com/api/v3".into()),
-                chat_path: Some("/api/v3/chat/completions".into()),
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "openai".into(),
+            display: "OpenAI-compatible".into(),
+            protocol: "openai".into(),
+            base_url: "https://ark.cn-beijing.volces.com".into(),
+            default_model: String::new(),
+            models: vec![],
+            models_url: Some("https://ark.cn-beijing.volces.com/api/v3".into()),
+            chat_path: Some("/api/v3/chat/completions".into()),
+            ..Default::default()
+        }],
     }
 }
 
@@ -166,18 +152,16 @@ fn openai() -> ProviderSpec {
     ProviderSpec {
         id: "openai".into(),
         display: "OpenAI".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "openai".into(),
-                display: "Chat Completions".into(),
-                protocol: "openai".into(),
-                base_url: "https://api.openai.com/v1".into(),
-                default_model: String::new(),
-                models: vec![],
-                models_url: Some("https://api.openai.com/v1".into()),
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "openai".into(),
+            display: "Chat Completions".into(),
+            protocol: "openai".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            default_model: String::new(),
+            models: vec![],
+            models_url: Some("https://api.openai.com/v1".into()),
+            ..Default::default()
+        }],
     }
 }
 
@@ -185,27 +169,35 @@ fn deepseek_web() -> ProviderSpec {
     ProviderSpec {
         id: "deepseek-web".into(),
         display: "DeepSeek Web (CDP Proxy)".into(),
-        endpoints: vec![
-            EndpointSpec {
-                id: "cdp".into(),
-                display: "CDP Proxy (localhost:8080)".into(),
-                protocol: "openai".into(),
-                base_url: "http://localhost:8080/v1".into(),
-                default_model: "deepseek-v4-pro".into(),
-                models: vec!["deepseek-v4-flash".into(), "deepseek-v4-pro".into()],
-                models_url: Some("http://localhost:8080/v1".into()),
-                user_id_mode: Some(UserSendMode::Body),
-                has_balance: false,
-                supports_thinking: true,
-                stateful: true,
-                ..Default::default()
-            },
-        ],
+        endpoints: vec![EndpointSpec {
+            id: "cdp".into(),
+            display: "CDP Proxy (localhost:8080)".into(),
+            protocol: "openai".into(),
+            base_url: "http://localhost:8080/v1".into(),
+            default_model: "deepseek-v4-pro".into(),
+            models: vec!["deepseek-v4-flash".into(), "deepseek-v4-pro".into()],
+            models_url: Some("http://localhost:8080/v1".into()),
+            user_id_mode: Some(UserSendMode::Body),
+            has_balance: false,
+            supports_thinking: true,
+            stateful: true,
+            ..Default::default()
+        }],
     }
 }
 
 fn providers() -> Vec<ProviderSpec> {
-    vec![deepseek(), qwen(), glm(), kimi(), mimo(), minimax(), doubao(), openai(), deepseek_web()]
+    vec![
+        deepseek(),
+        qwen(),
+        glm(),
+        kimi(),
+        mimo(),
+        minimax(),
+        doubao(),
+        openai(),
+        deepseek_web(),
+    ]
 }
 
 // ── Lookup ──
@@ -219,13 +211,11 @@ pub fn find_provider(id: &str) -> Option<ProviderSpec> {
 }
 
 pub fn find_endpoint(provider_id: &str, endpoint_id: &str) -> Option<EndpointSpec> {
-    find_provider(provider_id)
-        .and_then(|p| p.endpoints.into_iter().find(|e| e.id == endpoint_id))
+    find_provider(provider_id).and_then(|p| p.endpoints.into_iter().find(|e| e.id == endpoint_id))
 }
 
 pub fn first_endpoint_for(provider_id: &str) -> Option<EndpointSpec> {
-    find_provider(provider_id)
-        .and_then(|p| p.endpoints.into_iter().next())
+    find_provider(provider_id).and_then(|p| p.endpoints.into_iter().next())
 }
 
 pub fn first_provider_endpoint() -> (String, String) {
@@ -262,7 +252,11 @@ pub fn fetch_models(provider_id: &str, endpoint_id: &str, api_key: &str) -> Vec<
         .build()
         .into();
 
-    match agent.get(&url).header("Authorization", &format!("Bearer {}", api_key)).call() {
+    match agent
+        .get(&url)
+        .header("Authorization", &format!("Bearer {}", api_key))
+        .call()
+    {
         Ok(resp) => {
             let body: Result<serde_json::Value, _> = resp.into_body().read_json();
             match body {
@@ -276,11 +270,7 @@ pub fn fetch_models(provider_id: &str, endpoint_id: &str, api_key: &str) -> Vec<
                                 .collect()
                         })
                         .unwrap_or_default();
-                    if models.is_empty() {
-                        vec![]
-                    } else {
-                        models
-                    }
+                    if models.is_empty() { vec![] } else { models }
                 }
                 Err(_) => vec![],
             }

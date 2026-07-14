@@ -32,8 +32,6 @@ pub struct PersistentConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context7_api_key: Option<String>,
 
     // ── Subagent defaults ──
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,7 +102,9 @@ pub struct ProfileConfig {
     pub endpoint: Option<String>,
 }
 
-fn default_base_url() -> String { "https://api.deepseek.com".into() }
+fn default_base_url() -> String {
+    "https://api.deepseek.com".into()
+}
 
 // ── ConfigStore: unified config I/O with atomic writes ──
 
@@ -141,16 +141,24 @@ impl ConfigStore {
         };
         let tmp = self.path.with_extension("toml.tmp");
         if let Some(parent) = self.path.parent()
-            && let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("ConfigStore: create_dir_all({}) failed: {e}", parent.display());
-                return false;
-            }
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            eprintln!(
+                "ConfigStore: create_dir_all({}) failed: {e}",
+                parent.display()
+            );
+            return false;
+        }
         if let Err(e) = std::fs::write(&tmp, &content) {
             eprintln!("ConfigStore: write({}) failed: {e}", tmp.display());
             return false;
         }
         if let Err(e) = std::fs::rename(&tmp, &self.path) {
-            eprintln!("ConfigStore: rename({} -> {}) failed: {e}", tmp.display(), self.path.display());
+            eprintln!(
+                "ConfigStore: rename({} -> {}) failed: {e}",
+                tmp.display(),
+                self.path.display()
+            );
             return false;
         }
         true
@@ -178,5 +186,3 @@ pub struct BalanceInfo {
     pub granted_balance: String,
     pub topped_up_balance: String,
 }
-
-

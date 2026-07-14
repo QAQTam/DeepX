@@ -130,7 +130,7 @@ export function createChatStore(seed: string) {
     if (!turn) return;
     const idx = turn.rounds.findIndex((r) => r.round_num === round_num);
     if (idx < 0) {
-      setTurns((t) => t.turn_id === turn_id, "rounds", (r) => [...r, { round_num, thinking: "", answer: "", tool_calls: [], tool_results: [], blocks: [] } as Round]);
+      setTurns((t) => t.turn_id === turn_id, "rounds", (r) => [...r, { round_num, is_final: false, thinking: "", answer: "", tool_calls: [], tool_results: [], blocks: [] } as Round]);
     }
   }
 
@@ -187,13 +187,13 @@ export function createChatStore(seed: string) {
     }));
   }
 
-  function handleRoundComplete(turn_id: string, round_num: number, thinking?: string, answer?: string, tool_calls?: ToolCallDef[], blocks?: RoundBlock[]) {
+  function handleRoundComplete(turn_id: string, round_num: number, thinking?: string, answer?: string, tool_calls?: ToolCallDef[], blocks?: RoundBlock[], isFinal = false) {
     flushDeltas(turn_id, round_num); // flush any pending streaming delta before replacing with final state
     // Compute thinking elapsed for this round
     const thinkMs = roundThinkingStart ? Date.now() - roundThinkingStart : 0;
     ensureRound(turn_id, round_num);
     setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
-      if (thinking) round.thinking = thinking; if (answer) round.answer = answer; if (tool_calls) round.tool_calls = tool_calls; if (blocks) round.blocks = blocks;
+      if (thinking) round.thinking = thinking; if (answer) round.answer = answer; if (tool_calls) round.tool_calls = tool_calls; if (blocks) round.blocks = blocks; round.is_final = isFinal;
       if (thinkMs > 0) round.thinking_ms = thinkMs;
     }));
   }

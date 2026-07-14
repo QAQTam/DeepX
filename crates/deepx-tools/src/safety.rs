@@ -15,9 +15,9 @@ impl SafetyPolicy {
         match (risk, in_workspace) {
             (ToolRisk::ReadOnly, _) => SafetyVerdict::Allow,
             (ToolRisk::Write, _) => SafetyVerdict::Allow,
-            (ToolRisk::Destructive, false) => SafetyVerdict::Block(
-                "Destructive operation outside workspace is blocked".into(),
-            ),
+            (ToolRisk::Destructive, false) => {
+                SafetyVerdict::Block("Destructive operation outside workspace is blocked".into())
+            }
             (ToolRisk::Destructive, true) => SafetyVerdict::Allow,
             (ToolRisk::Administrative, _) => SafetyVerdict::Allow,
         }

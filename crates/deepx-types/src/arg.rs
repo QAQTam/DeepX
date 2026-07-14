@@ -26,7 +26,8 @@ pub fn parse_opt(args: &str, key: &str) -> Option<String> {
 pub fn parse_opt_u64(args: &str, key: &str) -> Option<u64> {
     let v: Value = serde_json::from_str(args).ok()?;
     let val = v.get(key)?;
-    val.as_u64().or_else(|| val.as_str().and_then(|s| s.parse::<u64>().ok()))
+    val.as_u64()
+        .or_else(|| val.as_str().and_then(|s| s.parse::<u64>().ok()))
 }
 
 /// Extract the "action" field from tool arguments.

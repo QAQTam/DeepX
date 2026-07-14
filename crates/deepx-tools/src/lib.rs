@@ -2,20 +2,22 @@
 //!
 //! Submodules register handlers via `pub fn register(mgr: &mut ToolManager)`.
 
-
 pub mod exec;
 
 pub mod explore;
 
-pub mod bridge;
+pub mod authorization;
+mod code_delta;
+pub mod execution;
+pub mod file_cache;
 pub mod file_mutate;
 pub mod file_query;
 pub mod file_shared;
-pub mod file_cache;
 pub mod file_state;
 pub mod git;
-pub mod skill;
+pub mod runtime;
 mod safety;
+pub mod skill;
 mod web;
 
 pub mod ask_user;
@@ -26,27 +28,21 @@ pub mod plan;
 
 pub mod workspace;
 
-pub mod process_registry;
 pub mod process_inspect;
+pub mod process_registry;
 
 pub mod registration;
-
-pub mod persistence;
-
-pub mod memory;
 
 pub mod manager;
 /// Permission engine: tool categories, levels, trusted folders.
 pub mod permission;
 
+pub mod agentfs_bridge;
 pub mod audit;
 pub mod auth;
-pub mod agentfs_bridge;
-pub mod context7;
 
-pub use context7::set_c7_key;
+pub use manager::{ToolExecMeta, ToolExecReport, ToolManager, ToolStats};
 pub use safety::SafetyVerdict;
-pub use manager::{ToolManager, ToolExecMeta, ToolExecReport, ToolStats};
 
 /// Return current time as "UTC+8 YYYY-MM-DD HH:MM" (matching the [timeis:] prefix convention).
 pub fn now_utc8() -> String {
@@ -68,21 +64,28 @@ pub fn json_ok(extra: serde_json::Value) -> String {
     let mut v = serde_json::json!({"timeis": now_utc8(), "status": "ok"});
     if let Some(obj) = v.as_object_mut() {
         if let Some(ext) = extra.as_object() {
-            for (k, val) in ext { obj.insert(k.clone(), val.clone()); }
+            for (k, val) in ext {
+                obj.insert(k.clone(), val.clone());
+            }
         }
     }
     v.to_string()
 }
 
 /// Build a JSON error response.
-pub fn json_err(code: impl Into<String>, message: impl Into<String>, hint: impl Into<String>) -> String {
+pub fn json_err(
+    code: impl Into<String>,
+    message: impl Into<String>,
+    hint: impl Into<String>,
+) -> String {
     serde_json::json!({
         "timeis": now_utc8(),
         "status": "error",
         "code": code.into(),
         "message": message.into(),
         "hint": hint.into(),
-    }).to_string()
+    })
+    .to_string()
 }
 
 /// Risk level for tool operations, replacing per-handler safety functions.
@@ -105,7 +108,9 @@ macro_rules! handler {
             let success = if is_json {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&result) {
                     v.get("status").and_then(|s| s.as_str()) != Some("error")
-                } else { false }
+                } else {
+                    false
+                }
             } else {
                 // Treat any failure-prefix as error; [PARTIAL] is also a failure.
                 let trimmed = result.trim_start();
@@ -131,14 +136,21 @@ pub trait JsonArgs {
 
 impl JsonArgs for serde_json::Value {
     fn s(&self, key: &str) -> String {
-        self.get(key).and_then(|v| v.as_str()).map(String::from).unwrap_or_default()
+        self.get(key)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_default()
     }
     fn s_or(&self, key: &str, default: &str) -> String {
-        self.get(key).and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| default.to_string())
+        self.get(key)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| default.to_string())
     }
     fn opt_bool(&self, key: &str) -> Option<bool> {
         let val = self.get(key)?;
-        val.as_bool().or_else(|| val.as_str().and_then(|s| s.parse::<bool>().ok()))
+        val.as_bool()
+            .or_else(|| val.as_str().and_then(|s| s.parse::<bool>().ok()))
     }
 }
 
@@ -167,10 +179,7 @@ pub fn set_current_session(seed: &str) {
 pub static CURRENT_WORKSPACE: RwLock<String> = RwLock::new(String::new());
 
 /// Tools blocked in PLAN mode. Keep in sync with permission::categorize_tool.
-pub const PLAN_BLOCKED: &[&str] = &[
-    "edit", "edit_block", "write", "delete",
-    "exec_run", "git",
-];
+pub const PLAN_BLOCKED: &[&str] = &["edit", "edit_block", "write", "delete", "exec_run", "git"];
 
 pub fn set_workspace(path: &str) {
     let mut ws = CURRENT_WORKSPACE.write().expect("CURRENT_WORKSPACE lock");
@@ -183,11 +192,17 @@ pub fn set_workspace(path: &str) {
 /// Otherwise, join the workspace root with the relative path.
 pub fn resolve_workspace_path(path: &str) -> String {
     use std::path::Path;
-    if path.is_empty() { return path.to_string(); }
+    if path.is_empty() {
+        return path.to_string();
+    }
     let p = Path::new(path);
-    if p.is_absolute() { return path.to_string(); }
+    if p.is_absolute() {
+        return path.to_string();
+    }
     let ws = CURRENT_WORKSPACE.read().expect("CURRENT_WORKSPACE lock");
-    if ws.is_empty() || *ws == "." { return path.to_string(); }
+    if ws.is_empty() || *ws == "." {
+        return path.to_string();
+    }
     let joined = Path::new(&*ws).join(p);
     // Normalise: strip redundant . components via iterator (e.g. D:\foo\./bar → D:\foo\bar)
     let normalized: std::path::PathBuf = joined.components().collect();
@@ -225,7 +240,6 @@ pub fn display_path(abs_path: &str) -> String {
     // Not under workspace — return normalised path with forward slashes
     norm_str.replace('\\', "/")
 }
-
 
 // ── ToolCallCtx ──
 
@@ -268,18 +282,23 @@ impl ExecProgressSender {
     pub fn try_send(&self, event: ExecProgressEvent) {
         let bytes = event.chunk.len() as u64;
         if self.tx.try_send(event).is_err() {
-            self.dropped_bytes.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+            self.dropped_bytes
+                .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
     pub fn dropped_bytes(&self) -> u64 {
-        self.dropped_bytes.load(std::sync::atomic::Ordering::Relaxed)
+        self.dropped_bytes
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 pub const EXEC_PROGRESS_CHANNEL_CAPACITY: usize = 256;
 
-pub fn bounded_exec_progress_channel() -> (ExecProgressSender, std::sync::mpsc::Receiver<ExecProgressEvent>) {
+pub fn bounded_exec_progress_channel() -> (
+    ExecProgressSender,
+    std::sync::mpsc::Receiver<ExecProgressEvent>,
+) {
     let (tx, rx) = std::sync::mpsc::sync_channel(EXEC_PROGRESS_CHANNEL_CAPACITY);
     let dropped_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     (ExecProgressSender { tx, dropped_bytes }, rx)
@@ -335,13 +354,22 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
-        Self { success: true, content: content.into() }
+        Self {
+            success: true,
+            content: content.into(),
+        }
     }
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { success: false, content: format!("[ERROR] {}", msg.into()) }
+        Self {
+            success: false,
+            content: format!("[ERROR] {}", msg.into()),
+        }
     }
     pub fn partial(msg: impl Into<String>) -> Self {
-        Self { success: false, content: format!("[PARTIAL] {}", msg.into()) }
+        Self {
+            success: false,
+            content: format!("[PARTIAL] {}", msg.into()),
+        }
     }
 }
 
@@ -362,7 +390,8 @@ pub fn parse_opt(args: &str, key: &str) -> Option<String> {
 pub fn parse_opt_bool(args: &str, key: &str) -> Option<bool> {
     let v: serde_json::Value = serde_json::from_str(args).ok()?;
     let val = v.get(key)?;
-    val.as_bool().or_else(|| val.as_str().and_then(|s| s.parse::<bool>().ok()))
+    val.as_bool()
+        .or_else(|| val.as_str().and_then(|s| s.parse::<bool>().ok()))
 }
 
 // ── ToolHandler ──

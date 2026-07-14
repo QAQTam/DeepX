@@ -49,7 +49,6 @@ const zh: I18nStrings = {
       task: "任务",
       plan: "规划",
       ask: "询问",
-      memory: "记忆",
       process: "进程",
     },
     activityLabel: {
@@ -89,8 +88,6 @@ const zh: I18nStrings = {
     contextLimit: "上下文限制",
     reasoningEffort: "推理强度",
     language: "语言",
-    context7Key: "Context7 API 密钥",
-    context7KeyHint: "Context7 文档检索 API 密钥，留空则禁用。",
     show: "显示",
     hide: "隐藏",
     save: "保存",

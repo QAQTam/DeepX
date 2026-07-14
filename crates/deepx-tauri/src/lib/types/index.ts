@@ -20,3 +20,4 @@ export type { AskAnswer } from "./AskAnswer";
 export type { AskResolution } from "./AskResolution";
 export type { SkillInfo } from "./SkillInfo";
 export type { SkillsStatus } from "./SkillsStatus";
+export type { PermissionRisk } from "./PermissionRisk";

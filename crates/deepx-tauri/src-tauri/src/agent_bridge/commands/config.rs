@@ -1,7 +1,7 @@
 //! Configuration, tool listing, skill management, workspace, session list commands.
 
+use super::super::registry::{AgentRegistry, send_to_agent};
 use deepx_proto::Ui2Agent;
-use super::super::registry::{send_to_agent, AgentRegistry};
 
 #[tauri::command]
 pub fn cmd_unload_skill(seed: String, name: String) -> Result<(), String> {
@@ -45,7 +45,7 @@ pub fn cmd_get_version() -> String {
 
 #[tauri::command]
 pub fn cmd_list_available_tools() -> Result<String, String> {
-    let tools = deepx_tools::bridge::all_tool_names();
+    let tools = deepx_tools::runtime::all_tool_names();
     serde_json::to_string(&tools).map_err(|e| format!("{e}"))
 }
 
@@ -63,7 +63,6 @@ pub fn cmd_save_config(
     context_limit: u32,
     reasoning_effort: String,
     lang: String,
-    context7_api_key: String,
     subagent_model: String,
     subagent_base_url: String,
     subagent_api_key: String,
@@ -100,9 +99,6 @@ pub fn cmd_save_config(
     set_str(&mut cfg.reasoning_effort, &reasoning_effort);
     if !lang.is_empty() {
         cfg.lang = Some(lang);
-    }
-    if !context7_api_key.is_empty() {
-        cfg.context7_api_key = Some(context7_api_key);
     }
 
     set_str(&mut cfg.subagent.model, &subagent_model);
@@ -177,7 +173,6 @@ pub fn cmd_load_config() -> Result<String, String> {
         "reasoning_effort": cfg.reasoning_effort,
         "lang": cfg.lang,
         "active_profile": cfg.active_profile,
-        "context7_api_key": if cfg.context7_api_key.as_deref().unwrap_or("").is_empty() { "" } else { "****" },
         "providers": providers,
         "subagent": {
             "model": cfg.subagent.model,

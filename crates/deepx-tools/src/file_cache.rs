@@ -31,11 +31,13 @@ fn cache() -> &'static Mutex<Vec<CacheEntry>> {
 /// Consecutive reads (same file twice in a row) always bypass cache — model needs re-examination.
 pub fn check(path: &str, content: &str) -> Option<String> {
     let hash = hash_content(content);
-    
+
     // Check consecutive read
     {
-        let mut lr = LAST_READ_PATH.get_or_init(|| Mutex::new(None))
-            .lock().unwrap_or_else(|e| e.into_inner());
+        let mut lr = LAST_READ_PATH
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let is_consecutive = lr.as_ref().map_or(false, |p| p == path);
         *lr = Some(path.to_string());
         if is_consecutive {
@@ -50,15 +52,18 @@ pub fn check(path: &str, content: &str) -> Option<String> {
         if e.path == path {
             if e.hash == hash {
                 log::info!("[CACHE] file_read hit: {} (hash={})", path, &hash[..8]);
-                return Some(serde_json::json!({
-                    "timeis": crate::now_utc8(),
-                    "status": "ok",
-                    "path": path,
-                    "hash": &hash[..8],
-                    "total_lines": e.line_count,
-                    "unchanged": true,
-                    "content": format!("{} unchanged (hash={})", path, &hash[..8]),
-                }).to_string());
+                return Some(
+                    serde_json::json!({
+                        "timeis": crate::now_utc8(),
+                        "status": "ok",
+                        "path": path,
+                        "hash": &hash[..8],
+                        "total_lines": e.line_count,
+                        "unchanged": true,
+                        "content": format!("{} unchanged (hash={})", path, &hash[..8]),
+                    })
+                    .to_string(),
+                );
             }
             break;
         }
@@ -81,7 +86,12 @@ pub fn store(path: &str, content: &str, line_count: usize) {
         json: String::new(),
         line_count,
     });
-    log::info!("[CACHE] file_read stored: {} (hash={}, {}L)", path, hash_short, line_count);
+    log::info!(
+        "[CACHE] file_read stored: {} (hash={}, {}L)",
+        path,
+        hash_short,
+        line_count
+    );
 }
 
 /// Invalidate cache for a path (called on file_write/edit/delete/move).

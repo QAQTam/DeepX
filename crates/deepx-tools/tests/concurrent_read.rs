@@ -11,9 +11,9 @@ fn ten_parallel_reads() {
     deepx_tools::set_workspace(&tmp.to_string_lossy());
 
     // Init tool manager
-    deepx_tools::bridge::init_tools("test", &[], vec![]);
+    deepx_tools::runtime::init_tools("test", &[], vec![]);
     // Set permission context so the compat wrapper can pass admission
-    deepx_tools::bridge::set_runtime_context("test", 4);
+    deepx_tools::runtime::set_context("test", 4);
 
     let file_path_str = file_path.to_string_lossy().to_string();
     let args = serde_json::json!({"path": file_path_str}).to_string();
@@ -25,7 +25,7 @@ fn ten_parallel_reads() {
         let args = args.clone();
         let done_tx = done_tx.clone();
         handles.push(std::thread::spawn(move || {
-            let result = deepx_tools::bridge::execute_tool_with_id_full(
+            let result = deepx_tools::execution::execute_with_context(
                 "read",
                 "",
                 &args,

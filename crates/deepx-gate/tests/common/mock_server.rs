@@ -204,7 +204,13 @@ impl MockServer {
             thread::spawn(|| run_server(server, src, stop, rc, lb))
         };
 
-        MockServer { port, handle: Some(handle), stop, request_count, last_request_body: last_body }
+        MockServer {
+            port,
+            handle: Some(handle),
+            stop,
+            request_count,
+            last_request_body: last_body,
+        }
     }
 
     /// Serve scenarios in rotation, one per request.
@@ -224,7 +230,13 @@ impl MockServer {
             thread::spawn(|| run_server(server, src, stop, rc, lb))
         };
 
-        MockServer { port, handle: Some(handle), stop, request_count, last_request_body: last_body }
+        MockServer {
+            port,
+            handle: Some(handle),
+            stop,
+            request_count,
+            last_request_body: last_body,
+        }
     }
 
     pub fn base_url(&self) -> String {
