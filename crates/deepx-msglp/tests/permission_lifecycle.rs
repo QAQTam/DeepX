@@ -133,6 +133,27 @@ fn final_round(text: &str) -> Vec<String> {
     ]
 }
 
+fn marker_exec_args(path: &std::path::Path) -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        let path = path.to_string_lossy().replace('\'', "''");
+        json!({
+            "argv": [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                format!("Set-Content -LiteralPath '{path}' -Value done"),
+            ]
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        json!({
+            "argv": ["sh", "-c", "printf done > \"$1\"", "sh", path.to_string_lossy()]
+        })
+    }
+}
+
 fn send(writer: &mut os_pipe::PipeWriter, command: Ui2Agent) {
     writeln!(writer, "{}", serde_json::to_string(&command).unwrap()).unwrap();
     writer.flush().unwrap();
@@ -530,6 +551,97 @@ fn llm_multiple_pending_waits_for_every_response() {
             );
             let events = collect_through_done(receiver);
             assert_single_completion(&events, 2);
+        },
+    );
+}
+
+#[test]
+fn llm_four_pending_execs_defer_execution_until_all_resolved() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let markers = (1..=4)
+        .map(|index| temp.path().join(format!("exec-{index}.txt")))
+        .collect::<Vec<_>>();
+    let calls = markers
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            (
+                format!("exec-{}", index + 1),
+                marker_exec_args(path),
+            )
+        })
+        .collect::<Vec<_>>();
+    let call_refs = calls
+        .iter()
+        .map(|(id, args)| (id.as_str(), "exec_run", args.clone()))
+        .collect::<Vec<_>>();
+    let expected_markers = markers.clone();
+
+    run_case(
+        1,
+        temp.path(),
+        vec![tool_round(&call_refs), final_round("all execs finished")],
+        2,
+        move |writer, receiver| {
+            send(
+                writer,
+                Ui2Agent::UserInput {
+                    text: "run four commands".into(),
+                },
+            );
+            let mut ids = (0..4)
+                .map(|_| permission_id(receiver))
+                .collect::<Vec<_>>();
+            ids.sort();
+            assert_eq!(ids, vec!["exec-1", "exec-2", "exec-3", "exec-4"]);
+
+            for id in &ids[..3] {
+                send(
+                    writer,
+                    Ui2Agent::PermissionResponse {
+                        tool_call_id: id.clone(),
+                        approved: true,
+                        trust_folder: false,
+                    },
+                );
+            }
+            assert_no_round_completion(receiver);
+            let execution_deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < execution_deadline
+                && expected_markers.iter().all(|path| !path.exists())
+            {
+                thread::sleep(Duration::from_millis(25));
+            }
+            assert!(
+                expected_markers.iter().all(|path| !path.exists()),
+                "approved execs must remain deferred until every decision is recorded",
+            );
+
+            send(
+                writer,
+                Ui2Agent::PermissionResponse {
+                    tool_call_id: ids[3].clone(),
+                    approved: true,
+                    trust_folder: false,
+                },
+            );
+            let completion_deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < completion_deadline
+                && expected_markers.iter().any(|path| !path.exists())
+            {
+                thread::sleep(Duration::from_millis(25));
+            }
+            assert!(
+                expected_markers.iter().all(|path| path.exists()),
+                "approved exec batch did not finish: {:?}",
+                expected_markers
+                    .iter()
+                    .map(|path| path.exists())
+                    .collect::<Vec<_>>(),
+            );
+            let events = collect_through_done(receiver);
+            assert_single_completion(&events, 4);
         },
     );
 }

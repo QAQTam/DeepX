@@ -572,7 +572,10 @@ impl Loop {
                     self.terminal_for_queued_interrupt = false;
                     self.pending.shutdown = true;
                 }
-                other if self.pending.is_empty() && !self.session.turn.is_suspended() => {
+                // A suspended turn may have several permission responses queued.
+                // Route them through the reason-aware dispatch guard instead of
+                // dropping every response after the first one.
+                other if self.pending.is_empty() => {
                     self.dispatch_one(other);
                 }
                 _ => {
@@ -969,11 +972,12 @@ impl Loop {
                     PermissionDisposition::Ignored | PermissionDisposition::UiHandled => {
                         Some(Outcome::Handled)
                     }
-                    PermissionDisposition::LlmResolved { call_id } => {
+                    PermissionDisposition::LlmResolved { call_id, admitted } => {
                         Some(self.session.turn.handle_permission_resolved(
                             &mut ctx,
                             &mut self.session.tool,
                             &call_id,
+                            admitted,
                         ))
                     }
                 }

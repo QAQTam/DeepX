@@ -98,6 +98,7 @@ impl TurnEngine {
         ctx: &mut RingContext,
         tool: &mut ToolEngine,
         call_id: &str,
+        admitted: Option<AdmittedTool>,
     ) -> Outcome {
         let Some(saved) = self.suspended.as_mut() else {
             log::warn!("[TURN] permission resolved without a suspended turn: {call_id}");
@@ -110,6 +111,9 @@ impl TurnEngine {
             return Outcome::Handled;
         }
 
+        if let Some(admitted) = admitted {
+            saved.deferred_authorized.push(admitted);
+        }
         saved.pending_permission_ids.retain(|id| id != call_id);
         if !saved.pending_permission_ids.is_empty() {
             return Outcome::YieldToUser {
@@ -118,16 +122,29 @@ impl TurnEngine {
             };
         }
 
+        let mut saved = self.suspended.take().expect("permission suspension exists");
+        let deferred_authorized = std::mem::take(&mut saved.deferred_authorized);
+        if !Self::execute_admitted_batch(
+            ctx,
+            tool,
+            deferred_authorized,
+            &saved.tool_call_order,
+            &saved.serial_call_ids,
+        ) {
+            return Self::abort_running_turn(ctx, saved.turn_id, saved.usage);
+        }
+
         if !saved.pending_asks.is_empty() {
             saved.reason = YieldReason::AskUser;
-            Self::emit_active_ask(ctx, saved);
+            let turn_id = saved.turn_id.clone();
+            Self::emit_active_ask(ctx, &saved);
+            self.suspended = Some(saved);
             return Outcome::YieldToUser {
-                turn_id: saved.turn_id.clone(),
+                turn_id,
                 reason: YieldReason::AskUser,
             };
         }
 
-        let saved = self.suspended.take().expect("permission suspension exists");
         self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
         self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
     }
@@ -305,6 +322,138 @@ impl TurnEngine {
             usage,
             consume_queued_interrupt: true,
         }
+    }
+
+    fn execute_admitted_batch(
+        ctx: &mut RingContext,
+        tool: &ToolEngine,
+        mut admitted: Vec<AdmittedTool>,
+        tool_call_order: &[String],
+        serial_call_ids: &HashSet<String>,
+    ) -> bool {
+        const MAX_PARALLEL_TOOL_WORKERS: usize = 4;
+        admitted.sort_by_key(|item| {
+            tool_call_order
+                .iter()
+                .position(|id| id == &item.call_id)
+                .unwrap_or(usize::MAX)
+        });
+        let (mut parallel, serial): (Vec<_>, Vec<_>) = admitted
+            .into_iter()
+            .partition(|item| !serial_call_ids.contains(&item.call_id));
+
+        while !parallel.is_empty() {
+            let batch_len = parallel.len().min(MAX_PARALLEL_TOOL_WORKERS);
+            let batch: Vec<_> = parallel.drain(..batch_len).collect();
+            let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
+            let mut handles = Vec::new();
+            for admitted in batch {
+                let tx = progress_tx.clone();
+                let call_id = admitted.call_id.clone();
+                let handle = std::thread::Builder::new()
+                    .stack_size(4 * 1024 * 1024)
+                    .spawn({
+                        let auth = admitted.auth;
+                        let id = call_id.clone();
+                        move || {
+                            let result = deepx_tools::execution::execute_authorized(*auth, Some(tx));
+                            (
+                                id,
+                                result.content,
+                                result.success,
+                                result.code_delta,
+                                result.skill_activation,
+                            )
+                        }
+                    })
+                    .expect("tool thread spawn");
+                handles.push((call_id, handle));
+            }
+            drop(progress_tx);
+            tool.drain_progress_external(ctx, progress_rx, "llm_tool");
+
+            let cancelled = ctx.cancel.is_set();
+            for (call_id, handle) in handles {
+                if cancelled {
+                    let _ = handle.join();
+                    continue;
+                }
+                match handle.join() {
+                    Ok((_id, content, success, code_delta, skill_activation)) => {
+                        ctx.agent
+                            .msg
+                            .push_tool_result_direct(&call_id, &content, success);
+                        if let Some(activation) = skill_activation {
+                            ctx.agent.activate_skill(&call_id, activation);
+                        }
+                        if let Some(ref delta) = code_delta {
+                            ctx.stats.push_delta(delta.clone());
+                            ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
+                                lines_added: delta.lines_added,
+                                lines_removed: delta.lines_removed,
+                                files_created: delta.files_created,
+                                files_deleted: delta.files_deleted,
+                                file: delta.file.clone(),
+                            });
+                        }
+                    }
+                    Err(_) => ctx.agent.msg.push_tool_result_direct(
+                        &call_id,
+                        "[ERROR] tool thread panicked",
+                        false,
+                    ),
+                }
+            }
+        }
+
+        for admitted in serial {
+            if ctx.cancel.is_set() {
+                return false;
+            }
+            let call_id = admitted.call_id;
+            let (progress_tx, progress_rx) = deepx_tools::bounded_exec_progress_channel();
+            let handle = std::thread::Builder::new()
+                .stack_size(4 * 1024 * 1024)
+                .spawn(move || {
+                    let result =
+                        deepx_tools::execution::execute_authorized(*admitted.auth, Some(progress_tx));
+                    (
+                        result.content,
+                        result.success,
+                        result.code_delta,
+                        result.skill_activation,
+                    )
+                })
+                .expect("tool thread spawn");
+            tool.drain_progress_external(ctx, progress_rx, &call_id);
+            match handle.join() {
+                Ok((content, success, code_delta, skill_activation)) => {
+                    ctx.agent
+                        .msg
+                        .push_tool_result_direct(&call_id, &content, success);
+                    if let Some(activation) = skill_activation {
+                        ctx.agent.activate_skill(&call_id, activation);
+                    }
+                    if let Some(ref delta) = code_delta {
+                        ctx.stats.push_delta(delta.clone());
+                        ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
+                            lines_added: delta.lines_added,
+                            lines_removed: delta.lines_removed,
+                            files_created: delta.files_created,
+                            files_deleted: delta.files_deleted,
+                            file: delta.file.clone(),
+                        });
+                    }
+                }
+                Err(_) => ctx.agent.msg.push_tool_result_direct(
+                    &call_id,
+                    "[ERROR] tool thread panicked",
+                    false,
+                ),
+            }
+        }
+
+        !ctx.cancel.is_set()
     }
 
     fn run_lap(
@@ -540,8 +689,11 @@ impl TurnEngine {
                             }
                         }
 
-                        // Admit all tools via ToolEngine, then keep later writers
-                        // out of the parallel worker batches.
+                        // Admit the complete model batch before executing any member.
+                        let tool_call_order = pending
+                            .iter()
+                            .map(|call| call.id.clone())
+                            .collect::<Vec<_>>();
                         const MAX_PARALLEL_TOOL_WORKERS: usize = 4;
                         let (_serial_groups, serial_after) =
                             conflict::resolve_write_conflicts(&pending);
@@ -550,6 +702,24 @@ impl TurnEngine {
                             .map(|index| pending[*index].id.clone())
                             .collect();
                         let admission = tool.admit_batch(ctx, &pending);
+                        if !admission.pending_permission_ids.is_empty() {
+                            self.suspended = Some(TurnState {
+                                session_id: ctx.agent.session.seed.clone(),
+                                turn_id: turn_id.clone(),
+                                round_num,
+                                pending_permission_ids: admission.pending_permission_ids,
+                                deferred_authorized: admission.authorized,
+                                tool_call_order,
+                                serial_call_ids,
+                                pending_asks: admission.pending_asks,
+                                usage: last_usage.clone(),
+                                reason: YieldReason::PermissionPending,
+                            });
+                            return Outcome::YieldToUser {
+                                turn_id,
+                                reason: YieldReason::PermissionPending,
+                            };
+                        }
                         let (mut parallel_authorized, serial_authorized): (Vec<_>, Vec<_>) =
                             admission
                                 .authorized
@@ -712,6 +882,9 @@ impl TurnEngine {
                                 turn_id: turn_id.clone(),
                                 round_num,
                                 pending_permission_ids: admission.pending_permission_ids,
+                                deferred_authorized: Vec::new(),
+                                tool_call_order,
+                                serial_call_ids,
                                 pending_asks: admission.pending_asks,
                                 usage: last_usage.clone(),
                                 reason,

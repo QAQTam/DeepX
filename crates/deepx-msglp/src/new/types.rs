@@ -22,7 +22,7 @@
 //! and swap the active one on session switch. The rest of the Loop
 //! (I/O channels, cancel token, session-agnostic engines) stays unchanged.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
@@ -205,12 +205,23 @@ pub struct PendingAsk {
 /// Serialized snapshot of a turn mid-execution.
 /// Stored in `TurnEngine.suspended` when a turn is paused for permissions
 /// or awaiting user input. Restored via `TurnEngine.resume()`.
+pub struct AdmittedTool {
+    pub call_id: String,
+    pub auth: Box<deepx_tools::authorization::AuthorizedToolCall>,
+}
+
 pub struct TurnState {
     pub turn_id: String,
     pub round_num: u32,
     pub usage: Option<UsageInfo>,
     /// Tool call IDs still awaiting permission approval.
     pub pending_permission_ids: Vec<String>,
+    /// Authorized calls held until every permission decision is recorded.
+    pub deferred_authorized: Vec<AdmittedTool>,
+    /// Original assistant tool-call order for deterministic conflict handling.
+    pub tool_call_order: Vec<String>,
+    /// Calls that must run after earlier conflicting writers.
+    pub serial_call_ids: HashSet<String>,
     /// Authorized ask_user calls in assistant tool-call order.
     pub pending_asks: VecDeque<PendingAsk>,
     /// Session ID at the time of suspension (validated on resume to prevent

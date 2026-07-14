@@ -150,26 +150,13 @@ impl ToolEngine {
                     }
                 }
                 if is_llm {
-                    // LLM tool: push result directly into message store
-                    let result = deepx_tools::execution::execute_authorized(authorized, None);
-                    ctx.agent.msg.push_tool_result_direct(
-                        &call_id,
-                        &result.content,
-                        result.success,
-                    );
-                    if let Some(activation) = result.skill_activation.clone() {
-                        ctx.agent.activate_skill(&call_id, activation);
-                    }
-                    if let Some(ref delta) = result.code_delta {
-                        ctx.stats.push_delta(delta.clone());
-                        ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
-                            lines_added: delta.lines_added,
-                            lines_removed: delta.lines_removed,
-                            files_created: delta.files_created,
-                            files_deleted: delta.files_deleted,
-                            file: delta.file.clone(),
-                        });
-                    }
+                    return PermissionDisposition::LlmResolved {
+                        call_id: call_id.clone(),
+                        admitted: Some(AdmittedTool {
+                            call_id,
+                            auth: Box::new(authorized),
+                        }),
+                    };
                 } else {
                     // UI tool: emit full result flow
                     let args = authorized.args().clone();
@@ -213,7 +200,10 @@ impl ToolEngine {
         }
 
         if is_llm {
-            PermissionDisposition::LlmResolved { call_id }
+            PermissionDisposition::LlmResolved {
+                call_id,
+                admitted: None,
+            }
         } else {
             PermissionDisposition::UiHandled
         }
@@ -583,13 +573,8 @@ impl ToolEngine {
 }
 
 // ═══════════════════════════════════════════════════════
-// AdmittedTool — wrapper for serialization-friendly storage
+// Batch admission and permission response contracts
 // ═══════════════════════════════════════════════════════
-
-pub struct AdmittedTool {
-    pub call_id: String,
-    pub auth: Box<deepx_tools::authorization::AuthorizedToolCall>,
-}
 
 pub struct BatchAdmission {
     pub authorized: Vec<AdmittedTool>,
@@ -600,5 +585,8 @@ pub struct BatchAdmission {
 pub enum PermissionDisposition {
     Ignored,
     UiHandled,
-    LlmResolved { call_id: String },
+    LlmResolved {
+        call_id: String,
+        admitted: Option<AdmittedTool>,
+    },
 }
