@@ -49,4 +49,17 @@ describe("turn projection", () => {
     const tool = view.process.items.find(item => item.kind === "tool");
     expect(tool).toMatchObject({ kind: "tool", output: "source", success: true });
   });
+
+  it("does not expose permission audit resolutions as chat process items", () => {
+    const turn = rawTurn();
+    turn.interactions = [
+      { id: "exec-1", kind: "permission", resolution: "approved", at: 500 },
+    ];
+
+    const view = projectTurn(turn);
+
+    expect(view.process.items).not.toContainEqual(
+      expect.objectContaining({ kind: "interaction", label: "permission" }),
+    );
+  });
 });

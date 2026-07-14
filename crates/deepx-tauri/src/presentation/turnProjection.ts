@@ -55,6 +55,7 @@ export function projectTurn(rawTurn: RawTurn): TurnViewModel {
   }
 
   for (const interaction of rawTurn.interactions) {
+    if (interaction.kind === "permission") continue;
     items.push({
       kind: "interaction",
       id: interaction.id,
