@@ -37,6 +37,25 @@ fn sleep_with_cancel(delay: Duration, cancel: Option<&Arc<AtomicBool>>) -> bool 
     false
 }
 
+/// Check whether an `io::Error` from `reader.read()` is a recoverable timeout.
+///
+/// ureq v3 wraps its internal `Error::Timeout` as `io::ErrorKind::Other` via
+/// `into_io()`, so we must also inspect the inner error to detect timeouts.
+/// Without this, every SSE read timeout is treated as a fatal error.
+fn is_read_timeout(e: &std::io::Error) -> bool {
+    if e.kind() == std::io::ErrorKind::TimedOut
+        || e.kind() == std::io::ErrorKind::WouldBlock
+        || e.kind() == std::io::ErrorKind::Interrupted
+    {
+        return true;
+    }
+    // ureq v3: io::Error::other(Error::Timeout(_))
+    e.get_ref()
+        .and_then(|inner| inner.downcast_ref::<ureq::Error>())
+        .map(|err| matches!(err, ureq::Error::Timeout(_)))
+        .unwrap_or(false)
+}
+
 const MAX_RETRIES: u32 = 3;
 const BASE_DELAY_SECS: u64 = 1;
 
@@ -228,8 +247,7 @@ fn stream_sse(
 
         let n = match reader.read(&mut byte_buf) {
             Ok(n) => n,
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut
-                  || e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(e) if is_read_timeout(&e) => {
                 // Read timeout (SSE_READ_TIMEOUT elapsed with no data).
                 // Loop back to check cancel, then retry the read.
                 continue;
