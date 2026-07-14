@@ -36,11 +36,25 @@ function rawTurn(): RawTurn {
 }
 
 describe("turn projection", () => {
-  it("projects only the final round answer at top level", () => {
+  it("projects assistant stage text directly and keeps the last answer as final", () => {
     const view = projectTurn(rawTurn());
-    expect(view.process.items.some(item => item.kind === "assistant_progress")).toBe(true);
+    expect(view.process.items.some(item => item.kind === "assistant_progress")).toBe(false);
+    expect(view.stageAnswers).toEqual([{ roundNum: 0, markdown: "intermediate" }]);
     expect(view.finalAnswer?.markdown).toBe("final answer");
+    expect(view.finalAnswer?.streaming).toBe(false);
     expect(view.process.elapsedMs).toBe(800);
+  });
+
+  it("projects the latest streaming answer directly as the final answer candidate", () => {
+    const turn = rawTurn();
+    turn.status = "running";
+    turn.rounds[1].isFinal = false;
+    turn.rounds[1].answer = "forming conclusion";
+
+    const view = projectTurn(turn);
+
+    expect(view.finalAnswer).toEqual({ markdown: "forming conclusion", streaming: true });
+    expect(view.process.items.some(item => item.kind === "assistant_progress")).toBe(false);
   });
 
   it("keeps tool output and reasoning inside process items", () => {

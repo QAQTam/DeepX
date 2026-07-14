@@ -9,7 +9,8 @@ export type TurnViewModel = {
     elapsedMs?: number;
     items: ProcessItem[];
   };
-  finalAnswer?: { markdown: string };
+  stageAnswers: Array<{ roundNum: number; markdown: string }>;
+  finalAnswer?: { markdown: string; streaming: boolean };
 };
 
 export function toolFamily(name: string): string {
@@ -29,13 +30,6 @@ export function projectTurn(rawTurn: RawTurn): TurnViewModel {
         kind: "reasoning",
         id: `${rawTurn.turnId}-reasoning-${round.roundNum}`,
         content: round.thinking,
-      });
-    }
-    if (!round.isFinal && round.answer.trim()) {
-      items.push({
-        kind: "assistant_progress",
-        id: `${rawTurn.turnId}-progress-${round.roundNum}`,
-        markdown: round.answer,
       });
     }
     for (const call of round.toolCalls) {
@@ -64,7 +58,12 @@ export function projectTurn(rawTurn: RawTurn): TurnViewModel {
     });
   }
 
-  const finalRound = [...rawTurn.rounds].reverse().find(round => round.isFinal);
+  const answeredRounds = rawTurn.rounds.filter(round => round.answer.trim());
+  const finalRound = answeredRounds[answeredRounds.length - 1];
+  const stageAnswers = answeredRounds.slice(0, -1).map(round => ({
+    roundNum: round.roundNum,
+    markdown: round.answer,
+  }));
   const elapsedMs = rawTurn.startedAt !== undefined && rawTurn.endedAt !== undefined
     ? Math.max(0, rawTurn.endedAt - rawTurn.startedAt)
     : undefined;
@@ -77,8 +76,9 @@ export function projectTurn(rawTurn: RawTurn): TurnViewModel {
       elapsedMs,
       items: aggregateProcessItems(items),
     },
+    stageAnswers,
     finalAnswer: finalRound?.answer.trim()
-      ? { markdown: finalRound.answer }
+      ? { markdown: finalRound.answer, streaming: rawTurn.status === "running" }
       : undefined,
   };
 }
