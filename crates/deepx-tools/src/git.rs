@@ -117,7 +117,7 @@ pub fn switch_branch(workspace: &str, branch: &str, stash: bool) -> Result<Strin
             .map_err(|e| format!("peel: {e}"))?;
 
         let mut checkout_opts = git2::build::CheckoutBuilder::new();
-        checkout_opts.force();
+        checkout_opts.safe();
         repo.checkout_tree(&obj, Some(&mut checkout_opts))
             .map_err(|e| format!("checkout tree: {e}"))?;
         repo.set_head(branch_ref.get().name().ok().unwrap_or(""))
@@ -190,4 +190,46 @@ pub fn file_diff(workspace: &str, file_path: &str) -> Result<String, String> {
     .map_err(|e| format!("print diff: {e}"))?;
 
     Ok(patch_text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn branch_switch_without_stash_preserves_dirty_worktree() {
+        let dir = tempfile::tempdir().expect("temp repo");
+        let repo = Repository::init(dir.path()).expect("init repo");
+        fs::write(dir.path().join("tracked.txt"), "committed\n").expect("write fixture");
+
+        let mut index = repo.index().expect("index");
+        index
+            .add_path(Path::new("tracked.txt"))
+            .expect("stage fixture");
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_id).expect("find tree");
+        let signature = git2::Signature::now("DeepX Test", "deepx-test@local").expect("signature");
+        let commit_id = repo
+            .commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+            .expect("initial commit");
+        let commit = repo.find_commit(commit_id).expect("find commit");
+        repo.branch("feature", &commit, false)
+            .expect("create branch");
+        let original_branch = current_branch(dir.path().to_str().unwrap()).expect("current branch");
+
+        fs::write(dir.path().join("tracked.txt"), "uncommitted\n").expect("dirty fixture");
+
+        let result = switch_branch(dir.path().to_str().unwrap(), "feature", false);
+
+        assert_eq!(
+            fs::read_to_string(dir.path().join("tracked.txt")).unwrap(),
+            "uncommitted\n"
+        );
+        let branch_after = current_branch(dir.path().to_str().unwrap()).unwrap();
+        if result.is_err() {
+            assert_eq!(branch_after, original_branch);
+        }
+        assert!(branch_after == original_branch || branch_after == "feature");
+    }
 }

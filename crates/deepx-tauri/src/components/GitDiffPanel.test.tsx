@@ -143,16 +143,14 @@ describe("GitDiffPanel", () => {
     host.remove();
   });
 
-  it("3. load failure shows empty state, not blank", async () => {
+  it("3. load failure shows the actual error and a retry action", async () => {
     mockInvoke({ diff: new Error("not a git repository"), branches: [] });
 
     const { host, dispose } = setup();
     await flush();
 
-    const hasFeedback =
-      host.textContent?.includes("没有变更") ||
-      host.querySelector(".git-workspace-empty") !== null;
-    expect(hasFeedback).toBe(true);
+    expect(host.textContent).toContain("not a git repository");
+    expect(host.querySelector(".git-workspace-error button")).not.toBeNull();
 
     dispose();
     host.remove();
@@ -172,7 +170,7 @@ describe("GitDiffPanel", () => {
     host.remove();
   });
 
-  it("5. does NOT show stage/unstage/discard/reset buttons", async () => {
+  it("5. does NOT offer stage/unstage/discard/reset operations", async () => {
     mockInvoke();
 
     const { host, dispose } = setup();
@@ -183,12 +181,13 @@ describe("GitDiffPanel", () => {
     expect(text).not.toContain("unstage");
     expect(text).not.toContain("暂存");
 
-    const standaloneDiscard = [...host.querySelectorAll("button")].filter(
-      (b) =>
-        (b.textContent?.includes("discard") || b.textContent?.includes("丢弃")) &&
-        !b.textContent?.includes("切换"),
-    );
-    expect(standaloneDiscard.length).toBe(0);
+    const branchSelect = host.querySelector<HTMLSelectElement>(".git-workspace-branch-select")!;
+    branchSelect.value = "feature/foo";
+    branchSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    expect(host.textContent).not.toContain("Discard");
+    expect(host.textContent).not.toContain("丢弃");
 
     const resetBtn = [...host.querySelectorAll("button")].find(
       (b) => b.textContent?.includes("reset") || b.textContent?.includes("Reset"),
@@ -199,13 +198,13 @@ describe("GitDiffPanel", () => {
     host.remove();
   });
 
-  it("6. non-git workspace shows clear empty state", async () => {
+  it("6. non-git workspace is distinguished from a clean repository", async () => {
     mockInvoke({ diff: new Error("not a git repository"), branches: [] });
 
     const { host, dispose } = setup();
     await flush();
 
-    expect(host.textContent).toContain("没有变更");
+    expect(host.textContent).toContain("not a git repository");
 
     dispose();
     host.remove();
@@ -280,6 +279,23 @@ describe("GitDiffPanel", () => {
 
     const overlay = host.querySelector(".git-workspace-overlay");
     expect(overlay).toBeNull();
+
+    dispose();
+    host.remove();
+  });
+
+  it("10. shows unified as active and split as explicitly unavailable", async () => {
+    mockInvoke();
+    const { host, dispose } = setup();
+    await flush();
+
+    const unified = host.querySelector<HTMLButtonElement>('[aria-label="Unified diff"]');
+    const split = host.querySelector<HTMLButtonElement>('[aria-label="Split diff"]');
+    expect(unified).not.toBeNull();
+    expect(unified?.disabled).toBe(false);
+    expect(unified?.classList.contains("active")).toBe(true);
+    expect(split).not.toBeNull();
+    expect(split?.disabled).toBe(true);
 
     dispose();
     host.remove();

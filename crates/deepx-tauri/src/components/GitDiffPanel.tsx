@@ -35,6 +35,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
   const { t } = useI18n();
   const [files, setFiles] = createSignal<GitFileEntry[]>([]);
   const [loading, setLoading] = createSignal(false);
+  const [listError, setListError] = createSignal<string | null>(null);
   const [branch, setBranch] = createSignal("");
   const [branches, setBranches] = createSignal<{ name: string; current: boolean }[]>([]);
   const [switching, setSwitching] = createSignal(false);
@@ -44,7 +45,6 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
   const [diffLoading, setDiffLoading] = createSignal(false);
   const [diffError, setDiffError] = createSignal<string | null>(null);
   const [diffHtml, setDiffHtml] = createSignal<string | null>(null);
-  const [diffMode, setDiffMode] = createSignal<"unified" | "split">("unified");
   const [showSwitchPrompt, setShowSwitchPrompt] = createSignal(false);
   const [pendingBranch, setPendingBranch] = createSignal("");
 
@@ -60,6 +60,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
   createEffect(() => {
     if (!props.open) {
       setFiles([]);
+      setListError(null);
       setBranch("");
       setBranches([]);
       setSelectedFile(null);
@@ -73,6 +74,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
   async function refresh() {
     if (!props.seed) return;
     setLoading(true);
+    setListError(null);
     try {
       const raw: GitFileEntry[] = JSON.parse(await invoke("cmd_get_git_diff", { seed: props.seed }));
       setFiles(raw);
@@ -80,6 +82,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
     } catch (e) {
       console.error("git_diff error:", e);
       setFiles([]);
+      setListError(String(e));
     }
     setLoading(false);
   }
@@ -235,12 +238,19 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
 
           <div class="git-workspace-actions">
             <button
-              class={`git-workspace-icon-btn${diffMode() === "split" ? " active" : ""}`}
-              onClick={() => setDiffMode("unified")}
+              class="git-workspace-icon-btn active"
               title="Unified diff"
-              disabled
+              aria-label="Unified diff"
             >
               U
+            </button>
+            <button
+              class="git-workspace-icon-btn"
+              title="Split diff unavailable"
+              aria-label="Split diff"
+              disabled
+            >
+              S
             </button>
             <button
               class="git-workspace-icon-btn"
@@ -270,9 +280,6 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
               <button class="git-switch-stash" onClick={() => doSwitch(pendingBranch(), true)}>
                 {t().status.stashSwitch}
               </button>
-              <button class="git-switch-discard" onClick={() => doSwitch(pendingBranch(), false)}>
-                {t().status.discardSwitch}
-              </button>
               <button class="git-switch-cancel" onClick={() => { setShowSwitchPrompt(false); setPendingBranch(""); }}>
                 {t().settings.cancel}
               </button>
@@ -284,9 +291,16 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
         <Show
           when={files().length > 0}
           fallback={
-            <div class="git-workspace-empty">
-              {loading() ? "Loading..." : t().status.noChanges}
-            </div>
+            <Show when={listError()} fallback={
+              <div class="git-workspace-empty">
+                {loading() ? "Loading..." : t().status.noChanges}
+              </div>
+            }>
+              <div class="git-workspace-error" role="alert">
+                <span>{listError()}</span>
+                <button class="git-workspace-icon-btn" onClick={refresh}>Retry</button>
+              </div>
+            </Show>
           }
         >
           <div class="git-workspace-body">
