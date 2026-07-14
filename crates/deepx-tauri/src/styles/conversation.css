@@ -1,5 +1,5 @@
 .conversation-scroll { position: relative; min-height: 0; height: 100%; overflow: auto; overscroll-behavior: contain; }
-.conversation-transcript { width: min(var(--dx-transcript-width), calc(100% - 40px)); margin: 0 auto; padding: 36px 0 180px; }
+.conversation-transcript { width: min(var(--dx-transcript-width), calc(100% - 40px)); margin: 0 auto; padding: 36px 0 180px; transform: translateX(var(--conversation-shift-x, 0)); }
 .conversation-turn { margin: 0 0 34px; color: var(--dx-text); }
 .user-prompt-row { display: flex; justify-content: flex-end; margin-bottom: 22px; }
 .user-prompt-bubble {
@@ -13,6 +13,6 @@
   border-radius: 999px; background: var(--dx-surface); color: var(--dx-text-muted); box-shadow: var(--dx-shadow); cursor: pointer;
 }
 @media (max-width: 799px) {
-  .conversation-transcript { width: min(var(--dx-transcript-width), calc(100% - 24px)); padding-top: 24px; }
+  .conversation-transcript { width: min(var(--dx-transcript-width), calc(100% - 24px)); padding-top: 24px; transform: none; }
   .user-prompt-bubble { max-width: 86%; }
 }

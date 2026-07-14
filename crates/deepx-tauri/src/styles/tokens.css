@@ -1,7 +1,9 @@
 :root {
   --dx-sidebar-width: 236px;
-  --dx-transcript-width: 760px;
-  --dx-composer-width: 760px;
+  --dx-transcript-width: 900px;
+  --dx-composer-width: 900px;
+  --conversation-width: 900px;
+  --conversation-shift-x: -30px;
   --dx-titlebar-height: 36px;
   --dx-header-height: 48px;
   --dx-bg: #f8f8f7;
