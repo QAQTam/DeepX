@@ -205,19 +205,31 @@ export default function SettingsView(props: SettingsViewProps) {
 
   async function save() {
     try {
+      const apiKeyReplacement = showApiKeyInput() ? apiKeyValue() : "";
+      const subApiKeyReplacement = showSubApiKeyInput() ? subApiKeyValue() : "";
       await invoke("cmd_save_config", {
-        apiKey: showApiKeyInput() ? apiKeyValue() : "",
+        apiKey: apiKeyReplacement,
         model: model(), baseUrl: baseUrl(),
         providerId: providerId(), endpoint: endpointId(),
         maxTokens: maxTokens(), contextLimit: contextLimit(),
         reasoningEffort: reasoningEffort(), lang: props.lang(),
         subagentModel: subModel(), subagentBaseUrl: subBaseUrl(),
-        subagentApiKey: showSubApiKeyInput() ? subApiKeyValue() : "",
+        subagentApiKey: subApiKeyReplacement,
         subagentMaxTokens: subMaxTokens(),
         subagentTimeoutSecs: subTimeout(), subagentDefaultTools: subTools(),
         databaseEnabled: databaseEnabled(),
         tokenizerPath: tokenizerPath(),
       });
+      if (apiKeyConfigured() || apiKeyReplacement) {
+        setApiKeyConfigured(true);
+        setApiKeyValue("");
+        setShowApiKeyInput(false);
+      }
+      if (subApiKeyConfigured() || subApiKeyReplacement) {
+        setSubApiKeyConfigured(true);
+        setSubApiKeyValue("");
+        setShowSubApiKeyInput(false);
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       if (dbToggled) {

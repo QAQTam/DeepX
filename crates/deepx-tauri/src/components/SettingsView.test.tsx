@@ -331,4 +331,40 @@ describe("SettingsView – API Key behavior", () => {
     dispose();
     host.remove();
   });
+
+  it("7. clears a replacement key from the form after save succeeds", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "cmd_load_config") return cfg();
+      if (command === "cmd_list_available_tools") return "[]";
+      if (command === "cmd_migration_count") return JSON.stringify({ pending: 0 });
+      return undefined;
+    });
+
+    const { host, dispose } = setup();
+    await waitForLayout(host);
+    clickNav(host, "API 与凭据");
+
+    const replace = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("替换"),
+    )!;
+    replace.click();
+
+    const keyInput = host.querySelector<HTMLInputElement>("input[type=password]")!;
+    keyInput.value = "sk-new-secret";
+    keyInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const save = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("保存"),
+    )!;
+    save.click();
+    await vi.waitFor(() => {
+      expect(invokeMock.mock.calls.some((call) => call[0] === "cmd_save_config")).toBe(true);
+    });
+
+    expect(host.textContent).toContain("已配置");
+    expect(host.querySelector<HTMLInputElement>("input[type=password]")?.value ?? "").not.toBe("sk-new-secret");
+
+    dispose();
+    host.remove();
+  });
 });

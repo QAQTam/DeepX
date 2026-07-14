@@ -320,4 +320,107 @@ describe("SkillsView", () => {
     dispose();
     host.remove();
   });
+
+  it("10. keeps activation pending until the authoritative active list updates", async () => {
+    const i18n = createI18n("zh");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const [active, setActive] = createSignal<string[]>([]);
+    const onActivate = vi.fn().mockResolvedValue(undefined);
+
+    const dispose = render(
+      () => (
+        <I18nCtx.Provider value={i18n}>
+          <SkillsView
+            seed="test-seed"
+            available={[skill({ name: "test-skill" })]}
+            active={active()}
+            onActivate={onActivate}
+            onUnload={vi.fn()}
+            onReload={vi.fn()}
+          />
+        </I18nCtx.Provider>
+      ),
+      host,
+    );
+    await flush();
+
+    const checkbox = host.querySelector<HTMLInputElement>(".skill-toggle input")!;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".skill-spinner")).not.toBeNull();
+
+    setActive(["test-skill"]);
+    await flush();
+
+    expect(host.querySelector(".skill-spinner")).toBeNull();
+    expect(host.querySelector<HTMLInputElement>(".skill-toggle input")?.checked).toBe(true);
+
+    dispose();
+    host.remove();
+  });
+
+  it("11. shows a recoverable error when catalog refresh fails", async () => {
+    const onReload = vi.fn().mockRejectedValue(new Error("agent unavailable"));
+    const { host, dispose } = setup({ onReload });
+    await flush();
+
+    const refresh = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("刷新"),
+    )!;
+    refresh.click();
+    await flush();
+
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("agent unavailable");
+    expect(refresh.disabled).toBe(false);
+
+    dispose();
+    host.remove();
+  });
+
+  it("12. keeps refresh pending until a new catalog snapshot arrives", async () => {
+    const i18n = createI18n("zh");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const [available, setAvailable] = createSignal<SkillInfo[]>(sampleSkills);
+    const onReload = vi.fn().mockResolvedValue(undefined);
+
+    const dispose = render(
+      () => (
+        <I18nCtx.Provider value={i18n}>
+          <SkillsView
+            seed="test-seed"
+            available={available()}
+            active={[]}
+            onActivate={vi.fn()}
+            onUnload={vi.fn()}
+            onReload={onReload}
+          />
+        </I18nCtx.Provider>
+      ),
+      host,
+    );
+    await flush();
+
+    const refresh = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("刷新"),
+    )!;
+    refresh.click();
+    await flush();
+
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(refresh.disabled).toBe(true);
+
+    setAvailable([...sampleSkills]);
+    await flush();
+
+    expect(refresh.disabled).toBe(false);
+
+    dispose();
+    host.remove();
+  });
 });

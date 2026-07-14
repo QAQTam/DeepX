@@ -1,4 +1,4 @@
-import { createSignal, For, Show, createMemo } from "solid-js";
+import { createEffect, createSignal, For, Show, createMemo } from "solid-js";
 import { useI18n } from "../i18n";
 import type { SkillInfo } from "../lib/types";
 
@@ -16,10 +16,33 @@ export default function SkillsView(props: SkillsViewProps) {
   const [search, setSearch] = createSignal("");
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
   const [pending, setPending] = createSignal<Set<string>>(new Set());
+  const pendingTargets = new Map<string, boolean>();
   const [errors, setErrors] = createSignal<Record<string, string>>({});
   const [refreshing, setRefreshing] = createSignal(false);
+  const [refreshError, setRefreshError] = createSignal<string | null>(null);
+  let refreshAwaitingCatalog = false;
 
   const hasSeed = () => props.seed.length > 0;
+
+  createEffect(() => {
+    const active = props.active;
+    void props.available;
+    setPending((current) => {
+      const next = new Set(current);
+      for (const name of current) {
+        const target = pendingTargets.get(name);
+        if (target !== undefined && active.includes(name) === target) {
+          next.delete(name);
+          pendingTargets.delete(name);
+        }
+      }
+      return next;
+    });
+    if (refreshAwaitingCatalog) {
+      refreshAwaitingCatalog = false;
+      setRefreshing(false);
+    }
+  });
 
   const filtered = createMemo(() => {
     const q = search().toLowerCase().trim();
@@ -62,6 +85,7 @@ export default function SkillsView(props: SkillsViewProps) {
     if (!hasSeed()) return;
     if (pending().has(name)) return;
 
+    pendingTargets.set(name, enable);
     setPending((prev) => new Set(prev).add(name));
     setErrors((prev) => {
       const next = { ...prev };
@@ -77,7 +101,7 @@ export default function SkillsView(props: SkillsViewProps) {
       }
     } catch (e) {
       setErrors((prev) => ({ ...prev, [name]: String(e) }));
-    } finally {
+      pendingTargets.delete(name);
       setPending((prev) => {
         const next = new Set(prev);
         next.delete(name);
@@ -88,12 +112,14 @@ export default function SkillsView(props: SkillsViewProps) {
 
   async function handleRefresh() {
     if (!hasSeed()) return;
+    setRefreshError(null);
+    refreshAwaitingCatalog = true;
     setRefreshing(true);
     try {
       await props.onReload();
     } catch (e) {
-      // silently ignore — individual skill errors handled per-row
-    } finally {
+      refreshAwaitingCatalog = false;
+      setRefreshError(String(e));
       setRefreshing(false);
     }
   }
@@ -138,6 +164,10 @@ export default function SkillsView(props: SkillsViewProps) {
           </button>
         </div>
       </div>
+
+      <Show when={refreshError()}>
+        <div class="skill-refresh-error" role="alert">{refreshError()}</div>
+      </Show>
 
       {/* No seed state */}
       <Show
