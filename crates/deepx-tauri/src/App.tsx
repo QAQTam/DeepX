@@ -13,7 +13,6 @@ import TaskSidebar from "./components/shell/TaskSidebar";
 import "./styles/git-diff-panel.css";
 import "./styles/context-panel.css";
 import "./styles/slash-menu.css";
-import "./styles/permission-dialog.css";
 import "./styles/changelog.css";
 import "./styles/skills.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
@@ -77,6 +76,10 @@ export default function App() {
   const activeChatPermission = () => {
     const permission = permissionQueue.active();
     return permission?.seed === activeSeed() ? permission : null;
+  };
+  const activePermissionProgress = () => {
+    const permission = activeChatPermission();
+    return permission ? permissionQueue.progress(permission.seed) : null;
   };
 
   async function respondToPermission(
@@ -683,6 +686,7 @@ export default function App() {
                     onLoadMore={loadMoreTurns}
                     onSlashCommand={handleSlashCommand}
                     permission={activeChatPermission}
+                    permissionProgress={activePermissionProgress}
                     onPermissionRespond={respondToPermission}
                     permissionLevel={permissionLevel()}
                     onPermissionLevelChange={changePermissionLevel}

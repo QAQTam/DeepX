@@ -47,4 +47,18 @@ describe("permission request queue", () => {
       dispose();
     });
   });
+
+  it("reports stable progress across a four-request permission batch", () => {
+    createRoot((dispose) => {
+      const queue = createPermissionQueue();
+      for (let index = 1; index <= 4; index += 1) {
+        queue.enqueue("seed-a", request(`call-${index}`));
+      }
+
+      expect(queue.progress("seed-a")).toEqual({ current: 1, total: 4 });
+      expect(queue.resolve("seed-a", "call-1")).toBe(true);
+      expect(queue.progress("seed-a")).toEqual({ current: 2, total: 4 });
+      dispose();
+    });
+  });
 });

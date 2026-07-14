@@ -17,9 +17,29 @@ export interface QueuedPermission {
   request: PermissionRequest;
 }
 
+export interface PermissionQueueProgress {
+  current: number;
+  total: number;
+}
+
+interface BatchProgress {
+  resolved: number;
+  total: number;
+}
+
 export function createPermissionQueue() {
   const [items, setItems] = createSignal<QueuedPermission[]>([]);
+  const [batches, setBatches] = createSignal<Record<string, BatchProgress>>({});
   const active = () => items()[0] ?? null;
+
+  function progress(seed: string): PermissionQueueProgress | null {
+    const batch = batches()[seed];
+    if (!batch || !items().some((item) => item.seed === seed)) return null;
+    return {
+      current: Math.min(batch.resolved + 1, batch.total),
+      total: batch.total,
+    };
+  }
 
   function enqueue(seed: string, request: PermissionRequest) {
     if (!seed || !request.tool_call_id) return;
@@ -27,7 +47,19 @@ export function createPermissionQueue() {
       const duplicate = current.some(
         (item) => item.seed === seed && item.request.tool_call_id === request.tool_call_id,
       );
-      return duplicate ? current : [...current, { seed, request }];
+      if (duplicate) return current;
+      const continuingBatch = current.some((item) => item.seed === seed);
+      setBatches((batches) => {
+        const previous = continuingBatch ? batches[seed] : undefined;
+        return {
+          ...batches,
+          [seed]: {
+            resolved: previous?.resolved ?? 0,
+            total: (previous?.total ?? 0) + 1,
+          },
+        };
+      });
+      return [...current, { seed, request }];
     });
   }
 
@@ -36,16 +68,29 @@ export function createPermissionQueue() {
     const first = current[0];
     if (!first || first.seed !== seed || first.request.tool_call_id !== toolCallId) return false;
     setItems(current.slice(1));
+    setBatches((batches) => ({
+      ...batches,
+      [seed]: {
+        resolved: (batches[seed]?.resolved ?? 0) + 1,
+        total: batches[seed]?.total ?? 1,
+      },
+    }));
     return true;
   }
 
   function clearSeed(seed: string) {
     setItems((current) => current.filter((item) => item.seed !== seed));
+    setBatches((batches) => {
+      const next = { ...batches };
+      delete next[seed];
+      return next;
+    });
   }
 
   function clear() {
     setItems([]);
+    setBatches({});
   }
 
-  return { active, enqueue, resolve, clearSeed, clear };
+  return { active, progress, enqueue, resolve, clearSeed, clear };
 }

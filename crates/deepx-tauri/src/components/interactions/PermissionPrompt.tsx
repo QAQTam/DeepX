@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import type { PermissionRisk } from "../../lib/types";
-import type { PermissionRequest } from "../../store/permissionQueue";
+import type { PermissionQueueProgress, PermissionRequest } from "../../store/permissionQueue";
 
 export const approvalClass = (risk: PermissionRisk): string =>
   ({
@@ -19,6 +19,7 @@ export const approvalLabel = (risk: PermissionRisk, category: string): string =>
 
 export default function PermissionPrompt(props: {
   request: PermissionRequest;
+  progress?: PermissionQueueProgress | null;
   onRespond: (approved: boolean, trustFolder: boolean) => void | Promise<void>;
 }) {
   const [busy, setBusy] = createSignal(false);
@@ -40,6 +41,11 @@ export default function PermissionPrompt(props: {
       aria-labelledby="permission-heading"
     >
       <div class="interaction-eyebrow">需要授权</div>
+      <Show when={props.progress && props.progress.total > 1}>
+        <span class="permission-progress">
+          第 {props.progress!.current}/{props.progress!.total} 项
+        </span>
+      </Show>
       <h3 id="permission-heading">{props.request.tool_name}</h3>
       <div class="permission-meta">
         <span data-permission-category>{props.request.category}</span>

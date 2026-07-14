@@ -15,7 +15,7 @@ import AskUserPrompt from "./interactions/AskUserPrompt";
 import PermissionPrompt from "./interactions/PermissionPrompt";
 import CompactStatusRow from "./interactions/CompactStatusRow";
 import InteractionModal from "./interactions/InteractionModal";
-import type { QueuedPermission } from "../store/permissionQueue";
+import type { PermissionQueueProgress, QueuedPermission } from "../store/permissionQueue";
 
 interface ChatViewProps {
   chat: ReturnType<typeof import("../store/chat").createChatStore>;
@@ -24,6 +24,7 @@ interface ChatViewProps {
   onLoadMore: () => void;
   onSlashCommand: (cmd: SlashCommand) => void;
   permission?: () => QueuedPermission | null;
+  permissionProgress?: () => PermissionQueueProgress | null;
   onPermissionRespond?: (
     permission: QueuedPermission,
     approved: boolean,
@@ -154,6 +155,7 @@ export default function ChatView(props: ChatViewProps) {
           <InteractionModal label="DeepX 请求操作授权">
               <PermissionPrompt
                 request={item().request}
+                progress={props.permissionProgress?.()}
                 onRespond={(approved, trustFolder) =>
                   props.onPermissionRespond?.(item(), approved, trustFolder)
                 }

@@ -39,4 +39,18 @@ describe("PermissionPrompt", () => {
     expect(approvalClass("high")).toBe("approval-high");
     dispose();
   });
+
+  it("shows the active position in a permission batch", () => {
+    const host = document.createElement("div");
+    const dispose = render(() => (
+      <PermissionPrompt
+        request={request("medium")}
+        progress={{ current: 2, total: 4 }}
+        onRespond={vi.fn()}
+      />
+    ), host);
+
+    expect(host.textContent).toContain("第 2/4 项");
+    dispose();
+  });
 });
