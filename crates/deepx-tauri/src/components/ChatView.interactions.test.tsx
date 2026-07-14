@@ -59,6 +59,7 @@ function mountChat(chat: ReturnType<typeof makeChat>, options?: {
         onSlashCommand={vi.fn()}
         permissionLevel={2}
         onPermissionLevelChange={vi.fn()}
+        onChangeWorkspace={vi.fn()}
         permission={options?.permission}
         onPermissionRespond={options?.onPermissionRespond}
       />
@@ -67,8 +68,8 @@ function mountChat(chat: ReturnType<typeof makeChat>, options?: {
   return host;
 }
 
-describe("ChatView inline interactions", () => {
-  it("renders ask_user in a dock immediately above the composer", async () => {
+describe("ChatView blocking interactions", () => {
+  it("renders ask_user in a centered modal outside the chat layout", async () => {
     const chat = makeChat(() => ({
       askId: "ask-1",
       mode: "single",
@@ -77,20 +78,20 @@ describe("ChatView inline interactions", () => {
     }));
     const host = mountChat(chat);
 
-    const dock = host.querySelector(".interaction-dock");
-    expect(dock).not.toBeNull();
-    expect(dock?.nextElementSibling).toBe(host.querySelector(".composer-wrap"));
-    expect(host.querySelector(".ask-overlay")).toBeNull();
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(host.querySelector(".ask-user-prompt")).toBeNull();
+    expect(dialog?.querySelector(".ask-user-prompt")).not.toBeNull();
 
-    host.querySelector<HTMLButtonElement>(".interaction-option")!.click();
-    host.querySelector<HTMLButtonElement>(".interaction-submit")!.click();
+    dialog!.querySelector<HTMLButtonElement>(".interaction-option")!.click();
+    dialog!.querySelector<HTMLButtonElement>(".interaction-submit")!.click();
     await flush();
     expect(chat.submitAskAnswer).toHaveBeenCalledWith([
       { question_id: "q1", answer: "yes" },
     ]);
   });
 
-  it("renders high-risk permission in the dock and forwards the response", async () => {
+  it("renders high-risk permission in the centered modal and forwards the response", async () => {
     const chat = makeChat(() => ({ askId: "", mode: "single", questions: [], show: false }));
     const permission: QueuedPermission = {
       seed: "seed-1",
@@ -111,9 +112,10 @@ describe("ChatView inline interactions", () => {
       onPermissionRespond,
     });
 
-    expect(host.querySelector(".interaction-dock")?.nextElementSibling)
-      .toBe(host.querySelector(".composer-wrap"));
-    const approve = host.querySelector<HTMLButtonElement>(".approval-high");
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(host.querySelector(".permission-prompt")).toBeNull();
+    const approve = dialog!.querySelector<HTMLButtonElement>(".approval-high");
     expect(approve).not.toBeNull();
     approve!.click();
     await flush();

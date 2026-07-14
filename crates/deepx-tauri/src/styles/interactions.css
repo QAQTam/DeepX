@@ -1,14 +1,41 @@
 /* ── Interaction Dock ── */
 .interaction-dock {
-  position: relative;
-  z-index: 5;
-  border-top: 0.5px solid var(--border-divider);
+  position: absolute;
+  z-index: 25;
+  left: 50%;
+  bottom: 142px;
+  transform: translateX(-50%);
+  width: min(var(--conversation-width, 760px), calc(100% - 32px));
+  border: 0.5px solid var(--border-divider);
+  border-radius: 12px;
   background: var(--bg-primary);
-  flex-shrink: 0;
+  box-shadow: 0 8px 24px rgba(0,0,0,.08);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 0;
 }
+
+.interaction-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(20, 20, 18, .38);
+  backdrop-filter: blur(2px);
+}
+.interaction-modal-card {
+  width: min(640px, 100%);
+  max-height: 75vh;
+  overflow: auto;
+  border: 1px solid var(--border-card);
+  border-radius: 16px;
+  background: var(--bg-primary);
+  box-shadow: 0 24px 80px rgba(0,0,0,.24);
+}
+.interaction-modal-card .interaction-prompt { border-bottom: 0; padding: 22px 24px; }
 
 /* ── Shared Prompt Card ── */
 .interaction-prompt {

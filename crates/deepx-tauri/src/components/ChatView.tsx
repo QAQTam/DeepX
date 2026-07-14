@@ -14,6 +14,7 @@ import InteractionDock from "./interactions/InteractionDock";
 import AskUserPrompt from "./interactions/AskUserPrompt";
 import PermissionPrompt from "./interactions/PermissionPrompt";
 import CompactStatusRow from "./interactions/CompactStatusRow";
+import InteractionModal from "./interactions/InteractionModal";
 import type { QueuedPermission } from "../store/permissionQueue";
 
 interface ChatViewProps {
@@ -30,6 +31,7 @@ interface ChatViewProps {
   ) => Promise<void>;
   permissionLevel: number;
   onPermissionLevelChange: (level: number) => void | Promise<void>;
+  onChangeWorkspace: () => void | Promise<void>;
 }
 
 export default function ChatView(props: ChatViewProps) {
@@ -41,8 +43,6 @@ export default function ChatView(props: ChatViewProps) {
   const [showGitWorkspace, setShowGitWorkspace] = createSignal(false);
   const permission = () => props.permission?.() ?? null;
   const showCompactStatus = () => chat().isCompacting() || chat().compactResult() != null;
-  const hasInteractions = () =>
-    showCompactStatus() || permission() !== null || chat().askState().show;
 
   async function handleSetMode(m: string) {
     setMode(m);
@@ -108,6 +108,9 @@ export default function ChatView(props: ChatViewProps) {
         onOpenLocation={() => {
           if (chat().workspace()) void open(chat().workspace());
         }}
+        workspace={chat().workspace()}
+        onChangeWorkspace={props.onChangeWorkspace}
+        compacting={chat().isCompacting()}
         onCompact={handleCompact}
       />
       <Show when={environmentOpen() && props.rawSession?.()}>
@@ -123,38 +126,40 @@ export default function ChatView(props: ChatViewProps) {
       <Show when={props.rawSession()}>
         {(raw) => <ConversationTranscript turns={projectSession(raw())} />}
       </Show>
-      <Show when={hasInteractions()}>
+      <Show when={showCompactStatus()}>
         <InteractionDock>
-          <Show when={showCompactStatus()}>
-            <CompactStatusRow
-              active={chat().isCompacting()}
-              status={chat().isCompacting() ? "active" : "complete"}
-              text={chat().compactText()}
-              turnsCompacted={chat().compactResult() ?? undefined}
-            />
+          <CompactStatusRow
+            active={chat().isCompacting()}
+            status={chat().isCompacting() ? "active" : "complete"}
+            text={chat().compactText()}
+            turnsCompacted={chat().compactResult() ?? undefined}
+          />
+        </InteractionDock>
+      </Show>
+      <Show
+        when={permission()}
+        fallback={
+          <Show when={chat().askState().show}>
+            <InteractionModal label="DeepX 需要你的回答">
+              <AskUserPrompt
+                questions={chat().askState().questions}
+                onSubmit={(answers) => chat().submitAskAnswer(answers)}
+                onDismiss={() => void chat().dismissAsk()}
+              />
+            </InteractionModal>
           </Show>
-          <Show
-            when={permission()}
-            fallback={
-              <Show when={chat().askState().show}>
-                <AskUserPrompt
-                  questions={chat().askState().questions}
-                  onSubmit={(answers) => chat().submitAskAnswer(answers)}
-                  onDismiss={() => void chat().dismissAsk()}
-                />
-              </Show>
-            }
-          >
-            {(item) => (
+        }
+      >
+        {(item) => (
+          <InteractionModal label="DeepX 请求操作授权">
               <PermissionPrompt
                 request={item().request}
                 onRespond={(approved, trustFolder) =>
                   props.onPermissionRespond?.(item(), approved, trustFolder)
                 }
               />
-            )}
-          </Show>
-        </InteractionDock>
+          </InteractionModal>
+        )}
       </Show>
       <ComposerDock
         onSend={handleSend}

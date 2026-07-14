@@ -686,6 +686,7 @@ export default function App() {
                     onPermissionRespond={respondToPermission}
                     permissionLevel={permissionLevel()}
                     onPermissionLevelChange={changePermissionLevel}
+                    onChangeWorkspace={browseWorkspace}
                   />
                 </div>
               </Show>

@@ -21,12 +21,15 @@ export default function ProcessDisclosure(props: {
 }) {
   const [open, setOpen] = createSignal(defaultOpenForStatus(props.process.status));
   const panelId = `process-${Math.random().toString(36).slice(2)}`;
+  let previousStatus = props.process.status;
 
   createEffect(() => {
-    if (props.process.status === "completed") {
+    const status = props.process.status;
+    if (previousStatus !== "completed" && status === "completed") {
       setOpen(false);
       props.onOpenChange?.(false);
     }
+    previousStatus = status;
   });
 
   const label = () => {
