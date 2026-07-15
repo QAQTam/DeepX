@@ -66,6 +66,14 @@ pub fn cmd_resume_session(seed: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn cmd_replay_session_events(seed: String) -> Result<Vec<serde_json::Value>, String> {
+    let registry = AgentRegistry::get()
+        .lock()
+        .map_err(|error| format!("registry lock: {error}"))?;
+    registry.replay_events(&seed)
+}
+
 /// Create a new session with a pre-generated seed.
 
 #[tauri::command]

@@ -3,7 +3,7 @@
 //! AgentRegistry manages multiple agent child processes, one per session seed.
 //! Each agent communicates via stdin/stdout JSON-framed protocol (Ui2Agent/Agent2Ui).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +16,51 @@ use deepx_proto::{Agent2Ui, Ui2Agent};
 use super::platform::SYSTEM_PATH;
 use super::util::agent2ui_event_name_for_ui;
 
+const REPLAY_EVENT_LIMIT: usize = 128;
+type ReplayCache = Arc<Mutex<VecDeque<serde_json::Value>>>;
+
+fn new_replay_cache() -> ReplayCache {
+    Arc::new(Mutex::new(VecDeque::new()))
+}
+
+fn is_replayable_event(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "turn_start"
+            | "round_complete"
+            | "tool_results"
+            | "turn_end"
+            | "done"
+            | "cancelled"
+            | "error"
+            | "permission_request"
+            | "ask_user"
+            | "ask_resolved"
+            | "ask_rejected"
+            | "plan_submitted"
+            | "plan_resolved"
+    )
+}
+
+fn record_replay_event(cache: &ReplayCache, payload: &serde_json::Value) {
+    let Some(event_type) = payload.get("type").and_then(|value| value.as_str()) else {
+        return;
+    };
+    if !is_replayable_event(event_type) {
+        return;
+    }
+    let Ok(mut events) = cache.lock() else {
+        return;
+    };
+    if event_type == "turn_start" {
+        events.clear();
+    }
+    while events.len() >= REPLAY_EVENT_LIMIT {
+        events.pop_front();
+    }
+    events.push_back(payload.clone());
+}
+
 // ── Agent instance ──
 
 pub struct AgentInstance {
@@ -24,6 +69,7 @@ pub struct AgentInstance {
     stdin: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Option<std::process::Child>>>,
     shutdown_flag: Arc<AtomicBool>,
+    replay_events: ReplayCache,
 }
 
 /// Global registry of all running agent subprocesses, keyed by session seed.
@@ -69,9 +115,57 @@ mod tests {
             stdin,
             child,
             shutdown_flag: shutdown,
+            replay_events: new_replay_cache(),
         };
 
         assert_eq!(inst.seed, "test_seed");
+    }
+
+    #[test]
+    fn replay_cache_keeps_lifecycle_events_and_drops_deltas() {
+        let cache = new_replay_cache();
+        record_replay_event(
+            &cache,
+            &serde_json::json!({
+                "type": "turn_start", "turn_id": "t1", "user_text": "reload"
+            }),
+        );
+        record_replay_event(
+            &cache,
+            &serde_json::json!({
+                "type": "round_delta", "turn_id": "t1", "delta": "partial"
+            }),
+        );
+        record_replay_event(
+            &cache,
+            &serde_json::json!({
+                "type": "round_complete", "turn_id": "t1", "round_num": 0,
+                "thinking": null, "answer": "complete", "tool_calls": []
+            }),
+        );
+
+        let events = cache.lock().unwrap();
+        let types: Vec<_> = events
+            .iter()
+            .filter_map(|event| event.get("type").and_then(|value| value.as_str()))
+            .collect();
+        assert_eq!(types, vec!["turn_start", "round_complete"]);
+    }
+
+    #[test]
+    fn a_new_turn_discards_the_previous_turn_replay() {
+        let cache = new_replay_cache();
+        record_replay_event(&cache, &serde_json::json!({ "type": "done" }));
+        record_replay_event(
+            &cache,
+            &serde_json::json!({
+                "type": "turn_start", "turn_id": "t2", "user_text": "next"
+            }),
+        );
+
+        let events = cache.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "turn_start");
     }
 }
 
@@ -155,6 +249,8 @@ fn spawn_agent_process(
     let seed_owned = seed.to_string();
     let child_for_check = Arc::new(Mutex::new(Some(child)));
     let child_for_thread = child_for_check.clone();
+    let replay_events = new_replay_cache();
+    let replay_for_reader = replay_events.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         let event_label = format!("agent-{}-event", seed_owned);
@@ -184,6 +280,7 @@ fn spawn_agent_process(
                 .get("type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
+            record_replay_event(&replay_for_reader, &payload);
             if event_type != "round_delta"
                 && event_type != "tool_call_preview"
                 && event_type != "exec_progress"
@@ -194,8 +291,14 @@ fn spawn_agent_process(
                     event_type
                 );
             }
-            if app_handle.emit(&event_label, &payload).is_err() {
-                break;
+            if let Err(error) = app_handle.emit(&event_label, &payload)
+                && event_type != "round_delta"
+                && event_type != "tool_call_preview"
+                && event_type != "exec_progress"
+            {
+                log::warn!(
+                    "[REGISTRY] WebView emit failed for {seed_owned}; retaining agent stdout: {error}"
+                );
             }
         }
         log::warn!(
@@ -218,6 +321,7 @@ fn spawn_agent_process(
             ),
         };
         let payload = serde_json::to_value(&error_event).unwrap_or_default();
+        record_replay_event(&replay_for_reader, &payload);
         let _ = app_handle.emit(&event_label, payload.clone());
         let _ = app_handle.emit("agent-event", payload);
     });
@@ -227,6 +331,7 @@ fn spawn_agent_process(
         stdin: Arc::new(Mutex::new(Box::new(stdin))),
         child: child_for_check,
         shutdown_flag: Arc::new(AtomicBool::new(false)),
+        replay_events,
     };
     inst.spawn_heartbeat();
     Ok(inst)
@@ -298,6 +403,18 @@ impl AgentRegistry {
 
     pub fn has_instance(&self, seed: &str) -> bool {
         self.instances.contains_key(seed)
+    }
+
+    pub fn replay_events(&self, seed: &str) -> Result<Vec<serde_json::Value>, String> {
+        let instance = self
+            .instances
+            .get(seed)
+            .ok_or_else(|| format!("No running agent for seed {seed}"))?;
+        let events = instance
+            .replay_events
+            .lock()
+            .map_err(|error| format!("replay cache lock: {error}"))?;
+        Ok(events.iter().cloned().collect())
     }
 
     pub fn kill_agent(&mut self, seed: &str) -> Option<AgentInstance> {

@@ -16,6 +16,7 @@ fn all_session_commands_visible() {
     let _ = agent_bridge::cmd_set_mode as fn(_, _) -> _;
     let _ = agent_bridge::cmd_cancel as fn(_) -> _;
     let _ = agent_bridge::cmd_resume_session as fn(_) -> _;
+    let _ = agent_bridge::cmd_replay_session_events as fn(_) -> _;
     let _ = agent_bridge::cmd_new_session as fn() -> _;
     let _ = agent_bridge::cmd_close_session as fn(_) -> _;
     let _ = agent_bridge::cmd_undo_turn as fn(_, _) -> _;
