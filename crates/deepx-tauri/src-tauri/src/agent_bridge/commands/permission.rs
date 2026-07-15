@@ -51,3 +51,28 @@ pub fn cmd_ask_dismiss(seed: String, ask_id: String) -> Result<(), String> {
     ensure_agent(&seed)?;
     send_to_agent(&seed, Ui2Agent::AskDismiss { ask_id })
 }
+
+/// Send user's plan review decision. Resumes a turn suspended by plan_submit.
+
+#[tauri::command]
+pub fn cmd_plan_review(
+    seed: String,
+    call_id: String,
+    approved: bool,
+    message: Option<String>,
+) -> Result<(), String> {
+    log::info!(
+        "[REGISTRY] cmd_plan_review seed={} call_id={} approved={approved}",
+        &seed[..seed.floor_char_boundary(seed.len().min(8))],
+        call_id,
+    );
+    ensure_agent(&seed)?;
+    send_to_agent(
+        &seed,
+        Ui2Agent::PlanReview {
+            call_id,
+            approved,
+            message: message.unwrap_or_default(),
+        },
+    )
+}

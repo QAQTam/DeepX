@@ -188,6 +188,8 @@ pub enum YieldReason {
     PermissionPending,
     /// The ask_user tool was called — waiting for user's response.
     AskUser,
+    /// A plan was submitted for review — waiting for user approval/rejection.
+    PlanReview,
 }
 
 // ═══════════════════════════════════════════════════════
@@ -200,6 +202,13 @@ pub struct PendingAsk {
     pub call_id: String,
     pub mode: AskMode,
     pub questions: Vec<AskQuestion>,
+}
+
+/// A plan_submit tool call intercepted and waiting for user review.
+#[derive(Debug, Clone)]
+pub struct PendingPlan {
+    pub call_id: String,
+    pub content: String,
 }
 
 /// Serialized snapshot of a turn mid-execution.
@@ -224,6 +233,8 @@ pub struct TurnState {
     pub serial_call_ids: HashSet<String>,
     /// Authorized ask_user calls in assistant tool-call order.
     pub pending_asks: VecDeque<PendingAsk>,
+    /// Intercepted plan_submit calls waiting for user review.
+    pub pending_plans: VecDeque<PendingPlan>,
     /// Session ID at the time of suspension (validated on resume to prevent
     /// stale turn resumption after a session switch).
     pub session_id: String,

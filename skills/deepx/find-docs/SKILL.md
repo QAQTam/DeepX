@@ -1,4 +1,3 @@
-[SkILLS]
 ---
 name: find-docs
 description: >-

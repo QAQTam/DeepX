@@ -1,4 +1,3 @@
-[SKILLS]
 ---
 name: deepx-debug
 description: DeepX Rust 项目 debug 步骤与方法论。当 qaqtam 遇到以下任何情况时必须使用此 skill：报错/崩溃但原因不明、行为与预期不符但代码"看起来是对的"、间歇性/难复现问题、跨 crate 或跨进程（Tauri IPC、TUI 事件流）的异常、性能异常（卡顿、延迟、丢帧）、"感觉哪里不对但不知道从哪查起"。目标是把 debug 过程从"改代码试试"转成"先定位再动手"，避免盲改浪费时间。

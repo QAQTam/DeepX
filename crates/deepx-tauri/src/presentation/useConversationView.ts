@@ -20,10 +20,7 @@ export function useConversationView(
 function omitTransientTiming(view: TurnViewModel): TurnViewModel {
   return {
     ...view,
-    process: {
-      ...view.process,
-      elapsedMs: undefined,
-    },
+    elapsedMs: undefined,
   };
 }
 

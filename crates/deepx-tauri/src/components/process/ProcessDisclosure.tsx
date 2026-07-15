@@ -1,9 +1,4 @@
 import { createEffect, createSignal, Show, type JSX } from "solid-js";
-import type { TurnViewModel } from "../../presentation/turnProjection";
-
-export function defaultOpenForStatus(status: TurnViewModel["process"]["status"]): boolean {
-  return status !== "completed";
-}
 
 export function formatElapsed(elapsedMs?: number): string {
   if (elapsedMs === undefined) return "";
@@ -15,39 +10,37 @@ export function formatElapsed(elapsedMs?: number): string {
 }
 
 export default function ProcessDisclosure(props: {
-  process: TurnViewModel["process"];
+  status: "running" | "waiting" | "completed" | "failed" | "cancelled";
+  elapsedMs?: number;
+  tokensPerSec?: number;
+  defaultOpen?: boolean;
   children?: JSX.Element;
-  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = createSignal(defaultOpenForStatus(props.process.status));
+  const [open, setOpen] = createSignal(
+    props.defaultOpen ?? props.status !== "completed",
+  );
   const panelId = `process-${Math.random().toString(36).slice(2)}`;
-  let previousStatus = props.process.status;
 
   createEffect(() => {
-    const status = props.process.status;
-    if (previousStatus !== "completed" && status === "completed") {
-      setOpen(false);
-      props.onOpenChange?.(false);
-    }
-    previousStatus = status;
+    if (props.defaultOpen !== undefined) return;
+    if (props.status === "completed") setOpen(false);
   });
 
   const label = () => {
-    const elapsed = formatElapsed(props.process.elapsedMs);
-    switch (props.process.status) {
+    const elapsed = formatElapsed(props.elapsedMs);
+    const speed = props.status === "completed" && props.tokensPerSec
+      ? ` · ${props.tokensPerSec} tok/s`
+      : "";
+    switch (props.status) {
       case "running": return elapsed ? `正在处理 ${elapsed}` : "正在处理";
       case "waiting": return "需要你的批准";
-      case "completed": return elapsed ? `已处理 ${elapsed}` : "已处理";
+      case "completed": return elapsed ? `已处理 ${elapsed}${speed}` : "已处理";
       case "failed": return "处理失败";
       case "cancelled": return "已停止";
     }
   };
 
-  const toggle = () => {
-    const next = !open();
-    setOpen(next);
-    props.onOpenChange?.(next);
-  };
+  const toggle = () => setOpen(!open());
 
   return (
     <section class="process-disclosure" data-process-disclosure>
@@ -58,7 +51,7 @@ export default function ProcessDisclosure(props: {
         aria-controls={panelId}
         onClick={toggle}
       >
-        <span class={`process-status-dot is-${props.process.status}`} aria-hidden="true" />
+        <span class={`process-status-dot is-${props.status}`} aria-hidden="true" />
         <span>{label()}</span>
         <span class="process-chevron" aria-hidden="true">›</span>
       </button>

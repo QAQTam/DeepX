@@ -134,6 +134,22 @@ impl TurnEngine {
             return Self::abort_running_turn(ctx, saved.turn_id, saved.usage);
         }
 
+        if !saved.pending_plans.is_empty() {
+            saved.reason = YieldReason::PlanReview;
+            let turn_id = saved.turn_id.clone();
+            if let Some(plan) = saved.pending_plans.front() {
+                ctx.emitter.emit(Agent2Ui::PlanSubmitted {
+                    call_id: plan.call_id.clone(),
+                    plan_content: plan.content.clone(),
+                });
+            }
+            self.suspended = Some(saved);
+            return Outcome::YieldToUser {
+                turn_id,
+                reason: YieldReason::PlanReview,
+            };
+        }
+
         if !saved.pending_asks.is_empty() {
             saved.reason = YieldReason::AskUser;
             let turn_id = saved.turn_id.clone();
@@ -214,6 +230,54 @@ impl TurnEngine {
                 reason: YieldReason::AskUser,
             };
         }
+
+        self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
+        self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
+    }
+
+    /// Validate and apply a plan review decision without consuming state
+    /// on identity or payload errors.
+    pub fn handle_plan_response(
+        &mut self,
+        ctx: &mut RingContext,
+        tool: &mut ToolEngine,
+        call_id: &str,
+        approved: bool,
+        message: &str,
+    ) -> Outcome {
+        let active_id = self
+            .suspended
+            .as_ref()
+            .filter(|state| state.reason == YieldReason::PlanReview)
+            .and_then(|state| state.pending_plans.front())
+            .map(|plan| plan.call_id.as_str());
+        if active_id != Some(call_id) {
+            log::warn!("[TURN] plan response without a suspended plan review: {call_id}");
+            return Outcome::Handled;
+        }
+
+        let mut saved = self.suspended.take().expect("plan review suspension exists");
+        let plan = saved.pending_plans.pop_front().expect("pending plan exists");
+
+        let content = if approved {
+            format!("Plan approved.\n\n{}", plan.content)
+        } else {
+            format!(
+                "Plan rejected: {}\n\n{}",
+                if message.is_empty() { "no reason given" } else { message },
+                plan.content
+            )
+        };
+        ctx.agent
+            .msg
+            .push_tool_result_direct(&plan.call_id, &content, approved);
+        ctx.agent
+            .msg
+            .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
+        ctx.emitter.emit(Agent2Ui::PlanResolved {
+            call_id: plan.call_id,
+            approved,
+        });
 
         self.emit_completed_tool_round(ctx, &saved.turn_id, saved.round_num);
         self.run_lap(ctx, tool, saved.turn_id, saved.round_num + 1, saved.usage)
@@ -702,7 +766,22 @@ impl TurnEngine {
                             .map(|index| pending[*index].id.clone())
                             .collect();
                         let admission = tool.admit_batch(ctx, &pending);
-                        if !admission.pending_permission_ids.is_empty() {
+                        if !admission.pending_permission_ids.is_empty()
+                            || !admission.pending_plans.is_empty()
+                        {
+                            let reason = if !admission.pending_permission_ids.is_empty() {
+                                YieldReason::PermissionPending
+                            } else {
+                                YieldReason::PlanReview
+                            };
+                            // Capture plan info before moving into TurnState
+                            let plan_submitted = if reason == YieldReason::PlanReview {
+                                admission.pending_plans.front().map(|plan| {
+                                    (plan.call_id.clone(), plan.content.clone())
+                                })
+                            } else {
+                                None
+                            };
                             self.suspended = Some(TurnState {
                                 session_id: ctx.agent.session.seed.clone(),
                                 turn_id: turn_id.clone(),
@@ -712,13 +791,17 @@ impl TurnEngine {
                                 tool_call_order,
                                 serial_call_ids,
                                 pending_asks: admission.pending_asks,
+                                pending_plans: admission.pending_plans,
                                 usage: last_usage.clone(),
-                                reason: YieldReason::PermissionPending,
+                                reason,
                             });
-                            return Outcome::YieldToUser {
-                                turn_id,
-                                reason: YieldReason::PermissionPending,
-                            };
+                            if let Some((call_id, plan_content)) = plan_submitted {
+                                ctx.emitter.emit(Agent2Ui::PlanSubmitted {
+                                    call_id,
+                                    plan_content,
+                                });
+                            }
+                            return Outcome::YieldToUser { turn_id, reason };
                         }
                         let (mut parallel_authorized, serial_authorized): (Vec<_>, Vec<_>) =
                             admission
@@ -867,15 +950,27 @@ impl TurnEngine {
                             return Self::abort_running_turn(ctx, turn_id, last_usage);
                         }
 
-                        // Suspend before the next gate lap while any approval or
-                        // ask_user call from this assistant round is unresolved.
+                        // Suspend before the next gate lap while any approval,
+                        // ask_user call, or plan review from this assistant round
+                        // is unresolved.
                         if !admission.pending_permission_ids.is_empty()
                             || !admission.pending_asks.is_empty()
+                            || !admission.pending_plans.is_empty()
                         {
-                            let reason = if admission.pending_permission_ids.is_empty() {
-                                YieldReason::AskUser
-                            } else {
+                            let reason = if !admission.pending_permission_ids.is_empty() {
                                 YieldReason::PermissionPending
+                            } else if !admission.pending_plans.is_empty() {
+                                YieldReason::PlanReview
+                            } else {
+                                YieldReason::AskUser
+                            };
+                            // Capture plan info before moving into TurnState
+                            let plan_submitted = if reason == YieldReason::PlanReview {
+                                admission.pending_plans.front().map(|plan| {
+                                    (plan.call_id.clone(), plan.content.clone())
+                                })
+                            } else {
+                                None
                             };
                             self.suspended = Some(TurnState {
                                 session_id: ctx.agent.session.seed.clone(),
@@ -886,6 +981,7 @@ impl TurnEngine {
                                 tool_call_order,
                                 serial_call_ids,
                                 pending_asks: admission.pending_asks,
+                                pending_plans: admission.pending_plans,
                                 usage: last_usage.clone(),
                                 reason,
                             });
@@ -894,6 +990,12 @@ impl TurnEngine {
                                     ctx,
                                     self.suspended.as_ref().expect("suspended ask state"),
                                 );
+                            }
+                            if let Some((call_id, plan_content)) = plan_submitted {
+                                ctx.emitter.emit(Agent2Ui::PlanSubmitted {
+                                    call_id,
+                                    plan_content,
+                                });
                             }
                             return Outcome::YieldToUser { turn_id, reason };
                         }
@@ -971,9 +1073,6 @@ impl TurnEngine {
                 round_num,
                 results: tool_defs,
             });
-        }
-        if results.iter().any(|(_, name, _, _)| name == "plan_submit") {
-            ctx.emitter.emit(Agent2Ui::PlanChanged);
         }
         // Refresh status bar tasks after every tool round
         if !results.is_empty() {

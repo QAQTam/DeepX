@@ -36,16 +36,23 @@ function rawTurn(): RawTurn {
 }
 
 describe("turn projection", () => {
-  it("projects assistant stage text directly and keeps the last answer as final", () => {
+  it("separates stage answer and final answer across rounds", () => {
     const view = projectTurn(rawTurn());
-    expect(view.process.items.some(item => item.kind === "assistant_progress")).toBe(false);
-    expect(view.stageAnswers).toEqual([{ roundNum: 0, markdown: "intermediate" }]);
-    expect(view.finalAnswer?.markdown).toBe("final answer");
-    expect(view.finalAnswer?.streaming).toBe(false);
-    expect(view.process.elapsedMs).toBe(800);
+    expect(view.rounds).toHaveLength(2);
+
+    // Round 0: stage answer
+    expect(view.rounds[0].answer).toBe("intermediate");
+    expect(view.rounds[0].isFinal).toBe(false);
+
+    // Round 1: final answer
+    expect(view.rounds[1].answer).toBe("final answer");
+    expect(view.rounds[1].isFinal).toBe(true);
+
+    expect(view.elapsedMs).toBe(800);
+    expect(view.status).toBe("completed");
   });
 
-  it("projects the latest streaming answer directly as the final answer candidate", () => {
+  it("rounds with only a streaming answer are still projected", () => {
     const turn = rawTurn();
     turn.status = "running";
     turn.rounds[1].isFinal = false;
@@ -53,18 +60,21 @@ describe("turn projection", () => {
 
     const view = projectTurn(turn);
 
-    expect(view.finalAnswer).toEqual({ markdown: "forming conclusion", streaming: true });
-    expect(view.process.items.some(item => item.kind === "assistant_progress")).toBe(false);
+    expect(view.rounds[1].answer).toBe("forming conclusion");
+    expect(view.rounds[1].isFinal).toBe(false);
+    expect(view.status).toBe("running");
   });
 
-  it("keeps tool output and reasoning inside process items", () => {
+  it("keeps tool output and reasoning in per-round process items", () => {
     const view = projectTurn(rawTurn());
-    expect(view.process.items.some(item => item.kind === "reasoning")).toBe(true);
-    const tool = view.process.items.find(item => item.kind === "tool");
+
+    const r0 = view.rounds[0];
+    expect(r0.processItems.some(item => item.kind === "reasoning")).toBe(true);
+    const tool = r0.processItems.find(item => item.kind === "tool");
     expect(tool).toMatchObject({ kind: "tool", output: "source", success: true });
   });
 
-  it("does not expose permission audit resolutions as chat process items", () => {
+  it("does not expose permission audit resolutions as process items", () => {
     const turn = rawTurn();
     turn.interactions = [
       { id: "exec-1", kind: "permission", resolution: "approved", at: 500 },
@@ -72,8 +82,11 @@ describe("turn projection", () => {
 
     const view = projectTurn(turn);
 
-    expect(view.process.items).not.toContainEqual(
-      expect.objectContaining({ kind: "interaction", label: "permission" }),
-    );
+    // Permission interactions should not appear in any round's items
+    for (const round of view.rounds) {
+      expect(round.processItems).not.toContainEqual(
+        expect.objectContaining({ kind: "interaction", label: "permission" }),
+      );
+    }
   });
 });

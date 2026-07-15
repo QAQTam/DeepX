@@ -50,9 +50,9 @@ function buildPiePaths(stats: ContextStats): string {
   return paths;
 }
 
-export default function ContextPanel(props: { seed: string; metricHistory: MetricPoint[]; contextLimit: number }) {
+export default function ContextPanel(props: { seed: string; metricHistory: MetricPoint[]; contextLimit: number; initialOpen?: boolean }) {
   const [stats, setStats] = createSignal<ContextStats | null>(null);
-  const [open, setOpen] = createSignal(false);
+  const [open, setOpen] = createSignal(props.initialOpen ?? false);
   const [tab, setTab] = createSignal<"breakdown" | "timeline">("breakdown");
 
   async function refresh() {

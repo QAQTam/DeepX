@@ -16,6 +16,7 @@ import PermissionPrompt from "./interactions/PermissionPrompt";
 import CompactStatusRow from "./interactions/CompactStatusRow";
 import InteractionModal from "./interactions/InteractionModal";
 import PlanReviewPanel from "./PlanReviewPanel";
+import ContextPanel from "./ContextPanel";
 import type { PermissionQueueProgress, QueuedPermission } from "../store/permissionQueue";
 
 interface ChatViewProps {
@@ -35,6 +36,9 @@ interface ChatViewProps {
   onPermissionLevelChange: (level: number) => void | Promise<void>;
   onChangeWorkspace: () => void | Promise<void>;
   planReviewOpen?: () => boolean;
+  planReviewCallId?: () => string;
+  planReviewContent?: () => string;
+  onPlanReviewRespond?: (approved: boolean, message?: string) => void;
   onPlanReviewClose?: () => void;
 }
 
@@ -43,6 +47,7 @@ export default function ChatView(props: ChatViewProps) {
   const seed = () => chat().sessionInfo.seed;
   const [mode, setMode] = createSignal("plan");
   const [environmentOpen, setEnvironmentOpen] = createSignal(false);
+  const [statsOpen, setStatsOpen] = createSignal(false);
   const [branch, setBranch] = createSignal("");
   const [showGitWorkspace, setShowGitWorkspace] = createSignal(false);
   const permission = () => props.permission?.() ?? null;
@@ -108,7 +113,9 @@ export default function ChatView(props: ChatViewProps) {
           props.rawSession?.()?.session.title || seed().slice(0, 8)
         }
         environmentOpen={environmentOpen()}
+        statsOpen={statsOpen()}
         onToggleEnvironment={() => setEnvironmentOpen((value) => !value)}
+        onToggleStats={() => setStatsOpen((value) => !value)}
         onOpenLocation={() => {
           if (chat().workspace()) void open(chat().workspace());
         }}
@@ -128,6 +135,14 @@ export default function ChatView(props: ChatViewProps) {
             onTaskAction={(action, task) => void chat().submitTaskAction(action, task.id, task.subject, task.description)}
           />
         )}
+      </Show>
+      <Show when={statsOpen()}>
+        <ContextPanel
+          seed={seed()}
+          metricHistory={chat().metricHistory()}
+          contextLimit={chat().sessionInfo.context_limit ?? 200000}
+          initialOpen={true}
+        />
       </Show>
       <Show when={props.rawSession()}>
         {(raw) => <ConversationTranscript turns={projectSession(raw())} />}
@@ -150,7 +165,14 @@ export default function ChatView(props: ChatViewProps) {
             fallback={
               <Show when={props.planReviewOpen?.()}>
                 <InteractionModal label="审核执行计划">
-                  <PlanReviewPanel seed={seed()} onClose={() => props.onPlanReviewClose?.()} />
+                  <PlanReviewPanel
+                    seed={seed()}
+                    callId={props.planReviewCallId?.() ?? ""}
+                    planContent={props.planReviewContent?.() ?? ""}
+                    onApprove={() => props.onPlanReviewRespond?.(true)}
+                    onReject={(message) => props.onPlanReviewRespond?.(false, message)}
+                    onClose={() => props.onPlanReviewClose?.()}
+                  />
                 </InteractionModal>
               </Show>
             }

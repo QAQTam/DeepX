@@ -5,6 +5,8 @@ import TurnGroup from "./TurnGroup";
 export default function ConversationTranscript(props: { turns: TurnViewModel[] }) {
   let scroller!: HTMLDivElement;
   const [nearBottom, setNearBottom] = createSignal(true);
+  let prevLen = 0;
+  let prevFirstId = "";
 
   const measure = () => {
     const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
@@ -12,8 +14,16 @@ export default function ConversationTranscript(props: { turns: TurnViewModel[] }
   };
 
   createEffect(() => {
-    props.turns.length;
-    if (nearBottom()) queueMicrotask(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
+    const len = props.turns.length;
+    // Detect session switches: if the first turn ID changed, the entire
+    // conversation was replaced (not appended). Always scroll to bottom.
+    const firstId = props.turns[0]?.turnId ?? "";
+    const sessionChanged = firstId !== prevFirstId;
+    prevFirstId = firstId;
+    if (sessionChanged || (len > prevLen && nearBottom())) {
+      queueMicrotask(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
+    }
+    prevLen = len;
   });
 
   return (

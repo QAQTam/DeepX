@@ -17,6 +17,7 @@ pub fn run() {
             agent_bridge::cmd_permission_response,
             agent_bridge::cmd_ask_response,
             agent_bridge::cmd_ask_dismiss,
+            agent_bridge::cmd_plan_review,
             agent_bridge::cmd_set_mode,
             agent_bridge::cmd_get_version,
             agent_bridge::cmd_list_available_tools,

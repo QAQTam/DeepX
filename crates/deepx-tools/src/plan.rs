@@ -48,7 +48,7 @@ fn plan_path() -> std::path::PathBuf {
     new_path
 }
 
-fn read_plan() -> Result<String, String> {
+pub fn read_plan() -> Result<String, String> {
     let path = plan_path();
     match std::fs::read_to_string(&path) {
         Ok(c) => Ok(c),

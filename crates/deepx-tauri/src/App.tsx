@@ -52,7 +52,7 @@ export default function App() {
   const [view, setView] = createSignal<View>("home");
   const [configLang, setConfigLang] = createSignal<Lang>("en");
   const [permissionLevel, setPermissionLevel] = createSignal(4);
-  const [pendingPlanReviews, setPendingPlanReviews] = createSignal<string[]>([]);
+  const [pendingPlanReviews, setPendingPlanReviews] = createSignal<{ call_id: string; content: string } | null>(null);
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
   // Active session seed — drives which ChatStore is displayed
   const [activeSeed, setActiveSeed] = createSignal<string>("");
@@ -188,8 +188,14 @@ export default function App() {
       }
       case "ask_resolved": chat.handleAskResolved((p.ask_id ?? "") as string); break;
       case "ask_rejected": chat.handleAskRejected((p.ask_id ?? "") as string, (p.message ?? "Invalid answer") as string); break;
-      case "plan_changed": {
-        setPendingPlanReviews((current) => current.includes(listenerSeed) ? current : [...current, listenerSeed]);
+      case "plan_submitted": {
+        setPendingPlanReviews({ call_id: p.call_id as string, content: p.plan_content as string });
+        break;
+      }
+      case "plan_resolved": {
+        if ((p.call_id as string) === pendingPlanReviews()?.call_id) {
+          setPendingPlanReviews(null);
+        }
         break;
       }
       case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); if (listenerSeed === activeSeed()) setRefreshKey((k) => k + 1); break;
@@ -689,8 +695,15 @@ export default function App() {
                     permissionLevel={permissionLevel()}
                     onPermissionLevelChange={changePermissionLevel}
                     onChangeWorkspace={browseWorkspace}
-                    planReviewOpen={() => pendingPlanReviews().includes(activeSeed())}
-                    onPlanReviewClose={() => setPendingPlanReviews((current) => current.filter((seed) => seed !== activeSeed()))}
+                    planReviewOpen={() => pendingPlanReviews() !== null}
+                    planReviewCallId={() => pendingPlanReviews()?.call_id ?? ""}
+                    planReviewContent={() => pendingPlanReviews()?.content ?? ""}
+                    onPlanReviewRespond={(approved, message) => {
+                      const plan = pendingPlanReviews();
+                      if (!plan) return;
+                      void invoke("cmd_plan_review", { seed: activeSeed(), callId: plan.call_id, approved, message: message ?? "" });
+                    }}
+                    onPlanReviewClose={() => setPendingPlanReviews(null)}
                   />
                 </div>
               </Show>

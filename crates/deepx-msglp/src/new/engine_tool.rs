@@ -224,6 +224,7 @@ impl ToolEngine {
         let mut authorized = Vec::new();
         let mut pending_permission_ids = Vec::new();
         let mut pending_asks = VecDeque::new();
+        let mut pending_plans = VecDeque::new();
 
         for tool in tools {
             let inv = deepx_tools::authorization::ToolInvocation {
@@ -271,6 +272,25 @@ impl ToolEngine {
                                     "message": error.message,
                                 })
                                 .to_string(),
+                                false,
+                            ),
+                        }
+                    } else if auth.tool_name() == "plan_submit" {
+                        match deepx_tools::plan::read_plan() {
+                            Ok(content) if content.trim().is_empty() => {
+                                ctx.agent.msg.push_tool_result_direct(
+                                    auth.call_id(),
+                                    "[ERROR] PLAN.md is empty — use plan_create to add items first.",
+                                    false,
+                                );
+                            }
+                            Ok(content) => pending_plans.push_back(PendingPlan {
+                                call_id: auth.call_id().to_string(),
+                                content,
+                            }),
+                            Err(error) => ctx.agent.msg.push_tool_result_direct(
+                                auth.call_id(),
+                                &format!("[ERROR] Cannot read plan: {error}"),
                                 false,
                             ),
                         }
@@ -327,6 +347,7 @@ impl ToolEngine {
             authorized,
             pending_permission_ids,
             pending_asks,
+            pending_plans,
         }
     }
 
@@ -580,6 +601,7 @@ pub struct BatchAdmission {
     pub authorized: Vec<AdmittedTool>,
     pub pending_permission_ids: Vec<String>,
     pub pending_asks: VecDeque<PendingAsk>,
+    pub pending_plans: VecDeque<PendingPlan>,
 }
 
 pub enum PermissionDisposition {

@@ -117,7 +117,7 @@ export function createChatStore(seed: string) {
 
   function resetStreamBuffer() { streamBuffer = { thinking: "", answer: "" }; }
 
-  // ── Direct render (no RAF batching — SolidJS granular updates are cheap) ──
+  // ── Direct render (no batching — zero-buffer backend delivers events one-by-one) ──
   function flushDeltas(turn_id: string, round_num: number) {
     setTurns((t) => t.turn_id === turn_id, "rounds", (r) => r.round_num === round_num, produce((round: Round) => {
       round.thinking = streamBuffer.thinking;

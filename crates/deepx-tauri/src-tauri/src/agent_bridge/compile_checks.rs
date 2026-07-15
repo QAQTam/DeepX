@@ -30,6 +30,7 @@ fn all_permission_commands_visible() {
     let _ = agent_bridge::cmd_permission_response as fn(_, _, _, _) -> _;
     let _ = agent_bridge::cmd_ask_response as fn(_, _, _) -> _;
     let _ = agent_bridge::cmd_ask_dismiss as fn(_, _) -> _;
+    let _ = agent_bridge::cmd_plan_review as fn(_, _, _, _) -> _;
 }
 
 #[test]

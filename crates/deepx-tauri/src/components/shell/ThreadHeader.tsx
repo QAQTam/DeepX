@@ -3,7 +3,9 @@ export default function ThreadHeader(props: {
   environmentOpen: boolean;
   workspace: string;
   compacting: boolean;
+  statsOpen: boolean;
   onToggleEnvironment: () => void;
+  onToggleStats: () => void;
   onOpenLocation: () => void;
   onChangeWorkspace: () => void | Promise<void>;
   onCompact: () => void;
@@ -15,6 +17,7 @@ export default function ThreadHeader(props: {
       <button class="thread-workspace-button" data-change-workspace onClick={() => void props.onChangeWorkspace()} title={props.workspace || "选择工作区"}>▱ {workspaceName()}</button>
       <button onClick={props.onOpenLocation}>打开位置</button>
       <button class={props.environmentOpen ? "active" : ""} onClick={props.onToggleEnvironment}>环境</button>
+      <button class={props.statsOpen ? "active" : ""} onClick={props.onToggleStats}>统计</button>
       <button aria-label="整理上下文" disabled={props.compacting} onClick={props.onCompact}>{props.compacting ? "整理中…" : "整理上下文"}</button>
     </div>
   </header>;

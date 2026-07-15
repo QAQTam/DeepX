@@ -88,6 +88,18 @@ pub enum Ui2Agent {
     #[serde(rename = "ask_dismiss")]
     AskDismiss { ask_id: String },
 
+    /// User's decision on a submitted plan review.
+    /// Resumes a turn suspended by plan_submit.
+    #[serde(rename = "plan_review")]
+    PlanReview {
+        /// Matches the call_id of the plan_submit tool call.
+        call_id: String,
+        approved: bool,
+        /// Optional rejection reason.
+        #[serde(default)]
+        message: String,
+    },
+
     /// Unload an explicitly-activated skill ($name mention) from context.
     #[serde(rename = "unload_skill")]
     UnloadSkill {
@@ -406,9 +418,24 @@ pub enum Agent2Ui {
         level: String,
     },
 
-    /// PLAN.md changed — frontend should refresh PlanReviewPanel.
-    #[serde(rename = "plan_changed")]
-    PlanChanged,
+    /// A plan has been submitted for review (plan_submit intercepted).
+    /// Frontend should show PlanReviewPanel with Approve/Reject buttons.
+    /// Turn is suspended until PlanReview response arrives.
+    #[serde(rename = "plan_submitted")]
+    PlanSubmitted {
+        /// The plan_submit tool-call ID (must match PlanReview.call_id).
+        call_id: String,
+        /// PLAN.md content to display.
+        plan_content: String,
+    },
+
+    /// Plan review resolved (approved or rejected). Frontend closes the panel.
+    #[serde(rename = "plan_resolved")]
+    PlanResolved {
+        /// The plan_submit tool-call ID.
+        call_id: String,
+        approved: bool,
+    },
 
     #[serde(rename = "dashboard")]
     Dashboard {

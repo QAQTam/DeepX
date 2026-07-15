@@ -3,23 +3,26 @@
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { describe, expect, it } from "vitest";
-import type { TurnViewModel } from "../../presentation/turnProjection";
-import ProcessDisclosure, { defaultOpenForStatus } from "./ProcessDisclosure";
+import ProcessDisclosure from "./ProcessDisclosure";
 
 describe("ProcessDisclosure", () => {
-  it("opens active and failed traces but collapses completed traces", () => {
-    expect(defaultOpenForStatus("running")).toBe(true);
-    expect(defaultOpenForStatus("waiting")).toBe(true);
-    expect(defaultOpenForStatus("failed")).toBe(true);
-    expect(defaultOpenForStatus("cancelled")).toBe(true);
-    expect(defaultOpenForStatus("completed")).toBe(false);
+  it("defaults open for running, closed for completed", () => {
+    const host = document.createElement("div");
+    const r = render(() => <ProcessDisclosure status="running" />, host);
+    expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+    r();
+
+    const host2 = document.createElement("div");
+    const r2 = render(() => <ProcessDisclosure status="completed" />, host2);
+    expect(host2.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+    r2();
   });
 
-  it("forces a running trace closed when it completes", async () => {
+  it("auto-closes on completion when defaultOpen is not set", async () => {
     const host = document.createElement("div");
-    const [status, setStatus] = createSignal<TurnViewModel["process"]["status"]>("running");
+    const [status, setStatus] = createSignal<"running" | "completed">("running");
     const dispose = render(() => (
-      <ProcessDisclosure process={{ status: status(), elapsedMs: 900, items: [] }} />
+      <ProcessDisclosure status={status()} />
     ), host);
 
     expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
@@ -29,22 +32,16 @@ describe("ProcessDisclosure", () => {
     dispose();
   });
 
-  it("keeps a completed trace open across projection refreshes", async () => {
+  it("respects explicit defaultOpen and ignores auto-close", async () => {
     const host = document.createElement("div");
     document.body.append(host);
-    const [process, setProcess] = createSignal<TurnViewModel["process"]>({
-      status: "running", elapsedMs: 900, items: [],
-    });
-    const dispose = render(() => <ProcessDisclosure process={process()} />, host);
+    const dispose = render(() => (
+      <ProcessDisclosure status="completed" defaultOpen={true} />
+    ), host);
 
-    setProcess({ status: "completed", elapsedMs: 1000, items: [] });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    host.querySelector<HTMLButtonElement>("button")!.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
-
-    setProcess({ status: "completed", elapsedMs: 1100, items: [] });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Should stay open even though status is completed
+    await Promise.resolve();
     expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
     dispose();
     host.remove();

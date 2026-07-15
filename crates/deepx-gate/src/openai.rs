@@ -16,7 +16,7 @@ use super::types::{ProviderConfig, StreamEvent};
 /// interval, `read()` returns a `TimedOut` error so we can check the cancel
 /// flag and retry. This makes cancel responsive even during the "thinking"
 /// delay before the first token arrives.
-const SSE_READ_TIMEOUT: Duration = Duration::from_millis(200);
+const SSE_READ_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Check whether the cancel flag is set.
 fn is_cancelled(cancel: Option<&Arc<AtomicBool>>) -> bool {
@@ -232,7 +232,7 @@ fn stream_sse(
 ) -> anyhow::Result<()> {
     let mut reader = resp.into_body().into_reader();
     let mut sse_buf = String::new();
-    let mut byte_buf = vec![0u8; 4096];
+    let mut byte_buf = vec![0u8; 512];
 
     let mut text_buf = String::new();
     let mut reasoning_buf = String::new();

@@ -91,6 +91,10 @@ impl Emitter for ChannelEmitter {
         }
     }
     fn emit_delta(&self, event: Agent2Ui) {
+        // Use blocking send — streaming deltas (RoundDelta, ToolCallPreview)
+        // carry state-accumulating data. Every delta must be delivered because
+        // the downstream reducer appends to round.thinking / round.answer /
+        // round.toolCalls. Dropping a delta silently corrupts the render state.
         let _ = self.tx.send(event);
     }
 }
@@ -211,38 +215,23 @@ impl Loop {
         // main loop can exit gracefully.
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut writer = std::io::BufWriter::with_capacity(65536, output);
-                let flush_interval = std::time::Duration::from_millis(2);
+                // Zero-buffer writer: block on recv(), write + flush each
+                // event immediately.  No timeout, no drain batches — every
+                // Agent2Ui event reaches stdout as fast as the OS pipe can
+                // deliver it.  The downstream reader (Tauri registry) picks
+                // up each line without buffering delay.
+                let mut writer = output;
                 loop {
-                    match event_rx.recv_timeout(flush_interval) {
+                    match event_rx.recv() {
                         Ok(event) => {
-                            let json = match serde_json::to_string(&event) {
-                                Ok(j) => j,
-                                Err(e) => {
-                                    log::error!("[AGENT] serialize: {e}");
-                                    continue;
+                            if let Ok(json) = serde_json::to_string(&event) {
+                                if writeln!(writer, "{}", json).is_err() {
+                                    break;
                                 }
-                            };
-                            if writeln!(writer, "{}", json).is_err() {
-                                break;
+                                let _ = writer.flush();
                             }
-                            // Drain backlog without intermediate flushes
-                            while let Ok(event) = event_rx.try_recv() {
-                                if let Ok(json) = serde_json::to_string(&event) {
-                                    if writeln!(writer, "{}", json).is_err() {
-                                        break;
-                                    }
-                                }
-                            }
-                            let _ = writer.flush();
                         }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {
-                            let _ = writer.flush();
-                        }
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            let _ = writer.flush();
-                            break;
-                        }
+                        Err(_) => break,
                     }
                 }
             }));
@@ -706,6 +695,8 @@ impl Loop {
                 // AskUser pending → accept only typed ask lifecycle commands.
                 (Ui2Agent::AskResponse { .. }, YieldReason::AskUser) => {}
                 (Ui2Agent::AskDismiss { .. }, YieldReason::AskUser) => {}
+                // PlanReview pending → accept only plan review decisions.
+                (Ui2Agent::PlanReview { .. }, YieldReason::PlanReview) => {}
                 // Always accepted regardless of suspension reason
                 (Ui2Agent::Cancel, _)
                 | (Ui2Agent::ResumeSession { .. }, _)
@@ -810,6 +801,7 @@ impl Loop {
             Ui2Agent::UserInput { .. }
             | Ui2Agent::AskResponse { .. }
             | Ui2Agent::AskDismiss { .. }
+            | Ui2Agent::PlanReview { .. }
             | Ui2Agent::CreateSession
             | Ui2Agent::ResumeSession { .. }
             | Ui2Agent::NewSession
@@ -946,6 +938,17 @@ impl Loop {
                 &mut ctx,
                 &mut self.session.tool,
                 ask_id,
+            )),
+            Ui2Agent::PlanReview {
+                call_id,
+                approved,
+                message,
+            } => Some(self.session.turn.handle_plan_response(
+                &mut ctx,
+                &mut self.session.tool,
+                &call_id,
+                *approved,
+                &message,
             )),
             Ui2Agent::ToolCall {
                 id,

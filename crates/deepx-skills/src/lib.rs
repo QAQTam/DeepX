@@ -219,14 +219,7 @@ fn should_skip_dir(name: &str) -> bool {
 
 fn parse_metadata(path: &Path, scope: SkillScope) -> Result<ParsedMetadata, String> {
     let raw = read_bounded(path)?;
-    let portable_header = raw
-        .strip_prefix('\u{feff}')
-        .unwrap_or(&raw)
-        .starts_with("---\n");
     let (frontmatter, _) = split_skill_file(&raw)?;
-    let yaml_error = serde_yaml::from_str::<Frontmatter>(frontmatter)
-        .err()
-        .map(|error| format!("invalid YAML frontmatter accepted by compatibility parser: {error}"));
     let parsed = parse_frontmatter(frontmatter)?;
     let name = parsed.name.trim().to_string();
     let description = parsed.description.trim().to_string();
@@ -235,15 +228,6 @@ fn parse_metadata(path: &Path, scope: SkillScope) -> Result<ParsedMetadata, Stri
     }
     let mut warnings =
         validate_standard_fields(path, &name, &description, parsed.compatibility.as_deref());
-    if !portable_header {
-        warnings.push(
-            "legacy [SKILLS] prefix is accepted for compatibility but is not portable; SKILL.md must start with YAML frontmatter"
-                .into(),
-        );
-    }
-    if let Some(error) = yaml_error {
-        warnings.push(error);
-    }
     if name.is_empty() {
         return Err("missing skill name".into());
     }
@@ -318,66 +302,18 @@ fn validate_standard_fields(
 }
 
 fn parse_frontmatter(frontmatter: &str) -> Result<Frontmatter, String> {
-    match serde_yaml::from_str(frontmatter) {
-        Ok(value) => Ok(value),
-        Err(yaml_error) => {
-            let name = extract_yaml_field(frontmatter, "name")
-                .ok_or_else(|| format!("invalid frontmatter: {yaml_error}"))?;
-            let description = extract_yaml_field(frontmatter, "description")
-                .ok_or_else(|| format!("invalid frontmatter: {yaml_error}"))?;
-            Ok(Frontmatter {
-                name,
-                description,
-                license: None,
-                compatibility: None,
-                metadata: BTreeMap::new(),
-                allowed_tools: None,
-            })
-        }
-    }
+    serde_yaml::from_str(frontmatter).map_err(|error| format!("invalid YAML frontmatter: {error}"))
 }
 
-fn extract_yaml_field(input: &str, key: &str) -> Option<String> {
-    let prefix = format!("{key}:");
-    let lines = input.lines().collect::<Vec<_>>();
-    let index = lines
-        .iter()
-        .position(|line| line.trim_start().starts_with(&prefix))?;
-    let rest = lines[index].trim_start().strip_prefix(&prefix)?.trim();
-    if !matches!(rest, ">" | ">-" | "|" | "|-") {
-        return (!rest.is_empty()).then(|| rest.trim_matches(['\'', '"']).to_string());
-    }
-    let literal = rest.starts_with('|');
-    let mut parts = Vec::new();
-    for line in lines.iter().skip(index + 1) {
-        if !line.trim().is_empty() && !line.starts_with([' ', '\t']) {
-            break;
-        }
-        parts.push(line.trim_start());
-    }
-    Some(if literal {
-        parts.join("\n")
-    } else {
-        parts.join(" ")
-    })
-}
-
-/// 兼容旧 DeepX skill 顶部的 `[SKILLS]` 标记，但不接受任意前置文本。
+/// Parse the YAML frontmatter boundary. Only `---\n` start is accepted;
+/// legacy `[SKILLS]` prefix and any other content before the frontmatter
+/// are rejected so that incompatible skills are skipped.
 fn split_skill_file(raw: &str) -> Result<(&str, &str), String> {
     let normalized = raw.strip_prefix('\u{feff}').unwrap_or(raw);
-    let start = if normalized.starts_with("---\n") {
-        0
-    } else {
-        let marker = normalized.find("---\n").ok_or("missing YAML frontmatter")?;
-        let prefix = normalized
-            .get(..marker)
-            .ok_or("invalid YAML frontmatter boundary")?
-            .trim();
-        if !prefix.eq_ignore_ascii_case("[skills]") {
-            return Err("unexpected content before YAML frontmatter".into());
-        }
-        marker
-    };
+    if !normalized.starts_with("---\n") {
+        return Err("SKILL.md must start with YAML frontmatter (---)".into());
+    }
+    let start = 0;
     let after_open = start + 4;
     let remainder = normalized
         .get(after_open..)
@@ -534,16 +470,15 @@ pub fn render_catalog(catalog: &SkillCatalog) -> String {
         return String::new();
     }
     let mut output = String::from(
-        "[SKILLS]\nSkills use progressive disclosure. Match a task against name and description only; do not infer the body. For an implicit match, call `skills` with action=`activate` and the exact name before acting. A user `$skill-name` mention is injected by the host directly. Load bundled files on demand with `skills` action=`resource`, the same name, and a manifest-relative path; do not use generic `read` for skill resources. Use action=`list` only for catalog diagnostics and action=`validate` only for strict portability checks.\n\n<available_skills>\n",
+        "Skills use progressive disclosure. Match a task against name and description only; do not infer the body. For an implicit match, call `skills` with action=`activate` and the exact name before acting. A user `$skill-name` mention is injected by the host directly. Load bundled files on demand with `skills` action=`resource`, the same name, and a manifest-relative path; do not use generic `read` for skill resources. Use action=`list` only for catalog diagnostics and action=`validate` only for strict portability checks.\n\n<available_skills>\n",
     );
     let mut omitted = 0usize;
     for skill in &catalog.skills {
         let description: String = skill.description.chars().take(600).collect();
         let line = format!(
-            "- {}: {} (source: {})\n",
+            "- {}: {}\n",
             skill.name,
             description.replace(['\r', '\n'], " "),
-            skill.path.display()
         );
         if output.chars().count() + line.chars().count() > MAX_CATALOG_CHARS {
             omitted += 1;
@@ -687,28 +622,15 @@ mod tests {
     }
 
     #[test]
-    fn discovers_nested_and_lenient_legacy_header() {
+    fn rejects_legacy_skills_prefix() {
         let temp = tempfile::tempdir().unwrap();
-        write_skill(
+        let path = write_skill(
             &temp.path().join("skills"),
             "deepx/debug",
             "[SkILLS]\n---\nname: deepx-debug\ndescription: Debug failures.\n---\n\n# Full body",
         );
-        let catalog = discover_roots(&[(temp.path().join("skills"), SkillScope::Project)]);
-        assert_eq!(catalog.skills.len(), 1);
-        assert_eq!(catalog.skills[0].name, "deepx-debug");
-        assert!(
-            catalog
-                .diagnostics
-                .iter()
-                .any(|item| item.message.contains("legacy [SKILLS] prefix"))
-        );
-        assert!(
-            load(&catalog.skills[0])
-                .unwrap()
-                .body
-                .contains("# Full body")
-        );
+        // Legacy [SKILLS] prefix is no longer accepted — the skill must be skipped.
+        assert!(parse_metadata(&path, SkillScope::Project).is_err());
     }
 
     #[test]
@@ -717,7 +639,7 @@ mod tests {
         let path = write_skill(
             temp.path(),
             "windows",
-            "[SKILLS]\r\n---\r\nname: windows\r\ndescription: Windows lines.\r\n---\r\n\r\nFull body",
+            "---\r\nname: windows\r\ndescription: Windows lines.\r\n---\r\n\r\nFull body",
         );
         let metadata = parse_metadata(&path, SkillScope::Project).unwrap().metadata;
         assert_eq!(load(&metadata).unwrap().body, "Full body");
@@ -840,20 +762,15 @@ mod tests {
     }
 
     #[test]
-    fn strict_validation_rejects_compatibility_parsed_invalid_yaml() {
+    fn invalid_yaml_frontmatter_is_rejected() {
         let temp = tempfile::tempdir().unwrap();
         let path = write_skill(
             temp.path(),
             "fallback",
             "---\nname: fallback\ndescription: [invalid yaml\n---\n\nBody",
         );
-        let parsed = parse_metadata(&path, SkillScope::Project).unwrap();
-        assert_eq!(parsed.metadata.name, "fallback");
-        assert!(
-            validate_file(&path)
-                .iter()
-                .any(|item| item.message.contains("invalid YAML frontmatter"))
-        );
+        // Invalid YAML is no longer accepted via compatibility parser.
+        assert!(parse_metadata(&path, SkillScope::Project).is_err());
     }
 
     #[test]

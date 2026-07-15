@@ -1,4 +1,3 @@
-[SKILLS]
 ---
 name: deepx-refactor-workflow
 description: DeepX 架构级重构的工作流规划参考。当 qaqtam 计划或正在进行跨模块/跨 crate 的结构性重构时必须使用此 skill：拆分或合并 crate、改变模块依赖方向、迁移状态存储方式（如 struct 字段改事件流）、大范围重命名或接口变更、"这次改动会牵连很多文件"类的任务。与 deepx-arch 的区别：deepx-arch 回答"这个改动该怎么设计"（架构决策），本 skill 回答"这个改动该怎么分阶段落地、如何不搞崩现有功能"（执行流程）。两者常配合使用：先用 deepx-arch 定方案，再用本 skill 定步骤。

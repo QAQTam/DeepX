@@ -1,15 +1,15 @@
-//! new/ — experimental new Loop architecture (Ring model).
+//! new/ — production Ring-architecture Loop (primary).
 //!
-//! This module contains the design sketches for the refactored Loop.
-//! It is NOT connected to the main code path yet — it serves as
-//! the architecture blueprint for the migration.
+//! This loop replaces the old monolithic `Loop` with a pluggable Engine model.
+//! Each Engine implements the [`Engine`] trait; the Loop dispatches `Ui2Agent`
+//! commands by iterating engines in a try-handle chain.
 //!
 //! ## Module map
 //!
 //! | Module              | Role                                   |
 //! |---------------------|----------------------------------------|
 //! | `types.rs`          | Shared types: Outcome, RingContext, CancelToken |
-//! | `loop_core.rs`      | Loop dispatcher (thin, ~150L target)   |
+//! | `loop_core.rs`      | Loop dispatcher                        |
 //! | `engine_turn.rs`    | TurnEngine: gate→tools cycle           |
 //! | `engine_tool.rs`    | ToolEngine: admit→execute→result       |
 //! | `engine_session.rs` | SessionEngine: create/resume/reload    |
@@ -25,20 +25,17 @@
 //! - `ContinueTurn` → re-enter TurnEngine for another gate lap
 //! - `YieldToUser` → pause, wait for PermissionResponse or UserInput
 //! - `TurnComplete` → emit Done, return to Idle
+//! - `TurnAborted` → emit Cancelled + Done, return to Idle
 //! - `Handled` → return to Idle
 //! - `Error` → emit error, return to Idle
 //! - `Shutdown` → exit loop
 //!
-//! ## Migration strategy
+//! ## Extension
 //!
-//! 1. Complete the design sketches in this module
-//! 2. Implement types.rs + loop_core.rs as standalone (no dependencies on old Loop)
-//! 3. Implement each Engine one at a time, testing in isolation
-//! 4. Wire up `new_ipc()` and `run()` to match the old external API exactly
-//! 5. Swap `lib.rs` to re-export from `new/` instead of old code
-//! 6. Delete old `lib.rs` methods, `turn.rs`, `tool_exec.rs`, `permission.rs`,
-//!    `compact.rs`, `conflict.rs` (keep `agent.rs`, `lifecycle.rs`, `notification.rs`,
-//!    `toast_com.rs`, `dashboard.rs`, `logger.rs`, `util.rs`)
+//! To add a new feature:
+//! 1. Create a new struct implementing `Engine`
+//! 2. Add `Box::new(YourEngine::new())` to the engines vec in `Loop::new_ipc()`
+//! 3. Done — no changes to `Loop::dispatch()` needed
 
 pub mod engine;
 pub mod engine_compact;

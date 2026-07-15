@@ -14,26 +14,56 @@ afterEach(() => { dispose?.(); dispose = undefined; document.body.innerHTML = ""
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("PlanReviewPanel", () => {
-  it("approves every item then continues the agent", async () => {
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "cmd_read_plan") return JSON.stringify([
-        { id: "P1", title: "检查接线", status: "pending", comment: "", actions: [] },
-        { id: "P2", title: "完成实现", status: "approved", comment: "", actions: [] },
-      ]) as never;
-      return undefined as never;
-    });
+  it("shows plan content and renders approve/reject buttons", async () => {
     const host = document.createElement("div");
     document.body.append(host);
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
     const onClose = vi.fn();
-    dispose = render(() => <PlanReviewPanel seed="seed-1" onClose={onClose} />, host);
+    dispose = render(() => (
+      <PlanReviewPanel
+        seed="seed-1"
+        callId="call-1"
+        planContent="## PLAN\n- [ ] P1: test item"
+        onApprove={onApprove}
+        onReject={onReject}
+        onClose={onClose}
+      />
+    ), host);
     await flush();
 
-    host.querySelector<HTMLButtonElement>(".plan-review-actions .interaction-approve")!.click();
-    await flush();
+    expect(host.textContent).toContain("P1");
+    expect(host.querySelector(".interaction-approve")).not.toBeNull();
+    expect(host.querySelector(".interaction-reject")).not.toBeNull();
+  });
+
+  it("calls onApprove and cmd_plan_review when approved", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined as never);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    const onClose = vi.fn();
+    dispose = render(() => (
+      <PlanReviewPanel
+        seed="seed-1"
+        callId="call-1"
+        planContent="test plan"
+        onApprove={onApprove}
+        onReject={onReject}
+        onClose={onClose}
+      />
+    ), host);
     await flush();
 
-    expect(invoke).toHaveBeenCalledWith("cmd_plan_action", expect.objectContaining({ itemId: "P1", action: "approve" }));
-    expect(invoke).toHaveBeenCalledWith("cmd_send_message", expect.objectContaining({ seed: "seed-1" }));
-    expect(onClose).toHaveBeenCalledOnce();
+    host.querySelector<HTMLButtonElement>(".interaction-approve")!.click();
+    await flush();
+
+    expect(invoke).toHaveBeenCalledWith("cmd_plan_review", expect.objectContaining({
+      seed: "seed-1",
+      callId: "call-1",
+      approved: true,
+    }));
+    expect(onApprove).toHaveBeenCalledOnce();
   });
 });

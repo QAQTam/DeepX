@@ -1,16 +1,26 @@
 import type { RawTurn } from "../store/rawSession";
 import { aggregateProcessItems, type ProcessItem } from "./processAggregation";
 
+export type RoundViewModel = {
+  roundNum: number;
+  isFinal: boolean;
+  processItems: ProcessItem[];
+  answer?: string;
+};
+
 export type TurnViewModel = {
   turnId: string;
   userPrompt: string;
-  process: {
-    status: RawTurn["status"];
-    elapsedMs?: number;
-    items: ProcessItem[];
-  };
-  stageAnswers: Array<{ roundNum: number; markdown: string }>;
-  finalAnswer?: { markdown: string; streaming: boolean };
+  status: string;
+  /** Total elapsed time across all rounds, or undefined until complete. */
+  elapsedMs?: number;
+  rounds: RoundViewModel[];
+  /** Resolved interactions (ask/plan), shown at turn level. */
+  interactions: ProcessItem[];
+  /** Total tokens used in this turn, from API usage info. */
+  totalTokens?: number;
+  /** Approximate tokens per second (total tokens / total elapsed). */
+  tokensPerSec?: number;
 };
 
 export function toolFamily(name: string): string {
@@ -22,9 +32,11 @@ export function toolFamily(name: string): string {
 }
 
 export function projectTurn(rawTurn: RawTurn): TurnViewModel {
-  const items: ProcessItem[] = [];
+  const rounds: RoundViewModel[] = [];
 
   for (const round of rawTurn.rounds) {
+    const items: ProcessItem[] = [];
+
     if (round.thinking.trim()) {
       items.push({
         kind: "reasoning",
@@ -46,11 +58,20 @@ export function projectTurn(rawTurn: RawTurn): TurnViewModel {
         success: result?.success,
       });
     }
+
+    rounds.push({
+      roundNum: round.roundNum,
+      isFinal: round.isFinal,
+      processItems: aggregateProcessItems(items),
+      answer: round.answer.trim() || undefined,
+    });
   }
 
+  // Resolved interactions (ask/plan) belong to the turn, not a specific round.
+  const interactions: ProcessItem[] = [];
   for (const interaction of rawTurn.interactions) {
     if (interaction.kind === "permission") continue;
-    items.push({
+    interactions.push({
       kind: "interaction",
       id: interaction.id,
       label: interaction.kind,
@@ -58,27 +79,23 @@ export function projectTurn(rawTurn: RawTurn): TurnViewModel {
     });
   }
 
-  const answeredRounds = rawTurn.rounds.filter(round => round.answer.trim());
-  const finalRound = answeredRounds[answeredRounds.length - 1];
-  const stageAnswers = answeredRounds.slice(0, -1).map(round => ({
-    roundNum: round.roundNum,
-    markdown: round.answer,
-  }));
   const elapsedMs = rawTurn.startedAt !== undefined && rawTurn.endedAt !== undefined
     ? Math.max(0, rawTurn.endedAt - rawTurn.startedAt)
+    : undefined;
+
+  const totalTokens = rawTurn.usage?.total_tokens;
+  const tokensPerSec = totalTokens !== undefined && elapsedMs !== undefined && elapsedMs > 0
+    ? Math.round(totalTokens / (elapsedMs / 1000))
     : undefined;
 
   return {
     turnId: rawTurn.turnId,
     userPrompt: rawTurn.userText,
-    process: {
-      status: rawTurn.status,
-      elapsedMs,
-      items: aggregateProcessItems(items),
-    },
-    stageAnswers,
-    finalAnswer: finalRound?.answer.trim()
-      ? { markdown: finalRound.answer, streaming: rawTurn.status === "running" }
-      : undefined,
+    status: rawTurn.status,
+    elapsedMs,
+    rounds,
+    interactions,
+    totalTokens,
+    tokensPerSec,
   };
 }
