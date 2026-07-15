@@ -28,10 +28,10 @@ export interface AskState {
   show: boolean;
 }
 
-export function createChatStore(seed: string) {
+export function createChatStore(seed: string, initialStreaming = false) {
   const [turns, setTurns] = createStore<Turn[]>([]);
-  const [sessionInfo, setSessionInfo] = createStore<SessionInfo>({ seed: "", model: "", context_tokens: 0, context_limit: 0, total_tokens: 0, prompt_cache_hit: 0, prompt_cache_miss: 0 });
-  const [isStreaming, setIsStreaming] = createSignal(false);
+  const [sessionInfo, setSessionInfo] = createStore<SessionInfo>({ seed, model: "", context_tokens: 0, context_limit: 0, total_tokens: 0, prompt_cache_hit: 0, prompt_cache_miss: 0 });
+  const [isStreaming, setIsStreaming] = createSignal(initialStreaming);
   const [inputDisabled, setInputDisabled] = createSignal(false);
   const [hasMore, setHasMore] = createSignal(false);
   const [workspace, setWorkspace] = createSignal("");

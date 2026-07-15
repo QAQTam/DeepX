@@ -97,4 +97,13 @@ describe("ask_user frontend lifecycle", () => {
       dispose();
     });
   });
+
+  it("initializes session identity and streaming state before any backend restore event", () => {
+    createRoot(dispose => {
+      const chat = createChatStore("seed-reload", true);
+      expect(chat.sessionInfo.seed).toBe("seed-reload");
+      expect(chat.isStreaming()).toBe(true);
+      dispose();
+    });
+  });
 });

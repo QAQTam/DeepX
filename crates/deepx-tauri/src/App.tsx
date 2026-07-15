@@ -2,7 +2,7 @@ import { createSignal, onMount, onCleanup, Show, For, Switch, Match } from "soli
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { createChatStore, type ToolCallDef, type RoundBlock, type ToolResultDef, type SessionMeta } from "./store/chat";
+import { createChatStore, type SessionMeta } from "./store/chat";
 import type { Agent2Ui } from "@/lib/types";
 import type { SlashCommand } from "./components/SlashMenu";
 import ChatView from "./components/ChatView";
@@ -17,8 +17,16 @@ import "./styles/changelog.css";
 import "./styles/skills.css";
 import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
 import { createPermissionQueue, type QueuedPermission } from "./store/permissionQueue";
-import { createRawSessionState, reduceAgentEvent, resolvePendingInteraction } from "./store/sessionEventReducer";
+import { createRawSessionState, resolvePendingInteraction } from "./store/sessionEventReducer";
 import type { RawSessionState } from "./store/rawSession";
+import {
+  createSessionEventRuntime,
+  loadReloadSnapshot,
+  removeReloadSnapshot,
+  type SessionEventRuntime,
+} from "./store/sessionEventRuntime";
+import { cleanupViewResources } from "./runtime/viewLifecycle";
+import { createSessionReplayBuffer } from "./runtime/sessionReplayBuffer";
 import ChangelogModal from "./components/ChangelogModal";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
 import en from "./i18n/en";
@@ -94,8 +102,7 @@ export default function App() {
       approved,
       trustFolder,
     });
-    const raw = rawSessions.get(permission.seed);
-    raw?.[1](state => resolvePendingInteraction(
+    rawRuntimeForSeed(permission.seed)?.update(state => resolvePendingInteraction(
       state,
       permission.request.tool_call_id,
       approved ? "approved" : "rejected",
@@ -121,34 +128,82 @@ export default function App() {
   // Registry of open session ChatStores
   const chatStores = new Map<string, ChatStore>();
   const rawSessions = new Map<string, RawStore>();
+  const rawEventRuntimes = new Map<string, SessionEventRuntime>();
+  const sessionReplay = createSessionReplayBuffer();
   // Per-seed unlisten functions for event listeners
   const unlistenMap = new Map<string, () => void>();
   // Pending store creations — deduplicate concurrent getOrCreateChatStore calls
   const pendingStores = new Map<string, Promise<ChatStore>>();
   let unlistenTheme: (() => void) | undefined;
 
+  function rawRuntimeForSeed(seed: string): SessionEventRuntime | undefined {
+    return rawEventRuntimes.get(seed)
+      ?? [...rawEventRuntimes.values()].find(runtime => runtime.current().seed === seed);
+  }
+
+  function listenerSeedForSession(seed: string): string | undefined {
+    const runtime = rawRuntimeForSeed(seed);
+    if (!runtime) return unlistenMap.has(seed) ? seed : undefined;
+    for (const [listenerSeed, candidate] of rawEventRuntimes) {
+      if (candidate === runtime && unlistenMap.has(listenerSeed)) return listenerSeed;
+    }
+    return undefined;
+  }
+
   /** Get or create a ChatStore for the given seed. Also sets up event listener.
    * Returns a Promise that resolves when the listener is ready.
    * Deduplicates concurrent calls for the same seed. */
   async function getOrCreateChatStore(seed: string): Promise<ChatStore> {
-    let store = chatStores.get(seed);
-    if (store) return store;
-    // If a creation is already in-flight for this seed, wait for it
     const pending = pendingStores.get(seed);
     if (pending) return pending;
+    const store = chatStores.get(seed);
+    if (store && listenerSeedForSession(seed)) return store;
+
+    if (store) {
+      const staleRuntime = rawRuntimeForSeed(seed);
+      staleRuntime?.dispose();
+      for (const [listenerSeed, candidate] of rawEventRuntimes) {
+        if (candidate === staleRuntime) rawEventRuntimes.delete(listenerSeed);
+      }
+      chatStores.delete(seed);
+      rawSessions.delete(seed);
+    }
     // Start creation and store the promise for deduplication
     const creation = (async () => {
-      const s = createChatStore(seed);
+      const initialRaw = loadReloadSnapshot(sessionStorage, seed)
+        ?? createRawSessionState(seed);
+      const lastTurn = initialRaw.turns[initialRaw.turns.length - 1];
+      const restoredStatus = lastTurn?.status;
+      const s = createChatStore(
+        seed,
+        restoredStatus === "running" || restoredStatus === "waiting",
+      );
       chatStores.set(seed, s);
-      rawSessions.set(seed, createSignal(createRawSessionState(seed)));
+      const rawStore = createSignal(initialRaw);
+      rawSessions.set(seed, rawStore);
+      const runtime = createSessionEventRuntime({
+        initialState: initialRaw,
+        commit: next => rawStore[1](next),
+        storage: sessionStorage,
+      });
+      rawEventRuntimes.set(seed, runtime);
       // Subscribe to per-seed agent events
       const eventName = `agent-${seed}-event`;
-      await listen<Record<string, unknown>>(eventName, (e) => {
-        handleAgentEvent(s, e.payload, seed);
-      }).then(unlisten => {
+      try {
+        const unlisten = await listen<Record<string, unknown>>(eventName, (e) => {
+          sessionReplay.handleLive(seed, e.payload, event => {
+            handleAgentEvent(s, event, seed);
+          });
+        });
         unlistenMap.set(seed, unlisten);
-      }).catch(console.error);
-      return s;
+        return s;
+      } catch (error) {
+        runtime.dispose();
+        rawEventRuntimes.delete(seed);
+        rawSessions.delete(seed);
+        chatStores.delete(seed);
+        throw error;
+      }
     })();
     pendingStores.set(seed, creation);
     try {
@@ -173,15 +228,18 @@ export default function App() {
 
   /** Handle incoming agent events for a specific store. */
   function handleAgentEvent(chat: ChatStore, p: Record<string, unknown>, listenerSeed: string) {
-    const raw = rawSessions.get(listenerSeed);
-    if (raw) raw[1](current => reduceAgentEvent(current, p as Agent2Ui));
+    const event = p as Agent2Ui;
+    rawEventRuntimes.get(listenerSeed)?.push(event);
     switch (p.type as string) {
       case "ready": break;
       case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
-      case "round_delta": chat.handleRoundDelta((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.kind ?? "") as string, (p.delta ?? "") as string); break;
-      case "tool_call_preview": console.log("[APP_EVENT] tool_call_preview received", { id: p.id, name: p.name }); chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
-      case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined, p.is_final as boolean | undefined); break;
-      case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
+      case "round_delta":
+      case "tool_call_preview":
+      case "round_complete":
+      case "tool_results":
+      case "exec_progress":
+      case "tool_exec_delta":
+        break;
       case "ask_user": {
         chat.showAskDialog({ ask_id: p.ask_id, mode: p.mode, questions: p.questions });
         break;
@@ -220,6 +278,11 @@ export default function App() {
             rawSessions.delete(listenerSeed);
             rawSessions.set(evtSeed, rawStore);
           }
+          const runtime = rawEventRuntimes.get(listenerSeed);
+          if (runtime) {
+            removeReloadSnapshot(sessionStorage, listenerSeed);
+            runtime.flush();
+          }
           setActiveSeed(evtSeed);
         }
         refreshSessions();
@@ -238,9 +301,7 @@ export default function App() {
           if (evtSeed === activeSeed()) { setWorkspaceDraft(ws); localStorage.setItem("deepx:workspace", ws); }
         }).catch(() => {});
         const turnsArr = p.turns as any[] | undefined;
-        if (turnsArr && turnsArr.length > 0) {
-          chat.loadTurnsFromRestore(turnsArr);
-        } else if (!turnsArr || turnsArr.length === 0) {
+        if (!turnsArr || turnsArr.length === 0) {
           // Session exists but has no messages yet (freshly created).
           // This is normal — show empty chat, not an error.
           console.log("[App] session_restored with 0 turns — empty session");
@@ -250,7 +311,7 @@ export default function App() {
         // Load dashboard data directly from disk (no agent dependency)
         loadDashboardFromDisk(evtSeed, chat);
       } break;
-      case "more_turns": if (p.turns) { chat.prependTurns(p.turns as any[]); chat.setHasMore(!!p.has_more); } break;
+      case "more_turns": chat.setHasMore(!!p.has_more); break;
       case "dashboard": chat.handleDashboard(p); break;
       case "done": chat.handleDone(); break;
       case "cancelled": chat.handleCancelled(); permissionQueue.clearSeed(listenerSeed); break;
@@ -294,13 +355,6 @@ export default function App() {
         });
         break;
       }
-
-      case "exec_progress": chat.handleExecProgress(
-        (p.tool_call_id ?? "") as string,
-        (p.stream ?? "stdout") as "stdout" | "stderr",
-        (p.seq ?? 0) as number,
-        (p.chunk ?? "") as string,
-      ); break;
     }
   }
 
@@ -324,35 +378,51 @@ export default function App() {
 
   async function resumeSession(seed: string) {
     console.log("[App] resumeSession called, seed:", seed);
-    try {
-      const existing = chatStores.get(seed);
-      // If already open and fully initialized, just switch — don't clear or re-invoke
-      if (existing && existing.sessionInfo.seed) {
-        setActiveSeed(seed);
-        setHasChosenSession(true);
-        setView("chat");
-        localStorage.setItem(LS_KEY, seed);
-        // Restore per-session workspace
-        try {
-          const ws = await invoke<string>("cmd_get_workspace", { seed });
-          existing.setWorkspace(ws);
-          setWorkspaceDraft(ws);
-          localStorage.setItem("deepx:workspace", ws);
-        } catch (_) {}
-        return;
-      }
-      const chat = await getOrCreateChatStore(seed);
-      console.log("[App] invoking cmd_resume_session...");
-      await invoke("cmd_resume_session", { seed });
-      console.log("[App] cmd_resume_session returned");
-      // Only commit UI state after successful backend call
-      localStorage.setItem(LS_KEY, seed);
+    const existing = chatStores.get(seed);
+    const existingListenerSeed = listenerSeedForSession(seed);
+    if (existing && existingListenerSeed) {
       setActiveSeed(seed);
       setHasChosenSession(true);
       setView("chat");
-    } catch (e) {
-      console.error("[App] resumeSession error:", e);
-      // Reset to home on failure so user isn't stuck in blank chat view
+      localStorage.setItem(LS_KEY, seed);
+      try {
+        const ws = await invoke<string>("cmd_get_workspace", { seed });
+        existing.setWorkspace(ws);
+        setWorkspaceDraft(ws);
+        localStorage.setItem("deepx:workspace", ws);
+      } catch (_) {}
+      return;
+    }
+
+    sessionReplay.begin(seed);
+    let chat: ChatStore | undefined;
+    try {
+      chat = await getOrCreateChatStore(seed);
+      await invoke("cmd_resume_session", { seed });
+      let replayed: Record<string, unknown>[] = [];
+      try {
+        replayed = await invoke<Record<string, unknown>[]>(
+          "cmd_replay_session_events",
+          { seed },
+        );
+      } catch (replayError) {
+        console.warn("[App] lifecycle replay unavailable:", replayError);
+      }
+      sessionReplay.complete(seed, replayed, event => {
+        handleAgentEvent(chat!, event, seed);
+      });
+      const activeSessionSeed = chat.sessionInfo.seed || seed;
+      localStorage.setItem(LS_KEY, activeSessionSeed);
+      setActiveSeed(activeSessionSeed);
+      setHasChosenSession(true);
+      setView("chat");
+    } catch (error) {
+      if (chat) {
+        sessionReplay.abort(seed, event => handleAgentEvent(chat!, event, seed));
+      } else {
+        sessionReplay.abort(seed, () => {});
+      }
+      console.error("[App] resumeSession error:", error);
       setHasChosenSession(false);
       setView("home");
     }
@@ -361,14 +431,38 @@ export default function App() {
   async function deleteSession(seed: string) {
     try {
       await invoke("cmd_delete_session", { seed });
-      if (activeSeed() === seed) {
-        const chat = chatStores.get(seed);
-        if (chat) chat.clear();
-        // Clean up event listener
+      const chat = chatStores.get(seed);
+      chat?.clear();
+
+      const runtime = rawRuntimeForSeed(seed);
+      const runtimeSeed = runtime?.current().seed;
+      runtime?.dispose();
+      for (const [listenerSeed, candidate] of rawEventRuntimes) {
+        if (candidate !== runtime) continue;
+        const unlisten = unlistenMap.get(listenerSeed);
+        if (unlisten) {
+          try { unlisten(); } catch (_) {}
+        }
+        unlistenMap.delete(listenerSeed);
+        rawEventRuntimes.delete(listenerSeed);
+        sessionReplay.abort(listenerSeed, () => {});
+        removeReloadSnapshot(sessionStorage, listenerSeed);
+      }
+      if (!runtime) {
         const unlisten = unlistenMap.get(seed);
-        if (unlisten) { unlisten(); unlistenMap.delete(seed); }
-        chatStores.delete(seed);
-        rawSessions.delete(seed);
+        if (unlisten) {
+          try { unlisten(); } catch (_) {}
+        }
+        unlistenMap.delete(seed);
+        sessionReplay.abort(seed, () => {});
+      }
+      if (runtimeSeed) removeReloadSnapshot(sessionStorage, runtimeSeed);
+      removeReloadSnapshot(sessionStorage, seed);
+      permissionQueue.clearSeed(seed);
+      chatStores.delete(seed);
+      rawSessions.delete(seed);
+
+      if (activeSeed() === seed) {
         localStorage.removeItem(LS_KEY);
         setActiveSeed("");
         setHasChosenSession(false);
@@ -380,11 +474,9 @@ export default function App() {
   async function loadMoreTurns() {
     const seed = activeSeed();
     if (!seed) return;
-    const chat = activeChat();
-    if (!chat) return;
-    const ts = chat.turns;
-    if (ts.length === 0) return;
-    const firstId = ts[0].turn_id;
+    const raw = activeRawSession();
+    const firstId = raw?.turns[0]?.turnId;
+    if (!firstId) return;
     try { await invoke("cmd_load_more_turns", { seed, beforeTurnId: firstId }); } catch (e) { console.error(e); }
   }
 
@@ -508,23 +600,14 @@ export default function App() {
   });
 
   onCleanup(() => {
-    // Unregister all event listeners
-    for (const [seed, unlisten] of unlistenMap) {
-      try { unlisten(); } catch (_) {}
-    }
+    cleanupViewResources(
+      rawEventRuntimes.values(),
+      unlistenMap.values(),
+      unlistenTheme,
+    );
+    rawEventRuntimes.clear();
     unlistenMap.clear();
-    unlistenTheme?.();
-    // Close all open sessions — await all to prevent lock contention
-    // with the next page load's cmd_resume_session.
-    const closePromises: Promise<void>[] = [];
-    for (const seed of chatStores.keys()) {
-      closePromises.push(
-        invoke("cmd_close_session", { seed }).then(() => {}).catch(() => {})
-      );
-    }
-    // Fire-and-forget but stored so cleanup runs before page fully unloads.
-    // Tauri's on_window_close can await these if needed.
-    Promise.allSettled(closePromises);
+    sessionReplay.clear();
   });
 
   const t = () => i18n.t() ?? en;
@@ -534,10 +617,9 @@ export default function App() {
       case "new": newSession(); break;
       case "compact": invoke("cmd_compact", { seed: activeSeed() }).catch(console.error); break;
       case "undo": {
-        const chat = activeChat();
-        if (chat) {
-          const turns = chat.turns;
-          if (turns.length > 0) chat.undoTurn(turns[turns.length - 1].turn_id);
+        const turns = activeRawSession()?.turns ?? [];
+        if (turns.length > 0) {
+          void activeChat()?.undoTurn(turns[turns.length - 1]!.turnId);
         }
         break;
       }
