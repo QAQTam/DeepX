@@ -72,7 +72,6 @@ describe("sessionEventReducer", () => {
     const lifecycleEvents: Agent2Ui[] = [
       { type: "ready" },
       { type: "pong" },
-      { type: "plan_changed" },
       { type: "done" },
       { type: "shutdown_ack" },
     ];
@@ -81,5 +80,36 @@ describe("sessionEventReducer", () => {
       createRawSessionState("seed-a"),
     );
     expect(final.seed).toBe("seed-a");
+  });
+
+  it("tracks plan review as a waiting interaction and resolves it", () => {
+    let state = createRawSessionState("seed-a");
+    state = reduceAgentEvent(state, {
+      type: "turn_start", turn_id: "t-plan", user_text: "plan",
+    }, 100);
+    state = reduceAgentEvent(state, {
+      type: "plan_submitted", call_id: "plan-1", plan_content: "# Plan",
+    }, 110);
+
+    expect(state.turns[0].status).toBe("waiting");
+    expect(state.pendingInteraction).toEqual({ kind: "plan", id: "plan-1" });
+
+    state = reduceAgentEvent(state, {
+      type: "plan_resolved", call_id: "plan-1", approved: true,
+    }, 120);
+
+    expect(state.turns[0].status).toBe("running");
+    expect(state.pendingInteraction).toBeNull();
+    expect(state.turns[0].interactions[state.turns[0].interactions.length - 1]).toMatchObject({
+      id: "plan-1", kind: "plan", resolution: "approved",
+    });
+  });
+
+  it("does not duplicate consecutive notices when lifecycle events are replayed", () => {
+    let state = createRawSessionState("seed-a");
+    const event = { type: "error" as const, message: "agent exited" };
+    state = reduceAgentEvent(state, event, 100);
+    state = reduceAgentEvent(state, event, 110);
+    expect(state.notices).toHaveLength(1);
   });
 });

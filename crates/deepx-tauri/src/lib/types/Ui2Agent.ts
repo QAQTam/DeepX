@@ -17,7 +17,15 @@ trust_folder: boolean, } | { "type": "ask_response",
 /**
  * Matches the ask_id from Agent2Ui::AskUser.
  */
-ask_id: string, answers: Array<AskAnswer>, } | { "type": "ask_dismiss", ask_id: string, } | { "type": "unload_skill",
+ask_id: string, answers: Array<AskAnswer>, } | { "type": "ask_dismiss", ask_id: string, } | { "type": "plan_review",
+/**
+ * Matches the call_id of the plan_submit tool call.
+ */
+call_id: string, approved: boolean,
+/**
+ * Optional rejection reason.
+ */
+message: string, } | { "type": "unload_skill",
 /**
  * Skill name (must match the name field in SKILL.md frontmatter).
  */

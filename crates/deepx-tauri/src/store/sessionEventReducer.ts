@@ -88,6 +88,17 @@ function lastTurnId(state: RawSessionState): string | undefined {
   return state.turns[state.turns.length - 1]?.turnId;
 }
 
+function appendNoticeOnce(
+  state: RawSessionState,
+  notice: RawSessionState["notices"][number],
+): RawSessionState {
+  const previous = state.notices[state.notices.length - 1];
+  if (previous?.level === notice.level && previous.message === notice.message) {
+    return state;
+  }
+  return { ...state, notices: [...state.notices, notice] };
+}
+
 function closePendingInteraction(
   state: RawSessionState,
   id: string,
@@ -253,10 +264,11 @@ export function reduceAgentEvent(
       return { ...createRawSessionState(event.seed), session: { ...state.session, ready: true } };
     case "error": {
       const turnId = lastTurnId(state);
-      const next = {
-        ...state,
-        notices: [...state.notices, { level: "error", message: event.message, at: now }],
-      };
+      const next = appendNoticeOnce(state, {
+        level: "error",
+        message: event.message,
+        at: now,
+      });
       return turnId ? updateTurn(next, turnId, turn => ({ ...turn, status: "failed", endedAt: now })) : next;
     }
     case "tool_notice":
@@ -319,10 +331,28 @@ export function reduceAgentEvent(
     case "ask_resolved":
       return resolvePendingInteraction(state, event.ask_id, event.resolution, now);
     case "ask_rejected":
-      return {
+      return appendNoticeOnce(state, {
+        level: "error",
+        message: event.message,
+        at: now,
+      });
+    case "plan_submitted": {
+      const turnId = lastTurnId(state);
+      const next = {
         ...state,
-        notices: [...state.notices, { level: "error", message: event.message, at: now }],
+        pendingInteraction: { kind: "plan" as const, id: event.call_id },
       };
+      return turnId
+        ? updateTurn(next, turnId, turn => ({ ...turn, status: "waiting" }))
+        : next;
+    }
+    case "plan_resolved":
+      return resolvePendingInteraction(
+        state,
+        event.call_id,
+        event.approved ? "approved" : "rejected",
+        now,
+      );
     case "compact_start":
       return { ...state, compact: { active: true, text: "" } };
     case "compact_delta":
@@ -339,7 +369,6 @@ export function reduceAgentEvent(
     case "done":
     case "shutdown_ack":
     case "pong":
-    case "plan_changed":
     case "audit_record":
       return state;
     default:

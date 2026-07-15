@@ -37,7 +37,19 @@ has_more: boolean, } | { "type": "session_created", seed: string, } | { "type": 
 /**
  * "warn" or "error"
  */
-level: string, } | { "type": "plan_changed" } | { "type": "dashboard", hp_connected: boolean, session_seed: string, tool_calls_total: number, tool_failures: number, current_phase: string, streaming: boolean, dsml_compat_count: number, documents?: Array<DocInfo>, recent_edits?: Array<string>, tasks?: Array<TaskInfo>, session_title?: string, usage?: UsageInfo, context_limit: number, model?: string, } | { "type": "done" } | { "type": "compact_start", turns_total: number, turns_keeping: number, } | { "type": "compact_end", summary_chars: number, turns_compacted: number, } | { "type": "compact_delta", delta: string, } | { "type": "cancelled" } | { "type": "shutdown_ack" } | { "type": "ready" } | { "type": "audit_record", tool_name: string, result_summary: string, success: boolean,
+level: string, } | { "type": "plan_submitted",
+/**
+ * The plan_submit tool-call ID (must match PlanReview.call_id).
+ */
+call_id: string,
+/**
+ * PLAN.md content to display.
+ */
+plan_content: string, } | { "type": "plan_resolved",
+/**
+ * The plan_submit tool-call ID.
+ */
+call_id: string, approved: boolean, } | { "type": "dashboard", hp_connected: boolean, session_seed: string, tool_calls_total: number, tool_failures: number, current_phase: string, streaming: boolean, dsml_compat_count: number, documents?: Array<DocInfo>, recent_edits?: Array<string>, tasks?: Array<TaskInfo>, session_title?: string, usage?: UsageInfo, context_limit: number, model?: string, } | { "type": "done" } | { "type": "compact_start", turns_total: number, turns_keeping: number, } | { "type": "compact_end", summary_chars: number, turns_compacted: number, } | { "type": "compact_delta", delta: string, } | { "type": "cancelled" } | { "type": "shutdown_ack" } | { "type": "ready" } | { "type": "audit_record", tool_name: string, result_summary: string, success: boolean,
 /**
  * ISO-8601 timestamp of the tool invocation.
  */
