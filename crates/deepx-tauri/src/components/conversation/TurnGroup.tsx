@@ -14,20 +14,21 @@ export default function TurnGroup(props: { turn: TurnViewModel }) {
       <UserPromptBubble text={props.turn.userPrompt} />
 
       <Index each={props.turn.rounds}>
-        {(round) => {
-          const hasItems = round().processItems.length > 0;
-          console.log("[TURN_GROUP]", { turnId: props.turn.turnId, roundNum: round().roundNum, processItemsLen: round().processItems.length, hasItems, answerLen: (round().answer ?? '').length, isFinal: round().isFinal });
-          const defaultOpen =
-            !round().answer ||
-            (round().isFinal && status() !== "completed");
+        {(round, index) => {
+          const hasItems = () => round().processItems.length > 0;
+          const isLiveRound = () =>
+            status() === "running" && index === props.turn.rounds.length - 1;
+          const isStage = () => !round().isFinal && !isLiveRound();
+          const defaultOpen = () =>
+            !round().answer || isLiveRound() || status() === "waiting";
 
           return (
             <>
-              <Show when={hasItems}>
+              <Show when={hasItems()}>
                 <div data-part="process">
                   <ProcessDisclosure
                     status={status()}
-                    defaultOpen={defaultOpen}
+                    defaultOpen={defaultOpen()}
                     tokensPerSec={
                       round().isFinal && status() === "completed"
                         ? props.turn.tokensPerSec
@@ -42,8 +43,8 @@ export default function TurnGroup(props: { turn: TurnViewModel }) {
                 {(answer) => (
                   <AssistantAnswer
                     markdown={answer()}
-                    stage={!round().isFinal}
-                    streaming={round().isFinal && status() !== "completed"}
+                    stage={isStage()}
+                    streaming={isLiveRound()}
                   />
                 )}
               </Show>
