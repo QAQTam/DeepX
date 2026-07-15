@@ -179,7 +179,7 @@ export default function App() {
       case "ready": break;
       case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
       case "round_delta": chat.handleRoundDelta((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.kind ?? "") as string, (p.delta ?? "") as string); break;
-      case "tool_call_preview": chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
+      case "tool_call_preview": console.log("[APP_EVENT] tool_call_preview received", { id: p.id, name: p.name }); chat.handleToolCallPreview((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, (p.index ?? 0) as number, (p.id ?? "") as string, (p.name ?? "") as string, (p.args_so_far ?? "") as string); break;
       case "round_complete": chat.handleRoundComplete((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.thinking as string | undefined, p.answer as string | undefined, p.tool_calls as ToolCallDef[] | undefined, p.blocks as RoundBlock[] | undefined, p.is_final as boolean | undefined); break;
       case "tool_results": chat.handleToolResults((p.turn_id ?? "") as string, (p.round_num ?? 0) as number, p.results as ToolResultDef[]); break;
       case "ask_user": {

@@ -208,6 +208,8 @@ export default function ChatView(props: ChatViewProps) {
         mode={mode()}
         onModeChange={handleSetMode}
         model={chat().sessionInfo.model}
+        contextTokens={chat().sessionInfo.context_tokens}
+        contextLimit={chat().sessionInfo.context_limit}
         permissionLevel={props.permissionLevel}
         onPermissionLevelChange={props.onPermissionLevelChange}
       />

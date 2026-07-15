@@ -641,6 +641,7 @@ impl TurnEngine {
                         name,
                         args_so_far,
                     } => {
+                        log::info!("[TURN] emit_delta ToolCallPreview turn_id={turn_id} round={round_num} idx={index} id={id} name={name}");
                         ctx.emitter.emit_delta(Agent2Ui::ToolCallPreview {
                             turn_id: turn_id.clone(),
                             round_num,

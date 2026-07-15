@@ -16,6 +16,7 @@ export default function TurnGroup(props: { turn: TurnViewModel }) {
       <Index each={props.turn.rounds}>
         {(round) => {
           const hasItems = round().processItems.length > 0;
+          console.log("[TURN_GROUP]", { turnId: props.turn.turnId, roundNum: round().roundNum, processItemsLen: round().processItems.length, hasItems, answerLen: (round().answer ?? '').length, isFinal: round().isFinal });
           const defaultOpen =
             !round().answer ||
             (round().isFinal && status() !== "completed");

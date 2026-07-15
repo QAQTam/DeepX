@@ -13,6 +13,8 @@ export default function ComposerDock(props: {
   mode: string;
   onModeChange: (mode: string) => void;
   model?: string;
+  contextTokens?: number;
+  contextLimit?: number;
   permissionLevel: number;
   onPermissionLevelChange: (level: number) => void | Promise<void>;
 }) {
@@ -32,7 +34,7 @@ export default function ComposerDock(props: {
       }} placeholder={props.hasPendingGate() ? "请先处理当前授权请求" : "向 DeepX 提问…"} />
       <footer>
         <div class="composer-controls"><button class="composer-attach" aria-label="添加附件">＋</button><button class="composer-mode" onClick={() => props.onModeChange(props.mode === "plan" ? "code" : "plan")}>{props.mode === "plan" ? "规划" : "执行"}</button><PermissionLevelSelect compact level={props.permissionLevel} onChange={props.onPermissionLevelChange} /></div>
-        <div class="composer-meta"><span>{props.model}</span>{props.isStreaming()
+        <div class="composer-meta">{(props.contextTokens != null || props.contextLimit != null) && <span class="composer-context">{props.contextTokens != null && props.contextLimit != null ? `${(props.contextTokens / 1000).toFixed(1)}K / ${(props.contextLimit / 1000).toFixed(0)}K` : ''}</span>}<span>{props.model}</span>{props.isStreaming()
           ? <button class="composer-stop" onClick={() => void props.onStop()}>■</button>
           : <button class="composer-send" disabled={!text().trim() || props.hasPendingGate()} onClick={() => void submit()}>↑</button>}</div>
       </footer>

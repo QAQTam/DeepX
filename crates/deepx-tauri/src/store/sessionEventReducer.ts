@@ -214,6 +214,7 @@ export function reduceAgentEvent(
       });
     }
     case "tool_call_preview":
+      console.log("[REDUCER] tool_call_preview", { turn_id: event.turn_id, round_num: event.round_num, id: event.id, name: event.name, args_len: event.args_so_far.length });
       return updateRound(state, event.turn_id, event.round_num, round => {
         const preview = {
           id: event.id,

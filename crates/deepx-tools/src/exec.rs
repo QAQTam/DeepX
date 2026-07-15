@@ -594,7 +594,7 @@ use std::time::Duration;
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: "exec_run".to_string(),
-        description: "Execute a command. Pass {\"argv\": [\"program\", \"arg1\", \"arg2\", ...]}. The first element is the executable, the rest are arguments. No shell — for shell builtins use cmd /c or pwsh -Command as the executable. For pipes or redirects, write a script file and run it. Returns {\"status\": \"completed\", \"exit_code\": 0, \"output\": \"...\", \"wall_time_seconds\": 0.5, \"timed_out\": false}",
+        description: "Execute a command. Pass {\"argv\": [\"program\", \"arg1\", \"arg2\", ...]}. The first element is the executable, the rest are arguments. No shell — for shell builtins use cmd /c, pwsh -Command, or bash -c as the executable. For pipes or redirects, write a script file and run it. Returns {\"status\": \"completed\", \"exit_code\": 0, \"output\": \"...\", \"wall_time_seconds\": 0.5, \"timed_out\": false}",
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

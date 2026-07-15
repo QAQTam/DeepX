@@ -369,6 +369,7 @@ fn stream_sse(
                                     .and_then(|v| v.as_str())
                                 {
                                     entry.2.push_str(args);
+                                    log::info!("[GATE] ToolCallProgress idx={idx} id={} name={} args_len={}", entry.0, entry.1, entry.2.len());
                                     on_event(StreamEvent::ToolCallProgress {
                                         index: idx,
                                         id: entry.0.clone(),
