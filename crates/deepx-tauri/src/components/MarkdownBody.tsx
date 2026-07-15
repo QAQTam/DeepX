@@ -1,4 +1,4 @@
-import { on, createEffect } from "solid-js";
+import { on, createEffect, onCleanup } from "solid-js";
 import { marked, Renderer } from "marked";
 import { createHighlighter, createOnigurumaEngine } from "shiki";
 
@@ -234,9 +234,18 @@ interface MarkdownBodyProps {
 export default function MarkdownBody(props: MarkdownBodyProps) {
   let container!: HTMLDivElement;
   let prevBlocks: MarkdownBlock[] = [];
+  let renderGeneration = 0;
+  let disposed = false;
+
+  onCleanup(() => {
+    disposed = true;
+    renderGeneration += 1;
+  });
 
   createEffect(on(() => [props.content, props.final] as const, async ([text, final]) => {
-    // Empty content — clear everything
+    const generation = ++renderGeneration;
+    const isStale = () => disposed || generation !== renderGeneration;
+
     if (!text) {
       container.innerHTML = "";
       container.classList.remove("final");
@@ -244,17 +253,23 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
       return;
     }
 
-    // P0: split into blocks
     const blocks = projectBlocks(text, !!final, prevBlocks);
 
     if (final) {
-      // Final render: markdown with syntax highlighting
-      const hi = await getHi();
-      if (!hi) return;
+      container.textContent = text;
+      container.classList.remove("final");
+      let hi: Awaited<ReturnType<typeof getHi>>;
+      try {
+        hi = await getHi();
+      } catch {
+        if (!isStale()) prevBlocks = blocks;
+        return;
+      }
+      if (isStale() || !hi) return;
       if (!blocks[0]!.html) {
         blocks[0]!.html = renderBlockHTML(blocks[0]!.raw, hi);
       }
-      // Replace entire container with the final rendered block
+      if (isStale()) return;
       container.innerHTML = "";
       container.appendChild(createStableEl(blocks[0]!));
       container.classList.add("final");
@@ -263,25 +278,25 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
     }
 
     container.classList.remove("final");
-
-    // Streaming: check if any stable block needs initial rendering
-    const needsRender = blocks.some(b => b.stable && !b.html);
+    const needsRender = blocks.some(block => block.stable && !block.html);
     if (needsRender) {
-      const hi = await getHi();
-      if (!hi) {
-        // Fallback: all live text
-        container.textContent = paceText(text);
-        prevBlocks = blocks;
+      container.textContent = paceText(text);
+      let hi: Awaited<ReturnType<typeof getHi>>;
+      try {
+        hi = await getHi();
+      } catch {
+        if (!isStale()) prevBlocks = blocks;
         return;
       }
-      for (const b of blocks) {
-        if (b.stable && !b.html) {
-          b.html = renderBlockHTML(b.raw, hi);
+      if (isStale() || !hi) return;
+      for (const block of blocks) {
+        if (block.stable && !block.html) {
+          block.html = renderBlockHTML(block.raw, hi);
         }
       }
     }
 
-    // P1: patch the DOM
+    if (isStale()) return;
     patchDOM(container, blocks);
     prevBlocks = blocks;
   }));
