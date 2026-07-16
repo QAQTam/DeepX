@@ -33,7 +33,10 @@ export function createRawSessionState(seed: string): RawSessionState {
     },
     dashboard: { tasks: [], recentEdits: [], activity: [] },
     telemetry: [],
-    skills: { available: [], active: [] },
+    skills: {
+      available: [], active: [], catalogRevision: "", contextEpoch: 0,
+      operationRevision: 0, tokenBudget: 0, tokenUsage: 0, runtime: [], diagnostics: [],
+    },
     notices: [],
     compact: { active: false, text: "", turnsCompacted: null, completionRevision: 0 },
   };
@@ -374,8 +377,30 @@ export function reduceAgentEvent(
             : state.environment.changedFiles,
         },
       };
-    case "skills_changed":
-      return { ...state, skills: { available: event.available, active: event.active } };
+    case "skills_changed": {
+      const revision = Number(event.operation_revision);
+      if (revision < state.skills.operationRevision) return state;
+      return {
+        ...state,
+        skills: {
+          available: event.available,
+          active: event.active,
+          catalogRevision: event.catalog_revision,
+          contextEpoch: Number(event.context_epoch),
+          operationRevision: revision,
+          tokenBudget: event.token_budget,
+          tokenUsage: event.token_usage,
+          runtime: event.runtime,
+          diagnostics: event.diagnostics,
+        },
+      };
+    }
+    case "skill_operation_resolved":
+      if (Number(event.revision) < state.skills.operationRevision) return state;
+      return event.success ? state : {
+        ...state,
+        notices: [...state.notices, { level: "error", message: event.error ?? "Skill operation failed", at: now }],
+      };
     case "permission_request": {
       const turnId = lastTurnId(state);
       if (!turnId) return state;

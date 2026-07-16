@@ -32,6 +32,8 @@ pub struct ProviderConfig {
     /// When true, only send incremental messages (not full history).
     /// The proxy remembers conversation context.
     pub stateful: bool,
+    /// Whether the endpoint accepts a system message after history/tools.
+    pub supports_tail_system: bool,
 }
 
 impl ProviderConfig {
@@ -56,12 +58,18 @@ impl ProviderConfig {
             cache_field,
             supports_thinking,
             stateful: false,
+            supports_tail_system: true,
         }
     }
 
     /// Configure this provider for stateful mode (web proxy).
     pub fn with_stateful(mut self, stateful: bool) -> Self {
         self.stateful = stateful;
+        self
+    }
+
+    pub fn with_tail_system_support(mut self, supported: bool) -> Self {
+        self.supports_tail_system = supported;
         self
     }
 }

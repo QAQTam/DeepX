@@ -332,6 +332,27 @@ impl SessionManager {
         }
     }
 
+    pub fn persist_skills(&self, seed: &str, skills: deepx_types::SkillSessionStateV2) {
+        let dir = self.session_path_dir(seed);
+        let _ = std::fs::create_dir_all(&dir);
+        let mut meta = self.load_meta(seed).unwrap_or_default();
+        let now = Self::now_epoch();
+        meta.seed = seed.to_string();
+        if meta.created_at == 0 {
+            meta.created_at = now;
+        }
+        meta.updated_at = now;
+        meta.skills = skills;
+        let _ = store::write_meta(&dir, &meta);
+        store::upsert_index(&self.sessions_dir, &meta);
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Some(dbs) = self.get_or_open_db(seed) {
+                let _ = dbs.get(seed).unwrap().upsert_meta(seed, &meta);
+            }
+        }
+    }
+
     /// Append a single message to JSONL immediately (per-message persistence).
     /// Does NOT update meta or index — caller should update meta periodically.
     pub fn save_one(&self, seed: &str, msg: &Message) {
@@ -366,7 +387,7 @@ impl SessionManager {
             Err(_) => String::new(),
         };
 
-        let existing_mode = self.load_meta(seed).map(|m| m.mode).unwrap_or(0);
+        let existing = self.load_meta(seed).unwrap_or_default();
 
         let meta = SessionMeta {
             seed: seed.to_string(),
@@ -378,7 +399,8 @@ impl SessionManager {
             turn_count,
             last_summary,
             compact_skip,
-            mode: existing_mode,
+            mode: existing.mode,
+            skills: existing.skills,
             ..Default::default()
         };
         if let Err(e) = store::write_meta(&dir, &meta) {
@@ -412,7 +434,7 @@ impl SessionManager {
 
         let created_at = self.load_meta(seed).map(|m| m.created_at).unwrap_or(now);
 
-        let existing_mode = self.load_meta(seed).map(|m| m.mode).unwrap_or(0);
+        let existing = self.load_meta(seed).unwrap_or_default();
         let last_summary = Self::extract_summary(messages);
 
         let meta = SessionMeta {
@@ -425,7 +447,8 @@ impl SessionManager {
             turn_count,
             last_summary,
             compact_skip,
-            mode: existing_mode,
+            mode: existing.mode,
+            skills: existing.skills,
             ..Default::default()
         };
 
@@ -470,7 +493,12 @@ impl SessionManager {
         let dir = self.session_path_dir(seed);
         let _ = std::fs::create_dir_all(&dir);
 
-        let created_at = self.load_meta(seed).map(|m| m.created_at).unwrap_or(now);
+        let existing = self.load_meta(seed).unwrap_or_default();
+        let created_at = if existing.created_at == 0 {
+            now
+        } else {
+            existing.created_at
+        };
 
         // Append messages
         if let Err(e) = store::append_messages(&dir, new_messages) {
@@ -494,6 +522,8 @@ impl SessionManager {
             turn_count,
             last_summary,
             compact_skip,
+            mode: existing.mode,
+            skills: existing.skills,
             ..Default::default()
         };
 
@@ -656,5 +686,57 @@ impl SessionManager {
                 format!("{}..", &s[..end])
             })
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod skill_persistence_tests {
+    use super::*;
+    use deepx_types::{SkillSessionEntry, SkillSessionEntryState, SkillSessionStateV2};
+
+    fn manager() -> (PathBuf, SessionManager) {
+        let root = std::env::temp_dir().join(format!(
+            "deepx-session-skills-{}-{}",
+            std::process::id(),
+            SessionManager::now_epoch(),
+        ));
+        let sessions_dir = root.join("sessions");
+        std::fs::create_dir_all(&sessions_dir).expect("create test sessions");
+        let manager = SessionManager {
+            sessions_dir,
+            active_path: root.join(".active_session"),
+            #[cfg(feature = "turso-backend")]
+            turso_enabled: AtomicBool::new(false),
+            #[cfg(feature = "turso-backend")]
+            dbs: Mutex::new(HashMap::new()),
+        };
+        (root, manager)
+    }
+
+    fn state() -> SkillSessionStateV2 {
+        SkillSessionStateV2 {
+            version: 2,
+            context_epoch: 7,
+            operation_revision: 9,
+            entries: vec![SkillSessionEntry {
+                name: "alpha".into(),
+                activation_order: 1,
+                source: "model".into(),
+                state: SkillSessionEntryState::Active,
+                lease_remaining: 2,
+            }],
+        }
+    }
+
+    #[test]
+    fn metadata_rewrites_preserve_skill_session_state_v2() {
+        let (root, manager) = manager();
+        manager.persist_skills("seed", state());
+        manager.update_meta("seed", "model", None, 0, 1);
+        manager.save_full("seed", &[Message::user("hello")], "model", None, 0, 1);
+        let meta = manager.load_meta("seed").expect("metadata");
+        assert_eq!(meta.seed, "seed");
+        assert_eq!(meta.skills, state());
+        std::fs::remove_dir_all(root).expect("remove test directory");
     }
 }

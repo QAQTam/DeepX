@@ -256,15 +256,25 @@ impl TurnEngine {
             return Outcome::Handled;
         }
 
-        let mut saved = self.suspended.take().expect("plan review suspension exists");
-        let plan = saved.pending_plans.pop_front().expect("pending plan exists");
+        let mut saved = self
+            .suspended
+            .take()
+            .expect("plan review suspension exists");
+        let plan = saved
+            .pending_plans
+            .pop_front()
+            .expect("pending plan exists");
 
         let content = if approved {
             format!("Plan approved.\n\n{}", plan.content)
         } else {
             format!(
                 "Plan rejected: {}\n\n{}",
-                if message.is_empty() { "no reason given" } else { message },
+                if message.is_empty() {
+                    "no reason given"
+                } else {
+                    message
+                },
                 plan.content
             )
         };
@@ -402,6 +412,7 @@ impl TurnEngine {
                 .position(|id| id == &item.call_id)
                 .unwrap_or(usize::MAX)
         });
+        let mut ordered_skill_effects = Vec::new();
         let (mut parallel, serial): (Vec<_>, Vec<_>) = admitted
             .into_iter()
             .partition(|item| !serial_call_ids.contains(&item.call_id));
@@ -420,13 +431,14 @@ impl TurnEngine {
                         let auth = admitted.auth;
                         let id = call_id.clone();
                         move || {
-                            let result = deepx_tools::execution::execute_authorized(*auth, Some(tx));
+                            let result =
+                                deepx_tools::execution::execute_authorized(*auth, Some(tx));
                             (
                                 id,
                                 result.content,
                                 result.success,
                                 result.code_delta,
-                                result.skill_activation,
+                                result.skill_effects,
                             )
                         }
                     })
@@ -443,13 +455,11 @@ impl TurnEngine {
                     continue;
                 }
                 match handle.join() {
-                    Ok((_id, content, success, code_delta, skill_activation)) => {
+                    Ok((_id, content, success, code_delta, skill_effects)) => {
                         ctx.agent
                             .msg
                             .push_tool_result_direct(&call_id, &content, success);
-                        if let Some(activation) = skill_activation {
-                            ctx.agent.activate_skill(&call_id, activation);
-                        }
+                        ordered_skill_effects.push((call_id.clone(), skill_effects));
                         if let Some(ref delta) = code_delta {
                             ctx.stats.push_delta(delta.clone());
                             ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
@@ -479,25 +489,25 @@ impl TurnEngine {
             let handle = std::thread::Builder::new()
                 .stack_size(4 * 1024 * 1024)
                 .spawn(move || {
-                    let result =
-                        deepx_tools::execution::execute_authorized(*admitted.auth, Some(progress_tx));
+                    let result = deepx_tools::execution::execute_authorized(
+                        *admitted.auth,
+                        Some(progress_tx),
+                    );
                     (
                         result.content,
                         result.success,
                         result.code_delta,
-                        result.skill_activation,
+                        result.skill_effects,
                     )
                 })
                 .expect("tool thread spawn");
             tool.drain_progress_external(ctx, progress_rx, &call_id);
             match handle.join() {
-                Ok((content, success, code_delta, skill_activation)) => {
+                Ok((content, success, code_delta, skill_effects)) => {
                     ctx.agent
                         .msg
                         .push_tool_result_direct(&call_id, &content, success);
-                    if let Some(activation) = skill_activation {
-                        ctx.agent.activate_skill(&call_id, activation);
-                    }
+                    ordered_skill_effects.push((call_id.clone(), skill_effects));
                     if let Some(ref delta) = code_delta {
                         ctx.stats.push_delta(delta.clone());
                         ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
@@ -517,7 +527,19 @@ impl TurnEngine {
             }
         }
 
-        !ctx.cancel.is_set()
+        if ctx.cancel.is_set() {
+            return false;
+        }
+        ordered_skill_effects.sort_by_key(|(call_id, _)| {
+            tool_call_order
+                .iter()
+                .position(|id| id == call_id)
+                .unwrap_or(usize::MAX)
+        });
+        for (_, effects) in ordered_skill_effects {
+            ctx.agent.apply_tool_effects(effects);
+        }
+        true
     }
 
     fn run_lap(
@@ -641,7 +663,9 @@ impl TurnEngine {
                         name,
                         args_so_far,
                     } => {
-                        log::info!("[TURN] emit_delta ToolCallPreview turn_id={turn_id} round={round_num} idx={index} id={id} name={name}");
+                        log::info!(
+                            "[TURN] emit_delta ToolCallPreview turn_id={turn_id} round={round_num} idx={index} id={id} name={name}"
+                        );
                         ctx.emitter.emit_delta(Agent2Ui::ToolCallPreview {
                             turn_id: turn_id.clone(),
                             round_num,
@@ -777,9 +801,10 @@ impl TurnEngine {
                             };
                             // Capture plan info before moving into TurnState
                             let plan_submitted = if reason == YieldReason::PlanReview {
-                                admission.pending_plans.front().map(|plan| {
-                                    (plan.call_id.clone(), plan.content.clone())
-                                })
+                                admission
+                                    .pending_plans
+                                    .front()
+                                    .map(|plan| (plan.call_id.clone(), plan.content.clone()))
                             } else {
                                 None
                             };
@@ -804,6 +829,7 @@ impl TurnEngine {
                             }
                             return Outcome::YieldToUser { turn_id, reason };
                         }
+                        let mut ordered_skill_effects = Vec::new();
                         let (mut parallel_authorized, serial_authorized): (Vec<_>, Vec<_>) =
                             admission
                                 .authorized
@@ -837,7 +863,7 @@ impl TurnEngine {
                                                 result.content,
                                                 result.success,
                                                 result.code_delta,
-                                                result.skill_activation,
+                                                result.skill_effects,
                                             )
                                         }
                                     })
@@ -856,19 +882,12 @@ impl TurnEngine {
                                     let _ = h.join(); // reap
                                 } else {
                                     match h.join() {
-                                        Ok((
-                                            _cid,
-                                            content,
-                                            success,
-                                            code_delta,
-                                            skill_activation,
-                                        )) => {
+                                        Ok((_cid, content, success, code_delta, skill_effects)) => {
                                             ctx.agent.msg.push_tool_result_direct(
                                                 &call_id, &content, success,
                                             );
-                                            if let Some(activation) = skill_activation {
-                                                ctx.agent.activate_skill(&call_id, activation);
-                                            }
+                                            ordered_skill_effects
+                                                .push((call_id.clone(), skill_effects));
                                             if let Some(ref delta) = code_delta {
                                                 ctx.stats.push_delta(delta.clone());
                                                 ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
@@ -914,20 +933,18 @@ impl TurnEngine {
                                             result.content,
                                             result.success,
                                             result.code_delta,
-                                            result.skill_activation,
+                                            result.skill_effects,
                                         )
                                     }
                                 })
                                 .expect("tool thread spawn");
                             tool.drain_progress_external(ctx, progress_rx, &call_id);
                             match handle.join() {
-                                Ok((content, success, code_delta, skill_activation)) => {
+                                Ok((content, success, code_delta, skill_effects)) => {
                                     ctx.agent
                                         .msg
                                         .push_tool_result_direct(&call_id, &content, success);
-                                    if let Some(activation) = skill_activation {
-                                        ctx.agent.activate_skill(&call_id, activation);
-                                    }
+                                    ordered_skill_effects.push((call_id.clone(), skill_effects));
                                     if let Some(ref delta) = code_delta {
                                         ctx.stats.push_delta(delta.clone());
                                         ctx.emitter.emit_delta(Agent2Ui::CodeDelta {
@@ -950,6 +967,15 @@ impl TurnEngine {
                         if ctx.cancel.is_set() {
                             return Self::abort_running_turn(ctx, turn_id, last_usage);
                         }
+                        ordered_skill_effects.sort_by_key(|(call_id, _)| {
+                            tool_call_order
+                                .iter()
+                                .position(|id| id == call_id)
+                                .unwrap_or(usize::MAX)
+                        });
+                        for (_, effects) in ordered_skill_effects {
+                            ctx.agent.apply_tool_effects(effects);
+                        }
 
                         // Suspend before the next gate lap while any approval,
                         // ask_user call, or plan review from this assistant round
@@ -967,9 +993,10 @@ impl TurnEngine {
                             };
                             // Capture plan info before moving into TurnState
                             let plan_submitted = if reason == YieldReason::PlanReview {
-                                admission.pending_plans.front().map(|plan| {
-                                    (plan.call_id.clone(), plan.content.clone())
-                                })
+                                admission
+                                    .pending_plans
+                                    .front()
+                                    .map(|plan| (plan.call_id.clone(), plan.content.clone()))
                             } else {
                                 None
                             };
@@ -1005,6 +1032,10 @@ impl TurnEngine {
                     // All tools from this round are now resolved.
                     self.emit_completed_tool_round(ctx, &turn_id, round_num);
 
+                    if let Err(error) = ctx.agent.skills.complete_model_lap() {
+                        ctx.emitter.emit(Agent2Ui::Error { message: error });
+                    }
+
                     // Another lap: tools executed, back to Gate
                     return Outcome::ContinueTurn {
                         turn_id,
@@ -1021,6 +1052,20 @@ impl TurnEngine {
                 .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
             if let Some(ref usage) = last_usage {
                 util::record_token_usage(usage, &ctx.agent.config.model);
+            }
+            let forced = match ctx.agent.skills.complete_model_lap() {
+                Ok(forced) => forced,
+                Err(error) => {
+                    ctx.emitter.emit(Agent2Ui::Error { message: error });
+                    Vec::new()
+                }
+            };
+            if ctx.agent.skills.has_requested() || !forced.is_empty() {
+                return Outcome::ContinueTurn {
+                    turn_id,
+                    round_num: round_num + 1,
+                    usage: last_usage,
+                };
             }
             return Outcome::TurnComplete {
                 turn_id,

@@ -4,6 +4,7 @@ import type {
   PermissionRisk,
   RoundBlock,
   SkillInfo,
+  SkillRuntimeInfo,
   TaskInfo,
   ToolCallDef,
   ToolResultDef,
@@ -115,7 +116,17 @@ export type RawSessionState = {
   };
   dashboard: DashboardData & { activity: RawActivityEntry[] };
   telemetry: RawMetricPoint[];
-  skills: { available: SkillInfo[]; active: string[] };
+  skills: {
+    available: SkillInfo[];
+    active: string[];
+    catalogRevision: string;
+    contextEpoch: number;
+    operationRevision: number;
+    tokenBudget: number;
+    tokenUsage: number;
+    runtime: SkillRuntimeInfo[];
+    diagnostics: string[];
+  };
   notices: Array<{ level: string; message: string; at: number }>;
   compact: {
     active: boolean;

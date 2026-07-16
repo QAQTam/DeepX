@@ -41,9 +41,24 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                     repairs.len()
                 );
                 agent.msg = msg;
+                // V2 state is restored only from typed session metadata. Old
+                // protected skill/catalog system messages must not reactivate
+                // instructions by surviving in message history.
+                agent
+                    .msg
+                    .remove_system_messages_by_prefix(deepx_skills::ACTIVATION_MARKER);
+                agent
+                    .msg
+                    .remove_system_messages_by_prefix("Available skills");
 
                 deepx_tools::workspace::set_current_session(&agent.session.seed);
                 deepx_tools::workspace::load_session_workspace(&agent.session.seed);
+                let workspace = deepx_tools::CURRENT_WORKSPACE
+                    .read()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone();
+                agent.skills.set_workspace(std::path::Path::new(&workspace));
+                agent.skills.restore(&agent.session.skills.clone());
                 // Hot-load latest tool schema (order-stable: new tools appended at end)
                 agent.tool_defs = deepx_tools::runtime::all_tools();
                 log::info!(
@@ -81,6 +96,14 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
     };
     deepx_tools::workspace::set_current_session(&agent.session.seed);
     deepx_tools::workspace::load_session_workspace(&agent.session.seed);
+    let workspace = deepx_tools::CURRENT_WORKSPACE
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    agent.skills = crate::skill_context::SkillContextManager::new(
+        std::path::Path::new(&workspace),
+        agent.config.context_limit as usize,
+    );
     agent.msg.push_system(deepx_types::Message::system(
         &deepx_config::prompt::full_system_prompt_with_date(
             &chrono_local_date(),
@@ -110,6 +133,14 @@ pub fn create_session(agent: &mut AgentState) {
     };
     deepx_tools::workspace::set_current_session(&agent.session.seed);
     deepx_tools::workspace::load_session_workspace(&agent.session.seed);
+    let workspace = deepx_tools::CURRENT_WORKSPACE
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    agent.skills = crate::skill_context::SkillContextManager::new(
+        std::path::Path::new(&workspace),
+        agent.config.context_limit as usize,
+    );
     agent.msg.push_system(deepx_types::Message::system(
         &deepx_config::prompt::full_system_prompt_with_date(
             &chrono_local_date(),
@@ -137,6 +168,14 @@ pub fn create_session_with_seed(agent: &mut AgentState) {
     };
     deepx_tools::workspace::set_current_session(&agent.session.seed);
     deepx_tools::workspace::load_session_workspace(&agent.session.seed);
+    let workspace = deepx_tools::CURRENT_WORKSPACE
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    agent.skills = crate::skill_context::SkillContextManager::new(
+        std::path::Path::new(&workspace),
+        agent.config.context_limit as usize,
+    );
     agent.msg.push_system(deepx_types::Message::system(
         &deepx_config::prompt::full_system_prompt_with_date(
             &chrono_local_date(),

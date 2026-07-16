@@ -28,6 +28,20 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
 
     // ------ Single file mode ------
     let path = crate::resolve_workspace_path(&args.s("path"));
+    let workspace = crate::CURRENT_WORKSPACE
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some(skill) = deepx_skills::managed_skill_for_path(
+        std::path::Path::new(&workspace),
+        std::path::Path::new(&path),
+    ) {
+        return crate::json_err(
+            "USE_SKILLS_TOOL",
+            format!("'{path}' is managed by skill '{skill}'"),
+            "Use skills(action=activate|resource, name=...) instead of generic read.",
+        );
+    }
     let start: Option<usize> = args
         .get("start_line")
         .and_then(|v| v.as_u64())
@@ -214,6 +228,20 @@ pub(super) fn exec_search(args: &serde_json::Value) -> String {
     let pattern = args.s("pattern");
     let glob = args.get("glob").and_then(|v| v.as_str()).map(String::from);
     let dir = crate::resolve_workspace_path(&args.s_or("path", "."));
+    let workspace = crate::CURRENT_WORKSPACE
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some(skill) = deepx_skills::managed_skill_for_path(
+        std::path::Path::new(&workspace),
+        std::path::Path::new(&dir),
+    ) {
+        return crate::json_err(
+            "USE_SKILLS_TOOL",
+            format!("search target is managed by skill '{skill}'"),
+            "Use skills(action=activate|resource, name=...) instead of generic search.",
+        );
+    }
 
     // Phase 1: try ripgrep (cross-platform, fast)
     let mut cmd = Command::new("rg");
@@ -224,6 +252,9 @@ pub(super) fn exec_search(args: &serde_json::Value) -> String {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd.arg("-n").arg("--no-heading");
+    for excluded in ["!.deepx/skills/**", "!.agents/skills/**", "!skills/**"] {
+        cmd.arg("-g").arg(excluded);
+    }
     if let Some(ref g) = glob {
         cmd.arg("-g").arg(g);
     }

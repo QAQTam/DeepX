@@ -12,7 +12,7 @@ pub struct ToolExecResult {
     pub success: bool,
     pub meta: crate::ToolExecMeta,
     pub code_delta: Option<deepx_proto::CodeDeltaRecord>,
-    pub skill_activation: Option<deepx_skills::SkillActivation>,
+    pub skill_effects: Vec<crate::ToolEffect>,
 }
 
 /// Consume an authorization proof and dispatch the bound handler.
@@ -71,7 +71,7 @@ pub fn execute_authorized(
                 success: report.success,
                 meta: report.meta,
                 code_delta: None,
-                skill_activation: None,
+                skill_effects: Vec::new(),
             };
         }
         None => {
@@ -84,13 +84,10 @@ pub fn execute_authorized(
 
     // Phase 2: execute without holding the manager lock.
     let tool_result = (prepared.handler_fn)(prepared.ctx.clone());
-    let skill_activation = if name == "skills"
-        && args.get("action").and_then(serde_json::Value::as_str) == Some("activate")
-        && tool_result.success
-    {
-        prepared.ctx.take_skill_activation()
+    let skill_effects = if name == "skills" && tool_result.success {
+        prepared.ctx.take_skill_effects()
     } else {
-        None
+        Vec::new()
     };
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let success = tool_result.success;
@@ -110,7 +107,7 @@ pub fn execute_authorized(
                 success: report.success,
                 meta: report.meta,
                 code_delta,
-                skill_activation,
+                skill_effects,
             };
             let audit_entry = crate::audit::AuditEntry {
                 ts: chrono::Utc::now().to_rfc3339(),
@@ -233,7 +230,7 @@ fn failure(name: &str, content: impl Into<String>) -> ToolExecResult {
             args_summary: String::new(),
         },
         code_delta: None,
-        skill_activation: None,
+        skill_effects: Vec::new(),
     }
 }
 
@@ -249,19 +246,17 @@ mod tests {
     };
     use std::collections::HashSet;
     use std::path::PathBuf;
-    use std::sync::{LazyLock, Mutex, MutexGuard, atomic::AtomicU32};
+    use std::sync::{MutexGuard, atomic::AtomicU32};
     use std::time::Duration;
 
     static TEST_HANDLER_COUNT: AtomicU32 = AtomicU32::new(0);
-    static TEST_SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
     fn test_counter_handler(_ctx: crate::ToolCallCtx) -> crate::ToolResult {
         TEST_HANDLER_COUNT.fetch_add(1, Ordering::SeqCst);
         crate::ToolResult::ok("counter incremented")
     }
 
     fn setup_test_manager() -> MutexGuard<'static, ()> {
-        let test_guard = TEST_SERIAL
+        let test_guard = crate::TEST_RUNTIME_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::set_workspace(".");
@@ -299,7 +294,7 @@ mod tests {
         assert!(
             skill_definitions[0].function.parameters["oneOf"]
                 .as_array()
-                .is_some_and(|variants| variants.len() == 4)
+                .is_some_and(|variants| variants.len() == 6)
         );
         assert!(!definitions.iter().any(|definition| matches!(
             definition.function.name.as_str(),
@@ -326,7 +321,15 @@ mod tests {
         );
 
         assert!(result.success);
-        let activation = result.skill_activation.expect("typed activation");
+        let activation = match result
+            .skill_effects
+            .into_iter()
+            .next()
+            .expect("typed activation")
+        {
+            crate::ToolEffect::Skill(deepx_skills::SkillEffect::Activate(activation)) => activation,
+            other => panic!("unexpected effect: {other:?}"),
+        };
         assert_eq!(activation.metadata.name, "typed-skill");
         assert!(activation.body.contains("Typed instructions"));
 
@@ -339,7 +342,25 @@ mod tests {
         );
         assert!(resource.success);
         assert_eq!(resource.content, "complete reference");
-        assert!(resource.skill_activation.is_none());
+        assert!(resource.skill_effects.is_empty());
+
+        let generic_read = execute_with_context(
+            "read",
+            "",
+            &serde_json::json!({"path": skill_dir.join("SKILL.md")}).to_string(),
+            "generic-skill-read",
+            None,
+        );
+        assert!(generic_read.content.contains("USE_SKILLS_TOOL"));
+
+        let generic_search = execute_with_context(
+            "search",
+            "",
+            &serde_json::json!({"path": skill_dir, "pattern": "Typed"}).to_string(),
+            "generic-skill-search",
+            None,
+        );
+        assert!(generic_search.content.contains("USE_SKILLS_TOOL"));
 
         let traversal = execute_with_context(
             "skills",

@@ -55,6 +55,7 @@ fn all_config_commands_visible() {
     let _ = agent_bridge::cmd_set_workspace as fn(_, _) -> _;
     let _ = agent_bridge::cmd_unload_skill as fn(_, _) -> _;
     let _ = agent_bridge::cmd_activate_skill as fn(_, _) -> _;
+    let _ = agent_bridge::cmd_skill_operation as fn(_, _, _, _, _) -> _;
     let _ = agent_bridge::cmd_reload_skills as fn(_) -> _;
 }
 

@@ -23,6 +23,25 @@ pub fn cmd_activate_skill(seed: String, name: String) -> Result<(), String> {
     send_to_agent(&seed, Ui2Agent::ActivateSkill { name })
 }
 
+#[tauri::command]
+pub fn cmd_skill_operation(
+    seed: String,
+    operation_id: String,
+    action: String,
+    name: String,
+    expected_revision: u64,
+) -> Result<(), String> {
+    send_to_agent(
+        &seed,
+        Ui2Agent::SkillOperation {
+            operation_id,
+            action,
+            name,
+            expected_revision,
+        },
+    )
+}
+
 /// Reload the skill catalog from disk and refresh the catalog system message.
 
 #[tauri::command]
@@ -130,7 +149,9 @@ fn validate_permission_level(level: u8) -> Result<u8, String> {
     if (1..=4).contains(&level) {
         Ok(level)
     } else {
-        Err(format!("permission level must be between 1 and 4, got {level}"))
+        Err(format!(
+            "permission level must be between 1 and 4, got {level}"
+        ))
     }
 }
 

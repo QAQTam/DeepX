@@ -160,7 +160,7 @@ impl ToolManager {
 
         let timeout_secs = timeout_secs.unwrap_or_else(|| handler.default_timeout.as_secs());
         let cancel_flag = Arc::new(AtomicBool::new(false));
-        let skill_activation = Arc::new(Mutex::new(None));
+        let skill_effects = Arc::new(Mutex::new(Vec::new()));
         let ctx = crate::ToolCallCtx {
             id: id.clone(),
             name: name.to_string(),
@@ -169,7 +169,7 @@ impl ToolManager {
             tx_progress: progress_tx.clone(),
             timeout_secs: Some(timeout_secs),
             cancel: cancel_flag.clone(),
-            skill_activation: skill_activation.clone(),
+            skill_effects: skill_effects.clone(),
         };
         let in_workspace = is_path_in_workspace(&ctx);
         match crate::safety::SafetyPolicy::evaluate(handler.risk.clone(), in_workspace) {
@@ -202,7 +202,7 @@ impl ToolManager {
             tx_progress: progress_tx,
             timeout_secs: Some(timeout_secs),
             cancel: cancel_flag,
-            skill_activation,
+            skill_effects,
         };
 
         Ok(PreparedCall {

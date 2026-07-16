@@ -178,6 +178,12 @@ pub fn set_current_session(seed: &str) {
 
 pub static CURRENT_WORKSPACE: RwLock<String> = RwLock::new(String::new());
 
+/// Unit tests mutate process-wide runtime state. Keep those mutations
+/// deterministic even when the Rust test harness runs modules in parallel.
+#[cfg(test)]
+pub(crate) static TEST_RUNTIME_SERIAL: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
 /// Tools blocked in PLAN mode. Keep in sync with permission::categorize_tool.
 pub const PLAN_BLOCKED: &[&str] = &["edit", "edit_block", "write", "delete", "exec_run", "git"];
 
@@ -316,8 +322,16 @@ pub struct ToolCallCtx {
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Private, typed effects returned to the host runtime. Sharing this cell
     /// across context clones avoids parsing trusted effects from tool text.
-    pub(crate) skill_activation:
-        std::sync::Arc<std::sync::Mutex<Option<deepx_skills::SkillActivation>>>,
+    pub(crate) skill_effects: std::sync::Arc<std::sync::Mutex<Vec<ToolEffect>>>,
+}
+
+/// Trusted, typed state transitions emitted by tool handlers.
+///
+/// Keeping this wrapper generic lets the runtime add other effect families
+/// without widening the textual tool-result protocol.
+#[derive(Clone, Debug)]
+pub enum ToolEffect {
+    Skill(deepx_skills::SkillEffect),
 }
 
 impl ToolCallCtx {
@@ -330,17 +344,19 @@ impl ToolCallCtx {
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.args.get(key).and_then(|v| v.as_bool())
     }
-    pub(crate) fn set_skill_activation(&self, activation: deepx_skills::SkillActivation) {
-        *self
-            .skill_activation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(activation);
-    }
-    pub(crate) fn take_skill_activation(&self) -> Option<deepx_skills::SkillActivation> {
-        self.skill_activation
+    pub(crate) fn push_skill_effect(&self, effect: deepx_skills::SkillEffect) {
+        self.skill_effects
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .take()
+            .push(ToolEffect::Skill(effect));
+    }
+    pub(crate) fn take_skill_effects(&self) -> Vec<ToolEffect> {
+        std::mem::take(
+            &mut *self
+                .skill_effects
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        )
     }
 }
 

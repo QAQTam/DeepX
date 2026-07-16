@@ -7,6 +7,7 @@ import type { PermissionRisk } from "./PermissionRisk";
 import type { RoundBlock } from "./RoundBlock";
 import type { RoundDeltaKind } from "./RoundDeltaKind";
 import type { SkillInfo } from "./SkillInfo";
+import type { SkillRuntimeInfo } from "./SkillRuntimeInfo";
 import type { TaskInfo } from "./TaskInfo";
 import type { ToolCallDef } from "./ToolCallDef";
 import type { ToolResultDef } from "./ToolResultDef";
@@ -65,7 +66,7 @@ available: Array<SkillInfo>,
 /**
  * Names of currently loaded (explicit, $mention-activated) skills.
  */
-active: Array<string>, } | { "type": "permission_request", tool_call_id: string, tool_name: string,
+active: Array<string>, catalog_revision: string, context_epoch: bigint, operation_revision: bigint, token_budget: number, token_usage: number, runtime: Array<SkillRuntimeInfo>, diagnostics: Array<string>, } | { "type": "skill_operation_resolved", operation_id: string, success: boolean, revision: bigint, error?: string, } | { "type": "permission_request", tool_call_id: string, tool_name: string,
 /**
  * Human-readable reason for the request.
  */

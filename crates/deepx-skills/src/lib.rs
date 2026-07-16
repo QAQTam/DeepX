@@ -51,7 +51,7 @@ pub struct SkillDiagnostic {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkillCatalog {
     pub skills: Vec<SkillMetadata>,
     pub diagnostics: Vec<SkillDiagnostic>,
@@ -428,6 +428,48 @@ pub fn read_resource(
     })
 }
 
+/// Return the owning discovered skill when a generic file tool targets its
+/// SKILL.md or any bundled resource.
+pub fn managed_skill_for_path(workspace: &Path, candidate: &Path) -> Option<String> {
+    let resolved = candidate.canonicalize().ok()?;
+    let workspace = absolutize(workspace);
+    let mut roots = vec![
+        workspace.join(".deepx/skills"),
+        workspace.join(".agents/skills"),
+        workspace.join("skills"),
+    ];
+    if let Some(home) = home_dir() {
+        roots.push(home.join(".deepx/skills"));
+        roots.push(home.join(".agents/skills"));
+    }
+    for root in roots {
+        let Ok(root) = root.canonicalize() else {
+            continue;
+        };
+        if !resolved.starts_with(&root) {
+            continue;
+        }
+        let mut directory = if resolved.is_dir() {
+            resolved.clone()
+        } else {
+            resolved.parent()?.to_path_buf()
+        };
+        loop {
+            let skill_file = directory.join("SKILL.md");
+            if skill_file.is_file() {
+                return parse_metadata(&skill_file, SkillScope::Project)
+                    .map(|parsed| parsed.metadata.name)
+                    .ok()
+                    .or_else(|| directory.file_name()?.to_str().map(str::to_string));
+            }
+            if directory == root || !directory.pop() {
+                break;
+            }
+        }
+    }
+    None
+}
+
 fn list_resources(root: &Path) -> Vec<PathBuf> {
     let mut resources = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -470,7 +512,7 @@ pub fn render_catalog(catalog: &SkillCatalog) -> String {
         return String::new();
     }
     let mut output = String::from(
-        "Skills use progressive disclosure. Match a task against name and description only; do not infer the body. For an implicit match, call `skills` with action=`activate` and the exact name before acting. A user `$skill-name` mention is injected by the host directly. Load bundled files on demand with `skills` action=`resource`, the same name, and a manifest-relative path; do not use generic `read` for skill resources. Use action=`list` only for catalog diagnostics and action=`validate` only for strict portability checks.\n\n<available_skills>\n",
+        "Skills use progressive disclosure. Match a task against name and description only; do not infer the body. For an implicit match or a user-requested skill, call `skills` with action=`activate` and the exact name before acting. Use `retain` or `release` when the authoritative envelope marks a skill review due. Load bundled files on demand with action=`resource`, the same name, and a manifest-relative path; generic read/search cannot access managed skill files. Use `list` only for catalog diagnostics and `validate` only for strict portability checks.\n\n<available_skills>\n",
     );
     let mut omitted = 0usize;
     for skill in &catalog.skills {
@@ -492,30 +534,6 @@ pub fn render_catalog(catalog: &SkillCatalog) -> String {
         ));
     }
     output.push_str("</available_skills>");
-    output
-}
-
-/// Render a numbered catalog for use as a stable system message.
-/// Skills are sorted by name for deterministic numbering.
-pub fn render_catalog_numbered(skills: &[SkillMetadata]) -> String {
-    if skills.is_empty() {
-        return String::new();
-    }
-    let mut sorted: Vec<&SkillMetadata> = skills.iter().collect();
-    sorted.sort_by_key(|s| &s.name);
-
-    let mut output = String::from(
-        "Available skills (use `$S{N}` or `skills(action=activate, name=\"...\")` to load):\n\n",
-    );
-    for (i, skill) in sorted.iter().enumerate() {
-        let desc: String = skill
-            .description
-            .chars()
-            .take(500)
-            .collect::<String>()
-            .replace(['\r', '\n'], " ");
-        output.push_str(&format!("S{}: {} — {}\n", i + 1, skill.name, desc));
-    }
     output
 }
 
@@ -793,32 +811,169 @@ mod tests {
         assert_eq!(resource.content, "complete resource");
         assert!(read_resource(workspace, "resource-skill", Path::new("../outside.md")).is_err());
         assert!(read_resource(workspace, "resource-skill", Path::new("references")).is_err());
-    }
-
-    #[test]
-    fn render_catalog_numbered_assigns_stable_ids() {
-        let meta = |name: &str, desc: &str| SkillMetadata {
-            name: name.into(),
-            description: desc.into(),
-            license: None,
-            compatibility: None,
-            metadata: BTreeMap::new(),
-            allowed_tools: vec![],
-            path: PathBuf::from(name),
-            scope: SkillScope::Project,
-        };
-        let skills = vec![
-            meta("zebra", "Last in alphabetical order"),
-            meta("alpha", "First in alphabetical order"),
-        ];
         assert_eq!(
-            render_catalog_numbered(&skills),
-            "Available skills (use `$S{N}` or `skills(action=activate, name=\"...\")` to load):\n\nS1: alpha — First in alphabetical order\nS2: zebra — Last in alphabetical order\n"
+            managed_skill_for_path(workspace, &skill_path).as_deref(),
+            Some("resource-skill")
+        );
+        assert_eq!(
+            managed_skill_for_path(
+                workspace,
+                &skill_path.parent().unwrap().join("references/info.md")
+            )
+            .as_deref(),
+            Some("resource-skill")
         );
     }
 
     #[test]
-    fn render_catalog_numbered_empty_returns_empty() {
-        assert_eq!(render_catalog_numbered(&[]), "");
+    fn catalog_snapshot_reuses_deterministic_fingerprint() {
+        let temp = tempfile::tempdir().unwrap();
+        write_skill(
+            &temp.path().join("skills"),
+            "alpha",
+            "---\nname: alpha\ndescription: Alpha workflow.\n---\n\nBody",
+        );
+
+        let first = SkillCatalogSnapshot::discover(temp.path());
+        let second = SkillCatalogSnapshot::discover(temp.path());
+
+        assert_eq!(first.fingerprint, second.fingerprint);
+        assert_eq!(first.rendered, second.rendered);
+    }
+
+    #[test]
+    fn body_change_includes_small_diff_and_summarizes_large_diff() {
+        let small = describe_body_change("one\ntwo\n", "one\nchanged\n", 200);
+        assert!(
+            small
+                .diff
+                .as_deref()
+                .is_some_and(|d| d.contains("-two") && d.contains("+changed"))
+        );
+
+        let old = (0..250)
+            .map(|i| format!("old-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let new = (0..250)
+            .map(|i| format!("new-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let large = describe_body_change(&old, &new, 200);
+        assert!(large.diff.is_none());
+        assert!(large.changed_lines > 200);
+        assert_ne!(large.old_hash, large.new_hash);
+    }
+
+    #[test]
+    fn skill_effect_supports_full_lifecycle() {
+        let retain = SkillEffect::Retain {
+            name: "alpha".into(),
+        };
+        let release = SkillEffect::Release {
+            name: "alpha".into(),
+        };
+        assert!(matches!(retain, SkillEffect::Retain { name } if name == "alpha"));
+        assert!(matches!(release, SkillEffect::Release { name } if name == "alpha"));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillCatalogSnapshot {
+    pub catalog: SkillCatalog,
+    pub rendered: String,
+    pub fingerprint: String,
+}
+
+impl SkillCatalogSnapshot {
+    pub fn discover(workspace: &Path) -> Self {
+        let catalog = discover(workspace);
+        let rendered = render_catalog(&catalog);
+        let mut fingerprint_input = rendered.clone();
+        for skill in &catalog.skills {
+            fingerprint_input.push_str(&skill.path.to_string_lossy());
+            if let Ok(metadata) = fs::metadata(&skill.path) {
+                fingerprint_input.push_str(&format!(":{}", metadata.len()));
+                if let Ok(modified) = metadata.modified()
+                    && let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH)
+                {
+                    fingerprint_input.push_str(&format!(":{}", elapsed.as_nanos()));
+                }
+            }
+        }
+        let fingerprint = content_hash(&fingerprint_input);
+        Self {
+            catalog,
+            rendered,
+            fingerprint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillEffect {
+    Activate(SkillActivation),
+    Retain { name: String },
+    Release { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillBodyChange {
+    pub old_hash: String,
+    pub new_hash: String,
+    pub changed_lines: usize,
+    pub added_lines: usize,
+    pub removed_lines: usize,
+    pub diff: Option<String>,
+}
+
+pub fn content_hash(content: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in content.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Deterministic provider-neutral token estimate used for admission budgets.
+/// Provider-specific tokenizers may report more precise UI telemetry, but this
+/// calculation remains stable across processes and never causes truncation.
+pub fn token_count(content: &str) -> usize {
+    content.chars().count().div_ceil(4)
+}
+
+pub fn describe_body_change(old: &str, new: &str, max_diff_lines: usize) -> SkillBodyChange {
+    let old_lines = old.lines().collect::<Vec<_>>();
+    let new_lines = new.lines().collect::<Vec<_>>();
+    let common = old_lines.len().min(new_lines.len());
+    let replaced = (0..common)
+        .filter(|&i| old_lines[i] != new_lines[i])
+        .count();
+    let removed_lines = replaced + old_lines.len().saturating_sub(common);
+    let added_lines = replaced + new_lines.len().saturating_sub(common);
+    let changed_lines = removed_lines + added_lines;
+    let diff = (changed_lines <= max_diff_lines).then(|| {
+        let mut out = String::new();
+        for index in 0..old_lines.len().max(new_lines.len()) {
+            match (old_lines.get(index), new_lines.get(index)) {
+                (Some(before), Some(after)) if before == after => {}
+                (Some(before), Some(after)) => {
+                    out.push_str(&format!("-{}\n+{}\n", before, after));
+                }
+                (Some(before), None) => out.push_str(&format!("-{}\n", before)),
+                (None, Some(after)) => out.push_str(&format!("+{}\n", after)),
+                (None, None) => {}
+            }
+        }
+        out
+    });
+    SkillBodyChange {
+        old_hash: content_hash(old),
+        new_hash: content_hash(new),
+        changed_lines,
+        added_lines,
+        removed_lines,
+        diff,
     }
 }

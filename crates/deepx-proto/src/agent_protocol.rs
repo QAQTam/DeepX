@@ -142,6 +142,16 @@ pub enum Ui2Agent {
         name: String,
     },
 
+    /// Revision-safe skills operation used by the V2 workbench.
+    #[serde(rename = "skill_operation")]
+    SkillOperation {
+        operation_id: String,
+        action: String,
+        name: String,
+        #[serde(default)]
+        expected_revision: u64,
+    },
+
     /// Reload the skill catalog from disk and refresh the catalog system message.
     #[serde(rename = "reload_skills")]
     ReloadSkills,
@@ -171,6 +181,37 @@ pub struct SkillsStatus {
     pub available: Vec<SkillInfo>,
     /// Names of currently loaded (explicit, $mention-activated) skills.
     pub active: Vec<String>,
+    #[serde(default)]
+    pub catalog_revision: String,
+    #[serde(default)]
+    pub context_epoch: u64,
+    #[serde(default)]
+    pub operation_revision: u64,
+    #[serde(default)]
+    pub token_budget: usize,
+    #[serde(default)]
+    pub token_usage: usize,
+    #[serde(default)]
+    pub runtime: Vec<SkillRuntimeInfo>,
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillRuntimeInfo {
+    pub name: String,
+    pub description: String,
+    /// catalog, requested, active, review_due, or unavailable
+    pub state: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lease_remaining: Option<u8>,
+    pub token_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
 }
 
 /// Tool call definition sent in RoundComplete.tool_calls.
@@ -579,6 +620,16 @@ pub enum Agent2Ui {
     SkillsChanged {
         #[serde(flatten)]
         status: SkillsStatus,
+    },
+
+    #[serde(rename = "skill_operation_resolved")]
+    SkillOperationResolved {
+        operation_id: String,
+        success: bool,
+        revision: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<String>,
     },
 
     /// Permission request: agent asks user to approve/deny a tool call.

@@ -425,40 +425,6 @@ impl MessageStore {
         Effect::None
     }
 
-    /// Insert one protected skill system message, replacing an older version
-    /// of the same named skill when its file changed during the session.
-    pub fn upsert_skill_system(&mut self, name: &str, content: &str) -> bool {
-        let prefix = format!("[DEEPX_SKILL_V1]\nname: {name}\n");
-        let mut kept_exact = false;
-        let before = self.system_messages.len();
-        self.system_messages.retain(|message| {
-            let text = message
-                .content
-                .iter()
-                .find_map(|block| match block {
-                    deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .unwrap_or("");
-            if !text.starts_with(&prefix) {
-                return true;
-            }
-            if text == content && !kept_exact {
-                kept_exact = true;
-                true
-            } else {
-                false
-            }
-        });
-        let removed_stale = self.system_messages.len() != before;
-        if !kept_exact {
-            self.push_system(Message::system(content));
-            true
-        } else {
-            removed_stale
-        }
-    }
-
     /// Remove all system messages whose first text block starts with the
     /// given prefix. Used to replace catalog messages without relying on
     /// the [DEEPX_SKILL_V1] format.
@@ -474,48 +440,6 @@ impl MessageStore {
                 .unwrap_or("");
             !text.starts_with(prefix)
         });
-    }
-
-    /// Remove a single explicitly-activated skill from system_messages.
-    /// Returns true if a message was removed.
-    pub fn remove_skill_system(&mut self, name: &str) -> bool {
-        let prefix = format!("[DEEPX_SKILL_V1]\nname: {name}\n");
-        let before = self.system_messages.len();
-        self.system_messages.retain(|message| {
-            let text = message
-                .content
-                .iter()
-                .find_map(|block| match block {
-                    deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .unwrap_or("");
-            !text.starts_with(&prefix)
-        });
-        self.system_messages.len() != before
-    }
-
-    /// Return the names of all explicitly-activated skills currently in
-    /// system_messages (identified by the [DEEPX_SKILL_V1] marker).
-    pub fn active_skill_names(&self) -> Vec<String> {
-        self.system_messages
-            .iter()
-            .filter_map(|message| {
-                let text = message
-                    .content
-                    .iter()
-                    .find_map(|block| match block {
-                        deepx_types::ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .unwrap_or("");
-                let name = text
-                    .strip_prefix("[DEEPX_SKILL_V1]\nname: ")
-                    .and_then(|rest| rest.split('\n').next())
-                    .map(|n| n.to_string())?;
-                Some(name)
-            })
-            .collect()
     }
 
     pub fn push_user(&mut self, text: &str) -> Effect {
@@ -694,11 +618,7 @@ impl MessageStore {
         );
     }
 
-    pub fn build_context_for_gate(
-        &mut self,
-        annotations: &[String],
-        skill_bodies: &std::collections::HashMap<String, String>,
-    ) -> Vec<Message> {
+    pub fn build_context_for_gate(&mut self, annotations: &[String]) -> Vec<Message> {
         let mut full: Vec<Message> = {
             let mut v = Vec::new();
             v.extend(self.system_messages.clone());
@@ -751,21 +671,6 @@ impl MessageStore {
                                 }
                             }
                             v.push(folded);
-                        }
-                    }
-                    // Inject skill body as system message AFTER all tool results (once per step).
-                    // Previously this was inside the tool_results loop, causing N duplicates
-                    // for a step with N tool results. Only the last step of the last turn
-                    // receives the ephemeral skill body injection.
-                    if is_last_step_of_last_turn {
-                        if let Some(tc_id) = step
-                            .assistant_tool_ids()
-                            .iter()
-                            .find(|id| step.tool_name_for_result(id) == Some("skills"))
-                        {
-                            if let Some(skill_body) = skill_bodies.get(tc_id.as_str()) {
-                                v.push(deepx_types::Message::system(skill_body));
-                            }
                         }
                     }
                 }
@@ -1463,7 +1368,7 @@ mod tests {
         store.push_tool_result_direct("read-1", "READ_RESULT", true);
         store.push_tool_result_direct("exec-1", "EXEC_RESULT", true);
 
-        let context = store.build_context_for_gate(&[], &std::collections::HashMap::new());
+        let context = store.build_context_for_gate(&[]);
 
         assert_eq!(
             context_result(&context, "write-1"),
@@ -1485,7 +1390,7 @@ mod tests {
         store.push_tool_result_direct("read-1", "READ_RESULT", true);
         store.push_user("second turn");
 
-        let context = store.build_context_for_gate(&[], &std::collections::HashMap::new());
+        let context = store.build_context_for_gate(&[]);
 
         assert_eq!(
             context_result(&context, "write-1"),
@@ -1506,18 +1411,12 @@ mod tests {
         store.push_tool_result_direct("skill-1", &activation, true);
 
         assert_eq!(
-            context_result(
-                &store.build_context_for_gate(&[], &std::collections::HashMap::new()),
-                "skill-1"
-            ),
+            context_result(&store.build_context_for_gate(&[]), "skill-1"),
             activation
         );
         store.push_user("continue");
         assert_eq!(
-            context_result(
-                &store.build_context_for_gate(&[], &std::collections::HashMap::new()),
-                "skill-1"
-            ),
+            context_result(&store.build_context_for_gate(&[]), "skill-1"),
             activation
         );
     }
@@ -1531,18 +1430,12 @@ mod tests {
         store.push_tool_result_direct("resource-1", &resource, true);
 
         assert_eq!(
-            context_result(
-                &store.build_context_for_gate(&[], &std::collections::HashMap::new()),
-                "resource-1"
-            ),
+            context_result(&store.build_context_for_gate(&[]), "resource-1"),
             resource
         );
         store.push_user("continue");
         assert_eq!(
-            context_result(
-                &store.build_context_for_gate(&[], &std::collections::HashMap::new()),
-                "resource-1"
-            ),
+            context_result(&store.build_context_for_gate(&[]), "resource-1"),
             resource
         );
     }
@@ -1566,26 +1459,6 @@ mod tests {
                 .any(|block| matches!(block, ContentBlock::Text { text } if text == skill))
         }));
         assert_eq!(repairs.len(), 2);
-    }
-
-    #[test]
-    fn skill_system_update_replaces_stale_instructions() {
-        let mut store = MessageStore::new_ephemeral("test");
-        let old = "[DEEPX_SKILL_V1]\nname: review\nold\n[END_DEEPX_SKILL_V1]";
-        let new = "[DEEPX_SKILL_V1]\nname: review\nnew\n[END_DEEPX_SKILL_V1]";
-        assert!(store.upsert_skill_system("review", old));
-        assert!(store.upsert_skill_system("review", new));
-        assert!(!store.upsert_skill_system("review", new));
-        assert_eq!(store.system_messages().len(), 1);
-        let text = store.system_messages()[0]
-            .content
-            .iter()
-            .find_map(|block| match block {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(text, new);
     }
 
     #[test]

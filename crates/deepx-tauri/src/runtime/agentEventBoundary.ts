@@ -6,7 +6,7 @@ const EVENT_TYPES: ReadonlySet<Agent2Ui["type"]> = new Set([
   "tool_notice", "plan_submitted", "plan_resolved", "dashboard", "done",
   "compact_start", "compact_end", "compact_delta", "cancelled", "shutdown_ack",
   "ready", "audit_record", "exec_progress", "tool_call_preview", "code_delta",
-  "pong", "skills_changed", "permission_request", "ask_user", "ask_resolved",
+  "pong", "skills_changed", "skill_operation_resolved", "permission_request", "ask_user", "ask_resolved",
   "ask_rejected",
 ]);
 

@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createI18n, I18nCtx } from "../i18n";
 import SkillsView from "./SkillsView";
-import type { SkillInfo } from "../lib/types";
+import type { SkillInfo, SkillRuntimeInfo } from "../lib/types";
 
 function skill(overrides: Partial<SkillInfo> = {}): SkillInfo {
   return {
@@ -420,6 +420,25 @@ describe("SkillsView", () => {
 
     expect(refresh.disabled).toBe(false);
 
+    dispose();
+    host.remove();
+  });
+
+  it("13. renders the five authoritative runtime columns", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const runtime: SkillRuntimeInfo[] = ["catalog", "requested", "active", "review_due", "unavailable"].map((state, index) => ({
+      name: `skill-${index}`, description: state, state, source: "test", token_count: index,
+    }));
+    const dispose = render(() => <I18nCtx.Provider value={createI18n("en")}>
+      <SkillsView seed="seed" available={[]} active={[]} runtime={runtime}
+        onActivate={vi.fn()} onUnload={vi.fn()} onReload={vi.fn()} />
+    </I18nCtx.Provider>, host);
+    await flush();
+    for (const label of ["Catalog", "Requested", "Enabled", "Review Due", "Unavailable"]) {
+      expect(host.textContent).toContain(label);
+    }
+    expect(host.querySelectorAll(".skill-column")).toHaveLength(5);
     dispose();
     host.remove();
   });

@@ -49,6 +49,7 @@ pub fn run() {
             agent_bridge::cmd_get_dashboard_data,
             agent_bridge::cmd_unload_skill,
             agent_bridge::cmd_activate_skill,
+            agent_bridge::cmd_skill_operation,
             agent_bridge::cmd_reload_skills,
             agent_bridge::cmd_task_action,
             agent_bridge::cmd_get_context_stats,

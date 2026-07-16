@@ -1,38 +1,44 @@
-# DeepX Skill Runtime
+# DeepX Skill Runtime V2
 
-## Design alignment
+This document is authoritative for skill discovery, context assembly, runtime state, IPC, and persistence.
 
-DeepX uses the community Agent Skills specification as the portable file contract: `SKILL.md`, YAML metadata, standard naming rules, and progressive disclosure. The runtime architecture follows Codex's stronger separation of catalog metadata, explicit host activation, typed activation state, and bounded resource loading. It does not copy Codex-specific plugin, admin, or enterprise scope machinery.
+## Ownership and context order
 
-DeepX-specific choices are deliberate: the selected workspace is the project trust boundary, discovery remains dynamic, and activation remains sticky for the current session because DeepX keeps a long-running multi-turn message store. The agent retains an exact rendered catalog snapshot and replaces it only when the effective metadata changes. These choices preserve interoperability without importing runtime policy that DeepX does not otherwise support.
+`SkillContextManager` owns catalog snapshots, Requested/Active/ReviewDue/Unavailable state, leases, budget, hot reload, queued UI transitions, revisions, and session conversion. `MessageStore` owns conversation history only and never infers skill state from historical system messages.
 
-## Runtime flow
+Each LLM request is assembled in this order:
 
-1. `deepx-skills` scans bounded project and user roots and parses only `SKILL.md` metadata.
-2. `AgentState::build_context` injects a transient catalog system message in a fixed slot after the base system prefix and before activated skill bodies. Unchanged catalogs reuse the retained rendered snapshot byte-for-byte.
-3. `$skill-name` is resolved and injected by the host before the user turn.
-4. Implicit activation uses the read-only `skills` tool with `action=activate`, which accepts a catalog name rather than a file path and returns the full body plus a resource manifest.
-5. `deepx-tools` returns a typed `SkillActivation` effect only for a successful `skills(action=activate)` call. The loop promotes that typed effect to a protected system message; ordinary tool text cannot impersonate it. Protected messages survive normal result folding, compaction, and session snapshots.
-6. The same tool uses `action=resource` for contained relative resources, `action=list` for effective precedence and diagnostics, and `action=validate` for strict portable-spec validation.
+1. persisted base system prompt;
+2. transient stable catalog system slot;
+3. conversation history;
+4. the current user-message clone with workspace and Requested annotations;
+5. current-round tool results;
+6. a final system `skill_context_envelope` containing the complete authoritative active set.
 
-## Discovery precedence
+Catalog and envelope messages are never written to history. Removing all skills emits an explicit empty active set. Stateful providers receive the complete final envelope every lap; it supersedes older remote instructions. OpenAI-compatible providers are the initial supported target for trailing system messages.
 
-Project scopes override user scopes:
+## Discovery and tools
 
-1. `<workspace>/.deepx/skills/`
-2. `<workspace>/.agents/skills/`
-3. `<workspace>/skills/` (legacy DeepX compatibility)
-4. `~/.deepx/skills/`
-5. `~/.agents/skills/`
+Discovery precedence is `.deepx/skills`, `.agents/skills`, and `skills` under the workspace, followed by the equivalent user roots. Scanning and file sizes are bounded. Invalid entries do not stop discovery and appear as Unavailable diagnostics.
 
-Scanning is deterministic and bounded by depth, directory count, skill count, file size, catalog size, and resource count. Symlink directories are not traversed.
+The fixed `skills` schema supports `activate`, `retain`, `release`, `resource`, `list`, and `validate`; it is not expanded per discovered skill. Successful lifecycle actions return ordered typed `SkillEffect` values. Parallel results are committed in original tool-call order. Generic `read` and `search` reject or exclude discovered `SKILL.md` files and managed resources with `USE_SKILLS_TOOL`.
 
-## Security boundary
+## State machine and turn lifecycle
 
-Generic file or network output cannot become instructions by copying the activation marker. Promotion also requires a successful typed effect from `skills(action=activate)`. The tool resolves names only from the discovered catalog and does not accept arbitrary paths.
+Frontend Load and `$skill-name` create Requested state and add only a temporary explanation to the current LLM user-message clone. The model should call `skills.activate`. The first ignored lap adds a final-system reminder; the second ignored lap performs the same typed activation in the host with source `user_forced` and runs another model lap.
 
-The selected workspace is the project-skill trust boundary, matching DeepX's existing workspace execution model. Skill `allowed-tools` metadata is descriptive only and never bypasses DeepX permissions. Resource paths are canonicalized and must remain inside the skill directory.
+Every user turn freezes a `SkillTurnSnapshot`. Permission, ask-user, plan review, and additional model laps reuse that snapshot epoch. UI operations received during a turn are queued until the next user-turn boundary. Only successful `TurnComplete` consumes a lease; cancel and abort do not.
 
-## Lifecycle decision
+Active skills receive a three-successful-turn lease. Expiry moves them to ReviewDue. `retain` renews three turns and `release` removes immediately. If a review turn ends without either action, removal occurs at the following user-turn boundary and a one-shot system notice is emitted.
 
-Discovery is intentionally dynamic: each catalog build and activation resolves the current filesystem state, so creation, edits, and deletion require no process restart. Activation is session-sticky because DeepX uses a long-running multi-turn message store; a same-name reactivation replaces the protected instruction snapshot. A new session starts with no active skill body and retains only the dynamic catalog.
+## Budget and hot update
+
+Total skill instructions are limited to 10% of effective input capacity with a 64K-token ceiling; one skill is limited to 32K. Bodies are never truncated. Reclamation order is ReviewDue first, then shortest remaining lease, oldest retain revision, and name. Activation is rejected if reclamation cannot satisfy the budget.
+
+Catalog directory metadata is fingerprinted every user turn while unchanged rendered catalog bytes are reused. Active bodies are reloaded and validated every turn. A changed body replaces the old body immediately and resets its lease. Changes of at most 200 lines include a diff; larger changes include hashes and add/remove counts only. Missing or invalid active files are removed instead of retaining stale instructions.
+
+## IPC and persistence
+
+`SkillsStatus` V2 carries catalog revision, context epoch, operation revision, budget usage, diagnostics, and complete runtime entries. Frontend commands use stable `operation_id` values; duplicate IDs resolve idempotently, stale expected revisions return `SKILL_OPERATION_STALE`, and every resolution is followed by a revisioned snapshot. The frontend reducer rejects older snapshots and is the event-derived source of skill state.
+
+`SkillSessionStateV2` persists names, activation order, source, stable state, lease, and revisions in JSON and Turso metadata. It never stores instruction bodies, transient requests, in-flight operations, or one-shot notices. Resume reloads each name from disk, restores order, resets valid leases to three turns, and marks missing entries Unavailable. Legacy sessions default to empty V2 state; historical `[DEEPX_SKILL_V1]` messages are not used for recovery.

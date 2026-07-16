@@ -1,6 +1,6 @@
 ---
 name: using-skills
-description: 任何对话开始时使用——确定如何发现和使用 skills。在任何响应（包括澄清问题）之前必须检查是否有适用的 skill。
+description: Use when starting any conversation, before responding, asking questions, or taking actions that may have an applicable skill.
 ---
 
 # Using Skills
@@ -13,7 +13,7 @@ description: 任何对话开始时使用——确定如何发现和使用 skills
 
 ## 如何检查
 
-1. 查看 system prompt 中 `Available skills (use $S{N} or ...)` 段，列出了所有可用 skill（name + description）
+1. 查看 system prompt 的稳定 skills catalog，其中按真实名称列出 name 和 description
 2. 如果任务匹配某个 skill 的描述，使用 **`skills(action=activate, name="skill-name")`** 工具加载
 3. **绝对禁止**使用 `read` 工具直接读取 `SKILL.md` 文件——只允许 `skills` 工具的加载命令
 4. Skill 激活后其指令会注入当前上下文，严格遵循其中的工作流和方法论

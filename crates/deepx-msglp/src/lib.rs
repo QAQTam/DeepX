@@ -25,6 +25,7 @@ pub mod lifecycle;
 pub mod logger;
 pub mod new;
 mod notification;
+pub mod skill_context;
 #[cfg(windows)]
 mod toast_com;
 pub mod util; // Ring-architecture Loop (primary)

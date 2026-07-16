@@ -39,7 +39,7 @@ export function dispatchAgentEvent(
     case "plan_submitted": case "done": case "compact_start":
     case "compact_end": case "compact_delta": case "shutdown_ack": case "ready":
     case "audit_record": case "exec_progress": case "tool_call_preview": case "code_delta":
-    case "pong": case "skills_changed": case "permission_request": case "ask_user":
+    case "pong": case "skills_changed": case "skill_operation_resolved": case "permission_request": case "ask_user":
       return;
     default: {
       const unreachable: never = event;

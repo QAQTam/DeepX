@@ -413,7 +413,7 @@ impl ToolEngine {
                     result.content,
                     result.success,
                     result.code_delta,
-                    result.skill_activation,
+                    result.skill_effects,
                 )
             })
             .expect("failed to spawn tool thread");
@@ -421,20 +421,18 @@ impl ToolEngine {
         // Drain progress
         self.drain_progress(ctx, progress_rx, &id.to_string());
 
-        let (tid, output, success, code_delta, skill_activation) =
+        let (tid, output, success, code_delta, skill_effects) =
             handle.join().unwrap_or_else(|_| {
                 (
                     id.to_string(),
                     "[ERROR] tool thread panicked".into(),
                     false,
                     None,
-                    None,
+                    Vec::new(),
                 )
             });
 
-        if let Some(activation) = skill_activation {
-            ctx.agent.activate_skill(&tid, activation);
-        }
+        ctx.agent.apply_tool_effects(skill_effects);
 
         if let Some(ref delta) = code_delta {
             ctx.stats.push_delta(delta.clone());
@@ -571,14 +569,10 @@ impl ToolEngine {
         .to_string()
     }
 
-    fn protocol_risk(
-        risk: deepx_tools::permission::PermissionRisk,
-    ) -> deepx_proto::PermissionRisk {
+    fn protocol_risk(risk: deepx_tools::permission::PermissionRisk) -> deepx_proto::PermissionRisk {
         match risk {
             deepx_tools::permission::PermissionRisk::Low => deepx_proto::PermissionRisk::Low,
-            deepx_tools::permission::PermissionRisk::Medium => {
-                deepx_proto::PermissionRisk::Medium
-            }
+            deepx_tools::permission::PermissionRisk::Medium => deepx_proto::PermissionRisk::Medium,
             deepx_tools::permission::PermissionRisk::High => deepx_proto::PermissionRisk::High,
         }
     }

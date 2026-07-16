@@ -391,11 +391,11 @@ fn skill_activation_reaches_followup_round_and_next_user_turn() {
         "follow-up body omitted activation: {}",
         bodies[1]
     );
-    // Skill bodies are now ephemeral (per-turn), not persisted to system_messages.
-    // The next turn should NOT contain the skill from the previous turn.
+    // Active state is owned by SkillContextManager and remains authoritative
+    // across user turns until its three-successful-turn lease expires.
     assert!(
-        !bodies[2].contains("STICKY_SKILL_INSTRUCTION"),
-        "next-turn should NOT persist skill activation (ephemeral design): {}",
+        bodies[2].contains("STICKY_SKILL_INSTRUCTION"),
+        "next-turn should retain leased skill activation: {}",
         bodies[2]
     );
 }
@@ -565,12 +565,7 @@ fn llm_four_pending_execs_defer_execution_until_all_resolved() {
     let calls = markers
         .iter()
         .enumerate()
-        .map(|(index, path)| {
-            (
-                format!("exec-{}", index + 1),
-                marker_exec_args(path),
-            )
-        })
+        .map(|(index, path)| (format!("exec-{}", index + 1), marker_exec_args(path)))
         .collect::<Vec<_>>();
     let call_refs = calls
         .iter()
@@ -590,9 +585,7 @@ fn llm_four_pending_execs_defer_execution_until_all_resolved() {
                     text: "run four commands".into(),
                 },
             );
-            let mut ids = (0..4)
-                .map(|_| permission_id(receiver))
-                .collect::<Vec<_>>();
+            let mut ids = (0..4).map(|_| permission_id(receiver)).collect::<Vec<_>>();
             ids.sort();
             assert_eq!(ids, vec!["exec-1", "exec-2", "exec-3", "exec-4"]);
 

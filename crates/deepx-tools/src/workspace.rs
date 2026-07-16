@@ -89,6 +89,9 @@ mod tests {
 
     #[test]
     fn deepx_dir_returns_workspace_subdir_when_set() {
+        let _guard = crate::TEST_RUNTIME_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::set_workspace("/home/user/project");
         let dir = deepx_dir();
         assert_eq!(dir, Path::new("/home/user/project/.deepx"));
@@ -96,6 +99,9 @@ mod tests {
 
     #[test]
     fn deepx_dir_falls_back_when_empty() {
+        let _guard = crate::TEST_RUNTIME_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::set_workspace("");
         let dir = deepx_dir();
         let expected = deepx_types::platform::data_dir().join("workspace");
@@ -104,6 +110,9 @@ mod tests {
 
     #[test]
     fn deepx_dir_falls_back_when_dot() {
+        let _guard = crate::TEST_RUNTIME_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::set_workspace(".");
         let dir = deepx_dir();
         let expected = deepx_types::platform::data_dir().join("workspace");

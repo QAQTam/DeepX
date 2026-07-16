@@ -31,7 +31,7 @@ pub use config::{
 };
 pub use message::{ContentBlock, FunctionCall, Message, ToolCall};
 pub use provider::{CacheTokenField, EndpointSpec, ProviderSpec, ThinkingParamMode, UserSendMode};
-pub use session::SessionMeta;
+pub use session::{SessionMeta, SkillSessionEntry, SkillSessionEntryState, SkillSessionStateV2};
 pub use state::DebugLevel;
 pub use tool_def::{ToolDef, ToolFunction};
 

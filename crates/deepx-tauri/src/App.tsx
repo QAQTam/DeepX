@@ -515,8 +515,24 @@ export default function App() {
                 seed={activeSeed()}
                 available={activeEntry()?.state().skills.available ?? []}
                 active={activeEntry()?.state().skills.active ?? []}
-                onActivate={async name => { await invoke("cmd_activate_skill", { seed: activeSeed(), name }); }}
-                onUnload={async name => { await invoke("cmd_unload_skill", { seed: activeSeed(), name }); }}
+                runtime={activeEntry()?.state().skills.runtime ?? []}
+                catalogRevision={activeEntry()?.state().skills.catalogRevision}
+                contextEpoch={activeEntry()?.state().skills.contextEpoch}
+                tokenBudget={activeEntry()?.state().skills.tokenBudget}
+                tokenUsage={activeEntry()?.state().skills.tokenUsage}
+                diagnostics={activeEntry()?.state().skills.diagnostics ?? []}
+                onActivate={async name => { await invoke("cmd_skill_operation", {
+                  seed: activeSeed(), operationId: crypto.randomUUID(), action: "request", name,
+                  expectedRevision: activeEntry()?.state().skills.operationRevision ?? 0,
+                }); }}
+                onUnload={async name => { await invoke("cmd_skill_operation", {
+                  seed: activeSeed(), operationId: crypto.randomUUID(), action: "release", name,
+                  expectedRevision: activeEntry()?.state().skills.operationRevision ?? 0,
+                }); }}
+                onRetain={async name => { await invoke("cmd_skill_operation", {
+                  seed: activeSeed(), operationId: crypto.randomUUID(), action: "retain", name,
+                  expectedRevision: activeEntry()?.state().skills.operationRevision ?? 0,
+                }); }}
                 onReload={async () => { await invoke("cmd_reload_skills", { seed: activeSeed() }); }}
               />
             </Match>

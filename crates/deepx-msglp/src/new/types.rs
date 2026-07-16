@@ -420,6 +420,11 @@ impl SessionBundle {
     /// Flush session metadata and code stats to disk.
     /// Called on TurnComplete and before session switch.
     pub fn flush(&mut self) {
+        self.agent.session.skills = self.agent.skills.session_state();
+        if !self.agent.ephemeral && !self.agent.session.seed.is_empty() {
+            deepx_session::SessionManager::global()
+                .persist_skills(&self.agent.session.seed, self.agent.session.skills.clone());
+        }
         self.agent.msg.flush_meta(
             &self.agent.config.model,
             &self.agent.config.reasoning_effort,

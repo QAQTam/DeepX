@@ -86,6 +86,7 @@ pub fn chat_stream_openai(
     cancel: Option<&Arc<AtomicBool>>,
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> anyhow::Result<()> {
+    let messages = normalize_skill_envelope(provider, messages).map_err(anyhow::Error::msg)?;
     // Stateful 模式：只发增量消息（最后一条 user + 其后的 tool 结果）
     let messages = if provider.stateful {
         filter_stateful_messages(messages)
@@ -369,7 +370,12 @@ fn stream_sse(
                                     .and_then(|v| v.as_str())
                                 {
                                     entry.2.push_str(args);
-                                    log::info!("[GATE] ToolCallProgress idx={idx} id={} name={} args_len={}", entry.0, entry.1, entry.2.len());
+                                    log::info!(
+                                        "[GATE] ToolCallProgress idx={idx} id={} name={} args_len={}",
+                                        entry.0,
+                                        entry.1,
+                                        entry.2.len()
+                                    );
                                     on_event(StreamEvent::ToolCallProgress {
                                         index: idx,
                                         id: entry.0.clone(),
@@ -522,16 +528,11 @@ fn filter_stateful_messages(messages: Vec<Message>) -> Vec<Message> {
         );
     }
 
-    let mut out: Vec<Message> = Vec::new();
-
-    // system 只在首次请求时发送（web session 已记住）
     if is_first {
-        for msg in &messages {
-            if msg.role == "system" {
-                out.push(msg.clone());
-            }
-        }
+        return messages;
     }
+
+    let mut out: Vec<Message> = Vec::new();
 
     // 保留 start 之后的新消息
     for msg in &messages[start..] {
@@ -551,6 +552,31 @@ fn filter_stateful_messages(messages: Vec<Message>) -> Vec<Message> {
     eprintln!("[filter] 输出: {:?} (is_first={})", out_roles, is_first);
 
     out
+}
+
+fn normalize_skill_envelope(
+    provider: &ProviderConfig,
+    mut messages: Vec<Message>,
+) -> Result<Vec<Message>, String> {
+    let is_envelope = messages.last().is_some_and(|message| {
+        message.role == "system" && message.content.iter().any(|block| {
+            matches!(block, ContentBlock::Text { text } if text.starts_with("<skill_context_envelope"))
+        })
+    });
+    if !is_envelope || provider.supports_tail_system {
+        return Ok(messages);
+    }
+    if provider.stateful {
+        return Err("SKILL_CONTEXT_SYNC_UNSUPPORTED: stateful provider cannot accept the authoritative tail system envelope; rebuild the remote session with a compatible provider".into());
+    }
+    let envelope = messages.pop().expect("checked last message");
+    let dynamic_slot = messages
+        .iter()
+        .take_while(|message| message.role == "system")
+        .count();
+    messages.insert(dynamic_slot, envelope);
+    log::warn!("skill context moved to head dynamic system slot; prompt-prefix cache degraded");
+    Ok(messages)
 }
 
 fn convert_messages(messages: Vec<Message>, system: Option<String>) -> Vec<serde_json::Value> {
@@ -657,6 +683,7 @@ pub fn chat_sync_openai(
     messages: Vec<Message>,
     max_tokens: u32,
 ) -> Result<String, String> {
+    let messages = normalize_skill_envelope(provider, messages)?;
     let messages = if provider.stateful {
         filter_stateful_messages(messages)
     } else {
@@ -727,5 +754,96 @@ fn http_error_description(status: u16) -> &'static str {
         500 => "Internal Error — 服务器故障",
         503 => "Service Unavailable — 服务器繁忙",
         _ => "Unknown",
+    }
+}
+
+#[cfg(test)]
+mod skill_envelope_tests {
+    use super::*;
+
+    #[test]
+    fn stateful_first_request_does_not_duplicate_system_slots() {
+        let messages = vec![
+            Message::system("base"),
+            Message::system("catalog"),
+            Message::user("hi"),
+            Message::system("envelope"),
+        ];
+        let filtered = filter_stateful_messages(messages.clone());
+        assert_eq!(filtered.len(), messages.len());
+    }
+
+    #[test]
+    fn stateful_increment_always_keeps_authoritative_tail_envelope() {
+        let messages = vec![
+            Message::system("base"),
+            Message::user("old"),
+            Message {
+                msg_id: None,
+                role: "assistant".into(),
+                name: None,
+                content: vec![ContentBlock::text("done")],
+            },
+            Message::user("next"),
+            Message::system("<skill_context_envelope />"),
+        ];
+        let filtered = filter_stateful_messages(messages);
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user", "system"]
+        );
+        assert!(
+            matches!(&filtered[1].content[0], ContentBlock::Text { text } if text.contains("skill_context_envelope"))
+        );
+    }
+
+    fn provider() -> ProviderConfig {
+        ProviderConfig::openai(
+            "http://test",
+            "",
+            "m",
+            None,
+            None,
+            ThinkingParamMode::OpenAi,
+            CacheTokenField::None,
+            false,
+        )
+    }
+
+    #[test]
+    fn stateless_provider_can_explicitly_degrade_to_head_dynamic_slot() {
+        let provider = provider().with_tail_system_support(false);
+        let messages = vec![
+            Message::system("base"),
+            Message::user("hi"),
+            Message::system("<skill_context_envelope />"),
+        ];
+        let normalized = normalize_skill_envelope(&provider, messages).unwrap();
+        assert_eq!(
+            normalized
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["system", "system", "user"]
+        );
+    }
+
+    #[test]
+    fn stateful_provider_refuses_silent_head_fallback() {
+        let provider = provider()
+            .with_stateful(true)
+            .with_tail_system_support(false);
+        let error = normalize_skill_envelope(
+            &provider,
+            vec![
+                Message::user("hi"),
+                Message::system("<skill_context_envelope />"),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.contains("SKILL_CONTEXT_SYNC_UNSUPPORTED"));
     }
 }

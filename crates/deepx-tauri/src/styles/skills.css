@@ -21,6 +21,15 @@
   display: flex; align-items: center; gap: 8px;
   flex: 1; justify-content: flex-end;
 }
+.skill-runtime-summary {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 4px; color: var(--text-muted); font-size: 10px;
+  font-family: var(--font-mono);
+}
+.skill-diagnostics {
+  padding: 6px 20px; border-bottom: 0.5px solid var(--border-divider);
+  color: var(--text-muted); font-size: 11px;
+}
 
 /* ── Search ── */
 .skill-search {
@@ -92,6 +101,22 @@
   flex: 1; overflow-y: auto;
   padding: 8px 0;
 }
+.skills-workbench {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(220px, 1fr));
+  align-items: start;
+  gap: 8px;
+  padding: 10px;
+  overflow: auto;
+}
+.skill-column {
+  min-height: 140px;
+  border: 0.5px solid var(--border-divider);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+.skill-column .skill-group-title { padding: 9px 10px 7px; }
+.skill-column .skill-group-title span { float: right; }
 
 /* ── Empty State ── */
 .skills-empty {
@@ -119,13 +144,14 @@
 .skill-row {
   display: flex; flex-direction: column;
   border-bottom: 0.5px solid var(--border-divider);
+  position: relative;
 }
 .skill-row:last-child { border-bottom: none; }
 .skill-row.pending { opacity: 0.6; pointer-events: none; }
 .skill-row-main {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px;
-  padding: 8px 20px;
+  padding: 8px 54px 8px 10px;
   cursor: pointer;
   transition: background 100ms;
 }
@@ -178,6 +204,12 @@
   flex-shrink: 0;
   display: flex; align-items: center;
   width: 48px; justify-content: center;
+  position: absolute; right: 4px; top: 8px;
+}
+.skill-row-actions button {
+  border: 0.5px solid var(--border-input); border-radius: var(--radius-sm);
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  font: inherit; font-size: 10px; padding: 3px 5px; cursor: pointer;
 }
 
 /* ── Toggle ── */

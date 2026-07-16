@@ -218,4 +218,19 @@ describe("sessionEventReducer", () => {
     state = reduceAgentEvent(state, { type: "more_turns", turns: [older], has_more: false }, 6);
     expect(state.turns.filter(turn => turn.turnId === "older")).toHaveLength(1);
   });
+
+  it("drops stale skills snapshots by operation revision", () => {
+    const snapshot = (revision: bigint, state: string): Agent2Ui => ({
+      type: "skills_changed", available: [], active: [], catalog_revision: "cat",
+      context_epoch: revision, operation_revision: revision,
+      token_budget: 100, token_usage: 10,
+      runtime: [{ name: "alpha", description: "A", state, source: "model", token_count: 10 }],
+      diagnostics: [],
+    });
+    let state = reduceAgentEvent(createRawSessionState("seed"), snapshot(4n, "active"), 1);
+    const current = state;
+    state = reduceAgentEvent(state, snapshot(3n, "catalog"), 2);
+    expect(state).toBe(current);
+    expect(state.skills.runtime[0].state).toBe("active");
+  });
 });

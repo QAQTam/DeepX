@@ -33,4 +33,4 @@ name: string, } | { "type": "activate_skill",
 /**
  * Skill name (must match the name field in SKILL.md frontmatter).
  */
-name: string, } | { "type": "reload_skills" };
+name: string, } | { "type": "skill_operation", operation_id: string, action: string, name: string, expected_revision: bigint, } | { "type": "reload_skills" };

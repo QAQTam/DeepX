@@ -896,10 +896,28 @@ impl Loop {
                 return Some(Outcome::Handled);
             }
             Ui2Agent::ActivateSkill { name } => {
-                // Activate via the same $skill-name parser path
-                self.session
-                    .agent
-                    .activate_explicit_skills(&format!("${name}"));
+                let _ = self.session.agent.skills.queue_request(name, "user");
+                self.emit_skills_status();
+                return Some(Outcome::Handled);
+            }
+            Ui2Agent::SkillOperation {
+                operation_id,
+                action,
+                name,
+                expected_revision,
+            } => {
+                let (success, revision, error) = self.session.agent.skills.apply_ui_operation(
+                    operation_id,
+                    *expected_revision,
+                    action,
+                    name,
+                );
+                let _ = self.event_tx.send(Agent2Ui::SkillOperationResolved {
+                    operation_id: operation_id.clone(),
+                    success,
+                    revision,
+                    error,
+                });
                 self.emit_skills_status();
                 return Some(Outcome::Handled);
             }
@@ -1045,6 +1063,7 @@ impl Loop {
     fn apply_outcome(&mut self, outcome: Outcome) {
         match outcome {
             Outcome::TurnComplete { turn_id, usage } => {
+                self.session.agent.skills.complete_user_turn();
                 // Persist session state
                 self.session.flush();
                 if let Some(ref u) = usage {
@@ -1067,6 +1086,7 @@ impl Loop {
                 usage,
                 consume_queued_interrupt,
             } => {
+                self.session.agent.skills.abort_user_turn();
                 self.session.flush();
                 self.reset_all_engines();
                 self.terminal_for_queued_interrupt = consume_queued_interrupt;

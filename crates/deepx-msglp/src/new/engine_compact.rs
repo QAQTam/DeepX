@@ -69,7 +69,7 @@ impl CompactEngine {
         let all = ctx
             .agent
             .msg
-            .build_context_for_gate(&[], &std::collections::HashMap::new());
+            .build_context_for_gate(&[]);
         let msgs: Vec<&deepx_types::Message> = all.iter().filter(|m| m.role != "system").collect();
         if msgs.is_empty() {
             return None;
