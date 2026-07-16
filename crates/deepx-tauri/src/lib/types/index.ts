@@ -14,6 +14,8 @@ export type { RoundData } from "./RoundData";
 export type { TurnData } from "./TurnData";
 export type { UsageInfo } from "./UsageInfo";
 export type { SessionMeta } from "./SessionMeta";
+export type { SessionActivity } from "./SessionActivity";
+export type { SessionActivityState } from "./SessionActivityState";
 export type { AskMode } from "./AskMode";
 export type { AskQuestion } from "./AskQuestion";
 export type { AskAnswer } from "./AskAnswer";

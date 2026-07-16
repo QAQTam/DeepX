@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter};
 
 use deepx_proto::{Agent2Ui, Ui2Agent};
 
+use super::activity::SessionActivityTracker;
 use super::platform::SYSTEM_PATH;
 use super::util::agent2ui_event_name_for_ui;
 
@@ -82,6 +83,7 @@ static REGISTRY: OnceLock<Mutex<AgentRegistry>> = OnceLock::new();
 pub struct AgentRegistry {
     pub(crate) instances: HashMap<String, AgentInstance>,
     app_handle: AppHandle,
+    activity_tracker: SessionActivityTracker,
 }
 
 impl std::fmt::Debug for AgentRegistry {
@@ -175,6 +177,8 @@ fn spawn_agent_process(
     seed: &str,
     new_seed: Option<&str>,
     app_handle: &AppHandle,
+    activity_tracker: SessionActivityTracker,
+    activity_generation: u64,
 ) -> Result<AgentInstance, String> {
     use std::process::{Command, Stdio};
 
@@ -281,6 +285,11 @@ fn spawn_agent_process(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
             record_replay_event(&replay_for_reader, &payload);
+            if let Some(activity) =
+                activity_tracker.observe(&seed_owned, activity_generation, &payload)
+            {
+                let _ = app_handle.emit("session-activity", &activity);
+            }
             if event_type != "round_delta"
                 && event_type != "tool_call_preview"
                 && event_type != "exec_progress"
@@ -324,6 +333,9 @@ fn spawn_agent_process(
         record_replay_event(&replay_for_reader, &payload);
         let _ = app_handle.emit(&event_label, payload.clone());
         let _ = app_handle.emit("agent-event", payload);
+        if let Some(activity) = activity_tracker.disconnect(&seed_owned, activity_generation) {
+            let _ = app_handle.emit("session-activity", &activity);
+        }
     });
 
     let inst = AgentInstance {
@@ -353,6 +365,7 @@ impl AgentRegistry {
         let registry = AgentRegistry {
             instances: HashMap::new(),
             app_handle: app.clone(),
+            activity_tracker: SessionActivityTracker::default(),
         };
         REGISTRY
             .set(Mutex::new(registry))
@@ -374,7 +387,23 @@ impl AgentRegistry {
     }
 
     fn spawn_agent(&mut self, seed: &str, new_seed: Option<&str>) -> Result<(), String> {
-        let instance = spawn_agent_process(seed, new_seed, &self.app_handle)?;
+        let (generation, starting) = self.activity_tracker.begin(seed);
+        let _ = self.app_handle.emit("session-activity", &starting);
+        let instance = match spawn_agent_process(
+            seed,
+            new_seed,
+            &self.app_handle,
+            self.activity_tracker.clone(),
+            generation,
+        ) {
+            Ok(instance) => instance,
+            Err(error) => {
+                if let Some(activity) = self.activity_tracker.disconnect(seed, generation) {
+                    let _ = self.app_handle.emit("session-activity", &activity);
+                }
+                return Err(error);
+            }
+        };
         self.instances.insert(seed.to_string(), instance);
         log::info!(
             "[REGISTRY] spawned agent for seed={}",
@@ -403,6 +432,10 @@ impl AgentRegistry {
 
     pub fn has_instance(&self, seed: &str) -> bool {
         self.instances.contains_key(seed)
+    }
+
+    pub fn session_activity(&self) -> Vec<deepx_proto::SessionActivity> {
+        self.activity_tracker.snapshot()
     }
 
     pub fn replay_events(&self, seed: &str) -> Result<Vec<serde_json::Value>, String> {

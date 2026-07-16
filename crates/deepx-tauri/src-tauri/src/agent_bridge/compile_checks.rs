@@ -1,4 +1,4 @@
-//! Compile-time verification that all 37 Tauri commands are reachable
+//! Compile-time verification that all 38 Tauri commands are reachable
 //! through the agent_bridge re-export chain.
 //!
 //! These tests use function-pointer coercion (`as fn(...) -> _`) which
@@ -49,6 +49,7 @@ fn all_config_commands_visible() {
     let _ = agent_bridge::cmd_save_config; // 20-param fn, can't fn-ptr cast
     let _ = agent_bridge::cmd_load_config as fn() -> _;
     let _ = agent_bridge::cmd_list_sessions as fn() -> _;
+    let _ = agent_bridge::cmd_list_session_activity as fn() -> _;
     let _ = agent_bridge::cmd_delete_session as fn(_) -> _;
     let _ = agent_bridge::cmd_get_workspace as fn(_) -> _;
     let _ = agent_bridge::cmd_set_workspace as fn(_, _) -> _;

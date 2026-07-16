@@ -7,6 +7,33 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// Authoritative runtime state for one desktop session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SessionActivityState {
+    Starting,
+    Idle,
+    Working,
+    WaitingUser,
+    Disconnected,
+}
+
+/// Snapshot/event payload emitted by the desktop bridge for every session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SessionActivity {
+    pub seed: String,
+    pub state: SessionActivityState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+    #[ts(type = "number")]
+    pub seq: u64,
+    #[ts(type = "number")]
+    pub updated_at: u64,
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // UI → Agent
 // ═══════════════════════════════════════════════════════════════════════════
@@ -842,5 +869,21 @@ mod tests {
         assert!(
             serde_json::from_str::<Ui2Agent>(r#"{"type":"ask_response","answer":"A"}"#,).is_err()
         );
+    }
+
+    #[test]
+    fn session_activity_serializes_stable_runtime_state() {
+        let activity = SessionActivity {
+            seed: "session-a".into(),
+            state: SessionActivityState::WaitingUser,
+            turn_id: Some("t7".into()),
+            seq: 4,
+            updated_at: 123,
+        };
+
+        let json = serde_json::to_value(activity).unwrap();
+        assert_eq!(json["state"], "waiting_user");
+        assert_eq!(json["turn_id"], "t7");
+        assert_eq!(json["seq"], 4);
     }
 }

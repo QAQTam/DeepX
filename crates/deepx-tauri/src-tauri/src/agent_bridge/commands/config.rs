@@ -253,6 +253,15 @@ pub fn cmd_list_sessions() -> Result<String, String> {
     serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
 }
 
+/// Return the authoritative activity snapshot for every spawned session.
+#[tauri::command]
+pub fn cmd_list_session_activity() -> Result<Vec<deepx_proto::SessionActivity>, String> {
+    let registry = AgentRegistry::get()
+        .lock()
+        .map_err(|error| format!("lock: {error}"))?;
+    Ok(registry.session_activity())
+}
+
 /// Count sessions pending JSONL → Turso migration.
 
 #[tauri::command]

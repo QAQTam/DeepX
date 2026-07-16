@@ -14,6 +14,8 @@ import { createI18n, I18nCtx, type Lang } from "./i18n";
 import { parseAgentEvent } from "./runtime/agentEventBoundary";
 import { dispatchAgentEvent } from "./runtime/agentEventDispatcher";
 import { createSessionReplayBuffer } from "./runtime/sessionReplayBuffer";
+import { startSessionActivityClient } from "./runtime/sessionActivityClient";
+import type { SessionActivityMap } from "./runtime/sessionActivityStore";
 import { hasRestorableTranscript, shouldAttemptSavedResume } from "./runtime/sessionStartup";
 import type { PendingInteraction } from "./store/rawSession";
 import {
@@ -55,11 +57,13 @@ export default function App() {
   const [configLang, setConfigLang] = createSignal<Lang>(i18n.lang());
   const [permissionLevel, setPermissionLevel] = createSignal(4);
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
+  const [sessionActivities, setSessionActivities] = createSignal<SessionActivityMap>({});
   const [activeSeed, setActiveSeed] = createSignal("");
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
   const [workspaceDraft, setWorkspaceDraft] = createSignal(localStorage.getItem(LS_WORKSPACE) ?? "");
   const [theme, setTheme] = createSignal<ThemeMode>("system");
   let unlistenTheme: (() => void) | undefined;
+  let unlistenSessionActivity: (() => void) | undefined;
 
   function activeEntry(): SessionEntry | undefined {
     const seed = activeSeed();
@@ -437,6 +441,17 @@ export default function App() {
     unlistenTheme = () => media.removeEventListener("change", onSystemThemeChange);
 
     try {
+      unlistenSessionActivity = await startSessionActivityClient({
+        listen: handler => listen<unknown>("session-activity", event => handler(event.payload)),
+        loadSnapshot: () => invoke<unknown[]>("cmd_list_session_activity"),
+        onChange: setSessionActivities,
+        onError: error => console.error("session activity", error),
+      });
+    } catch (error) {
+      console.error("session activity listener", error);
+    }
+
+    try {
       const raw = await invoke<string>("cmd_load_config");
       const config = JSON.parse(raw) as { lang?: Lang; permission_level?: number };
       if (config.lang === "en" || config.lang === "zh") {
@@ -465,6 +480,7 @@ export default function App() {
     registry.disposeView();
     sessionReplay.clear();
     unlistenTheme?.();
+    unlistenSessionActivity?.();
   });
 
   return (
@@ -473,6 +489,7 @@ export default function App() {
         sidebar={
           <TaskSidebar
             sessions={sessions()}
+            activities={sessionActivities()}
             activeSeed={activeSeed()}
             onNew={() => void newSession()}
             onOpen={seed => void resumeSession(seed)}

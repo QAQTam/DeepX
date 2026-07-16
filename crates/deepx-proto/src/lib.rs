@@ -26,9 +26,9 @@ mod agent_protocol;
 
 pub use agent_protocol::{
     Agent2Ui, AskAnswer, AskMode, AskQuestion, AskResolution, CodeDaily, CodeDeltaRecord,
-    DaemonToFrontend, DocInfo, FileSnapshotInfo, FrontendToDaemon, RoundBlock, RoundData,
-    RoundDeltaKind, PermissionRisk, SkillInfo, SkillsStatus, TaskInfo, ToolCallDef, ToolResultDef,
-    TurnData, Ui2Agent,
+    DaemonToFrontend, DocInfo, FileSnapshotInfo, FrontendToDaemon, PermissionRisk, RoundBlock,
+    RoundData, RoundDeltaKind, SessionActivity, SessionActivityState, SkillInfo, SkillsStatus,
+    TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent,
 };
 
 // ── Redacted (prevents API key leaks in debug logs) ─────────────────────
