@@ -1,113 +1,231 @@
-import { createSignal, onMount, onCleanup, Show, For, Switch, Match } from "solid-js";
-import { listen } from "@tauri-apps/api/event";
+import { createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { createChatStore, type SessionMeta } from "./store/chat";
-import type { Agent2Ui } from "@/lib/types";
-import type { SlashCommand } from "./components/SlashMenu";
+import type { Agent2Ui, AskAnswer, SessionMeta, TaskInfo } from "./lib/types";
 import ChatView from "./components/ChatView";
-import StartupView from "./components/StartupView";
-import SettingsView from "./components/SettingsView";
+import SettingsView, { type ThemeMode } from "./components/SettingsView";
 import SkillsView from "./components/SkillsView";
+import StartupView from "./components/StartupView";
+import { ToastContainer, createToastCtrl } from "./components/Toast";
+import AppShell from "./components/shell/AppShell";
 import TaskSidebar from "./components/shell/TaskSidebar";
-import "./styles/git-diff-panel.css";
-import "./styles/context-panel.css";
-import "./styles/slash-menu.css";
-import "./styles/changelog.css";
-import "./styles/skills.css";
-import { ToastContainer, createToastCtrl, type ToastCtrl } from "./components/Toast";
-import { createPermissionQueue, type QueuedPermission } from "./store/permissionQueue";
-import { createRawSessionState, resolvePendingInteraction } from "./store/sessionEventReducer";
-import type { RawSessionState } from "./store/rawSession";
-import {
-  createSessionEventRuntime,
-  loadReloadSnapshot,
-  removeReloadSnapshot,
-  type SessionEventRuntime,
-} from "./store/sessionEventRuntime";
-import { cleanupViewResources } from "./runtime/viewLifecycle";
-import { createSessionReplayBuffer } from "./runtime/sessionReplayBuffer";
-import ChangelogModal from "./components/ChangelogModal";
 import { createI18n, I18nCtx, type Lang } from "./i18n";
-import en from "./i18n/en";
+import { parseAgentEvent } from "./runtime/agentEventBoundary";
+import { dispatchAgentEvent } from "./runtime/agentEventDispatcher";
+import { createSessionReplayBuffer } from "./runtime/sessionReplayBuffer";
+import { hasRestorableTranscript, shouldAttemptSavedResume } from "./runtime/sessionStartup";
+import type { PendingInteraction } from "./store/rawSession";
+import {
+  applyDashboardData,
+  removeTurnFromSession,
+  resolvePendingInteraction,
+} from "./store/sessionEventReducer";
+import {
+  createSessionRegistry,
+  type SessionEntry,
+} from "./store/sessionRegistry";
+import { isSessionStreaming } from "./store/sessionSelectors";
+import "./styles/context-panel.css";
+import "./styles/git-diff-panel.css";
+import "./styles/skills.css";
 
 type View = "home" | "chat" | "settings" | "skills";
-export type ThemeMode = "system" | "light" | "dark" | "dark-gray";
 
 const LS_KEY = "deepx:seed";
 const LS_THEME = "deepx:theme";
+const LS_WORKSPACE = "deepx:workspace";
 
-/** Resolve a ThemeMode to the actual data-theme value to apply. */
 function resolveTheme(mode: ThemeMode): "light" | "dark" | "dark-gray" {
   if (mode !== "system") return mode;
-  if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
-    return "dark-gray";
-  }
-  return "light";
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark-gray" : "light";
 }
 
 function applyTheme(mode: ThemeMode) {
   document.documentElement.setAttribute("data-theme", resolveTheme(mode));
 }
 
-// ── Multi-session store registry ──
-// Each open session gets its own ChatStore, keyed by seed.
-type ChatStore = ReturnType<typeof createChatStore>;
-type RawStore = ReturnType<typeof createSignal<RawSessionState>>;
-
 export default function App() {
-  const i18n = createI18n(((localStorage.getItem("deepx:lang") ?? "en") as Lang));
+  const i18n = createI18n((localStorage.getItem("deepx:lang") ?? "en") as Lang);
+  const toastCtrl = createToastCtrl();
+  const registry = createSessionRegistry({ storage: sessionStorage });
+  const sessionReplay = createSessionReplayBuffer();
+  const pendingEntries = new Map<string, Promise<SessionEntry>>();
   const [view, setView] = createSignal<View>("home");
-  const [configLang, setConfigLang] = createSignal<Lang>("en");
+  const [configLang, setConfigLang] = createSignal<Lang>(i18n.lang());
   const [permissionLevel, setPermissionLevel] = createSignal(4);
-  const [pendingPlanReviews, setPendingPlanReviews] = createSignal<{ call_id: string; content: string } | null>(null);
   const [sessions, setSessions] = createSignal<SessionMeta[]>([]);
-  // Active session seed — drives which ChatStore is displayed
-  const [activeSeed, setActiveSeed] = createSignal<string>("");
-  // Has the user explicitly chosen a session?
+  const [activeSeed, setActiveSeed] = createSignal("");
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
-  // Workspace draft — survives session switches so the sidebar input keeps its value.
-  const [workspaceDraft, setWorkspaceDraft] = createSignal(localStorage.getItem("deepx:workspace") ?? "");
-  const [version, setVersion] = createSignal("");
-  const [sidebarW, setSidebarW] = createSignal(
-    Number(localStorage.getItem("deepx:sidebar-w")) || 220
-  );
-
-  // Apply sidebar width to CSS variable
-  onMount(() => {
-    document.documentElement.style.setProperty("--sidebar-w", sidebarW() + "px");
-    // Fetch version
-    invoke<string>("cmd_get_version").then(setVersion).catch(() => {});
-  });
+  const [workspaceDraft, setWorkspaceDraft] = createSignal(localStorage.getItem(LS_WORKSPACE) ?? "");
   const [theme, setTheme] = createSignal<ThemeMode>("system");
-  const [refreshKey, setRefreshKey] = createSignal(0); // bump to refresh TokenChart
-  const permissionQueue = createPermissionQueue();
-  const activeChatPermission = () => {
-    const permission = permissionQueue.active();
-    return permission?.seed === activeSeed() ? permission : null;
-  };
-  const activePermissionProgress = () => {
-    const permission = activeChatPermission();
-    return permission ? permissionQueue.progress(permission.seed) : null;
-  };
+  let unlistenTheme: (() => void) | undefined;
 
-  async function respondToPermission(
-    permission: QueuedPermission,
-    approved: boolean,
-    trustFolder: boolean,
-  ) {
-    await invoke("cmd_permission_response", {
-      seed: permission.seed,
-      toolCallId: permission.request.tool_call_id,
-      approved,
-      trustFolder,
+  function activeEntry(): SessionEntry | undefined {
+    const seed = activeSeed();
+    return seed ? registry.get(seed) : undefined;
+  }
+
+  async function refreshSessions(): Promise<boolean> {
+    try {
+      const raw = await invoke<string>("cmd_list_sessions");
+      const list = JSON.parse(raw) as SessionMeta[];
+      list.sort((a, b) => Number(b.updated_at) - Number(a.updated_at));
+      setSessions(list);
+      return true;
+    } catch (error) {
+      console.error("refreshSessions", error);
+      return false;
+    }
+  }
+
+  async function loadDashboardFromDisk(entry: SessionEntry) {
+    try {
+      const raw = await invoke<string>("cmd_get_dashboard_data", { seed: entry.state().seed });
+      const parsed = JSON.parse(raw) as { tasks?: TaskInfo[]; recent_edits?: string[] };
+      entry.runtime.update(state => applyDashboardData(state, {
+        tasks: parsed.tasks ?? [],
+        recentEdits: parsed.recent_edits ?? [],
+      }));
+    } catch (error) {
+      console.error("loadDashboardFromDisk", error);
+    }
+  }
+
+  async function loadWorkspace(entry: SessionEntry) {
+    try {
+      const workspace = await invoke<string>("cmd_get_workspace", { seed: entry.state().seed });
+      entry.ui.setWorkspace(workspace);
+      if (entry.state().seed === activeSeed()) {
+        setWorkspaceDraft(workspace);
+        localStorage.setItem(LS_WORKSPACE, workspace);
+      }
+    } catch (error) {
+      console.error("loadWorkspace", error);
+    }
+  }
+
+  async function afterSessionCreated(entry: SessionEntry, seed: string) {
+    const previousSeed = entry.state().seed;
+    const remapped = registry.remap(entry.listenerSeed, seed);
+    if (activeSeed() === entry.listenerSeed || activeSeed() === previousSeed) setActiveSeed(seed);
+    localStorage.setItem(LS_KEY, seed);
+    await loadWorkspace(remapped);
+    await loadDashboardFromDisk(remapped);
+    await refreshSessions();
+  }
+
+  async function afterSessionRestored(entry: SessionEntry, seed: string) {
+    localStorage.setItem(LS_KEY, seed);
+    await loadWorkspace(entry);
+    await loadDashboardFromDisk(entry);
+    await refreshSessions();
+  }
+
+  async function handleAgentError(entry: SessionEntry, message: string) {
+    toastCtrl.push(message, "error");
+    const agentDead = /(exited|died|broken.pipe|killed|connection.*lost|agent.*(dead|gone|stopped))/i.test(message);
+    if (!agentDead) return;
+    const seed = entry.state().seed;
+    try {
+      await resumeSession(seed);
+      toastCtrl.push(i18n.t().toast.agentReconnected, "info");
+    } catch {
+      toastCtrl.push(i18n.t().toast.agentLost, "error", true);
+    }
+  }
+
+  function handleAgentEvent(entry: SessionEntry, event: Agent2Ui) {
+    dispatchAgentEvent(event, entry.runtime, {
+      onSessionCreated: seed => { void afterSessionCreated(entry, seed); },
+      onSessionRestored: seed => { void afterSessionRestored(entry, seed); },
+      onDashboard: () => {},
+      onError: message => { void handleAgentError(entry, message); },
+      onCancelled: () => {
+        const id = entry.ui.submittingInteractionId();
+        if (id) entry.ui.finishInteractionSubmit(id);
+      },
+      onInteractionSettled: id => entry.ui.finishInteractionSubmit(id),
+      onReducerError: (failedEvent, error) => {
+        console.error("[App] reducer rejected event", {
+          seed: entry.state().seed,
+          type: failedEvent.type,
+          error,
+        });
+        toastCtrl.push("会话事件处理失败，现有消息已保留", "error");
+      },
     });
-    rawRuntimeForSeed(permission.seed)?.update(state => resolvePendingInteraction(
-      state,
-      permission.request.tool_call_id,
-      approved ? "approved" : "rejected",
-    ));
-    permissionQueue.resolve(permission.seed, permission.request.tool_call_id);
+  }
+
+  async function getOrCreateSessionEntry(seed: string): Promise<SessionEntry> {
+    const existing = registry.get(seed);
+    if (existing?.hasListener()) return existing;
+    const pending = pendingEntries.get(seed);
+    if (pending) return pending;
+
+    const creation = (async () => {
+      const entry = registry.ensure(seed);
+      try {
+        const unlisten = await listen<unknown>(`agent-${entry.listenerSeed}-event`, event => {
+          let parsed: Agent2Ui;
+          try {
+            parsed = parseAgentEvent(event.payload);
+          } catch (error) {
+            console.error("[App] ignored malformed live event", { seed: entry.listenerSeed, error });
+            toastCtrl.push("收到无法识别的后端事件，已忽略", "error");
+            return;
+          }
+          sessionReplay.handleLive(entry.listenerSeed, parsed, replayed => {
+            handleAgentEvent(entry, replayed);
+          });
+        });
+        entry.attachListener(unlisten);
+        return entry;
+      } catch (error) {
+        registry.remove(seed);
+        throw error;
+      }
+    })();
+    pendingEntries.set(seed, creation);
+    try { return await creation; }
+    finally { pendingEntries.delete(seed); }
+  }
+
+  async function resumeSession(seed: string) {
+    sessionReplay.begin(seed);
+    let entry: SessionEntry | undefined;
+    try {
+      entry = await getOrCreateSessionEntry(seed);
+      await invoke("cmd_resume_session", { seed });
+      const rawReplay = await invoke<unknown[]>("cmd_replay_session_events", { seed }).catch(() => []);
+      const replayed = rawReplay.flatMap(payload => {
+        try { return [parseAgentEvent(payload)]; }
+        catch (error) {
+          console.error("[App] ignored malformed replay event", { seed, error });
+          return [];
+        }
+      });
+      sessionReplay.complete(seed, replayed, event => handleAgentEvent(entry!, event));
+      const currentSeed = entry.state().seed;
+      localStorage.setItem(LS_KEY, currentSeed);
+      setActiveSeed(currentSeed);
+      setHasChosenSession(true);
+      setView("chat");
+      await loadWorkspace(entry);
+    } catch (error) {
+      if (entry) sessionReplay.abort(seed, event => handleAgentEvent(entry!, event));
+      else sessionReplay.abort(seed, () => {});
+      console.error("[App] resumeSession error", error);
+      if (!hasRestorableTranscript(entry?.state())) {
+        setHasChosenSession(false);
+        setView("home");
+      } else {
+        setActiveSeed(entry!.state().seed);
+        setHasChosenSession(true);
+        setView("chat");
+        toastCtrl.push("后端暂时不可用，已显示本地恢复的消息", "error");
+      }
+    }
   }
 
   async function changePermissionLevel(level: number) {
@@ -116,699 +234,305 @@ export default function App() {
       await invoke("cmd_set_permission_level", { level });
       setPermissionLevel(level);
     } catch (error) {
-      console.error("set permission level:", error);
+      console.error("set permission level", error);
       toastCtrl.push("权限等级保存失败", "error");
     }
   }
-  const [showChangelog, setShowChangelog] = createSignal(false);
 
-  // ── Toast notifications (disconnect warnings, errors) ──
-  const toastCtrl: ToastCtrl = createToastCtrl();
-
-  // Registry of open session ChatStores
-  const chatStores = new Map<string, ChatStore>();
-  const rawSessions = new Map<string, RawStore>();
-  const rawEventRuntimes = new Map<string, SessionEventRuntime>();
-  const sessionReplay = createSessionReplayBuffer();
-  // Per-seed unlisten functions for event listeners
-  const unlistenMap = new Map<string, () => void>();
-  // Pending store creations — deduplicate concurrent getOrCreateChatStore calls
-  const pendingStores = new Map<string, Promise<ChatStore>>();
-  let unlistenTheme: (() => void) | undefined;
-
-  function rawRuntimeForSeed(seed: string): SessionEventRuntime | undefined {
-    return rawEventRuntimes.get(seed)
-      ?? [...rawEventRuntimes.values()].find(runtime => runtime.current().seed === seed);
-  }
-
-  function listenerSeedForSession(seed: string): string | undefined {
-    const runtime = rawRuntimeForSeed(seed);
-    if (!runtime) return unlistenMap.has(seed) ? seed : undefined;
-    for (const [listenerSeed, candidate] of rawEventRuntimes) {
-      if (candidate === runtime && unlistenMap.has(listenerSeed)) return listenerSeed;
-    }
-    return undefined;
-  }
-
-  /** Get or create a ChatStore for the given seed. Also sets up event listener.
-   * Returns a Promise that resolves when the listener is ready.
-   * Deduplicates concurrent calls for the same seed. */
-  async function getOrCreateChatStore(seed: string): Promise<ChatStore> {
-    const pending = pendingStores.get(seed);
-    if (pending) return pending;
-    const store = chatStores.get(seed);
-    if (store && listenerSeedForSession(seed)) return store;
-
-    if (store) {
-      const staleRuntime = rawRuntimeForSeed(seed);
-      staleRuntime?.dispose();
-      for (const [listenerSeed, candidate] of rawEventRuntimes) {
-        if (candidate === staleRuntime) rawEventRuntimes.delete(listenerSeed);
-      }
-      chatStores.delete(seed);
-      rawSessions.delete(seed);
-    }
-    // Start creation and store the promise for deduplication
-    const creation = (async () => {
-      const initialRaw = loadReloadSnapshot(sessionStorage, seed)
-        ?? createRawSessionState(seed);
-      const lastTurn = initialRaw.turns[initialRaw.turns.length - 1];
-      const restoredStatus = lastTurn?.status;
-      const s = createChatStore(
-        seed,
-        restoredStatus === "running" || restoredStatus === "waiting",
-      );
-      chatStores.set(seed, s);
-      const rawStore = createSignal(initialRaw);
-      rawSessions.set(seed, rawStore);
-      const runtime = createSessionEventRuntime({
-        initialState: initialRaw,
-        commit: next => rawStore[1](next),
-        storage: sessionStorage,
+  async function respondToPermission(
+    item: Extract<PendingInteraction, { kind: "permission" }>,
+    approved: boolean,
+    trustFolder: boolean,
+  ) {
+    const entry = activeEntry();
+    if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
+    try {
+      await invoke("cmd_permission_response", {
+        seed: entry.state().seed,
+        toolCallId: item.id,
+        approved,
+        trustFolder,
       });
-      rawEventRuntimes.set(seed, runtime);
-      // Subscribe to per-seed agent events
-      const eventName = `agent-${seed}-event`;
-      try {
-        const unlisten = await listen<Record<string, unknown>>(eventName, (e) => {
-          sessionReplay.handleLive(seed, e.payload, event => {
-            handleAgentEvent(s, event, seed);
-          });
-        });
-        unlistenMap.set(seed, unlisten);
-        return s;
-      } catch (error) {
-        runtime.dispose();
-        rawEventRuntimes.delete(seed);
-        rawSessions.delete(seed);
-        chatStores.delete(seed);
-        throw error;
-      }
-    })();
-    pendingStores.set(seed, creation);
-    try {
-      return await creation;
+      entry.runtime.update(state => resolvePendingInteraction(
+        state,
+        item.id,
+        approved ? "approved" : "rejected",
+      ));
+    } catch (error) {
+      toastCtrl.push(String(error), "error");
     } finally {
-      pendingStores.delete(seed);
+      entry.ui.finishInteractionSubmit(item.id);
     }
   }
 
-  /** Current active ChatStore (derived from activeSeed). */
-  function activeChat(): ChatStore | undefined {
-    const seed = activeSeed();
-    if (!seed) return undefined;
-    return chatStores.get(seed);
-  }
-
-  function activeRawSession(): RawSessionState | undefined {
-    const seed = activeSeed();
-    if (!seed) return undefined;
-    return rawSessions.get(seed)?.[0]();
-  }
-
-  /** Handle incoming agent events for a specific store. */
-  function handleAgentEvent(chat: ChatStore, p: Record<string, unknown>, listenerSeed: string) {
-    const event = p as Agent2Ui;
-    rawEventRuntimes.get(listenerSeed)?.push(event);
-    switch (p.type as string) {
-      case "ready": break;
-      case "turn_start": chat.handleTurnStart((p.turn_id ?? "") as string, (p.user_text ?? "") as string); break;
-      case "round_delta":
-      case "tool_call_preview":
-      case "round_complete":
-      case "tool_results":
-      case "exec_progress":
-      case "tool_exec_delta":
-        break;
-      case "ask_user": {
-        chat.showAskDialog({ ask_id: p.ask_id, mode: p.mode, questions: p.questions });
-        break;
-      }
-      case "ask_resolved": chat.handleAskResolved((p.ask_id ?? "") as string); break;
-      case "ask_rejected": chat.handleAskRejected((p.ask_id ?? "") as string, (p.message ?? "Invalid answer") as string); break;
-      case "plan_submitted": {
-        setPendingPlanReviews({ call_id: p.call_id as string, content: p.plan_content as string });
-        break;
-      }
-      case "plan_resolved": {
-        if ((p.call_id as string) === pendingPlanReviews()?.call_id) {
-          setPendingPlanReviews(null);
-        }
-        break;
-      }
-      case "turn_end": chat.handleTurnEnd((p.turn_id ?? "") as string, p); if (listenerSeed === activeSeed()) setRefreshKey((k) => k + 1); break;
-      case "session_created": {
-        permissionQueue.clearSeed(listenerSeed);
-        const evtSeed = p.seed as string;
-        chat.clearTurns();
-        chat.handleSessionCreated(evtSeed);
-        localStorage.setItem(LS_KEY, evtSeed);
-        // Sync workspace from backend to draft
-        invoke<string>("cmd_get_workspace", { seed: evtSeed }).then(ws => {
-          chat.setWorkspace(ws);
-          if (evtSeed === activeSeed()) { setWorkspaceDraft(ws); localStorage.setItem("deepx:workspace", ws); }
-        }).catch(() => {});
-        // If the agent created a different seed (fallback from failed resume),
-        // remap chatStores and activeSeed to the new seed.
-        if (evtSeed !== listenerSeed) {
-          chatStores.delete(listenerSeed);
-          chatStores.set(evtSeed, chat);
-          const rawStore = rawSessions.get(listenerSeed);
-          if (rawStore) {
-            rawSessions.delete(listenerSeed);
-            rawSessions.set(evtSeed, rawStore);
-          }
-          const runtime = rawEventRuntimes.get(listenerSeed);
-          if (runtime) {
-            removeReloadSnapshot(sessionStorage, listenerSeed);
-            runtime.flush();
-          }
-          setActiveSeed(evtSeed);
-        }
-        refreshSessions();
-        loadDashboardFromDisk(evtSeed, chat);
-        break;
-      }
-      case "session_restored": if (p.seed) {
-        permissionQueue.clearSeed(listenerSeed);
-        const evtSeed = p.seed as string;
-        chat.clearTurns();
-        chat.handleSessionCreated(evtSeed);
-        localStorage.setItem(LS_KEY, evtSeed);
-        // Sync workspace from backend to draft
-        invoke<string>("cmd_get_workspace", { seed: evtSeed }).then(ws => {
-          chat.setWorkspace(ws);
-          if (evtSeed === activeSeed()) { setWorkspaceDraft(ws); localStorage.setItem("deepx:workspace", ws); }
-        }).catch(() => {});
-        const turnsArr = p.turns as any[] | undefined;
-        if (!turnsArr || turnsArr.length === 0) {
-          // Session exists but has no messages yet (freshly created).
-          // This is normal — show empty chat, not an error.
-          console.log("[App] session_restored with 0 turns — empty session");
-        }
-        chat.setHasMore(!!p.has_more);
-        refreshSessions();
-        // Load dashboard data directly from disk (no agent dependency)
-        loadDashboardFromDisk(evtSeed, chat);
-      } break;
-      case "more_turns": chat.setHasMore(!!p.has_more); break;
-      case "dashboard": chat.handleDashboard(p); break;
-      case "done": chat.handleDone(); break;
-      case "cancelled": chat.handleCancelled(); permissionQueue.clearSeed(listenerSeed); break;
-      case "error": {
-        const errMsg = (p.message ?? "Unknown error") as string;
-        chat.handleError(errMsg);
-        // Detect agent death: any message indicating the agent process is gone
-        const isAgentDead = /(exited|died|broken.pipe|killed|connection.*lost|agent.*(dead|gone|stopped))/i.test(errMsg);
-        if (isAgentDead) {
-          chat.handleCancelled();
-          permissionQueue.clearSeed(listenerSeed);
-          toastCtrl.push(i18n.t().toast.agentLost, "error", true);
-          // Auto-reconnect after agent death
-          const seed = activeSeed();
-          if (seed) {
-            resumeSession(seed).then(() => {
-              toastCtrl.push(i18n.t().toast.agentReconnected, "info");
-            }).catch(() => {});
-          }
-        } else {
-          toastCtrl.push(errMsg, "error");
-        }
-        break;
-      }
-      case "audit_record": chat.handleAuditRecord({ tool_name: (p.tool_name ?? "") as string, summary: (p.result_summary ?? "") as string, success: (p.success ?? false) as boolean, time: (p.time ?? "") as string, args: (p.args ?? "{}") as string }); break;
-      case "skills_changed": chat.handleSkillsChanged(p); break;
-      case "compact_start": chat.handleCompactStart(p); break;
-      case "compact_end": chat.handleCompactEnd(p); break;
-      case "compact_delta": chat.handleCompactDelta(p); break;
-      case "tool_notice": chat.handleToolNotice(p); break;
-      case "permission_request": {
-        permissionQueue.enqueue(listenerSeed, {
-          tool_call_id: (p.tool_call_id ?? "") as string,
-          tool_name: (p.tool_name ?? "") as string,
-          reason: (p.reason ?? "") as string,
-          paths: (Array.isArray(p.paths) ? p.paths : []) as string[],
-          category: (p.category ?? "") as string,
-          level: (p.level ?? 4) as number,
-          risk: (p.risk ?? "low") as "low" | "medium" | "high",
-          consequence: (p.consequence ?? "") as string,
-        });
-        break;
-      }
+  async function submitAsk(
+    item: Extract<PendingInteraction, { kind: "ask" }>,
+    answers: AskAnswer[],
+  ) {
+    const entry = activeEntry();
+    if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
+    try {
+      await invoke("cmd_ask_response", { seed: entry.state().seed, askId: item.id, answers });
+    } catch (error) {
+      entry.ui.finishInteractionSubmit(item.id);
+      toastCtrl.push(String(error), "error");
     }
   }
 
-  async function refreshSessions() {
+  async function dismissAsk(item: Extract<PendingInteraction, { kind: "ask" }>) {
+    const entry = activeEntry();
+    if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
     try {
-      const raw = await invoke<string>("cmd_list_sessions");
-      const list: SessionMeta[] = JSON.parse(raw);
-      list.sort((a, b) => Number(b.updated_at) - Number(a.updated_at));
-      setSessions(list);
-    } catch (e) { console.error(e); }
+      await invoke("cmd_ask_dismiss", { seed: entry.state().seed, askId: item.id });
+    } catch (error) {
+      entry.ui.finishInteractionSubmit(item.id);
+      toastCtrl.push(String(error), "error");
+    }
   }
 
-  /** Load tasks + recent edits from disk, bypassing agent. */
-  async function loadDashboardFromDisk(seed: string, chat: ChatStore) {
+  async function respondToPlan(
+    item: Extract<PendingInteraction, { kind: "plan" }>,
+    approved: boolean,
+    message?: string,
+  ) {
+    const entry = activeEntry();
+    if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
     try {
-      const raw = await invoke<string>("cmd_get_dashboard_data", { seed });
-      const data = JSON.parse(raw);
-      chat.handleDashboard({ tasks: data.tasks ?? [], recent_edits: data.recent_edits ?? [] });
-    } catch (e) { console.error("loadDashboardFromDisk:", e); }
+      await invoke("cmd_plan_review", {
+        seed: entry.state().seed,
+        callId: item.id,
+        approved,
+        message: message ?? null,
+      });
+    } catch (error) {
+      entry.ui.finishInteractionSubmit(item.id);
+      toastCtrl.push(String(error), "error");
+    }
   }
 
-  async function resumeSession(seed: string) {
-    console.log("[App] resumeSession called, seed:", seed);
-    const existing = chatStores.get(seed);
-    const existingListenerSeed = listenerSeedForSession(seed);
-    if (existing && existingListenerSeed) {
-      setActiveSeed(seed);
-      setHasChosenSession(true);
-      setView("chat");
-      localStorage.setItem(LS_KEY, seed);
-      try {
-        const ws = await invoke<string>("cmd_get_workspace", { seed });
-        existing.setWorkspace(ws);
-        setWorkspaceDraft(ws);
-        localStorage.setItem("deepx:workspace", ws);
-      } catch (_) {}
+  async function submitTaskAction(action: "cancel" | "delete" | "ask", task: TaskInfo) {
+    const entry = activeEntry();
+    if (!entry) return;
+    if (action === "ask") {
+      await invoke("cmd_send_message", {
+        seed: entry.state().seed,
+        text: `Look at ${task.id}: ${task.subject}. Explain the implementation plan and current status in detail.`,
+      });
       return;
     }
+    const taskId = Number.parseInt(task.id.replace(/^T/, ""), 10);
+    if (!Number.isFinite(taskId)) return;
+    await invoke("cmd_task_action", { seed: entry.state().seed, action, taskId });
+    await loadDashboardFromDisk(entry);
+  }
 
-    sessionReplay.begin(seed);
-    let chat: ChatStore | undefined;
+  async function loadMoreTurns() {
+    const entry = activeEntry();
+    const firstId = entry?.state().turns[0]?.turnId;
+    if (!entry || !firstId) return;
     try {
-      chat = await getOrCreateChatStore(seed);
-      await invoke("cmd_resume_session", { seed });
-      let replayed: Record<string, unknown>[] = [];
-      try {
-        replayed = await invoke<Record<string, unknown>[]>(
-          "cmd_replay_session_events",
-          { seed },
-        );
-      } catch (replayError) {
-        console.warn("[App] lifecycle replay unavailable:", replayError);
-      }
-      sessionReplay.complete(seed, replayed, event => {
-        handleAgentEvent(chat!, event, seed);
+      await invoke("cmd_load_more_turns", {
+        seed: entry.state().seed,
+        beforeTurnId: firstId,
       });
-      const activeSessionSeed = chat.sessionInfo.seed || seed;
-      localStorage.setItem(LS_KEY, activeSessionSeed);
-      setActiveSeed(activeSessionSeed);
-      setHasChosenSession(true);
-      setView("chat");
     } catch (error) {
-      if (chat) {
-        sessionReplay.abort(seed, event => handleAgentEvent(chat!, event, seed));
-      } else {
-        sessionReplay.abort(seed, () => {});
-      }
-      console.error("[App] resumeSession error:", error);
-      setHasChosenSession(false);
-      setView("home");
+      console.error("loadMoreTurns", error);
     }
+  }
+
+  async function undoLastTurn() {
+    const entry = activeEntry();
+    const turns = entry?.state().turns;
+    const turnId = turns?.[turns.length - 1]?.turnId;
+    if (!entry || !turnId || isSessionStreaming(entry.state())) return;
+    await invoke("cmd_undo_turn", { seed: entry.state().seed, turnId });
+    entry.runtime.update(state => removeTurnFromSession(state, turnId));
+  }
+
+  async function newSession() {
+    const seed = await invoke<string>("cmd_new_session");
+    localStorage.removeItem(LS_KEY);
+    await resumeSession(seed);
+    const entry = activeEntry();
+    const workspace = workspaceDraft();
+    if (entry && workspace) {
+      entry.ui.setWorkspace(workspace);
+      await invoke("cmd_set_workspace", { seed: entry.state().seed, path: workspace });
+    }
+    await refreshSessions();
+  }
+
+  async function startNewSessionAndSend(text: string) {
+    await newSession();
+    const entry = activeEntry();
+    if (entry) await invoke("cmd_send_message", { seed: entry.state().seed, text });
   }
 
   async function deleteSession(seed: string) {
     try {
       await invoke("cmd_delete_session", { seed });
-      const chat = chatStores.get(seed);
-      chat?.clear();
-
-      const runtime = rawRuntimeForSeed(seed);
-      const runtimeSeed = runtime?.current().seed;
-      runtime?.dispose();
-      for (const [listenerSeed, candidate] of rawEventRuntimes) {
-        if (candidate !== runtime) continue;
-        const unlisten = unlistenMap.get(listenerSeed);
-        if (unlisten) {
-          try { unlisten(); } catch (_) {}
-        }
-        unlistenMap.delete(listenerSeed);
-        rawEventRuntimes.delete(listenerSeed);
-        sessionReplay.abort(listenerSeed, () => {});
-        removeReloadSnapshot(sessionStorage, listenerSeed);
-      }
-      if (!runtime) {
-        const unlisten = unlistenMap.get(seed);
-        if (unlisten) {
-          try { unlisten(); } catch (_) {}
-        }
-        unlistenMap.delete(seed);
-        sessionReplay.abort(seed, () => {});
-      }
-      if (runtimeSeed) removeReloadSnapshot(sessionStorage, runtimeSeed);
-      removeReloadSnapshot(sessionStorage, seed);
-      permissionQueue.clearSeed(seed);
-      chatStores.delete(seed);
-      rawSessions.delete(seed);
-
+      registry.remove(seed);
       if (activeSeed() === seed) {
         localStorage.removeItem(LS_KEY);
         setActiveSeed("");
         setHasChosenSession(false);
+        setView("home");
       }
       await refreshSessions();
-    } catch (e) { console.error(e); }
-  }
-
-  async function loadMoreTurns() {
-    const seed = activeSeed();
-    if (!seed) return;
-    const raw = activeRawSession();
-    const firstId = raw?.turns[0]?.turnId;
-    if (!firstId) return;
-    try { await invoke("cmd_load_more_turns", { seed, beforeTurnId: firstId }); } catch (e) { console.error(e); }
-  }
-
-  async function newSession() {
-    try {
-      const seed: string = await invoke("cmd_new_session");
-      const chat = await getOrCreateChatStore(seed);
-      chat.clear();
-      localStorage.removeItem(LS_KEY);
-      // Apply workspace draft
-      const ws = workspaceDraft();
-      if (ws) {
-        chat.setWorkspace(ws);
-        try { await invoke("cmd_set_workspace", { seed, path: ws }); } catch (e) { console.error(e); }
-      }
-      setActiveSeed(seed);
-      setHasChosenSession(true);
-      setView("chat");
-      await refreshSessions();
-    } catch (e) { console.error(e); }
-  }
-
-  /** Called from StartupView when user types a message without a session. */
-  async function startNewSessionAndSend(text: string) {
-    try {
-      const seed: string = await invoke("cmd_new_session");
-      const chat = await getOrCreateChatStore(seed);
-      chat.clear();
-      localStorage.removeItem(LS_KEY);
-      // Apply workspace draft before sending the message
-      const ws = workspaceDraft();
-      if (ws) {
-        chat.setWorkspace(ws);
-        try { await invoke("cmd_set_workspace", { seed, path: ws }); } catch (e) { console.error(e); }
-      }
-      setActiveSeed(seed);
-      setHasChosenSession(true);
-      setView("chat");
-      await refreshSessions();
-      // Now send the message
-      await invoke("cmd_send_message", { seed, text });
-    } catch (e) { console.error(e); }
-  }
-
-  async function saveWorkspace(val: string) {
-    setWorkspaceDraft(val);
-    localStorage.setItem("deepx:workspace", val);
-    const seed = activeSeed();
-    const chat = activeChat();
-    if (chat) chat.setWorkspace(val);
-    if (!seed) return; // Persisted to localStorage; will apply when session is created.
-    try { await invoke("cmd_set_workspace", { seed, path: val }); } catch (e) { console.error(e); }
+    } catch (error) {
+      console.error("deleteSession", error);
+    }
   }
 
   async function browseWorkspace() {
     try {
-      const selected = await open({ directory: true, multiple: false, title: t().session.workspace });
-      if (selected && typeof selected === "string") {
-        setWorkspaceDraft(selected);
-        localStorage.setItem("deepx:workspace", selected);
-        const seed = activeSeed();
-        const chat = activeChat();
-        if (chat) chat.setWorkspace(selected);
-        if (seed) await invoke("cmd_set_workspace", { seed, path: selected });
-      }
-    } catch (e) { console.error(e); }
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: i18n.t().session.workspace,
+      });
+      if (!selected || typeof selected !== "string") return;
+      setWorkspaceDraft(selected);
+      localStorage.setItem(LS_WORKSPACE, selected);
+      const entry = activeEntry();
+      if (!entry) return;
+      entry.ui.setWorkspace(selected);
+      await invoke("cmd_set_workspace", { seed: entry.state().seed, path: selected });
+    } catch (error) {
+      console.error("browseWorkspace", error);
+    }
+  }
+
+  async function switchLang(lang: Lang) {
+    i18n.setLang(lang);
+    setConfigLang(lang);
+    localStorage.setItem("deepx:lang", lang);
+    try {
+      await invoke("cmd_save_config", {
+        apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "",
+        maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang,
+        subagentModel: "", subagentBaseUrl: "", subagentApiKey: "",
+        subagentMaxTokens: 0, subagentTimeoutSecs: 0, subagentDefaultTools: [],
+      });
+    } catch (error) {
+      console.error("switchLang", error);
+    }
+  }
+
+  function switchTheme(nextTheme: ThemeMode) {
+    setTheme(nextTheme);
+    localStorage.setItem(LS_THEME, nextTheme);
+    applyTheme(nextTheme);
   }
 
   onMount(async () => {
-    // ── Theme initialization ──
     const savedTheme = (localStorage.getItem(LS_THEME) ?? "system") as ThemeMode;
     setTheme(savedTheme);
     applyTheme(savedTheme);
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onSysThemeChange = () => {
-      if ((localStorage.getItem(LS_THEME) ?? "system") === "system") {
-        applyTheme("system");
-      }
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSystemThemeChange = () => {
+      if ((localStorage.getItem(LS_THEME) ?? "system") === "system") applyTheme("system");
     };
-    mq.addEventListener("change", onSysThemeChange);
-    unlistenTheme = () => mq.removeEventListener("change", onSysThemeChange);
+    media.addEventListener("change", onSystemThemeChange);
+    unlistenTheme = () => media.removeEventListener("change", onSystemThemeChange);
 
-    // Load config
     try {
       const raw = await invoke<string>("cmd_load_config");
-      const cfg = JSON.parse(raw);
-      if (cfg.lang && (cfg.lang === "en" || cfg.lang === "zh")) {
-        const cl = cfg.lang as Lang;
-        i18n.setLang(cl);
-        setConfigLang(cl);
-        localStorage.setItem("deepx:lang", cl);
+      const config = JSON.parse(raw) as { lang?: Lang; permission_level?: number };
+      if (config.lang === "en" || config.lang === "zh") {
+        i18n.setLang(config.lang);
+        setConfigLang(config.lang);
+        localStorage.setItem("deepx:lang", config.lang);
       }
-      if (Number.isInteger(cfg.permission_level) && cfg.permission_level >= 1 && cfg.permission_level <= 4) {
-        setPermissionLevel(cfg.permission_level);
-      }
-    } catch (_) {}
+      if (
+        Number.isInteger(config.permission_level) &&
+        config.permission_level! >= 1 &&
+        config.permission_level! <= 4
+      ) setPermissionLevel(config.permission_level!);
+    } catch {}
 
-    await refreshSessions();
-
-    // Auto-resume saved session from last app close
+    const listingSucceeded = await refreshSessions();
     const savedSeed = localStorage.getItem(LS_KEY);
-    if (savedSeed) {
-      // Verify the session still exists in the list
-      const exists = sessions().some((s) => s.seed === savedSeed);
-      if (exists) {
-        try {
-          const ws = await invoke<string>("cmd_get_workspace", { seed: savedSeed });
-          // Store workspace in the session's ChatStore once created
-          const existingStore = chatStores.get(savedSeed);
-          if (existingStore) existingStore.setWorkspace(ws);
-          // Sync to draft if it's currently empty (session workspace takes priority)
-          if (ws && !workspaceDraft()) { setWorkspaceDraft(ws); localStorage.setItem("deepx:workspace", ws); }
-        } catch (_) {}
-        // Resume the session — this spawns the agent and loads history
-        resumeSession(savedSeed);
-      } else {
-        // Session was deleted externally — clear stale key
-        localStorage.removeItem(LS_KEY);
-      }
+    if (!savedSeed) return;
+    if (!shouldAttemptSavedResume(savedSeed, sessions(), listingSucceeded)) {
+      localStorage.removeItem(LS_KEY);
+      return;
     }
+    await resumeSession(savedSeed);
   });
 
   onCleanup(() => {
-    cleanupViewResources(
-      rawEventRuntimes.values(),
-      unlistenMap.values(),
-      unlistenTheme,
-    );
-    rawEventRuntimes.clear();
-    unlistenMap.clear();
+    registry.disposeView();
     sessionReplay.clear();
+    unlistenTheme?.();
   });
 
-  const t = () => i18n.t() ?? en;
-  function handleSlashCommand(cmd: SlashCommand) {
-    switch (cmd.id) {
-      case "settings": setView("settings"); break;
-      case "new": newSession(); break;
-      case "compact": invoke("cmd_compact", { seed: activeSeed() }).catch(console.error); break;
-      case "undo": {
-        const turns = activeRawSession()?.turns ?? [];
-        if (turns.length > 0) {
-          void activeChat()?.undoTurn(turns[turns.length - 1]!.turnId);
-        }
-        break;
-      }
-    }
-  }
-
-  async function switchLang(l: Lang) { i18n.setLang(l); setConfigLang(l); localStorage.setItem("deepx:lang", l); try { await invoke("cmd_save_config", { apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "", maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang: l, subagentModel: "", subagentBaseUrl: "", subagentApiKey: "", subagentMaxTokens: 0, subagentTimeoutSecs: 0, subagentDefaultTools: [] }); } catch (e) { console.error(e); } }
-  function switchTheme(t: ThemeMode) { setTheme(t); localStorage.setItem(LS_THEME, t); applyTheme(t); }
-
-  const isActive = (seed: string) => activeSeed() === seed;
-
   return (
-    <I18nCtx.Provider value={{ t: i18n.t, lang: () => i18n.lang(), setLang: switchLang }}>
-      <div class="app-container">
-        <TaskSidebar
-          sessions={sessions()}
-          activeSeed={activeSeed()}
-          onNew={() => { void newSession(); setHasChosenSession(true); }}
-          onOpen={seed => void resumeSession(seed)}
-          onDelete={seed => void deleteSession(seed)}
-          onSkills={() => setView("skills")}
-          onSettings={() => setView("settings")}
-        />
-        <aside class="sidebar frost-panel">
-          <div class="sidebar-brand"><span class="sidebar-logo">{">"}</span><span class="sidebar-title">{t().app.title}</span></div>
-          <nav class="sidebar-nav">
-            <button class={`sidebar-btn ${view() === "home" ? "active" : ""}`} onClick={() => setView("home")} title={t().nav.home}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-              <span>{t().nav.home}</span>
-            </button>
-            <button class={`sidebar-btn ${view() === "chat" ? "active" : ""}`} onClick={() => {
-              setView("chat");
-              if (!hasChosenSession() || !activeSeed()) {
-                const list = sessions();
-                if (list.length > 0) resumeSession(list[0].seed);
-              }
-            }} title={t().nav.chat}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              <span>{t().nav.chat}</span>
-            </button>
-            <button class={`sidebar-btn ${view() === "skills" ? "active" : ""}`} onClick={() => setView("skills")} title={t().skills.title}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="15.5"/><polyline points="22 8.5 12 15.5 2 8.5"/></svg>
-              <span>{t().skills.title}</span>
-            </button>
-            <button class={`sidebar-btn ${view() === "settings" ? "active" : ""}`} onClick={() => setView("settings")} title={t().nav.settings}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-              <span>{t().nav.settings}</span>
-            </button>
-          </nav>
-          <div class="sidebar-section-label">{t().session.resume}</div>
-          <button class="sidebar-new-session-btn" onClick={() => { newSession(); setHasChosenSession(true); }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            <span>{t().session.new}</span>
-          </button>
-          <div class="sidebar-sessions">
-            <For each={sessions()}>
-              {(s) => (
-                <button class={`sidebar-session-item ${isActive(s.seed) ? "active" : ""}`} onClick={() => resumeSession(s.seed)} title={s.last_summary || s.seed}>
-                  <span class={`session-dot ${s.running ? "running" : ""} ${s.turso_backed ? "turso" : ""}`} title={s.turso_backed ? "SQLite" : "JSONL"} />
-                  <span class="session-info">
-                    <span class="session-summary">{s.last_summary || s.seed.substring(0, 8)}</span>
-                    <span class="session-meta">{formatDate(Number(s.updated_at))} · {s.turn_count || s.message_count} {t().session.turns}</span>
-                  </span>
-                  <span
-                    class="session-delete-btn"
-                    onClick={(e) => { e.stopPropagation(); deleteSession(s.seed); }}
-                    title={t().session.deleteHint}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M18 6L6 18M6 6l12 12" />
-                    </svg>
-                  </span>
-                </button>
-              )}
-            </For>
-          </div>
-          <div class="sidebar-spacer" />
-          <div class="sidebar-workspace">
-            <label class="sidebar-workspace-label">{t().session.workspace}</label>
-            <div class="sidebar-workspace-row">
-              <input
-                class="sidebar-workspace-input"
-                type="text"
-                value={workspaceDraft()}
-                placeholder={t().session.workspaceHint}
-                onInput={(e) => { setWorkspaceDraft(e.currentTarget.value); const chat = activeChat(); if (chat) chat.setWorkspace(e.currentTarget.value); }}
-                onChange={(e) => saveWorkspace(e.currentTarget.value)}
-              />
-              <button class="sidebar-workspace-browse" onClick={browseWorkspace} title={t().session.workspaceBrowse}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-          <Show when={version()}>
-            <button class="sidebar-version" onClick={() => setShowChangelog(true)} title="更新日志">
-              v{version()}
-            </button>
-          </Show>
-          <div
-            class="sidebar-resize-handle"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              const startX = e.clientX;
-              const startW = sidebarW();
-              const handle = e.currentTarget as HTMLElement;
-              handle.classList.add("active");
-              const onMove = (ev: MouseEvent) => {
-                const w = Math.max(160, Math.min(500, startW + ev.clientX - startX));
-                setSidebarW(w);
-                document.documentElement.style.setProperty("--sidebar-w", w + "px");
-              };
-              const onUp = () => {
-                handle.classList.remove("active");
-                localStorage.setItem("deepx:sidebar-w", String(sidebarW()));
-                document.removeEventListener("mousemove", onMove);
-                document.removeEventListener("mouseup", onUp);
-              };
-              document.addEventListener("mousemove", onMove);
-              document.addEventListener("mouseup", onUp);
-            }}
+    <I18nCtx.Provider value={i18n}>
+      <AppShell
+        sidebar={
+          <TaskSidebar
+            sessions={sessions()}
+            activeSeed={activeSeed()}
+            onNew={() => void newSession()}
+            onOpen={seed => void resumeSession(seed)}
+            onDelete={seed => void deleteSession(seed)}
+            onSkills={() => setView("skills")}
+            onSettings={() => setView("settings")}
           />
-        </aside>
-        <main class="main-content">
+        }
+        workspace={
           <Switch>
             <Match when={view() === "settings"}>
-              <SettingsView lang={configLang} onLangChange={switchLang} theme={theme} onThemeChange={switchTheme} permissionLevel={permissionLevel()} onPermissionLevelChange={changePermissionLevel} />
+              <SettingsView
+                lang={configLang}
+                onLangChange={switchLang}
+                theme={theme}
+                onThemeChange={switchTheme}
+                permissionLevel={permissionLevel()}
+                onPermissionLevelChange={changePermissionLevel}
+              />
             </Match>
             <Match when={view() === "skills"}>
               <SkillsView
                 seed={activeSeed()}
-                available={activeChat()?.skillCatalog() ?? []}
-                active={activeChat()?.activeSkillNames() ?? []}
-                onActivate={async (name) => { await invoke("cmd_activate_skill", { seed: activeSeed(), name }); }}
-                onUnload={async (name) => { await invoke("cmd_unload_skill", { seed: activeSeed(), name }); }}
+                available={activeEntry()?.state().skills.available ?? []}
+                active={activeEntry()?.state().skills.active ?? []}
+                onActivate={async name => { await invoke("cmd_activate_skill", { seed: activeSeed(), name }); }}
+                onUnload={async name => { await invoke("cmd_unload_skill", { seed: activeSeed(), name }); }}
                 onReload={async () => { await invoke("cmd_reload_skills", { seed: activeSeed() }); }}
               />
             </Match>
             <Match when={view() === "home"}>
-              <StartupView sessions={sessions()} onResume={resumeSession} onSend={startNewSessionAndSend} showHeatmap={false} />
+              <StartupView
+                sessions={sessions()}
+                onResume={resumeSession}
+                onSend={startNewSessionAndSend}
+                showHeatmap={false}
+              />
             </Match>
             <Match when={view() === "chat"}>
-              <Show when={hasChosenSession() && activeSeed() && activeChat()}>
-                <div class="chat-area">
-                  <ChatView
-                    chat={activeChat()!}
-                    rawSession={activeRawSession}
-                    hasMore={activeChat()!.hasMore()}
-                    onLoadMore={loadMoreTurns}
-                    onSlashCommand={handleSlashCommand}
-                    permission={activeChatPermission}
-                    permissionProgress={activePermissionProgress}
-                    onPermissionRespond={respondToPermission}
-                    permissionLevel={permissionLevel()}
-                    onPermissionLevelChange={changePermissionLevel}
-                    onChangeWorkspace={browseWorkspace}
-                    planReviewOpen={() => pendingPlanReviews() !== null}
-                    planReviewCallId={() => pendingPlanReviews()?.call_id ?? ""}
-                    planReviewContent={() => pendingPlanReviews()?.content ?? ""}
-                    onPlanReviewRespond={(approved, message) => {
-                      const plan = pendingPlanReviews();
-                      if (!plan) return;
-                      void invoke("cmd_plan_review", { seed: activeSeed(), callId: plan.call_id, approved, message: message ?? "" });
-                    }}
-                    onPlanReviewClose={() => setPendingPlanReviews(null)}
-                  />
-                </div>
+              <Show when={hasChosenSession() && activeEntry()} keyed>
+                {entry => <ChatView
+                  rawSession={entry.state}
+                  ui={entry.ui}
+                  onLoadMore={loadMoreTurns}
+                  onAskSubmit={submitAsk}
+                  onAskDismiss={dismissAsk}
+                  onPermissionRespond={respondToPermission}
+                  onPlanRespond={respondToPlan}
+                  onTaskAction={submitTaskAction}
+                  onUndo={undoLastTurn}
+                  permissionLevel={permissionLevel()}
+                  onPermissionLevelChange={changePermissionLevel}
+                  onChangeWorkspace={browseWorkspace}
+                />}
               </Show>
             </Match>
           </Switch>
-        </main>
-        
-      </div>
+        }
+      />
       <ToastContainer ctrl={toastCtrl} />
-      <Show when={showChangelog()}>
-        <ChangelogModal onClose={() => setShowChangelog(false)} />
-      </Show>
     </I18nCtx.Provider>
   );
-}
-
-function formatDate(epoch: number): string {
-  const d = new Date(epoch * 1000);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return mins + "m ago";
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return hours + "h ago";
-  return d.toLocaleDateString();
 }

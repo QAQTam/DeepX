@@ -5,8 +5,9 @@ import { reduceAgentEvent } from "./sessionEventReducer";
 export type ReloadStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 export type ScheduleFlush = (flush: () => void) => void;
 
-const SNAPSHOT_VERSION = 1;
-const SNAPSHOT_PREFIX = "deepx:reload:v1:";
+const SNAPSHOT_VERSION = 3;
+const SNAPSHOT_PREFIX = "deepx:reload:v3:";
+const LEGACY_SNAPSHOT_PREFIXES = ["deepx:reload:v1:", "deepx:reload:v2:"];
 const MAX_RELOAD_TURNS = 20;
 const MAX_PROGRESS_CHUNKS = 200;
 
@@ -29,6 +30,7 @@ const IMMEDIATE_EVENT_TYPES = new Set<Agent2Ui["type"]>([
   "compact_end",
   "cancelled",
   "done",
+  "ready",
 ]);
 
 function reloadKey(seed: string): string {
@@ -69,6 +71,7 @@ export function loadReloadSnapshot(
   seed: string,
 ): RawSessionState | undefined {
   try {
+    for (const prefix of LEGACY_SNAPSHOT_PREFIXES) storage.removeItem(`${prefix}${seed}`);
     const raw = storage.getItem(reloadKey(seed));
     if (!raw) return undefined;
     const parsed = JSON.parse(raw) as { version?: number; state?: RawSessionState };

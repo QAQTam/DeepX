@@ -1,21 +1,24 @@
-export type SessionEvent = Record<string, unknown>;
-export type ApplySessionEvent = (event: SessionEvent) => void;
+import type { Agent2Ui } from "../lib/types";
+
+export type ApplySessionEvent = (event: Agent2Ui) => void;
 
 export interface SessionReplayBuffer {
   begin(seed: string): void;
-  handleLive(seed: string, event: SessionEvent, apply: ApplySessionEvent): void;
-  complete(seed: string, replayed: SessionEvent[], apply: ApplySessionEvent): void;
+  handleLive(seed: string, event: Agent2Ui, apply: ApplySessionEvent): void;
+  complete(seed: string, replayed: Agent2Ui[], apply: ApplySessionEvent): void;
   abort(seed: string, apply: ApplySessionEvent): void;
   clear(): void;
 }
 
-function eventSignature(event: SessionEvent): string {
-  return JSON.stringify(event);
+function eventSignature(event: Agent2Ui): string {
+  return JSON.stringify(event, (_key, value) =>
+    typeof value === "bigint" ? { $deepxBigInt: value.toString() } : value,
+  );
 }
 
 export function createSessionReplayBuffer(): SessionReplayBuffer {
   const replayingSeeds = new Set<string>();
-  const bufferedLiveEvents = new Map<string, SessionEvent[]>();
+  const bufferedLiveEvents = new Map<string, Agent2Ui[]>();
 
   return {
     begin(seed) {

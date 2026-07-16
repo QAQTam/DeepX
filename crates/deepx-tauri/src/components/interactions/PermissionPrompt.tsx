@@ -1,6 +1,21 @@
 import { createSignal, For, Show } from "solid-js";
 import type { PermissionRisk } from "../../lib/types";
-import type { PermissionQueueProgress, PermissionRequest } from "../../store/permissionQueue";
+
+export interface PermissionRequest {
+  tool_call_id: string;
+  tool_name: string;
+  reason: string;
+  paths: string[];
+  category: string;
+  level: number;
+  risk: PermissionRisk;
+  consequence: string;
+}
+
+export interface PermissionQueueProgress {
+  current: number;
+  total: number;
+}
 
 export const approvalClass = (risk: PermissionRisk): string =>
   ({

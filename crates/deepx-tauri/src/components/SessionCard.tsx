@@ -1,4 +1,4 @@
-import type { SessionMeta } from "../store/chat";
+import type { SessionMeta } from "../lib/types";
 
 interface SessionCardProps {
   session: SessionMeta;

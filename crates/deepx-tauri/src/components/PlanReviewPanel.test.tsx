@@ -19,15 +19,11 @@ describe("PlanReviewPanel", () => {
     document.body.append(host);
     const onApprove = vi.fn();
     const onReject = vi.fn();
-    const onClose = vi.fn();
     dispose = render(() => (
       <PlanReviewPanel
-        seed="seed-1"
-        callId="call-1"
         planContent="## PLAN\n- [ ] P1: test item"
         onApprove={onApprove}
         onReject={onReject}
-        onClose={onClose}
       />
     ), host);
     await flush();
@@ -37,21 +33,16 @@ describe("PlanReviewPanel", () => {
     expect(host.querySelector(".interaction-reject")).not.toBeNull();
   });
 
-  it("calls onApprove and cmd_plan_review when approved", async () => {
-    vi.mocked(invoke).mockResolvedValue(undefined as never);
+  it("delegates approval exactly once without invoking Tauri itself", async () => {
     const host = document.createElement("div");
     document.body.append(host);
-    const onApprove = vi.fn();
+    const onApprove = vi.fn().mockResolvedValue(undefined);
     const onReject = vi.fn();
-    const onClose = vi.fn();
     dispose = render(() => (
       <PlanReviewPanel
-        seed="seed-1"
-        callId="call-1"
         planContent="test plan"
         onApprove={onApprove}
         onReject={onReject}
-        onClose={onClose}
       />
     ), host);
     await flush();
@@ -59,11 +50,8 @@ describe("PlanReviewPanel", () => {
     host.querySelector<HTMLButtonElement>(".interaction-approve")!.click();
     await flush();
 
-    expect(invoke).toHaveBeenCalledWith("cmd_plan_review", expect.objectContaining({
-      seed: "seed-1",
-      callId: "call-1",
-      approved: true,
-    }));
     expect(onApprove).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(host.querySelector(".plan-review-close")).toBeNull();
   });
 });

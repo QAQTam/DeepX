@@ -4,6 +4,7 @@ import type {
   PermissionRisk,
   RoundBlock,
   SkillInfo,
+  TaskInfo,
   ToolCallDef,
   ToolResultDef,
   UsageInfo,
@@ -37,10 +38,26 @@ export type InteractionRecord = {
   at: number;
 };
 
+export type RawMetricPoint = {
+  ts: number;
+  context_tokens: number;
+  cache_hit: number;
+  cache_miss: number;
+};
+
+export type RawActivityEntry = {
+  toolName: string;
+  summary: string;
+  success: boolean;
+  time: string;
+  args: string;
+};
+
+type InteractionBase = { id: string; turnId: string };
+
 export type PendingInteraction =
-  | {
+  | (InteractionBase & {
       kind: "permission";
-      id: string;
       toolName: string;
       reason: string;
       paths: string[];
@@ -48,16 +65,19 @@ export type PendingInteraction =
       level: number;
       risk: PermissionRisk;
       consequence: string;
-    }
-  | {
+    })
+  | (InteractionBase & {
       kind: "ask";
-      id: string;
-      turnId: string;
       roundNum: number;
       mode: AskMode;
       questions: AskQuestion[];
-    }
-  | { kind: "plan"; id: string };
+    })
+  | (InteractionBase & { kind: "plan"; content: string });
+
+export type DashboardData = {
+  tasks: TaskInfo[];
+  recentEdits: string[];
+};
 
 export type RawTurn = {
   turnId: string;
@@ -74,7 +94,7 @@ export type RawTurn = {
 export type RawSessionState = {
   seed: string;
   turns: RawTurn[];
-  pendingInteraction: PendingInteraction | null;
+  pendingInteractions: PendingInteraction[];
   environment: {
     linesAdded: number;
     linesRemoved: number;
@@ -91,10 +111,18 @@ export type RawSessionState = {
     title?: string;
     model?: string;
     contextLimit: number;
+    usage?: UsageInfo;
   };
+  dashboard: DashboardData & { activity: RawActivityEntry[] };
+  telemetry: RawMetricPoint[];
   skills: { available: SkillInfo[]; active: string[] };
   notices: Array<{ level: string; message: string; at: number }>;
-  compact: { active: boolean; text: string };
+  compact: {
+    active: boolean;
+    text: string;
+    turnsCompacted: number | null;
+    completionRevision: number;
+  };
 };
 
 export function emptyRawRound(roundNum: number): RawRound {

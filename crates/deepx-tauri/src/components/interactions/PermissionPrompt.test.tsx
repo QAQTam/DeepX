@@ -2,8 +2,7 @@
 
 import { render } from "solid-js/web";
 import { describe, expect, it, vi } from "vitest";
-import type { PermissionRequest } from "../../store/permissionQueue";
-import PermissionPrompt, { approvalClass } from "./PermissionPrompt";
+import PermissionPrompt, { approvalClass, type PermissionRequest } from "./PermissionPrompt";
 
 const request = (risk: PermissionRequest["risk"]): PermissionRequest => ({
   tool_call_id: "call-1",

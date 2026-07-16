@@ -7,8 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import AskUserPrompt from "./AskUserPrompt";
 import CompactStatusRow from "./CompactStatusRow";
 import InteractionDock from "./InteractionDock";
-import PermissionPrompt from "./PermissionPrompt";
-import type { PermissionRequest } from "../../store/permissionQueue";
+import PermissionPrompt, { type PermissionRequest } from "./PermissionPrompt";
 
 function flush() {
   return new Promise((r) => setTimeout(r, 20));

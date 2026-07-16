@@ -1,16 +1,21 @@
-import type { Agent2Ui, RoundData, TurnData } from "../lib/types";
+import type { Agent2Ui, RoundData, TurnData, UsageInfo } from "../lib/types";
 import {
   emptyRawRound,
+  type DashboardData,
+  type PendingInteraction,
   type RawRound,
   type RawSessionState,
   type RawTurn,
 } from "./rawSession";
 
+const MAX_ACTIVITY = 50;
+const MAX_METRICS = 120;
+
 export function createRawSessionState(seed: string): RawSessionState {
   return {
     seed,
     turns: [],
-    pendingInteraction: null,
+    pendingInteractions: [],
     environment: {
       linesAdded: 0,
       linesRemoved: 0,
@@ -26,9 +31,11 @@ export function createRawSessionState(seed: string): RawSessionState {
       cacheHitPct: 0,
       contextLimit: 0,
     },
+    dashboard: { tasks: [], recentEdits: [], activity: [] },
+    telemetry: [],
     skills: { available: [], active: [] },
     notices: [],
-    compact: { active: false, text: "" },
+    compact: { active: false, text: "", turnsCompacted: null, completionRevision: 0 },
   };
 }
 
@@ -99,21 +106,50 @@ function appendNoticeOnce(
   return { ...state, notices: [...state.notices, notice] };
 }
 
-function closePendingInteraction(
+function appendMetric(
   state: RawSessionState,
-  id: string,
-  resolution: string,
+  usage: UsageInfo,
   now: number,
 ): RawSessionState {
-  const pending = state.pendingInteraction;
-  if (!pending || pending.id !== id) return state;
-  const turnId = pending.kind === "ask" ? pending.turnId : lastTurnId(state);
-  const next = { ...state, pendingInteraction: null };
-  if (!turnId) return next;
-  return updateTurn(next, turnId, turn => ({
-    ...turn,
-    interactions: [...turn.interactions, { id, kind: pending.kind, resolution, at: now }],
-  }));
+  return {
+    ...state,
+    telemetry: [...state.telemetry, {
+      ts: now,
+      context_tokens: usage.prompt_tokens,
+      cache_hit: usage.prompt_cache_hit_tokens,
+      cache_miss: usage.prompt_cache_miss_tokens,
+    }].slice(-MAX_METRICS),
+  };
+}
+
+function enqueueInteraction(
+  state: RawSessionState,
+  interaction: PendingInteraction,
+): RawSessionState {
+  if (state.pendingInteractions.some(item => item.kind === interaction.kind && item.id === interaction.id)) {
+    return state;
+  }
+  const pendingInteractions = [...state.pendingInteractions, interaction];
+  return { ...state, pendingInteractions };
+}
+
+export function applyDashboardData(
+  state: RawSessionState,
+  data: DashboardData,
+): RawSessionState {
+  return { ...state, dashboard: { ...state.dashboard, ...data } };
+}
+
+export function removeTurnFromSession(
+  state: RawSessionState,
+  turnId: string,
+): RawSessionState {
+  const pendingInteractions = state.pendingInteractions.filter(item => item.turnId !== turnId);
+  return {
+    ...state,
+    turns: state.turns.filter(turn => turn.turnId !== turnId),
+    pendingInteractions,
+  };
 }
 
 export function resolvePendingInteraction(
@@ -122,10 +158,24 @@ export function resolvePendingInteraction(
   resolution: string,
   now = Date.now(),
 ): RawSessionState {
-  const next = closePendingInteraction(state, id, resolution, now);
-  const turnId = lastTurnId(next);
-  if (!turnId) return next;
-  return updateTurn(next, turnId, turn => turn.status === "waiting" ? { ...turn, status: "running" } : turn);
+  const interaction = state.pendingInteractions.find(item => item.id === id);
+  if (!interaction) return state;
+  const pendingInteractions = state.pendingInteractions.filter(item => item.id !== id);
+  const next = {
+    ...state,
+    pendingInteractions,
+  };
+  const stillWaiting = pendingInteractions.some(item => item.turnId === interaction.turnId);
+  return updateTurn(next, interaction.turnId, turn => ({
+    ...turn,
+    status: stillWaiting ? "waiting" : turn.status === "waiting" ? "running" : turn.status,
+    interactions: [...turn.interactions, {
+      id,
+      kind: interaction.kind,
+      resolution,
+      at: now,
+    }],
+  }));
 }
 
 export function reduceAgentEvent(
@@ -147,14 +197,28 @@ export function reduceAgentEvent(
           interactions: [],
         }],
       };
-    case "turn_end":
-      return updateTurn(state, event.turn_id, turn => ({
+    case "turn_end": {
+      const current = state.turns.find(turn => turn.turnId === event.turn_id);
+      if (
+        current?.status === "completed" &&
+        current.stopReason === event.stop_reason &&
+        JSON.stringify(current.usage) === JSON.stringify(event.usage)
+      ) return state;
+      let next = updateTurn(state, event.turn_id, turn => ({
         ...turn,
         status: turn.status === "failed" || turn.status === "cancelled" ? turn.status : "completed",
         endedAt: now,
         stopReason: event.stop_reason,
         usage: event.usage,
       }));
+      if (event.usage) {
+        next = appendMetric({
+          ...next,
+          session: { ...next.session, usage: event.usage },
+        }, event.usage, now);
+      }
+      return next;
+    }
     case "round_delta":
       return updateRound(state, event.turn_id, event.round_num, round => ({
         ...round,
@@ -167,8 +231,8 @@ export function reduceAgentEvent(
         isFinal: event.is_final,
         thinking: event.thinking ?? round.thinking,
         answer: event.answer ?? round.answer,
-        toolCalls: event.tool_calls ?? [],
-        blocks: event.blocks ?? [],
+        toolCalls: event.tool_calls ?? round.toolCalls,
+        blocks: event.blocks ?? round.blocks,
       }));
     case "tool_results":
       return updateRound(state, event.turn_id, event.round_num, round => ({
@@ -225,7 +289,6 @@ export function reduceAgentEvent(
       });
     }
     case "tool_call_preview":
-      console.log("[REDUCER] tool_call_preview", { turn_id: event.turn_id, round_num: event.round_num, id: event.id, name: event.name, args_len: event.args_so_far.length });
       return updateRound(state, event.turn_id, event.round_num, round => {
         const preview = {
           id: event.id,
@@ -254,14 +317,20 @@ export function reduceAgentEvent(
           cacheHitPct: event.cache_hit_pct,
         },
       };
-    case "more_turns":
+    case "more_turns": {
+      const existing = new Set(state.turns.map(turn => turn.turnId));
+      const older = event.turns.map(restoredTurn).filter(turn => !existing.has(turn.turnId));
       return {
         ...state,
-        turns: [...event.turns.map(restoredTurn), ...state.turns],
+        turns: [...older, ...state.turns],
         session: { ...state.session, hasMore: event.has_more },
       };
-    case "session_created":
-      return { ...createRawSessionState(event.seed), session: { ...state.session, ready: true } };
+    }
+    case "session_created": {
+      if (state.seed === event.seed && state.session.ready) return state;
+      const created = createRawSessionState(event.seed);
+      return { ...created, session: { ...created.session, ready: true } };
+    }
     case "error": {
       const turnId = lastTurnId(state);
       const next = appendNoticeOnce(state, {
@@ -273,16 +342,25 @@ export function reduceAgentEvent(
     }
     case "tool_notice":
       return { ...state, notices: [...state.notices, { level: event.level, message: event.message, at: now }] };
-    case "dashboard":
-      return {
+    case "dashboard": {
+      let next: RawSessionState = {
         ...state,
         session: {
           ...state.session,
           title: event.session_title,
           model: event.model,
           contextLimit: event.context_limit,
+          usage: event.usage ?? state.session.usage,
+        },
+        dashboard: {
+          ...state.dashboard,
+          tasks: event.tasks ?? state.dashboard.tasks,
+          recentEdits: event.recent_edits ?? state.dashboard.recentEdits,
         },
       };
+      if (event.usage) next = appendMetric(next, event.usage, now);
+      return next;
+    }
     case "code_delta":
       return {
         ...state,
@@ -300,34 +378,29 @@ export function reduceAgentEvent(
       return { ...state, skills: { available: event.available, active: event.active } };
     case "permission_request": {
       const turnId = lastTurnId(state);
-      const next = {
-        ...state,
-        pendingInteraction: {
-          kind: "permission" as const,
-          id: event.tool_call_id,
-          toolName: event.tool_name,
-          reason: event.reason,
-          paths: event.paths,
-          category: event.category,
-          level: event.level,
-          risk: event.risk,
-          consequence: event.consequence,
-        },
-      };
-      return turnId ? updateTurn(next, turnId, turn => ({ ...turn, status: "waiting" })) : next;
+      if (!turnId) return state;
+      return updateTurn(enqueueInteraction(state, {
+        kind: "permission",
+        id: event.tool_call_id,
+        turnId,
+        toolName: event.tool_name,
+        reason: event.reason,
+        paths: event.paths,
+        category: event.category,
+        level: event.level,
+        risk: event.risk,
+        consequence: event.consequence,
+      }), turnId, turn => ({ ...turn, status: "waiting" }));
     }
     case "ask_user":
-      return updateTurn({
-        ...state,
-        pendingInteraction: {
-          kind: "ask",
-          id: event.ask_id,
-          turnId: event.turn_id,
-          roundNum: event.round_num,
-          mode: event.mode,
-          questions: event.questions,
-        },
-      }, event.turn_id, turn => ({ ...turn, status: "waiting" }));
+      return updateTurn(enqueueInteraction(state, {
+        kind: "ask",
+        id: event.ask_id,
+        turnId: event.turn_id,
+        roundNum: event.round_num,
+        mode: event.mode,
+        questions: event.questions,
+      }), event.turn_id, turn => ({ ...turn, status: "waiting" }));
     case "ask_resolved":
       return resolvePendingInteraction(state, event.ask_id, event.resolution, now);
     case "ask_rejected":
@@ -338,13 +411,13 @@ export function reduceAgentEvent(
       });
     case "plan_submitted": {
       const turnId = lastTurnId(state);
-      const next = {
-        ...state,
-        pendingInteraction: { kind: "plan" as const, id: event.call_id },
-      };
-      return turnId
-        ? updateTurn(next, turnId, turn => ({ ...turn, status: "waiting" }))
-        : next;
+      if (!turnId) return state;
+      return updateTurn(enqueueInteraction(state, {
+        kind: "plan",
+        id: event.call_id,
+        turnId,
+        content: event.plan_content,
+      }), turnId, turn => ({ ...turn, status: "waiting" }));
     }
     case "plan_resolved":
       return resolvePendingInteraction(
@@ -354,23 +427,58 @@ export function reduceAgentEvent(
         now,
       );
     case "compact_start":
-      return { ...state, compact: { active: true, text: "" } };
+      return { ...state, compact: { ...state.compact, active: true, text: "", turnsCompacted: null } };
     case "compact_delta":
-      return { ...state, compact: { active: true, text: state.compact.text + event.delta } };
+      return { ...state, compact: { ...state.compact, active: true, text: state.compact.text + event.delta } };
     case "compact_end":
-      return { ...state, compact: { active: false, text: "" } };
+      if (!state.compact.active && state.compact.turnsCompacted === event.turns_compacted) return state;
+      return { ...state, compact: {
+        active: false,
+        text: "",
+        turnsCompacted: event.turns_compacted,
+        completionRevision: state.compact.completionRevision + 1,
+      } };
     case "cancelled": {
       const turnId = lastTurnId(state);
-      const next = { ...state, pendingInteraction: null };
-      return turnId ? updateTurn(next, turnId, turn => ({ ...turn, status: "cancelled", endedAt: now })) : next;
+      if (!turnId) return state;
+      const pendingInteractions = state.pendingInteractions.filter(item => item.turnId !== turnId);
+      const next = {
+        ...state,
+        pendingInteractions,
+      };
+      return updateTurn(next, turnId, turn => ({ ...turn, status: "cancelled", endedAt: now }));
     }
     case "ready":
       return { ...state, session: { ...state.session, ready: true } };
-    case "done":
+    case "done": {
+      const turnId = lastTurnId(state);
+      return turnId ? updateTurn(state, turnId, turn =>
+        turn.status === "running" || turn.status === "waiting"
+          ? { ...turn, status: "completed", endedAt: now }
+          : turn,
+      ) : state;
+    }
     case "shutdown_ack":
     case "pong":
-    case "audit_record":
       return state;
+    case "audit_record": {
+      const entry = {
+        toolName: event.tool_name,
+        summary: event.result_summary,
+        success: event.success,
+        time: event.time,
+        args: event.args,
+      };
+      const previous = state.dashboard.activity[0];
+      if (previous && JSON.stringify(previous) === JSON.stringify(entry)) return state;
+      return {
+        ...state,
+        dashboard: {
+          ...state.dashboard,
+          activity: [entry, ...state.dashboard.activity].slice(0, MAX_ACTIVITY),
+        },
+      };
+    }
     default:
       return assertNever(event);
   }

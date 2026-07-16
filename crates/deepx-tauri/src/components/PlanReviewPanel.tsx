@@ -1,13 +1,9 @@
 import { Show, createSignal } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
 
 interface PlanReviewPanelProps {
-  seed: string;
-  callId: string;
   planContent: string;
-  onApprove: () => void;
-  onReject: (message?: string) => void;
-  onClose: () => void;
+  onApprove: () => void | Promise<void>;
+  onReject: (message?: string) => void | Promise<void>;
 }
 
 export default function PlanReviewPanel(props: PlanReviewPanelProps) {
@@ -18,15 +14,7 @@ export default function PlanReviewPanel(props: PlanReviewPanelProps) {
     if (busy()) return;
     setBusy(true);
     try {
-      await invoke("cmd_plan_review", {
-        seed: props.seed,
-        callId: props.callId,
-        approved: true,
-        message: null,
-      });
-      props.onApprove();
-    } catch (error) {
-      console.error("plan review approve:", error);
+      await props.onApprove();
     } finally {
       setBusy(false);
     }
@@ -37,15 +25,7 @@ export default function PlanReviewPanel(props: PlanReviewPanelProps) {
     const message = feedback().trim() || undefined;
     setBusy(true);
     try {
-      await invoke("cmd_plan_review", {
-        seed: props.seed,
-        callId: props.callId,
-        approved: false,
-        message: message ?? null,
-      });
-      props.onReject(message);
-    } catch (error) {
-      console.error("plan review reject:", error);
+      await props.onReject(message);
     } finally {
       setBusy(false);
     }
@@ -59,7 +39,6 @@ export default function PlanReviewPanel(props: PlanReviewPanelProps) {
           <h2>确认执行计划</h2>
           <p>审阅计划内容后批准执行，或留下拒绝原因。</p>
         </div>
-        <button type="button" class="plan-review-close" aria-label="稍后审核" onClick={props.onClose}>×</button>
       </header>
 
       <Show when={props.planContent} fallback={<div class="plan-review-empty">计划内容为空。</div>}>

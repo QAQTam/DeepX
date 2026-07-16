@@ -1,102 +1,125 @@
-import { createEffect, createSignal, Show } from "solid-js";
+import { createEffect, createSignal, Match, onCleanup, Show, Switch, type Accessor } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
-import type { SlashCommand } from "./SlashMenu";
-import ConversationTranscript from "./conversation/ConversationTranscript";
+import type { AskAnswer, TaskInfo } from "../lib/types";
 import { projectSession } from "../presentation/useConversationView";
-import type { RawSessionState } from "../store/rawSession";
-import ThreadHeader from "./shell/ThreadHeader";
-import EnvironmentPopover from "./shell/EnvironmentPopover";
-import GitDiffPanel from "./GitDiffPanel";
-import ComposerDock from "./composer/ComposerDock";
+import type { PendingInteraction, RawSessionState } from "../store/rawSession";
 import { createFollowUpQueue } from "../store/followUpQueue";
-import InteractionDock from "./interactions/InteractionDock";
+import {
+  activeInteraction,
+  canLoadMore,
+  isSessionStreaming,
+  sessionUsage,
+} from "../store/sessionSelectors";
+import type { SessionUiState } from "../store/sessionUiState";
+import ComposerDock from "./composer/ComposerDock";
+import ConversationTranscript from "./conversation/ConversationTranscript";
+import GitDiffPanel from "./GitDiffPanel";
 import AskUserPrompt from "./interactions/AskUserPrompt";
-import PermissionPrompt from "./interactions/PermissionPrompt";
 import CompactStatusRow from "./interactions/CompactStatusRow";
+import InteractionDock from "./interactions/InteractionDock";
 import InteractionModal from "./interactions/InteractionModal";
+import PermissionPrompt from "./interactions/PermissionPrompt";
 import PlanReviewPanel from "./PlanReviewPanel";
 import ContextPanel from "./ContextPanel";
-import type { PermissionQueueProgress, QueuedPermission } from "../store/permissionQueue";
+import EnvironmentPopover from "./shell/EnvironmentPopover";
+import ThreadHeader from "./shell/ThreadHeader";
 
 interface ChatViewProps {
-  chat: ReturnType<typeof import("../store/chat").createChatStore>;
-  rawSession: () => RawSessionState | undefined;
-  hasMore: boolean;
-  onLoadMore: () => void;
-  onSlashCommand: (cmd: SlashCommand) => void;
-  permission?: () => QueuedPermission | null;
-  permissionProgress?: () => PermissionQueueProgress | null;
-  onPermissionRespond?: (
-    permission: QueuedPermission,
+  rawSession: Accessor<RawSessionState>;
+  ui: SessionUiState;
+  onLoadMore: () => void | Promise<void>;
+  onAskSubmit: (
+    item: Extract<PendingInteraction, { kind: "ask" }>,
+    answers: AskAnswer[],
+  ) => void | Promise<void>;
+  onAskDismiss: (item: Extract<PendingInteraction, { kind: "ask" }>) => void | Promise<void>;
+  onPermissionRespond: (
+    item: Extract<PendingInteraction, { kind: "permission" }>,
     approved: boolean,
     trustFolder: boolean,
-  ) => Promise<void>;
+  ) => void | Promise<void>;
+  onPlanRespond: (
+    item: Extract<PendingInteraction, { kind: "plan" }>,
+    approved: boolean,
+    message?: string,
+  ) => void | Promise<void>;
+  onTaskAction: (action: "cancel" | "delete" | "ask", task: TaskInfo) => void | Promise<void>;
+  onUndo: () => void | Promise<void>;
   permissionLevel: number;
   onPermissionLevelChange: (level: number) => void | Promise<void>;
   onChangeWorkspace: () => void | Promise<void>;
-  planReviewOpen?: () => boolean;
-  planReviewCallId?: () => string;
-  planReviewContent?: () => string;
-  onPlanReviewRespond?: (approved: boolean, message?: string) => void;
-  onPlanReviewClose?: () => void;
 }
 
 export default function ChatView(props: ChatViewProps) {
-  const chat = () => props.chat;
-  const seed = () => chat().sessionInfo.seed;
+  const session = () => props.rawSession();
+  const seed = () => session().seed;
+  const interaction = () => activeInteraction(session());
+  const permissionInteraction = () => {
+    const item = interaction();
+    return item?.kind === "permission" ? item : null;
+  };
+  const askInteraction = () => {
+    const item = interaction();
+    return item?.kind === "ask" ? item : null;
+  };
+  const planInteraction = () => {
+    const item = interaction();
+    return item?.kind === "plan" ? item : null;
+  };
+  const streaming = () => isSessionStreaming(session());
+  const usage = () => sessionUsage(session());
   const [mode, setMode] = createSignal("plan");
   const [environmentOpen, setEnvironmentOpen] = createSignal(false);
   const [statsOpen, setStatsOpen] = createSignal(false);
   const [branch, setBranch] = createSignal("");
   const [showGitWorkspace, setShowGitWorkspace] = createSignal(false);
-  const permission = () => props.permission?.() ?? null;
-  const showCompactStatus = () => chat().isCompacting() || chat().compactResult() != null;
+  const [compactCompleteVisible, setCompactCompleteVisible] = createSignal(
+    session().compact.completionRevision > 0,
+  );
+  let compactRevision = 0;
+  let compactTimer: ReturnType<typeof setTimeout> | undefined;
 
-  async function handleSetMode(m: string) {
-    setMode(m);
-    try {
-      await invoke("cmd_set_mode", { seed: seed(), mode: m });
-    } catch (e) {
-      console.error("set_mode error:", e);
+  createEffect(() => {
+    const revision = session().compact.completionRevision;
+    if (revision > compactRevision) {
+      setCompactCompleteVisible(true);
+      if (compactTimer) clearTimeout(compactTimer);
+      compactTimer = setTimeout(() => setCompactCompleteVisible(false), 4_000);
     }
+    compactRevision = revision;
+  });
+  onCleanup(() => { if (compactTimer) clearTimeout(compactTimer); });
+
+  async function handleSetMode(nextMode: string) {
+    setMode(nextMode);
+    try { await invoke("cmd_set_mode", { seed: seed(), mode: nextMode }); }
+    catch (error) { console.error("set_mode error:", error); }
   }
 
   async function handleSend(text: string, files: string[]) {
-    try {
-      chat().clearError();
-      await invoke("cmd_send_message", { seed: seed(), text, files });
-    } catch (e) {
-      console.error("send_message error:", e);
-    }
+    try { await invoke("cmd_send_message", { seed: seed(), text, files }); }
+    catch (error) { console.error("send_message error:", error); }
   }
 
   async function handleStop() {
-    try {
-      await invoke("cmd_cancel", { seed: seed() });
-    } catch (e) {
-      console.error("cancel error:", e);
-    }
+    try { await invoke("cmd_cancel", { seed: seed() }); }
+    catch (error) { console.error("cancel error:", error); }
   }
 
   async function handleCompact() {
-    try {
-      await invoke("cmd_compact", { seed: seed() });
-    } catch (e) {
-      console.error(e);
-    }
+    try { await invoke("cmd_compact", { seed: seed() }); }
+    catch (error) { console.error("compact error:", error); }
   }
 
   const followUps = createFollowUpQueue(seed(), handleSend);
-  let wasStreaming = chat().isStreaming();
+  let wasStreaming = streaming();
   createEffect(() => {
-    const streaming = chat().isStreaming();
-    if (wasStreaming && !streaming) {
-      void followUps.drainAfterTurnEnd({
-        hasPendingGate: !!props.rawSession?.()?.pendingInteraction,
-      });
+    const active = streaming();
+    if (wasStreaming && !active) {
+      void followUps.drainAfterTurnEnd({ hasPendingGate: activeInteraction(session()) !== null });
     }
-    wasStreaming = streaming;
+    wasStreaming = active;
   });
 
   createEffect(() => {
@@ -109,112 +132,103 @@ export default function ChatView(props: ChatViewProps) {
   return (
     <div class="chat-view">
       <ThreadHeader
-        title={
-          props.rawSession?.()?.session.title || seed().slice(0, 8)
-        }
+        title={session().session.title || seed().slice(0, 8)}
         environmentOpen={environmentOpen()}
         statsOpen={statsOpen()}
-        onToggleEnvironment={() => setEnvironmentOpen((value) => !value)}
-        onToggleStats={() => setStatsOpen((value) => !value)}
-        onOpenLocation={() => {
-          if (chat().workspace()) void open(chat().workspace());
-        }}
-        workspace={chat().workspace()}
+        onToggleEnvironment={() => setEnvironmentOpen(value => !value)}
+        onToggleStats={() => setStatsOpen(value => !value)}
+        onOpenLocation={() => { if (props.ui.workspace()) void open(props.ui.workspace()); }}
+        workspace={props.ui.workspace()}
         onChangeWorkspace={props.onChangeWorkspace}
-        compacting={chat().isCompacting()}
+        compacting={session().compact.active}
         onCompact={handleCompact}
+        undoDisabled={session().turns.length === 0 || streaming()}
+        onUndo={() => void props.onUndo()}
       />
-      <Show when={environmentOpen() && props.rawSession?.()}>
-        {(raw) => (
-          <EnvironmentPopover
-            session={raw()}
-            workspace={chat().workspace()}
-            branch={branch()}
-            tasks={chat().tasks()}
-            onOpenDiff={() => setShowGitWorkspace(true)}
-            onTaskAction={(action, task) => void chat().submitTaskAction(action, task.id, task.subject, task.description)}
-          />
-        )}
+      <Show when={environmentOpen()}>
+        <EnvironmentPopover
+          session={session()}
+          workspace={props.ui.workspace()}
+          branch={branch()}
+          tasks={session().dashboard.tasks}
+          onOpenDiff={() => setShowGitWorkspace(true)}
+          onTaskAction={(action, task) => void props.onTaskAction(action, task)}
+        />
       </Show>
       <Show when={statsOpen()}>
         <ContextPanel
           seed={seed()}
-          metricHistory={chat().metricHistory()}
-          contextLimit={chat().sessionInfo.context_limit ?? 200000}
+          metricHistory={session().telemetry}
+          contextLimit={usage().contextLimit || 200000}
           initialOpen={true}
         />
       </Show>
-      <Show when={props.rawSession()}>
-        {(raw) => <ConversationTranscript turns={projectSession(raw())} />}
-      </Show>
-      <Show when={showCompactStatus()}>
+      <ConversationTranscript
+        turns={projectSession(session())}
+        hasMore={canLoadMore(session())}
+        onLoadMore={props.onLoadMore}
+      />
+      <Show when={session().compact.active || compactCompleteVisible()}>
         <InteractionDock>
           <CompactStatusRow
-            active={chat().isCompacting()}
-            status={chat().isCompacting() ? "active" : "complete"}
-            text={chat().compactText()}
-            turnsCompacted={chat().compactResult() ?? undefined}
+            active={session().compact.active}
+            status={session().compact.active ? "active" : "complete"}
+            text={session().compact.text}
+            turnsCompacted={session().compact.turnsCompacted ?? undefined}
           />
         </InteractionDock>
       </Show>
-      <Show
-        when={permission()}
-        fallback={
-          <Show
-            when={chat().askState().show}
-            fallback={
-              <Show when={props.planReviewOpen?.()}>
-                <InteractionModal label="审核执行计划">
-                  <PlanReviewPanel
-                    seed={seed()}
-                    callId={props.planReviewCallId?.() ?? ""}
-                    planContent={props.planReviewContent?.() ?? ""}
-                    onApprove={() => props.onPlanReviewRespond?.(true)}
-                    onReject={(message) => props.onPlanReviewRespond?.(false, message)}
-                    onClose={() => props.onPlanReviewClose?.()}
-                  />
-                </InteractionModal>
-              </Show>
-            }
-          >
-              <InteractionModal label="DeepX 需要你的回答">
-                <AskUserPrompt
-                  questions={chat().askState().questions}
-                  onSubmit={(answers) => chat().submitAskAnswer(answers)}
-                  onDismiss={() => void chat().dismissAsk()}
-                />
-              </InteractionModal>
-          </Show>
-        }
-      >
-        {(item) => (
-          <InteractionModal label="DeepX 请求操作授权">
-              <PermissionPrompt
-                request={item().request}
-                progress={props.permissionProgress?.()}
-                onRespond={(approved, trustFolder) =>
-                  props.onPermissionRespond?.(item(), approved, trustFolder)
-                }
-              />
-          </InteractionModal>
-        )}
-      </Show>
+      <Switch>
+        <Match when={permissionInteraction()}>
+          {item => <InteractionModal label="DeepX 请求操作授权">
+            <PermissionPrompt
+              request={{
+                tool_call_id: item().id,
+                tool_name: item().toolName,
+                reason: item().reason,
+                paths: item().paths,
+                category: item().category,
+                level: item().level,
+                risk: item().risk,
+                consequence: item().consequence,
+              }}
+              onRespond={(approved, trust) => void props.onPermissionRespond(item(), approved, trust)}
+            />
+          </InteractionModal>}
+        </Match>
+        <Match when={askInteraction()}>
+          {item => <InteractionModal label="DeepX 需要你的回答">
+            <AskUserPrompt
+              questions={item().questions}
+              onSubmit={answers => void props.onAskSubmit(item(), answers)}
+              onDismiss={() => void props.onAskDismiss(item())}
+            />
+          </InteractionModal>}
+        </Match>
+        <Match when={planInteraction()}>
+          {item => <InteractionModal label="审核执行计划">
+            <PlanReviewPanel
+              planContent={item().content}
+              onApprove={() => props.onPlanRespond(item(), true)}
+              onReject={message => props.onPlanRespond(item(), false, message)}
+            />
+          </InteractionModal>}
+        </Match>
+      </Switch>
       <ComposerDock
         onSend={handleSend}
         onStop={handleStop}
-        isStreaming={chat().isStreaming}
-        hasPendingGate={() => !!props.rawSession?.()?.pendingInteraction}
+        isStreaming={streaming}
+        hasPendingGate={() => activeInteraction(session()) !== null}
         queue={followUps}
         mode={mode()}
         onModeChange={handleSetMode}
-        model={chat().sessionInfo.model}
-        contextTokens={chat().sessionInfo.context_tokens}
-        contextLimit={chat().sessionInfo.context_limit}
+        model={usage().model}
+        contextTokens={usage().contextTokens}
+        contextLimit={usage().contextLimit}
         permissionLevel={props.permissionLevel}
         onPermissionLevelChange={props.onPermissionLevelChange}
       />
-
-      {/* ── Git Diff Workspace Overlay ── */}
       <GitDiffPanel
         open={showGitWorkspace()}
         seed={seed()}

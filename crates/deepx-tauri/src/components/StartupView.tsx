@@ -1,7 +1,7 @@
 import { For, createMemo, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
-import type { SessionMeta } from "../store/chat";
+import type { SessionMeta } from "../lib/types";
 import SessionCard from "./SessionCard";
 
 interface StartupViewProps {

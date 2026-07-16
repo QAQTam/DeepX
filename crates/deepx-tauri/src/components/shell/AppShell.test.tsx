@@ -12,3 +12,15 @@ it("renders the focused shell without permanent engineering panels", () => {
   expect(host.querySelector(".status-panel,.info-bar,.open-tabs")).toBeNull();
   dispose();
 });
+
+it("mounts exactly one authoritative sidebar and workspace", () => {
+  const host = document.createElement("div");
+  const dispose = render(() => <AppShell
+    sidebar={<aside data-task-sidebar />}
+    workspace={<section data-active-workspace />}
+  />, host);
+  expect(host.querySelectorAll("[data-task-sidebar]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-thread-workspace]")).toHaveLength(1);
+  expect(host.querySelector(".sidebar")).toBeNull();
+  dispose();
+});
