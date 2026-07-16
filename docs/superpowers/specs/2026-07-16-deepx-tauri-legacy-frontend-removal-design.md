@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 
-**Status:** Approved direction; written specification pending user review
+**Status:** Approved by user on 2026-07-16
 
 **Source baseline:** `main@440eb7b`
 
