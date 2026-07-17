@@ -1,30 +1,53 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// Activation state of a single skill within a session.
+///
+/// Tracks whether a skill is currently loaded and available in the
+/// agent's context window.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillSessionEntryState {
+    /// Skill is loaded and active in the current session.
     Active,
+    /// Skill was previously available but is now unavailable
+    /// (e.g. file deleted, scope changed).
     Unavailable,
 }
 
+/// Runtime tracking for one skill in a session.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
 pub struct SkillSessionEntry {
+    /// Skill name matching SKILL.md metadata.
     pub name: String,
+    /// Monotonic counter for determining activation order across sessions.
     pub activation_order: u64,
+    /// Path or identifier of the skill source directory (project/user scope).
     pub source: String,
+    /// Current activation state.
     pub state: SkillSessionEntryState,
+    /// Number of turns remaining before the skill lease expires and
+    /// must be re-validated or released.
     pub lease_remaining: u8,
 }
 
+/// Snapshot of skill activation state for a session, persisted in meta.json.
+///
+/// Version 2 adds `context_epoch` and `operation_revision` for tracking
+/// skill activation/deactivation across context compaction cycles.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
 pub struct SkillSessionStateV2 {
+    /// Schema version (always 2).
     pub version: u8,
+    /// Epoch counter incremented on context compaction. Used to detect
+    /// whether stale skill contexts need refresh.
     pub context_epoch: u64,
+    /// Monotonic revision counter for operation ordering across restarts.
     pub operation_revision: u64,
+    /// Active skill entries in activation order.
     pub entries: Vec<SkillSessionEntry>,
 }
 
