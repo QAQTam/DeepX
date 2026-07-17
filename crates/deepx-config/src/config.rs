@@ -4,19 +4,27 @@ use deepx_types::{
 use std::collections::HashMap; // still used by profiles
 
 /// Subagent default configuration.
-/// These are defaults; individual `spawn_subagent` calls can override per-instance.
+///
+/// These are defaults applied when spawning sub-agents. Individual
+/// `spawn_subagent` tool calls can override these on a per-instance basis.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubagentConfig {
+    /// Override model. Empty = inherit from parent agent config.
     #[serde(default)]
     pub model: String,
+    /// Override API base URL. Empty = inherit.
     #[serde(default)]
     pub base_url: String,
+    /// Override API key. Empty = inherit.
     #[serde(default)]
     pub api_key: String,
+    /// Max output tokens for subagent responses. Default: 4096.
     #[serde(default = "default_subagent_max_tokens")]
     pub max_tokens: u32,
+    /// Maximum lifetime in seconds before the subagent is killed. Default: 120.
     #[serde(default = "default_subagent_timeout")]
     pub timeout_secs: u64,
+    /// Default tool allowlist. Empty = all tools available.
     #[serde(default)]
     pub default_tools: Vec<String>,
 }
@@ -41,11 +49,16 @@ impl Default for SubagentConfig {
     }
 }
 
-/// Database mirror configuration (Turso local .db).
+/// Database mirror configuration (Turso local SQLite database).
+///
+/// When enabled, session messages are dual-written to both JSONL and a
+/// local SQLite database for fast querying from external tools.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DatabaseConfig {
+    /// Whether the database mirror is enabled.
     #[serde(default)]
     pub enabled: bool,
+    /// Path to the local Turso database file. `None` = default location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
@@ -59,29 +72,49 @@ impl Default for DatabaseConfig {
     }
 }
 
+/// Runtime agent configuration built from PersistentConfig + registry.
+///
+/// This is the fully-resolved config used by the agent at runtime. It combines
+/// user settings from config.toml with provider registry defaults and profile
+/// overrides. All fields are concrete (no Option wrapping).
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// API key for the selected provider.
     pub api_key: String,
+    /// Base URL for API requests (from provider registry).
     pub base_url: String,
+    /// Active model identifier.
     pub model: String,
+    /// Max output tokens per turn.
     pub max_tokens: u32,
+    /// Maximum context window size in tokens.
     pub context_limit: u32,
+    /// Selected provider ID (e.g. "deepseek", "qwen").
     pub provider_id: String,
+    /// Selected endpoint within the provider (e.g. "openai").
     pub endpoint: String,
+    /// Reasoning effort: "high", "max", or empty.
     pub reasoning_effort: String,
+    /// Named profiles for quick config switching.
     pub profiles: HashMap<String, deepx_types::ProfileConfig>,
+    /// Currently active profile name.
     pub active_profile: String,
+    /// UI language preference.
     pub lang: Option<String>,
+    /// Default configuration for sub-agent spawning.
     pub subagent: SubagentConfig,
-    /// Compliance / content-filter configuration.
+    /// Whether the content filter is active.
     pub compliance_enabled: bool,
+    /// Additional banned keywords for the content filter.
     pub compliance_extra_keywords: Vec<String>,
+    /// Whitelisted patterns exempt from content filtering.
     pub compliance_allowlist: Vec<String>,
-    /// Turso local database mirror.
+    /// Local Turso SQLite database mirror configuration.
     pub database: DatabaseConfig,
-    /// Agent permission level (1-4). Default 4 = Unrestricted.
+    /// Agent permission level:
+    /// 1 = MaxLockdown, 2 = ReadFree, 3 = WorkspaceFree, 4 = Unrestricted.
     pub permission_level: u8,
-    /// Path to tokenizer.json for accurate token counting. Falls back to heuristic if None.
+    /// Path to a HuggingFace tokenizer.json. `None` = use heuristic fallback.
     pub tokenizer_path: Option<String>,
 }
 
@@ -127,6 +160,13 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Load config from disk (TOML, with optional Turso DB dual-read).
+    ///
+    /// # Loading order
+    /// 1. Read config.toml (always)
+    /// 2. If database.enabled, try reading config.db (SQLite mirror, may be newer)
+    /// 3. Apply provider registry defaults for missing fields
+    /// 4. Apply active profile overrides
     pub fn load() -> Result<Self, String> {
         let store = ConfigStore::default_location();
         let mut cfg = Self::default();
