@@ -8,28 +8,41 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Authoritative runtime state for one desktop session.
+///
+/// Emitted by SessionActivity via `Agent2Ui::SessionEvents` whenever the
+/// agent session transitions between lifecycle states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum SessionActivityState {
+    /// Agent is initializing (loading config, creating session, etc.).
     Starting,
+    /// No turn in progress; waiting for user input.
     Idle,
+    /// A turn is actively running (gate → tools loop).
     Working,
+    /// Turn suspended — waiting for user response (permission, ask, plan review).
     WaitingUser,
+    /// Agent subprocess has disconnected.
     Disconnected,
 }
 
-/// Snapshot/event payload emitted by the desktop bridge for every session.
+/// Snapshot/event payload emitted by the desktop bridge for every session state change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SessionActivity {
+    /// Session identifier (8 hex chars).
     pub seed: String,
+    /// Current lifecycle state.
     pub state: SessionActivityState,
+    /// Active turn ID, if a turn is in progress or suspended.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub turn_id: Option<String>,
+    /// Monotonic event sequence number for this session.
     #[ts(type = "number")]
     pub seq: u64,
+    /// Unix timestamp of this state change.
     #[ts(type = "number")]
     pub updated_at: u64,
 }
@@ -43,9 +56,11 @@ pub struct SessionActivity {
 #[non_exhaustive]
 #[ts(export)]
 pub enum Ui2Agent {
+    /// User typed a message. Triggers InputEngine → TurnEngine → gate → tools pipeline.
     #[serde(rename = "user_input")]
     UserInput { text: String },
 
+    /// Frontend-requested tool execution (e.g. from a UI button or inline action).
     #[serde(rename = "tool_call")]
     ToolCall {
         id: String,
@@ -55,30 +70,39 @@ pub enum Ui2Agent {
         args: serde_json::Value,
     },
 
+    /// Create a new session and switch to it.
     #[serde(rename = "create_session")]
     CreateSession,
 
+    /// Cancel the current turn (stops gate streaming and tool execution).
     #[serde(rename = "cancel")]
     Cancel,
 
+    /// Shut down the agent process gracefully.
     #[serde(rename = "shutdown")]
     Shutdown,
 
+    /// Reload config from disk (provider, model, permission, etc.).
     #[serde(rename = "reload_config")]
     ReloadConfig,
 
+    /// Remove the last turn from the session.
     #[serde(rename = "undo_turn")]
     UndoTurn { turn_id: String },
 
+    /// Trigger context compaction (summarize old turns to free token budget).
     #[serde(rename = "compact")]
     Compact,
 
+    /// Restore a previously saved session by seed.
     #[serde(rename = "resume_session")]
     ResumeSession { seed: String },
 
+    /// Create a fresh session (alias for CreateSession, triggers end of previous session).
     #[serde(rename = "new_session")]
     NewSession,
 
+    /// Load older (archived) turns for display in the history panel.
     #[serde(rename = "load_more_turns")]
     LoadMoreTurns {
         /// Load turns older than this turn_id.
@@ -88,6 +112,7 @@ pub enum Ui2Agent {
         count: u32,
     },
 
+    /// Set the agent operating mode (Normal, Plan, Code).
     #[serde(rename = "set_mode")]
     SetMode { mode: String },
 
@@ -197,18 +222,23 @@ pub struct SkillsStatus {
     pub diagnostics: Vec<String>,
 }
 
+/// Runtime state of a skill within a session.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SkillRuntimeInfo {
     pub name: String,
     pub description: String,
-    /// catalog, requested, active, review_due, or unavailable
+    /// Current lifecycle state: "catalog", "requested", "active", "review_due", or "unavailable".
     pub state: String,
+    /// Display source path (e.g. "skills/deepx/deepx-debug" or "~/.deepx/skills/...").
     pub source: String,
+    /// Number of turns before the lease expires and the skill must be re-validated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub lease_remaining: Option<u8>,
+    /// Estimated token count of the skill body.
     pub token_count: usize,
+    /// Error message if the skill failed to load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub error: Option<String>,
@@ -308,12 +338,18 @@ pub struct TurnData {
 }
 
 /// One block in a round, preserving the LLM's output order.
+///
+/// Blocks are streamed to the frontend in order so it can reconstruct
+/// the exact sequence of reasoning → text → tool calls from the model.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum RoundBlock {
+    /// Model reasoning/thinking block (collapsible in UI).
     Reasoning { content: String },
+    /// Plain text answer block.
     Text { content: String },
+    /// A tool call the model wants to invoke.
     Tool { card: ToolCallDef },
 }
 
@@ -534,9 +570,11 @@ pub enum Agent2Ui {
         model: Option<String>,
     },
 
+    /// Agent finished the current turn. Frontend shows the Done indicator.
     #[serde(rename = "done")]
     Done,
 
+    /// Agent completed compacting old turns.
     #[serde(rename = "compact_start")]
     CompactStart {
         turns_total: u32,
@@ -554,12 +592,15 @@ pub enum Agent2Ui {
     #[serde(rename = "compact_delta")]
     CompactDelta { delta: String },
 
+    /// Turn was cancelled by user. Frontend shows cancelled UI.
     #[serde(rename = "cancelled")]
     Cancelled,
 
+    /// Agent acknowledged shutdown command.
     #[serde(rename = "shutdown_ack")]
     ShutdownAck,
 
+    /// Agent is booted and ready to accept commands.
     #[serde(rename = "ready")]
     Ready,
 
