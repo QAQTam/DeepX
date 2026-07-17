@@ -15,6 +15,10 @@ static RT: LazyLock<Option<tokio::runtime::Runtime>> = LazyLock::new(|| {
         .ok()
 });
 
+/// Per-session local Turso (SQLite) database for dual-write mirroring.
+///
+/// When enabled via `database.enabled`, session messages are written
+/// to both JSONL (primary) and this SQLite database for fast querying.
 pub struct TursoBackend {
     _db: turso::Database,
     conn: turso::Connection,
