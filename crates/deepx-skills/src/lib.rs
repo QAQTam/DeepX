@@ -1,13 +1,23 @@
-//! Agent Skill 运行时：发现、解析、目录渲染和完整激活。
+//! Agent Skill runtime: discovery, parsing, catalog rendering, and activation.
 //!
-//! Catalog 只暴露元数据；正文仅在显式提及或 `skills(action=activate)` 时读取。
+//! The catalog exposes only metadata; the body is read only on explicit mention
+//! or `skills(action=activate)`.
+//!
+//! ## Key concepts
+//!
+//! - **Discovery**: scans project and user directories for `SKILL.md` files
+//! - **Activation**: reads the skill body and injects it into the agent context
+//! - **Catalog**: lightweight metadata index for browsing without loading bodies
+//! - **Scope**: each skill belongs to either `Project` or `User` scope
 
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+/// Magic marker that identifies a SKILL.md file as an active skill definition.
 pub const ACTIVATION_MARKER: &str = "[DEEPX_SKILL_V1]";
+/// Maximum skill body size in bytes (512 KB). Larger files are rejected.
 pub const MAX_SKILL_BYTES: u64 = 512 * 1024;
 const MAX_SCAN_DEPTH: usize = 6;
 const MAX_SCANNED_DIRS: usize = 2_000;
@@ -18,12 +28,19 @@ const MAX_NAME_CHARS: usize = 64;
 const MAX_DESCRIPTION_CHARS: usize = 1_024;
 const MAX_COMPATIBILITY_CHARS: usize = 500;
 
+/// Scope of a skill: where it was discovered.
+///
+/// Project skills live in the workspace and are shared via version control.
+/// User skills live in the home directory and are personal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillScope {
+    /// Workspace-relative directory (`.deepx/skills`, `.agents/skills`, `skills`).
     Project,
+    /// User home directory (`~/.deepx/skills`, `~/.agents/skills`).
     User,
 }
 
+/// Lightweight metadata from a SKILL.md file for catalog listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillMetadata {
     pub name: String,
@@ -38,12 +55,16 @@ pub struct SkillMetadata {
     pub scope: SkillScope,
 }
 
+/// Skill diagnostic severity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
+    /// Non-fatal issue (e.g. deprecated field, oversized name).
     Warning,
+    /// Fatal issue preventing the skill from loading.
     Error,
 }
 
+/// A diagnostic produced during skill discovery or validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillDiagnostic {
     pub path: PathBuf,
@@ -51,12 +72,14 @@ pub struct SkillDiagnostic {
     pub message: String,
 }
 
+/// Complete result of skill discovery (metadata index + diagnostics).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkillCatalog {
     pub skills: Vec<SkillMetadata>,
     pub diagnostics: Vec<SkillDiagnostic>,
 }
 
+/// A fully loaded skill ready for injection into the agent context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillActivation {
     pub metadata: SkillMetadata,
@@ -64,6 +87,7 @@ pub struct SkillActivation {
     pub resources: Vec<PathBuf>,
 }
 
+/// A bundled resource file within a skill directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillResource {
     pub skill_name: String,
@@ -340,6 +364,11 @@ fn read_bounded(path: &Path) -> Result<String, String> {
         .map_err(|error| format!("cannot read skill: {error}"))
 }
 
+/// Load and activate a skill by name.
+///
+/// Discovers all skills in the workspace, finds the one with the given name,
+/// and reads its full body. Returns an error if the skill is not found or
+/// cannot be parsed.
 pub fn load_named(workspace: &Path, name: &str) -> Result<SkillActivation, String> {
     let catalog = discover(workspace);
     let metadata = catalog
@@ -372,6 +401,7 @@ pub fn validate_file(path: &Path) -> Vec<SkillDiagnostic> {
     }
 }
 
+/// Read the body of a skill from its SKILL.md file and construct an activation.
 pub fn load(metadata: &SkillMetadata) -> Result<SkillActivation, String> {
     let raw = read_bounded(&metadata.path)?;
     let (_, body) = split_skill_file(&raw)?;
@@ -507,6 +537,9 @@ fn list_resources(root: &Path) -> Vec<PathBuf> {
     resources
 }
 
+/// Render a catalog into the injection text format displayed in the system prompt.
+///
+/// Truncates descriptions at 600 chars and the total catalog at `MAX_CATALOG_CHARS`.
 pub fn render_catalog(catalog: &SkillCatalog) -> String {
     if catalog.skills.is_empty() {
         return String::new();
@@ -537,6 +570,10 @@ pub fn render_catalog(catalog: &SkillCatalog) -> String {
     output
 }
 
+/// Render an activated skill as the full context injection block.
+///
+/// Produces the `[DEEPX_SKILL_V1] ... [END_DEEPX_SKILL_V1]` envelope with
+/// metadata header, body, compatibility section, and resource listing.
 pub fn render_activation(activation: &SkillActivation) -> String {
     let dir = activation.metadata.path.parent().unwrap_or(Path::new("."));
     let mut output = format!(
@@ -566,10 +603,14 @@ pub fn render_activation(activation: &SkillActivation) -> String {
     output
 }
 
+/// Check if a text block is a rendered skill activation (contains markers).
 pub fn is_activation_text(text: &str) -> bool {
     text.starts_with(ACTIVATION_MARKER) && text.contains("[END_DEEPX_SKILL_V1]")
 }
 
+/// Extract the skill name from an activation text block.
+///
+/// Returns `None` if the text is not a valid activation.
 pub fn activation_name(text: &str) -> Option<&str> {
     if !is_activation_text(text) {
         return None;
@@ -577,6 +618,10 @@ pub fn activation_name(text: &str) -> Option<&str> {
     text.lines().find_map(|line| line.strip_prefix("name: "))
 }
 
+/// Find skills explicitly mentioned via `$skill-name` syntax.
+///
+/// Scans text for `$name` patterns where `name` matches an available
+/// skill. Each skill is returned at most once.
 pub fn explicit_mentions(text: &str, catalog: &SkillCatalog) -> Vec<SkillMetadata> {
     let available = catalog
         .skills
@@ -878,14 +923,22 @@ mod tests {
     }
 }
 
+/// A snapshot of the skill catalog at a point in time, with fingerprint for change detection.
+///
+/// Stored in session state so that context updates can detect when skills
+/// have been added, removed, or modified between turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillCatalogSnapshot {
+    /// The full catalog at snapshot time.
     pub catalog: SkillCatalog,
+    /// Rendered catalog text as injected into the system prompt.
     pub rendered: String,
+    /// Content-based fingerprint for detecting catalog changes.
     pub fingerprint: String,
 }
 
 impl SkillCatalogSnapshot {
+    /// Discover skills and create a snapshot with fingerprint.
     pub fn discover(workspace: &Path) -> Self {
         let catalog = discover(workspace);
         let rendered = render_catalog(&catalog);
@@ -910,13 +963,24 @@ impl SkillCatalogSnapshot {
     }
 }
 
+/// A skill context operation requested by the agent.
+///
+/// Generated by the `skills` tool and applied by the message loop to
+/// update the agent's context window with activated/released skills.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkillEffect {
+    /// Activate a skill and inject its body into the context.
     Activate(SkillActivation),
+    /// Renew the lease on an already-active skill.
     Retain { name: String },
+    /// Remove a skill from the context.
     Release { name: String },
 }
 
+/// Describes how a skill body changed between two versions.
+///
+/// Used by the context manager to decide whether to emit a
+/// `SkillUpdated` diagnostic event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillBodyChange {
     pub old_hash: String,
@@ -927,6 +991,7 @@ pub struct SkillBodyChange {
     pub diff: Option<String>,
 }
 
+/// FNV-1a 64-bit hash for cheap content fingerprinting.
 pub fn content_hash(content: &str) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in content.as_bytes() {
@@ -943,6 +1008,10 @@ pub fn token_count(content: &str) -> usize {
     content.chars().count().div_ceil(4)
 }
 
+/// Compare two skill bodies and produce a change summary.
+///
+/// If the total changed lines ≤ `max_diff_lines`, a unified diff is included.
+/// Otherwise only the line counts and content hashes are returned.
 pub fn describe_body_change(old: &str, new: &str, max_diff_lines: usize) -> SkillBodyChange {
     let old_lines = old.lines().collect::<Vec<_>>();
     let new_lines = new.lines().collect::<Vec<_>>();
