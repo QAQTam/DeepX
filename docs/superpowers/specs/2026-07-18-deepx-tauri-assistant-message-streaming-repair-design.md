@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-18
 
-**Status:** Approved design; awaiting review of this written specification
+**Status:** Approved by user on 2026-07-18
 
 ## Context
 

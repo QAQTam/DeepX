@@ -63,22 +63,30 @@ function buildRenderer(hi: Awaited<ReturnType<typeof getHi>>) {
   return renderer;
 }
 
-/** Render a single stable block's raw markdown to HTML. */
-function renderBlockHTML(raw: string, hi: Awaited<ReturnType<typeof getHi>>): string {
-  let html = marked.parse(raw, {
+function parseMarkdown(raw: string, renderer?: Renderer): string {
+  const html = marked.parse(raw, {
     async: false,
     gfm: true,
     breaks: false,
-    renderer: buildRenderer(hi),
+    renderer,
   });
   if (typeof html !== "string") return "";
-  // Strip Shiki's inline background-color so CSS variables control the theme
-  html = html.replace(
+  // Strip Shiki's inline background-color so CSS variables control the theme.
+  return html.replace(
     /(<pre\b[^>]*style=")([^"]*)(")/gi,
     (_, before, styles, after) =>
       before + styles.replace(/background-color\s*:\s*[^;]+;?/gi, "") + after,
   );
-  return html;
+}
+
+/** Render a single stable block's raw markdown to HTML. */
+function renderBlockHTML(raw: string, hi: Awaited<ReturnType<typeof getHi>>): string {
+  return parseMarkdown(raw, buildRenderer(hi));
+}
+
+/** Render Markdown without Shiki when the highlighter is unavailable. */
+function renderFallbackHTML(raw: string): string {
+  return parseMarkdown(raw);
 }
 
 /** P0: Split markdown text into stable blocks + live streaming tail. */
@@ -256,22 +264,23 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
     const blocks = projectBlocks(text, !!final, prevBlocks);
 
     if (final) {
-      container.textContent = text;
-      container.classList.remove("final");
-      let hi: Awaited<ReturnType<typeof getHi>>;
+      let html: string;
       try {
-        hi = await getHi();
+        const hi = await getHi();
+        if (isStale()) return;
+        html = renderBlockHTML(blocks[0]!.raw, hi);
       } catch {
-        if (!isStale()) prevBlocks = blocks;
-        return;
-      }
-      if (isStale() || !hi) return;
-      if (!blocks[0]!.html) {
-        blocks[0]!.html = renderBlockHTML(blocks[0]!.raw, hi);
+        if (isStale()) return;
+        try {
+          html = renderFallbackHTML(blocks[0]!.raw);
+        } catch {
+          if (!isStale()) prevBlocks = blocks;
+          return;
+        }
       }
       if (isStale()) return;
-      container.innerHTML = "";
-      container.appendChild(createStableEl(blocks[0]!));
+      blocks[0]!.html = html;
+      container.replaceChildren(createStableEl(blocks[0]!));
       container.classList.add("final");
       prevBlocks = blocks;
       return;

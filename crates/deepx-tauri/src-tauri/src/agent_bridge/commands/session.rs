@@ -222,7 +222,9 @@ pub fn cmd_get_dashboard_data(seed: String) -> Result<String, String> {
 
     // Tasks are session-scoped, matching deepx-tools/task.rs.
     let tasks: Vec<serde_json::Value> = {
-        let path = deepx_types::platform::sessions_dir().join(&seed).join("tasks.md");
+        let path = deepx_types::platform::sessions_dir()
+            .join(&seed)
+            .join("tasks.md");
         if let Ok(file) = std::fs::File::open(&path) {
             std::io::BufReader::new(file)
                 .lines()

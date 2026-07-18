@@ -21,6 +21,7 @@ use std::fmt;
 // ── Submodule declarations ──────────────────────────────────────────────
 
 mod agent_protocol;
+mod companion;
 
 // ── Re-exports ──────────────────────────────────────────────────────────
 
@@ -29,6 +30,12 @@ pub use agent_protocol::{
     DaemonToFrontend, DocInfo, FileSnapshotInfo, FrontendToDaemon, PermissionRisk, RoundBlock,
     RoundData, RoundDeltaKind, SessionActivity, SessionActivityState, SkillInfo, SkillRuntimeInfo,
     SkillsStatus, TaskInfo, ToolCallDef, ToolResultDef, TurnData, Ui2Agent,
+};
+pub use companion::{
+    COMPANION_PROTOCOL_VERSION, CompanionClientMessage, CompanionCommandStatus, CompanionEvent,
+    CompanionInteraction, CompanionInteractionKey, CompanionInteractionKind,
+    CompanionInteractionPayload, CompanionInteractionResponse, CompanionServerMessage,
+    CompanionSession, CompanionSnapshot, CompanionVisualState,
 };
 
 // ── Redacted (prevents API key leaks in debug logs) ─────────────────────

@@ -89,6 +89,12 @@ impl SessionActivityTracker {
         activities.sort_by(|left, right| left.seed.cmp(&right.seed));
         activities
     }
+
+    pub fn current(&self, seed: &str, generation: u64) -> Option<SessionActivity> {
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let tracked = inner.by_seed.get(seed)?;
+        (tracked.generation == generation).then(|| tracked.activity.clone())
+    }
 }
 
 fn transition(

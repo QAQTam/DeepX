@@ -8,6 +8,7 @@
 
 pub mod activity;
 pub mod commands;
+pub mod companion_host;
 pub mod platform;
 pub mod registry;
 pub mod util;

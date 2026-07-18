@@ -64,6 +64,8 @@ export default function App() {
   const [theme, setTheme] = createSignal<ThemeMode>("system");
   let unlistenTheme: (() => void) | undefined;
   let unlistenSessionActivity: (() => void) | undefined;
+  let unlistenCompanionResolved: (() => void) | undefined;
+  let unlistenCompanionFocus: (() => void) | undefined;
 
   function activeEntry(): SessionEntry | undefined {
     const seed = activeSeed();
@@ -440,6 +442,25 @@ export default function App() {
     media.addEventListener("change", onSystemThemeChange);
     unlistenTheme = () => media.removeEventListener("change", onSystemThemeChange);
 
+    unlistenCompanionResolved = await listen<{
+      seed: string;
+      request_id: string;
+    }>("companion-interaction-resolved", event => {
+      const entry = registry.get(event.payload.seed);
+      if (!entry) return;
+      entry.runtime.update(state => resolvePendingInteraction(
+        state,
+        event.payload.request_id,
+        "answered",
+      ));
+      entry.ui.finishInteractionSubmit(event.payload.request_id);
+    });
+    unlistenCompanionFocus = await listen<string>("companion-focus-session", event => {
+      const seed = event.payload;
+      if (!seed) return;
+      void resumeSession(seed);
+    });
+
     try {
       unlistenSessionActivity = await startSessionActivityClient({
         listen: handler => listen<unknown>("session-activity", event => handler(event.payload)),
@@ -481,6 +502,8 @@ export default function App() {
     sessionReplay.clear();
     unlistenTheme?.();
     unlistenSessionActivity?.();
+    unlistenCompanionResolved?.();
+    unlistenCompanionFocus?.();
   });
 
   return (

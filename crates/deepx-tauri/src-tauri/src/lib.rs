@@ -10,6 +10,7 @@ pub fn run() {
         .setup(|app| {
             // Initialize the multi-agent registry (replaces old singleton AgentBridge).
             agent_bridge::AgentRegistry::init(app.handle());
+            agent_bridge::companion_host::CompanionHost::init(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -61,6 +62,7 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 // Gracefully terminate all agent child processes.
                 agent_bridge::shutdown_all_agents();
+                agent_bridge::companion_host::CompanionHost::shutdown();
             }
         })
         .run(tauri::generate_context!())

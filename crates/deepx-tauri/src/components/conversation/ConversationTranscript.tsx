@@ -1,6 +1,8 @@
-import { createEffect, createSignal, Index, Show } from "solid-js";
+import { createEffect, createSignal, Index, onCleanup, onMount, Show } from "solid-js";
 import type { TurnViewModel } from "../../presentation/turnProjection";
 import TurnGroup from "./TurnGroup";
+
+const BOTTOM_THRESHOLD = 120;
 
 export default function ConversationTranscript(props: {
   turns: TurnViewModel[];
@@ -8,18 +10,27 @@ export default function ConversationTranscript(props: {
   onLoadMore?: () => void | Promise<void>;
 }) {
   let scroller!: HTMLDivElement;
-  const [nearBottom, setNearBottom] = createSignal(true);
-  let prevLen = 0;
-  let prevLastId = "";
-
-  const measure = () => {
-    const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    setNearBottom(remaining < 120);
-  };
+  let transcript!: HTMLElement;
+  let scrollFrame: number | undefined;
+  let resizeObserver: ResizeObserver | undefined;
+  const [followTail, setFollowTail] = createSignal(true);
 
   const scrollToBottom = () => {
     if (typeof scroller?.scrollTo === "function") scroller.scrollTo({ top: scroller.scrollHeight });
     else if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  };
+
+  const scheduleScrollToBottom = () => {
+    if (!followTail() || scrollFrame !== undefined) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = undefined;
+      if (followTail()) scrollToBottom();
+    });
+  };
+
+  const measure = () => {
+    const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    setFollowTail(remaining < BOTTOM_THRESHOLD);
   };
 
   async function loadOlder() {
@@ -32,17 +43,19 @@ export default function ConversationTranscript(props: {
   }
 
   createEffect(() => {
-    const len = props.turns.length;
-    const lastId = props.turns[len - 1]?.turnId ?? "";
-    const firstRender = prevLastId === "";
-    const prepended = len > prevLen && lastId === prevLastId;
-    const appended = len > prevLen && lastId !== prevLastId;
-    const replaced = !firstRender && !prepended && lastId !== prevLastId;
-    if (firstRender || replaced || (appended && nearBottom())) {
-      queueMicrotask(scrollToBottom);
-    }
-    prevLen = len;
-    prevLastId = lastId;
+    props.turns;
+    queueMicrotask(scheduleScrollToBottom);
+  });
+
+  onMount(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    resizeObserver = new ResizeObserver(() => scheduleScrollToBottom());
+    resizeObserver.observe(transcript);
+  });
+
+  onCleanup(() => {
+    if (scrollFrame !== undefined) cancelAnimationFrame(scrollFrame);
+    resizeObserver?.disconnect();
   });
 
   return (
@@ -55,15 +68,18 @@ export default function ConversationTranscript(props: {
           onClick={() => void loadOlder()}
         >加载更早消息</button>
       </Show>
-      <main class="conversation-transcript" aria-live="polite">
+      <main ref={transcript} class="conversation-transcript" aria-live="polite">
         <Index each={props.turns}>{(turn) => <TurnGroup turn={turn()} />}</Index>
       </main>
-      <Show when={!nearBottom()}>
+      <Show when={!followTail()}>
         <button
           type="button"
           class="jump-to-bottom"
           aria-label="跳到最新消息"
-          onClick={() => scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" })}
+          onClick={() => {
+            setFollowTail(true);
+            scheduleScrollToBottom();
+          }}
         >↓</button>
       </Show>
     </div>

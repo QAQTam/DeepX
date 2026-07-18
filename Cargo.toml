@@ -8,6 +8,7 @@ members = [
     "crates/deepx-message",
     "crates/deepx-types",
     "crates/deepx-proto",
+    "crates/deepx-companion",
     "crates/deepx-tools",
     "crates/deepx-session",
     "crates/deepx-subagent",

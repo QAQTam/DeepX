@@ -6,44 +6,56 @@ import { describe, expect, it } from "vitest";
 import ProcessDisclosure from "./ProcessDisclosure";
 
 describe("ProcessDisclosure", () => {
-  it("defaults open for running, closed for completed", () => {
-    const host = document.createElement("div");
-    const r = render(() => <ProcessDisclosure status="running" />, host);
-    expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
-    r();
-
-    const host2 = document.createElement("div");
-    const r2 = render(() => <ProcessDisclosure status="completed" />, host2);
-    expect(host2.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
-    r2();
-  });
-
-  it("auto-closes on completion when defaultOpen is not set", async () => {
-    const host = document.createElement("div");
-    const [status, setStatus] = createSignal<"running" | "completed">("running");
-    const dispose = render(() => (
-      <ProcessDisclosure status={status()} />
-    ), host);
-
-    expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
-    setStatus("completed");
-    await Promise.resolve();
-    expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
-    dispose();
-  });
-
-  it("respects explicit defaultOpen and ignores auto-close", async () => {
+  it("starts collapsed when defaultOpen is false", () => {
     const host = document.createElement("div");
     document.body.append(host);
-    const dispose = render(() => (
-      <ProcessDisclosure status="completed" defaultOpen={true} />
-    ), host);
+    const dispose = render(() => <ProcessDisclosure status="running" defaultOpen={false} />, host);
 
-    expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
-    // Should stay open even though status is completed
-    await Promise.resolve();
-    expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
     dispose();
     host.remove();
   });
+
+  it("keeps a user expansion while the process remains active", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const [revision, setRevision] = createSignal(0);
+    const dispose = render(() => (
+      <ProcessDisclosure status="running" defaultOpen={false}>
+        <span>{revision()}</span>
+      </ProcessDisclosure>
+    ), host);
+
+    const trigger = host.querySelector<HTMLButtonElement>("button")!;
+    trigger.click();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+    setRevision(1);
+    await Promise.resolve();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    dispose();
+    host.remove();
+  });
+
+  it.each(["completed", "failed", "cancelled"] as const)(
+    "closes when status becomes %s",
+    async (terminal) => {
+      const host = document.createElement("div");
+      document.body.append(host);
+      const [status, setStatus] = createSignal<"running" | typeof terminal>("running");
+      const dispose = render(() => (
+        <ProcessDisclosure status={status()} defaultOpen={false} />
+      ), host);
+
+      const trigger = host.querySelector<HTMLButtonElement>("button")!;
+      trigger.click();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+      setStatus(terminal);
+      await Promise.resolve();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      dispose();
+      host.remove();
+    },
+  );
 });

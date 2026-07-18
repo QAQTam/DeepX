@@ -26,6 +26,7 @@ deepx-session = { path = "../../deepx-session" }
 deepx-tools = { path = "../../deepx-tools" }
 deepx-types = { path = "../../deepx-types" }
 deepx-proto = { path = "../../deepx-proto" }
+deepx-companion = { path = "../../deepx-companion" }
 serde_json = "1"
 log = "0.4"
 [lints]

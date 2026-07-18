@@ -1,7 +1,7 @@
 //! Permission dialog and ask_user response commands.
 
-use super::super::registry::{ensure_agent, send_to_agent};
-use deepx_proto::Ui2Agent;
+use super::super::companion_host::submit_tauri_response;
+use deepx_proto::{CompanionInteractionKind, CompanionInteractionResponse};
 
 #[tauri::command]
 pub fn cmd_permission_response(
@@ -11,10 +11,11 @@ pub fn cmd_permission_response(
     trust_folder: Option<bool>,
 ) -> Result<(), String> {
     log::info!("[REGISTRY] permission_response id={tool_call_id} approved={approved}");
-    send_to_agent(
+    submit_tauri_response(
         &seed,
-        Ui2Agent::PermissionResponse {
-            tool_call_id,
+        CompanionInteractionKind::Permission,
+        &tool_call_id,
+        CompanionInteractionResponse::Permission {
             approved,
             trust_folder: trust_folder.unwrap_or(false),
         },
@@ -35,8 +36,15 @@ pub fn cmd_ask_response(
         ask_id,
         answers.len(),
     );
-    ensure_agent(&seed)?;
-    send_to_agent(&seed, Ui2Agent::AskResponse { ask_id, answers })
+    submit_tauri_response(
+        &seed,
+        CompanionInteractionKind::AskUser,
+        &ask_id,
+        CompanionInteractionResponse::AskUser {
+            answers,
+            dismissed: false,
+        },
+    )
 }
 
 /// User dismissed the ask_user dialog without answering. Notifies the agent.
@@ -48,8 +56,15 @@ pub fn cmd_ask_dismiss(seed: String, ask_id: String) -> Result<(), String> {
         &seed[..seed.floor_char_boundary(seed.len().min(8))],
         ask_id,
     );
-    ensure_agent(&seed)?;
-    send_to_agent(&seed, Ui2Agent::AskDismiss { ask_id })
+    submit_tauri_response(
+        &seed,
+        CompanionInteractionKind::AskUser,
+        &ask_id,
+        CompanionInteractionResponse::AskUser {
+            answers: Vec::new(),
+            dismissed: true,
+        },
+    )
 }
 
 /// Send user's plan review decision. Resumes a turn suspended by plan_submit.
@@ -66,11 +81,11 @@ pub fn cmd_plan_review(
         &seed[..seed.floor_char_boundary(seed.len().min(8))],
         call_id,
     );
-    ensure_agent(&seed)?;
-    send_to_agent(
+    submit_tauri_response(
         &seed,
-        Ui2Agent::PlanReview {
-            call_id,
+        CompanionInteractionKind::PlanReview,
+        &call_id,
+        CompanionInteractionResponse::PlanReview {
             approved,
             message: message.unwrap_or_default(),
         },

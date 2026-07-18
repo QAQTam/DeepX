@@ -31,7 +31,9 @@ pub fn cmd_migrate_to_turso() -> Result<String, String> {
 
 #[tauri::command]
 pub fn cmd_task_action(seed: String, action: String, task_id: u32) -> Result<(), String> {
-    let path = deepx_types::platform::sessions_dir().join(&seed).join("tasks.md");
+    let path = deepx_types::platform::sessions_dir()
+        .join(&seed)
+        .join("tasks.md");
     let _guard = std::sync::Mutex::new(()); // serialize access
 
     let mut lines: Vec<String> = if path.exists() {

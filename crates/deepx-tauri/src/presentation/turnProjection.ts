@@ -1,11 +1,15 @@
-import type { RawTurn } from "../store/rawSession";
+import type { RawRound, RawTurn } from "../store/rawSession";
+import type { ToolCallDef } from "../lib/types";
 import { aggregateProcessItems, type ProcessItem } from "./processAggregation";
+
+export type RoundRenderEntry =
+  | { kind: "assistant"; id: string; markdown: string; streaming: boolean }
+  | { kind: "process"; id: string; items: ProcessItem[]; hasTools: boolean };
 
 export type RoundViewModel = {
   roundNum: number;
   isFinal: boolean;
-  processItems: ProcessItem[];
-  answer?: string;
+  entries: RoundRenderEntry[];
 };
 
 export type TurnViewModel = {
@@ -31,41 +35,107 @@ export function toolFamily(name: string): string {
   return "tool";
 }
 
-export function projectTurn(rawTurn: RawTurn): TurnViewModel {
-  const rounds: RoundViewModel[] = [];
+function reasoningItem(turnId: string, roundNum: number, ordinal: number, content: string): ProcessItem {
+  return {
+    kind: "reasoning",
+    id: `${turnId}-reasoning-${roundNum}-${ordinal}`,
+    content,
+  };
+}
 
-  for (const round of rawTurn.rounds) {
-    const items: ProcessItem[] = [];
+function toolItem(round: RawRound, call: ToolCallDef): Extract<ProcessItem, { kind: "tool" }> {
+  const result = round.toolResults[call.id];
+  return {
+    kind: "tool",
+    id: call.id,
+    family: toolFamily(call.name),
+    toolName: call.name,
+    summary: call.args_display || call.name,
+    argsJson: call.args_json,
+    output: result?.output,
+    progress: round.progress[call.id]?.chunks,
+    success: result?.success,
+  };
+}
 
-    if (round.thinking.trim()) {
-      items.push({
-        kind: "reasoning",
-        id: `${rawTurn.turnId}-reasoning-${round.roundNum}`,
-        content: round.thinking,
-      });
+function projectRoundEntries(
+  turn: RawTurn,
+  round: RawRound,
+  streaming: boolean,
+): RoundRenderEntry[] {
+  const entries: RoundRenderEntry[] = [];
+  let processItems: ProcessItem[] = [];
+  let ordinal = 0;
+
+  const flushProcess = () => {
+    if (processItems.length === 0) return;
+    const items = aggregateProcessItems(processItems);
+    entries.push({
+      kind: "process",
+      id: `${turn.turnId}-round-${round.roundNum}-process-${ordinal++}`,
+      items,
+      hasTools: processItems.some(item => item.kind === "tool"),
+    });
+    processItems = [];
+  };
+
+  if (round.blocks.length > 0) {
+    for (const block of round.blocks) {
+      switch (block.type) {
+        case "reasoning":
+          if (block.content.trim()) {
+            processItems.push(reasoningItem(turn.turnId, round.roundNum, processItems.length, block.content));
+          }
+          break;
+        case "tool":
+          processItems.push(toolItem(round, block.card));
+          break;
+        case "text":
+          if (!block.content.trim()) break;
+          flushProcess();
+          entries.push({
+            kind: "assistant",
+            id: `${turn.turnId}-round-${round.roundNum}-assistant-${ordinal++}`,
+            markdown: block.content,
+            streaming: false,
+          });
+          break;
+      }
     }
-    for (const call of round.toolCalls) {
-      const result = round.toolResults[call.id];
-      items.push({
-        kind: "tool",
-        id: call.id,
-        family: toolFamily(call.name),
-        toolName: call.name,
-        summary: call.args_display || call.name,
-        argsJson: call.args_json,
-        output: result?.output,
-        progress: round.progress[call.id]?.chunks,
-        success: result?.success,
-      });
-    }
+    flushProcess();
+    return entries;
+  }
 
-    rounds.push({
-      roundNum: round.roundNum,
-      isFinal: round.isFinal,
-      processItems: aggregateProcessItems(items),
-      answer: round.answer.trim() || undefined,
+  if (round.thinking.trim()) {
+    processItems.push(reasoningItem(turn.turnId, round.roundNum, 0, round.thinking));
+  }
+  for (const call of round.toolCalls) {
+    processItems.push(toolItem(round, call));
+  }
+  flushProcess();
+
+  if (round.answer.trim()) {
+    entries.push({
+      kind: "assistant",
+      id: `${turn.turnId}-round-${round.roundNum}-assistant-${ordinal}`,
+      markdown: round.answer,
+      streaming,
     });
   }
+
+  return entries;
+}
+
+export function projectTurn(rawTurn: RawTurn): TurnViewModel {
+  const rounds = rawTurn.rounds.map((round, index) => ({
+    roundNum: round.roundNum,
+    isFinal: round.isFinal,
+    entries: projectRoundEntries(
+      rawTurn,
+      round,
+      rawTurn.status === "running" && index === rawTurn.rounds.length - 1,
+    ),
+  }));
 
   // Resolved interactions (ask/plan) belong to the turn, not a specific round.
   const interactions: ProcessItem[] = [];

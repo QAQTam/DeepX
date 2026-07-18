@@ -16,14 +16,13 @@ export default function ProcessDisclosure(props: {
   defaultOpen?: boolean;
   children?: JSX.Element;
 }) {
-  const [open, setOpen] = createSignal(
-    props.defaultOpen ?? props.status !== "completed",
-  );
+  const [open, setOpen] = createSignal(props.defaultOpen ?? false);
   const panelId = `process-${Math.random().toString(36).slice(2)}`;
 
   createEffect(() => {
-    if (props.defaultOpen !== undefined) return;
-    if (props.status === "completed") setOpen(false);
+    if (props.status === "completed" || props.status === "failed" || props.status === "cancelled") {
+      setOpen(false);
+    }
   });
 
   const label = () => {

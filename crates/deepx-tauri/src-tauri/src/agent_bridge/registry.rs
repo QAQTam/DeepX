@@ -290,6 +290,14 @@ fn spawn_agent_process(
             {
                 let _ = app_handle.emit("session-activity", &activity);
             }
+            if let Some(activity) = activity_tracker.current(&seed_owned, activity_generation) {
+                super::companion_host::publish_agent_event(
+                    &seed_owned,
+                    activity_generation,
+                    &payload,
+                    &activity,
+                );
+            }
             if event_type != "round_delta"
                 && event_type != "tool_call_preview"
                 && event_type != "exec_progress"
@@ -335,6 +343,12 @@ fn spawn_agent_process(
         let _ = app_handle.emit("agent-event", payload);
         if let Some(activity) = activity_tracker.disconnect(&seed_owned, activity_generation) {
             let _ = app_handle.emit("session-activity", &activity);
+            super::companion_host::publish_agent_event(
+                &seed_owned,
+                activity_generation,
+                &serde_json::json!({ "type": "shutdown_ack" }),
+                &activity,
+            );
         }
     });
 
@@ -389,6 +403,12 @@ impl AgentRegistry {
     fn spawn_agent(&mut self, seed: &str, new_seed: Option<&str>) -> Result<(), String> {
         let (generation, starting) = self.activity_tracker.begin(seed);
         let _ = self.app_handle.emit("session-activity", &starting);
+        super::companion_host::publish_agent_event(
+            seed,
+            generation,
+            &serde_json::json!({ "type": "starting" }),
+            &starting,
+        );
         let instance = match spawn_agent_process(
             seed,
             new_seed,
@@ -614,6 +634,38 @@ pub(crate) fn send_to_agent(seed: &str, frame: Ui2Agent) -> Result<(), String> {
         stdin2.flush().map_err(|e| format!("flush retry: {e}"))?;
     }
     Ok(())
+}
+
+/// Send an interaction response only to the exact agent process generation
+/// that requested it. Unlike ordinary user input, this never respawns or
+/// retries: carrying an approval across a process boundary is unsafe.
+pub(crate) fn send_to_agent_generation(
+    seed: &str,
+    generation: u64,
+    frame: Ui2Agent,
+) -> Result<(), String> {
+    let registry = AgentRegistry::get()
+        .lock()
+        .map_err(|error| format!("lock: {error}"))?;
+    if registry
+        .activity_tracker
+        .current(seed, generation)
+        .is_none()
+    {
+        return Err(format!(
+            "Agent generation {generation} is no longer current for session {seed}"
+        ));
+    }
+    let stdin = registry
+        .instances
+        .get(seed)
+        .ok_or_else(|| format!("No agent running for seed: {seed}"))?
+        .stdin
+        .clone();
+    let json = serde_json::to_string(&frame).map_err(|error| format!("serialize: {error}"))?;
+    let mut stdin = stdin.lock().map_err(|error| format!("lock: {error}"))?;
+    writeln!(*stdin, "{json}").map_err(|error| format!("write: {error}"))?;
+    stdin.flush().map_err(|error| format!("flush: {error}"))
 }
 
 /// Shutdown all running agents. Called on window close.

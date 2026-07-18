@@ -10,68 +10,75 @@ function rawTurn(): RawTurn {
     startedAt: 100,
     endedAt: 900,
     interactions: [],
-    rounds: [
-      {
-        roundNum: 0,
-        isFinal: false,
-        thinking: "inspect",
-        answer: "intermediate",
-        blocks: [],
-        toolCalls: [{ id: "read-1", name: "read", args_display: "App.tsx", args_json: "{}" }],
-        toolResults: { "read-1": { tool_call_id: "read-1", output: "source", success: true } },
-        progress: {},
-      },
-      {
-        roundNum: 1,
-        isFinal: true,
-        thinking: "verify",
-        answer: "final answer",
-        blocks: [],
-        toolCalls: [],
-        toolResults: {},
-        progress: {},
-      },
-    ],
+    rounds: [{
+      roundNum: 0,
+      isFinal: false,
+      thinking: "",
+      answer: "stale fallback",
+      blocks: [
+        { type: "text", content: "before tool" },
+        { type: "tool", card: { id: "read-1", name: "read", args_display: "App.tsx", args_json: "{}" } },
+        { type: "text", content: "after tool" },
+      ],
+      toolCalls: [{ id: "read-1", name: "read", args_display: "App.tsx", args_json: "{}" }],
+      toolResults: { "read-1": { tool_call_id: "read-1", output: "source", success: true } },
+      progress: {},
+    }],
   };
 }
 
 describe("turn projection", () => {
-  it("separates stage answer and final answer across rounds", () => {
+  it("preserves text, tool, text order as independent assistant and process entries", () => {
     const view = projectTurn(rawTurn());
-    expect(view.rounds).toHaveLength(2);
+    const entries = view.rounds[0]!.entries;
 
-    // Round 0: stage answer
-    expect(view.rounds[0].answer).toBe("intermediate");
-    expect(view.rounds[0].isFinal).toBe(false);
-
-    // Round 1: final answer
-    expect(view.rounds[1].answer).toBe("final answer");
-    expect(view.rounds[1].isFinal).toBe(true);
+    expect(entries.map(entry => entry.kind)).toEqual(["assistant", "process", "assistant"]);
+    expect(entries[0]).toMatchObject({ kind: "assistant", markdown: "before tool", streaming: false });
+    expect(entries[1]).toMatchObject({ kind: "process", hasTools: true });
+    expect(entries[2]).toMatchObject({ kind: "assistant", markdown: "after tool", streaming: false });
+    if (entries[1]?.kind === "process") {
+      expect(entries[1].items).toContainEqual(expect.objectContaining({
+        kind: "tool", id: "read-1", output: "source", success: true,
+      }));
+    }
 
     expect(view.elapsedMs).toBe(800);
     expect(view.status).toBe("completed");
   });
 
-  it("rounds with only a streaming answer are still projected", () => {
+  it("uses answer once as the legacy fallback when ordered blocks are absent", () => {
     const turn = rawTurn();
-    turn.status = "running";
-    turn.rounds[1].isFinal = false;
-    turn.rounds[1].answer = "forming conclusion";
+    turn.rounds[0]!.blocks = [];
+    turn.rounds[0]!.thinking = "inspect";
+    turn.rounds[0]!.answer = "legacy answer";
 
-    const view = projectTurn(turn);
-
-    expect(view.rounds[1].answer).toBe("forming conclusion");
-    expect(view.rounds[1].isFinal).toBe(false);
-    expect(view.status).toBe("running");
+    const entries = projectTurn(turn).rounds[0]!.entries;
+    expect(entries.map(entry => entry.kind)).toEqual(["process", "assistant"]);
+    expect(entries[1]).toMatchObject({ kind: "assistant", markdown: "legacy answer", streaming: false });
   });
 
-  it("keeps tool output and reasoning in per-round process items", () => {
-    const view = projectTurn(rawTurn());
+  it("does not render answer fallback beside authoritative text blocks", () => {
+    const turn = rawTurn();
+    turn.rounds[0]!.blocks = [{ type: "text", content: "authoritative" }];
+    turn.rounds[0]!.toolCalls = [];
+    turn.rounds[0]!.toolResults = {};
 
-    const r0 = view.rounds[0];
-    expect(r0.processItems.some(item => item.kind === "reasoning")).toBe(true);
-    const tool = r0.processItems.find(item => item.kind === "tool");
-    expect(tool).toMatchObject({ kind: "tool", output: "source", success: true });
+    const assistantEntries = projectTurn(turn).rounds[0]!.entries
+      .filter((entry): entry is Extract<typeof entry, { kind: "assistant" }> => entry.kind === "assistant");
+    expect(assistantEntries).toEqual([expect.objectContaining({ markdown: "authoritative" })]);
+  });
+
+  it("projects an active answer-only stream as one transient assistant entry", () => {
+    const turn = rawTurn();
+    turn.status = "running";
+    turn.rounds[0]!.blocks = [];
+    turn.rounds[0]!.answer = "forming conclusion";
+
+    const entries = projectTurn(turn).rounds[0]!.entries;
+    const assistant = entries.find((entry): entry is Extract<typeof entry, { kind: "assistant" }> =>
+      entry.kind === "assistant",
+    );
+    expect(assistant).toMatchObject({ markdown: "forming conclusion", streaming: true });
   });
 
   it("does not expose permission audit resolutions as process items", () => {
@@ -81,12 +88,6 @@ describe("turn projection", () => {
     ];
 
     const view = projectTurn(turn);
-
-    // Permission interactions should not appear in any round's items
-    for (const round of view.rounds) {
-      expect(round.processItems).not.toContainEqual(
-        expect.objectContaining({ kind: "interaction", label: "permission" }),
-      );
-    }
+    expect(view.interactions).toEqual([]);
   });
 });
