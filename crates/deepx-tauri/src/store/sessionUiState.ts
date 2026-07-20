@@ -11,17 +11,22 @@ export interface SessionUiState {
 export function createSessionUiState(): SessionUiState {
   const [workspace, setWorkspaceSignal] = createSignal("");
   const [submittingInteractionId, setSubmittingInteractionId] = createSignal<string | null>(null);
+  let submittingId: string | null = null;
   return {
     workspace,
     setWorkspace: setWorkspaceSignal,
     submittingInteractionId,
     beginInteractionSubmit(id) {
-      if (!id || submittingInteractionId() !== null) return false;
+      if (!id || submittingId !== null) return false;
+      submittingId = id;
       setSubmittingInteractionId(id);
       return true;
     },
     finishInteractionSubmit(id) {
-      if (submittingInteractionId() === id) setSubmittingInteractionId(null);
+      if (submittingId === id) {
+        submittingId = null;
+        setSubmittingInteractionId(null);
+      }
     },
   };
 }

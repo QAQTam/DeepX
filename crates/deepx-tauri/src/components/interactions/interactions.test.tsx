@@ -81,6 +81,7 @@ describe("AskUserPrompt", () => {
     );
     expect(btnA).toBeTruthy();
     (btnA as HTMLElement).click();
+    await flush();
 
     // Submit
     const submit = host.querySelector<HTMLButtonElement>(".interaction-submit")!;
@@ -120,6 +121,7 @@ describe("AskUserPrompt", () => {
     // Select option
     const btn = host.querySelector(".interaction-option") as HTMLElement;
     btn.click();
+    await flush();
 
     // Submit twice
     const submit = host.querySelector<HTMLButtonElement>(".interaction-submit")!;

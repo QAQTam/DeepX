@@ -157,11 +157,10 @@ export default function SettingsView(props: SettingsViewProps) {
 
   createEffect(
     () => ({ data: configData(), loading: configLoading(), error: configError() }),
-    () => {
-    const data = configData();
-    if (configLoading()) return;
-    if (configError()) {
-      setLoadError(String(configError()));
+    ({ data, loading, error }) => {
+    if (loading) return;
+    if (error) {
+      setLoadError(String(error));
       return;
     }
     if (!data) {
@@ -270,9 +269,9 @@ export default function SettingsView(props: SettingsViewProps) {
   // ── Migration ──
   createEffect(
     () => databaseEnabled(),
-    () => {
+    enabled => {
     void (async () => {
-    if (!databaseEnabled()) return;
+    if (!enabled) return;
     try {
       const raw = await invoke<string>("cmd_migration_count");
       const data = JSON.parse(raw);

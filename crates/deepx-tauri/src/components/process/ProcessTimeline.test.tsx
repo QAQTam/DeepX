@@ -37,6 +37,7 @@ describe("ProcessTimeline", () => {
     }]);
     const dispose = render(() => <ProcessTimeline items={items()} />, host);
     (host.querySelector("[data-process-row] button") as HTMLButtonElement).click();
+    await Promise.resolve();
     expect(host.querySelector("[data-process-row]")?.getAttribute("aria-expanded")).toBe("true");
     setItems(current => current.map(item => item.kind === "tool" ? {
       ...item,

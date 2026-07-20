@@ -13,6 +13,7 @@ export default function ConversationTranscript(props: {
   let transcript!: HTMLElement;
   let scrollFrame: number | undefined;
   let resizeObserver: ResizeObserver | undefined;
+  let followingTail = true;
   const [followTail, setFollowTail] = createSignal(true);
 
   const scrollToBottom = () => {
@@ -21,16 +22,17 @@ export default function ConversationTranscript(props: {
   };
 
   const scheduleScrollToBottom = () => {
-    if (!followTail() || scrollFrame !== undefined) return;
+    if (!followingTail || scrollFrame !== undefined) return;
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = undefined;
-      if (followTail()) scrollToBottom();
+      if (followingTail) scrollToBottom();
     });
   };
 
   const measure = () => {
     const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    setFollowTail(remaining < BOTTOM_THRESHOLD);
+    followingTail = remaining < BOTTOM_THRESHOLD;
+    setFollowTail(followingTail);
   };
 
   async function loadOlder() {
@@ -77,8 +79,9 @@ export default function ConversationTranscript(props: {
           class="jump-to-bottom"
           aria-label="跳到最新消息"
           onClick={() => {
+            followingTail = true;
             setFollowTail(true);
-            scheduleScrollToBottom();
+            queueMicrotask(scheduleScrollToBottom);
           }}
         >↓</button>
       </Show>

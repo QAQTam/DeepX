@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Match, onCleanup, Show, Switch, type Accessor } from "solid-js";
+import { createEffect, createSignal, Match, onCleanup, Show, Switch, untrack, type Accessor } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import type { AskAnswer, TaskInfo } from "../lib/types";
@@ -75,7 +75,7 @@ export default function ChatView(props: ChatViewProps) {
   const [branch, setBranch] = createSignal("");
   const [showGitWorkspace, setShowGitWorkspace] = createSignal(false);
   const [compactCompleteVisible, setCompactCompleteVisible] = createSignal(
-    session().compact.completionRevision > 0,
+    untrack(() => session().compact.completionRevision > 0),
   );
   let compactRevision = 0;
   let compactTimer: ReturnType<typeof setTimeout> | undefined;
@@ -113,22 +113,22 @@ export default function ChatView(props: ChatViewProps) {
     catch (error) { console.error("compact error:", error); }
   }
 
-  const followUps = createFollowUpQueue(seed(), handleSend);
-  let wasStreaming = streaming();
+  const followUps = createFollowUpQueue(untrack(seed), handleSend);
+  let wasStreaming = untrack(streaming);
   createEffect(
-    () => streaming(),
-    (active) => {
+    () => ({ active: streaming(), hasPendingGate: activeInteraction(session()) !== null }),
+    ({ active, hasPendingGate }) => {
     if (wasStreaming && !active) {
-      void followUps.drainAfterTurnEnd({ hasPendingGate: activeInteraction(session()) !== null });
+      void followUps.drainAfterTurnEnd({ hasPendingGate });
     }
     wasStreaming = active;
   });
 
   createEffect(
-    () => environmentOpen(),
-    () => {
-    if (!environmentOpen()) return;
-    invoke<string>("cmd_get_git_branch", { seed: seed() })
+    () => ({ open: environmentOpen(), seed: seed() }),
+    ({ open, seed: currentSeed }) => {
+    if (!open) return;
+    invoke<string>("cmd_get_git_branch", { seed: currentSeed })
       .then(setBranch)
       .catch(() => setBranch(""));
   });

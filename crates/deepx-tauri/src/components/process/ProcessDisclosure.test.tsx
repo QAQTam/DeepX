@@ -28,6 +28,7 @@ describe("ProcessDisclosure", () => {
 
     const trigger = host.querySelector<HTMLButtonElement>("button")!;
     trigger.click();
+    await Promise.resolve();
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
 
     setRevision(1);
@@ -49,6 +50,7 @@ describe("ProcessDisclosure", () => {
 
       const trigger = host.querySelector<HTMLButtonElement>("button")!;
       trigger.click();
+      await Promise.resolve();
       expect(trigger.getAttribute("aria-expanded")).toBe("true");
 
       setStatus(terminal);

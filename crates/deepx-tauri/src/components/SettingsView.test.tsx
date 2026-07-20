@@ -347,11 +347,13 @@ describe("SettingsView – API Key behavior", () => {
     const { host, dispose } = setup();
     await waitForLayout(host);
     clickNav(host, "API 与凭据");
+    await new Promise((r) => setTimeout(r, 20));
 
     const replace = [...host.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("替换"),
     )!;
     replace.click();
+    await new Promise((r) => setTimeout(r, 20));
 
     const keyInput = host.querySelector<HTMLInputElement>("input[type=password]")!;
     keyInput.value = "sk-new-secret";
@@ -365,8 +367,10 @@ describe("SettingsView – API Key behavior", () => {
       expect(invokeMock.mock.calls.some((call) => call[0] === "cmd_save_config")).toBe(true);
     });
 
-    expect(host.textContent).toContain("已配置");
-    expect(host.querySelector<HTMLInputElement>("input[type=password]")?.value ?? "").not.toBe("sk-new-secret");
+    await vi.waitFor(() => {
+      expect(host.textContent).toContain("已配置");
+      expect(host.querySelector<HTMLInputElement>("input[type=password]")?.value ?? "").not.toBe("sk-new-secret");
+    });
 
     dispose();
     host.remove();

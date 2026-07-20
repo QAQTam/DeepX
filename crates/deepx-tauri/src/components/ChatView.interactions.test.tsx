@@ -72,6 +72,7 @@ describe("ChatView blocking interactions", () => {
     expect(dialog.textContent).toContain("Continue?");
     expect(dialog.textContent).not.toContain("Later");
     dialog.querySelector<HTMLButtonElement>(".interaction-option")!.click();
+    await flush();
     dialog.querySelector<HTMLButtonElement>(".interaction-submit")!.click();
     await flush();
     expect(callbacks.onAskSubmit).toHaveBeenCalledWith(

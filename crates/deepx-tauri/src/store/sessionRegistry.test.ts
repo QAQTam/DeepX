@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createRawSessionState } from "./sessionEventReducer";
 import { createSessionRegistry } from "./sessionRegistry";
@@ -16,33 +16,30 @@ function memoryStorage() {
 }
 
 it("hydrates once, remaps without replacing the entry, and removes frontend resources", () => {
-  // @ts-expect-error SolidJS 2.x: ownedWrite option for test roots
-  createRoot(dispose => {
-    const { values, storage } = memoryStorage();
-    const restored = createRawSessionState("old");
-    restored.turns.push({
-      turnId: "t1", userText: "restored", status: "completed", rounds: [], interactions: [],
-    });
-    values.set("deepx:reload:v3:old", JSON.stringify({ version: 3, state: restored }));
+  const { values, storage } = memoryStorage();
+  const restored = createRawSessionState("old");
+  restored.turns.push({
+    turnId: "t1", userText: "restored", status: "completed", rounds: [], interactions: [],
+  });
+  values.set("deepx:reload:v3:old", JSON.stringify({ version: 3, state: restored }));
 
-    const registry = createSessionRegistry({ storage });
-    const entry = registry.ensure("old");
-    const unlisten = vi.fn();
-    entry.attachListener(unlisten);
+  const registry = createSessionRegistry({ storage });
+  const entry = registry.ensure("old");
+  const unlisten = vi.fn();
+  entry.attachListener(unlisten);
 
-    expect(registry.ensure("old")).toBe(entry);
-    expect(entry.state().turns[0].turnId).toBe("t1");
-    expect(registry.remap("old", "new")).toBe(entry);
-    expect(entry.state().seed).toBe("new");
-    expect(entry.state().turns[0].turnId).toBe("t1");
+  expect(registry.ensure("old")).toBe(entry);
+  expect(entry.state().turns[0].turnId).toBe("t1");
+  expect(registry.remap("old", "new")).toBe(entry);
+  flush();
+  expect(entry.state().seed).toBe("new");
+  expect(entry.state().turns[0].turnId).toBe("t1");
 
-    registry.remove("new");
-    expect(unlisten).toHaveBeenCalledOnce();
-    expect(registry.get("new")).toBeUndefined();
-    expect(values.has("deepx:reload:v3:old")).toBe(false);
-    expect(values.has("deepx:reload:v3:new")).toBe(false);
-    dispose();
-  }, { ownedWrite: true });
+  registry.remove("new");
+  expect(unlisten).toHaveBeenCalledOnce();
+  expect(registry.get("new")).toBeUndefined();
+  expect(values.has("deepx:reload:v3:old")).toBe(false);
+  expect(values.has("deepx:reload:v3:new")).toBe(false);
 });
 
 it("disposes only frontend-owned runtimes and listeners", () => {

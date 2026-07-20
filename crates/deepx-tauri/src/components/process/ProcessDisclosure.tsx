@@ -44,7 +44,7 @@ export default function ProcessDisclosure(props: {
     }
   };
 
-  const toggle = () => setOpen(!open());
+  const toggle = () => setOpen(value => !value);
 
   return (
     <section class="process-disclosure" data-process-disclosure>

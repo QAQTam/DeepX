@@ -264,13 +264,12 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
     // Use a string key so SolidJS compares by value, not array reference.
     // Returning an array here would cause the effect to re-fire on every
     // parent re-render, even when the markdown text hasn't changed.
-    () => `${props.content}|${props.final}`,
-    () => { void (async () => {
-      const text = props.content;
-      const final = !!props.final;
-      const depsKey = `${text}|${final}`;
-      if (depsKey === lastDeps) return;
-      lastDeps = depsKey;
+    () => JSON.stringify([props.content, props.final]),
+    (serializedDeps) => { void (async () => {
+      const [text, final] = JSON.parse(serializedDeps) as [string, boolean];
+      const nextDepsKey = `${text}|${final}`;
+      if (nextDepsKey === lastDeps) return;
+      lastDeps = nextDepsKey;
 
       const generation = ++renderGeneration;
       const isStale = () => disposed || generation !== renderGeneration;

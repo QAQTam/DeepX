@@ -119,12 +119,14 @@ it("stops following after user scroll-away and jump-to-bottom restores it", asyn
   const jump = host.querySelector<HTMLButtonElement>(".jump-to-bottom")!;
   expect(jump).not.toBeNull();
   jump.click();
+  await Promise.resolve();
   flushFrames();
   expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 1200 });
 
   vi.mocked(scroller.scrollTo).mockClear();
   height = 1400;
   setTurns([turn("same", "following again")]);
+  await Promise.resolve();
   await Promise.resolve();
   flushFrames();
   expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 1400 });

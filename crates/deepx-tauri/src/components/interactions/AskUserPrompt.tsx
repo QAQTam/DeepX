@@ -11,6 +11,7 @@ export default function AskUserPrompt(props: AskUserPromptProps) {
   const [answers, setAnswers] = createSignal<Record<string, string>>({});
   const [customInputs, setCustomInputs] = createSignal<Record<string, string>>({});
   const [busy, setBusy] = createSignal(false);
+  let submitting = false;
 
   const allAnswered = () =>
     props.questions.every((q) =>
@@ -39,7 +40,8 @@ export default function AskUserPrompt(props: AskUserPromptProps) {
   }
 
   async function handleSubmit() {
-    if (!allAnswered() || busy()) return;
+    if (!allAnswered() || submitting) return;
+    submitting = true;
     setBusy(true);
     try {
       const result: AskAnswer[] = props.questions.map((q) => ({
@@ -48,6 +50,7 @@ export default function AskUserPrompt(props: AskUserPromptProps) {
       }));
       await props.onSubmit(result);
     } finally {
+      submitting = false;
       setBusy(false);
     }
   }

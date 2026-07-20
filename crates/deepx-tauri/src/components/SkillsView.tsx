@@ -63,11 +63,7 @@ export default function SkillsView(props: SkillsViewProps) {
 
   createEffect(
     () => ({ active: props.active, runtime: props.runtime, available: props.available, catalogRevision: props.catalogRevision }),
-    () => {
-    const active = props.active;
-    const runtime = props.runtime;
-    void props.available;
-    void props.catalogRevision;
+    ({ active, runtime }) => {
     setPending(current => {
       const next = new Set(current);
       for (const name of current) {
