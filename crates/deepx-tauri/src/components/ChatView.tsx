@@ -1,8 +1,8 @@
-import { createEffect, createSignal, Match, onCleanup, Show, Switch, untrack, type Accessor } from "solid-js";
+import { createEffect, createMemo, createSignal, Match, onCleanup, Show, Switch, untrack, type Accessor } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import type { AskAnswer, TaskInfo } from "../lib/types";
-import { projectSession } from "../presentation/useConversationView";
+import { createSessionProjector } from "../presentation/useConversationView";
 import type { PendingInteraction, RawSessionState } from "../store/rawSession";
 import { createFollowUpQueue } from "../store/followUpQueue";
 import {
@@ -53,6 +53,8 @@ interface ChatViewProps {
 
 export default function ChatView(props: ChatViewProps) {
   const session = () => props.rawSession();
+  const projectSession = createSessionProjector();
+  const turns = createMemo(() => projectSession(session()));
   const seed = () => session().seed;
   const interaction = () => activeInteraction(session());
   const permissionInteraction = () => {
@@ -168,7 +170,7 @@ export default function ChatView(props: ChatViewProps) {
         />
       </Show>
       <ConversationTranscript
-        turns={projectSession(session())}
+        turns={turns()}
         hasMore={canLoadMore(session())}
         onLoadMore={props.onLoadMore}
       />

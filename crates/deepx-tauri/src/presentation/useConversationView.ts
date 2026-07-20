@@ -7,6 +7,20 @@ import {
 } from "../store/sessionEventReducer";
 import { projectTurn, type TurnViewModel } from "./turnProjection";
 
+export type SessionProjector = (state: RawSessionState) => TurnViewModel[];
+
+/** Keeps unchanged turns referentially stable during high-frequency streaming updates. */
+export function createSessionProjector(): SessionProjector {
+  const cache = new WeakMap<RawSessionState["turns"][number], TurnViewModel>();
+  return state => state.turns.map(turn => {
+    const existing = cache.get(turn);
+    if (existing) return existing;
+    const projected = projectTurn(turn);
+    cache.set(turn, projected);
+    return projected;
+  });
+}
+
 export function projectSession(state: RawSessionState): TurnViewModel[] {
   return state.turns.map(projectTurn);
 }
@@ -14,7 +28,8 @@ export function projectSession(state: RawSessionState): TurnViewModel[] {
 export function useConversationView(
   rawSession: Accessor<RawSessionState>,
 ): Accessor<TurnViewModel[]> {
-  return () => projectSession(rawSession());
+  const project = createSessionProjector();
+  return () => project(rawSession());
 }
 
 function omitTransientTiming(view: TurnViewModel): TurnViewModel {

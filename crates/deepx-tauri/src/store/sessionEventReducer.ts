@@ -55,6 +55,7 @@ function restoredRound(round: RoundData): RawRound {
     toolCalls: round.tool_calls,
     toolResults: Object.fromEntries(round.tool_results.map(result => [result.tool_call_id, result])),
     blocks: round.blocks ?? [],
+    phase: "complete",
   };
 }
 
@@ -228,6 +229,7 @@ export function reduceAgentEvent(
         ...round,
         thinking: event.kind === "thinking" ? round.thinking + event.delta : round.thinking,
         answer: event.kind === "answering" ? round.answer + event.delta : round.answer,
+        phase: event.kind,
       }));
     case "round_complete":
       return updateRound(state, event.turn_id, event.round_num, round => ({
@@ -237,6 +239,7 @@ export function reduceAgentEvent(
         answer: event.answer ?? round.answer,
         toolCalls: event.tool_calls ?? round.toolCalls,
         blocks: event.blocks ?? round.blocks,
+        phase: "complete",
       }));
     case "tool_results":
       return updateRound(state, event.turn_id, event.round_num, round => ({
@@ -306,6 +309,7 @@ export function reduceAgentEvent(
           toolCalls: exists
             ? round.toolCalls.map(call => call.id === event.id ? preview : call)
             : [...round.toolCalls, preview],
+          phase: "tool_calling",
         };
       });
     case "session_restored":

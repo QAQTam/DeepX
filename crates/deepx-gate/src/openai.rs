@@ -63,6 +63,44 @@ fn is_retryable(status: u16) -> bool {
     matches!(status, 429 | 500 | 503)
 }
 
+/// Providers use several OpenAI-compatible names for the same hidden
+/// reasoning stream. Keep that data out of `content`, which is user-visible.
+fn reasoning_delta<'a>(delta: &'a serde_json::Value) -> Option<&'a str> {
+    [
+        "reasoning_content",
+        "reasoning",
+        "thinking",
+        "analysis_content",
+    ]
+    .into_iter()
+    .find_map(|key| delta.get(key).and_then(|value| value.as_str()))
+}
+
+/// Some compatible endpoints put reasoning inside `content` using think tags.
+/// Split complete tags before events reach the frontend. The normal provider
+/// fields above remain the authoritative path; this is a compatibility guard.
+fn split_inline_thinking(text: &str, in_thinking: &mut bool) -> Vec<(bool, String)> {
+    let mut result = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let marker = if *in_thinking { "</think>" } else { "<think>" };
+        match rest.find(marker) {
+            Some(index) => {
+                if index > 0 {
+                    result.push((*in_thinking, rest[..index].to_string()));
+                }
+                *in_thinking = !*in_thinking;
+                rest = &rest[index + marker.len()..];
+            }
+            None => {
+                result.push((*in_thinking, rest.to_string()));
+                break;
+            }
+        }
+    }
+    result
+}
+
 fn backoff_delay(attempt: u32) -> Duration {
     let secs = BASE_DELAY_SECS * 2u64.pow(attempt.saturating_sub(1));
     Duration::from_secs(secs.min(30))
@@ -242,6 +280,7 @@ fn stream_sse(
     let mut dsml_seen: HashSet<String> = HashSet::new();
     let mut usage_info: Option<UsageInfo> = None;
     let mut stop_reason: Option<String> = None;
+    let mut inline_thinking = false;
 
     loop {
         // Check cancel before each read attempt
@@ -306,40 +345,48 @@ fn stream_sse(
                     if let Some(delta) = choice.get("delta") {
                         // Text content
                         if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                            let t = text.to_string();
-                            text_buf.push_str(&t);
-                            on_event(StreamEvent::ContentDelta(t.clone()));
-
-                            // DSML tool call detection in content stream
-                            dsml_buf.push_str(&t);
-                            let mut search_from = 0usize;
-                            while let Some(start) =
-                                dsml_buf[search_from..].find("<｜DSML｜invoke name=\"")
+                            for (is_reasoning, t) in
+                                split_inline_thinking(text, &mut inline_thinking)
                             {
-                                let abs_start = search_from + start;
-                                let after_tag = abs_start + "<｜DSML｜invoke name=\"".len();
-                                if let Some(rest) = dsml_buf.get(after_tag..) {
-                                    if let Some(quote_end) = rest.find('"') {
-                                        let name = rest[..quote_end].to_string();
-                                        if dsml_seen.insert(name.clone()) {
-                                            let idx = dsml_seen.len() - 1;
-                                            on_event(StreamEvent::ToolCallProgress {
-                                                index: idx,
-                                                id: format!("dsml_tc_{}", idx),
-                                                name,
-                                                args_so_far: String::new(),
-                                            });
+                                if is_reasoning {
+                                    reasoning_buf.push_str(&t);
+                                    on_event(StreamEvent::ReasoningDelta(t));
+                                } else {
+                                    text_buf.push_str(&t);
+                                    on_event(StreamEvent::ContentDelta(t.clone()));
+
+                                    // DSML tool call detection in content stream
+                                    dsml_buf.push_str(&t);
+                                    let mut search_from = 0usize;
+                                    while let Some(start) =
+                                        dsml_buf[search_from..].find("<｜DSML｜invoke name=\"")
+                                    {
+                                        let abs_start = search_from + start;
+                                        let after_tag = abs_start + "<｜DSML｜invoke name=\"".len();
+                                        if let Some(rest) = dsml_buf.get(after_tag..) {
+                                            if let Some(quote_end) = rest.find('"') {
+                                                let name = rest[..quote_end].to_string();
+                                                if dsml_seen.insert(name.clone()) {
+                                                    let idx = dsml_seen.len() - 1;
+                                                    on_event(StreamEvent::ToolCallProgress {
+                                                        index: idx,
+                                                        id: format!("dsml_tc_{}", idx),
+                                                        name,
+                                                        args_so_far: String::new(),
+                                                    });
+                                                }
+                                                search_from = after_tag + quote_end + 1;
+                                                continue;
+                                            }
                                         }
-                                        search_from = after_tag + quote_end + 1;
-                                        continue;
+                                        break;
                                     }
                                 }
-                                break;
                             }
                         }
 
                         // Reasoning content
-                        if let Some(rc) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
+                        if let Some(rc) = reasoning_delta(delta) {
                             let r = rc.to_string();
                             reasoning_buf.push_str(&r);
                             on_event(StreamEvent::ReasoningDelta(r));
@@ -811,6 +858,35 @@ mod skill_envelope_tests {
             CacheTokenField::None,
             false,
         )
+    }
+
+    #[test]
+    fn normalizes_reasoning_aliases_and_think_tags() {
+        for key in [
+            "reasoning_content",
+            "reasoning",
+            "thinking",
+            "analysis_content",
+        ] {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                key.to_string(),
+                serde_json::Value::String("hidden".to_string()),
+            );
+            let delta = serde_json::Value::Object(map);
+            assert_eq!(reasoning_delta(&delta), Some("hidden"));
+        }
+
+        let mut in_thinking = false;
+        assert_eq!(
+            split_inline_thinking("visible<think>hidden</think>done", &mut in_thinking),
+            vec![
+                (false, "visible".to_string()),
+                (true, "hidden".to_string()),
+                (false, "done".to_string()),
+            ],
+        );
+        assert!(!in_thinking);
     }
 
     #[test]

@@ -11,6 +11,8 @@ import type {
   UsageInfo,
 } from "../lib/types";
 
+export type RoundPhase = "thinking" | "tool_calling" | "answering" | "complete";
+
 export type TurnStatus = "running" | "waiting" | "completed" | "failed" | "cancelled";
 
 export type RawProgressChunk = {
@@ -30,6 +32,7 @@ export type RawRound = {
   toolCalls: ToolCallDef[];
   toolResults: Record<string, ToolResultDef>;
   progress: Record<string, RawProgress>;
+  phase: RoundPhase;
 };
 
 export type InteractionRecord = {
@@ -146,5 +149,6 @@ export function emptyRawRound(roundNum: number): RawRound {
     toolCalls: [],
     toolResults: {},
     progress: {},
+    phase: "thinking",
   };
 }

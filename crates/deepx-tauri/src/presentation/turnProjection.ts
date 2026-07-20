@@ -106,11 +106,16 @@ function projectRoundEntries(
     return entries;
   }
 
-  if (round.thinking.trim()) {
+  // Streaming previews are intentionally phase-exclusive. A provider may emit
+  // reasoning deltas before its tool-call preview; retaining both makes the UI
+  // look as though it is thinking and executing at once.
+  if (round.phase !== "tool_calling" && round.thinking.trim()) {
     processItems.push(reasoningItem(turn.turnId, round.roundNum, 0, round.thinking));
   }
-  for (const call of round.toolCalls) {
-    processItems.push(toolItem(round, call));
+  if (round.phase !== "thinking") {
+    for (const call of round.toolCalls) {
+      processItems.push(toolItem(round, call));
+    }
   }
   flushProcess();
 

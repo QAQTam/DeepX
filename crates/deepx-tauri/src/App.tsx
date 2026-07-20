@@ -66,6 +66,7 @@ export default function App() {
   let unlistenSessionActivity: (() => void) | undefined;
   let unlistenCompanionResolved: (() => void) | undefined;
   let unlistenCompanionFocus: (() => void) | undefined;
+  let resumeRequest = 0;
 
   function activeEntry(): SessionEntry | undefined {
     const seed = activeSeed();
@@ -198,8 +199,15 @@ export default function App() {
   }
 
   async function resumeSession(seed: string) {
+    const request = ++resumeRequest;
     sessionReplay.begin(seed);
-    let entry: SessionEntry | undefined;
+    // Swap to the locally persisted transcript immediately. Agent startup and
+    // replay may take seconds on a cold session and must not block navigation.
+    const cachedEntry = registry.ensure(seed);
+    setActiveSeed(cachedEntry.state().seed);
+    setHasChosenSession(true);
+    setView("chat");
+    let entry: SessionEntry | undefined = cachedEntry;
     try {
       entry = await getOrCreateSessionEntry(seed);
       await invoke("cmd_resume_session", { seed });
@@ -212,6 +220,7 @@ export default function App() {
         }
       });
       sessionReplay.complete(seed, replayed, event => handleAgentEvent(entry!, event));
+      if (request !== resumeRequest) return;
       const currentSeed = entry.state().seed;
       localStorage.setItem(LS_KEY, currentSeed);
       setActiveSeed(currentSeed);
@@ -221,6 +230,7 @@ export default function App() {
     } catch (error) {
       if (entry) sessionReplay.abort(seed, event => handleAgentEvent(entry!, event));
       else sessionReplay.abort(seed, () => {});
+      if (request !== resumeRequest) return;
       console.error("[App] resumeSession error", error);
       if (!hasRestorableTranscript(entry?.state())) {
         setHasChosenSession(false);

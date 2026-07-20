@@ -14,6 +14,7 @@ export default function ProcessDisclosure(props: {
   status: "running" | "waiting" | "completed" | "failed" | "cancelled";
   elapsedMs?: number;
   tokensPerSec?: number;
+  summary?: string;
   defaultOpen?: boolean;
   children?: JSX.Element;
 }) {
@@ -38,7 +39,7 @@ export default function ProcessDisclosure(props: {
     switch (props.status) {
       case "running": return elapsed ? `正在处理 ${elapsed}` : "正在处理";
       case "waiting": return "需要你的批准";
-      case "completed": return elapsed ? `已处理 ${elapsed}${speed}` : "已处理";
+      case "completed": return props.summary ? `${props.summary}${elapsed ? ` · ${elapsed}` : ""}${speed}` : elapsed ? `已处理 ${elapsed}${speed}` : "已处理";
       case "failed": return "处理失败";
       case "cancelled": return "已停止";
     }

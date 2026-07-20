@@ -23,6 +23,7 @@ function rawTurn(): RawTurn {
       toolCalls: [{ id: "read-1", name: "read", args_display: "App.tsx", args_json: "{}" }],
       toolResults: { "read-1": { tool_call_id: "read-1", output: "source", success: true } },
       progress: {},
+      phase: "complete",
     }],
   };
 }
@@ -79,6 +80,21 @@ describe("turn projection", () => {
       entry.kind === "assistant",
     );
     expect(assistant).toMatchObject({ markdown: "forming conclusion", streaming: true });
+  });
+
+  it("hides stale thinking while a live tool preview is active", () => {
+    const turn = rawTurn();
+    turn.status = "running";
+    turn.rounds[0]!.blocks = [];
+    turn.rounds[0]!.thinking = "internal analysis";
+    turn.rounds[0]!.phase = "tool_calling";
+
+    const process = projectTurn(turn).rounds[0]!.entries.find(entry => entry.kind === "process");
+    expect(process).toMatchObject({ kind: "process" });
+    if (process?.kind === "process") {
+      expect(process.items.some(item => item.kind === "reasoning")).toBe(false);
+      expect(process.items.some(item => item.kind === "tool")).toBe(true);
+    }
   });
 
   it("does not expose permission audit resolutions as process items", () => {

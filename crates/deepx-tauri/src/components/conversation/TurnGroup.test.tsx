@@ -58,6 +58,26 @@ it("renders protocol-ordered assistant chats outside a tool process", () => {
   dispose();
 });
 
+it("combines all process entries in a turn into one collapsed activity summary", () => {
+  const host = document.createElement("div");
+  const turn: TurnViewModel = {
+    turnId: "turn-summary",
+    userPrompt: "完成任务",
+    status: "completed",
+    rounds: [{
+      roundNum: 0,
+      isFinal: false,
+      entries: [processEntry(), { ...processEntry(), id: "process-1" }],
+    }],
+    interactions: [],
+  };
+  const dispose = render(() => <TurnGroup turn={turn} />, host);
+
+  expect(host.querySelectorAll('[data-part="process"]')).toHaveLength(1);
+  expect(host.textContent).toContain("完成 2 项操作");
+  dispose();
+});
+
 it("renders a live answer-only entry as streaming Markdown", async () => {
   const host = document.createElement("div");
   const [turn, setTurn] = createSignal<TurnViewModel>({
