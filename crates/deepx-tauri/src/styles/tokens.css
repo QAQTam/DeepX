@@ -6,31 +6,20 @@
   --conversation-shift-x: -30px;
   --dx-titlebar-height: 36px;
   --dx-header-height: 48px;
-  --dx-bg: #f8f8f7;
-  --dx-surface: #ffffff;
-  --dx-surface-muted: #f1f1ef;
-  --dx-surface-hover: #eaeae7;
-  --dx-text: #242422;
-  --dx-text-muted: #767672;
-  --dx-border: rgba(32, 32, 28, 0.12);
-  --dx-shadow: 0 14px 38px rgba(28, 28, 24, 0.1);
-  --dx-accent: #da6b2c;
-  --dx-danger: #c9362b;
-  --dx-danger-soft: #fff0ee;
-  --dx-radius-sm: 8px;
-  --dx-radius-md: 12px;
-  --dx-radius-lg: 18px;
-}
-
-[data-theme="dark"],
-[data-theme="dark-gray"] {
-  --dx-bg: #191918;
-  --dx-surface: #222220;
-  --dx-surface-muted: #2a2a27;
-  --dx-surface-hover: #343430;
-  --dx-text: #f1f0eb;
-  --dx-text-muted: #aaa9a2;
-  --dx-border: rgba(255, 255, 245, 0.12);
-  --dx-shadow: 0 16px 44px rgba(0, 0, 0, 0.34);
-  --dx-danger-soft: #3b211f;
+  /* Compatibility names used by the conversation surface. They deliberately
+     alias the application tokens so every view follows the active theme. */
+  --dx-bg: var(--bg-primary);
+  --dx-surface: var(--bg-primary);
+  --dx-surface-muted: var(--bg-secondary);
+  --dx-surface-hover: var(--bg-hover);
+  --dx-text: var(--text-primary);
+  --dx-text-muted: var(--text-muted);
+  --dx-border: var(--border-panel);
+  --dx-shadow: var(--shadow-card);
+  --dx-accent: var(--accent);
+  --dx-danger: var(--red);
+  --dx-danger-soft: color-mix(in srgb, var(--red) 10%, var(--bg-primary));
+  --dx-radius-sm: var(--radius-sm);
+  --dx-radius-md: var(--radius-md);
+  --dx-radius-lg: var(--radius-lg);
 }

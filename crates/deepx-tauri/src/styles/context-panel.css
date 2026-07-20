@@ -13,9 +13,9 @@
 
 .context-dropdown {
   position: absolute; top: 100%; right: 0; margin-top: 6px; z-index: 100;
-  width: 260px; background: var(--bg-primary); border: 0.5px solid var(--border-panel);
+  width: 292px; background: var(--bg-glass-panel); border: var(--panel-border);
   border-radius: var(--radius-md); box-shadow: var(--shadow-card);
-  overflow: hidden;
+  overflow: hidden; backdrop-filter: blur(var(--panel-glass-blur)) saturate(var(--panel-glass-saturate));
 }
 .context-dropdown-hd {
   display: flex; align-items: center; justify-content: space-between;
@@ -23,15 +23,15 @@
   border-bottom: 0.5px solid var(--border-divider);
 }
 .context-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; }
-.context-dropdown-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.context-dropdown-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .context-empty { font-size: 11px; color: var(--text-muted); text-align: center; padding: 12px 0; }
 
-.context-pie-wrap { display: flex; justify-content: center; }
-.context-pie { width: 120px; height: 120px; }
+.context-pie-wrap { display: flex; justify-content: center; padding: 4px; }
+.context-pie { width: 136px; height: 136px; filter: drop-shadow(0 5px 10px color-mix(in srgb, var(--text-primary) 10%, transparent)); }
 
-.context-legend { display: flex; flex-direction: column; gap: 3px; }
-.context-legend-item { display: flex; align-items: center; gap: 6px; font-size: 10px; }
-.context-legend-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.context-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; }
+.context-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.context-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .context-legend-label { color: var(--text-secondary); flex: 1; }
 .context-legend-pct { color: var(--text-muted); font-family: var(--font-mono); }
 

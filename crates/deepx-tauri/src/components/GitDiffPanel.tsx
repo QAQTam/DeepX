@@ -1,4 +1,4 @@
-import { createSignal, For, Show, onSettled, createEffect } from "solid-js";
+import { createSignal, For, Show, createEffect, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
 import { renderDiffHtml } from "../lib/diff";
@@ -28,6 +28,10 @@ const CHANGE_ICONS: Record<string, string> = {
 interface GitDiffPanelProps {
   open: boolean;
   seed: string;
+  /** Changes whenever an agent tool reports a write; used to refresh Git promptly. */
+  changeRevision?: number;
+  /** Relative path selected from the environment summary. */
+  initialFile?: string;
   onClose: () => void;
 }
 
@@ -47,13 +51,28 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
   const [diffHtml, setDiffHtml] = createSignal<string | null>(null);
   const [showSwitchPrompt, setShowSwitchPrompt] = createSignal(false);
   const [pendingBranch, setPendingBranch] = createSignal("");
+  const [actionError, setActionError] = createSignal<string | null>(null);
+  const [actionNotice, setActionNotice] = createSignal<string | null>(null);
+  let refreshing = false;
 
   createEffect(
-    () => props.open && props.seed,
-    () => {
-    if (props.open && props.seed) {
-      refresh();
-      loadBranches();
+    () => ({ open: props.open, seed: props.seed, revision: props.changeRevision }),
+    ({ open, seed, revision }) => {
+    if (!open || !seed) return;
+    const timer = window.setTimeout(() => void refresh(), revision ? 280 : 0);
+    const poll = window.setInterval(() => void refresh(), 4_000);
+    void loadBranches();
+    onCleanup(() => {
+      window.clearTimeout(timer);
+      window.clearInterval(poll);
+    });
+  });
+
+  createEffect(
+    () => ({ open: props.open, file: props.initialFile, files: files(), selected: selectedFile() }),
+    ({ open, file, files, selected }) => {
+    if (open && file && files.some(entry => entry.path === file) && selected !== file) {
+      void selectFile(file);
     }
   });
 
@@ -75,19 +94,30 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
   });
 
   async function refresh() {
-    if (!props.seed) return;
+    if (!props.seed || refreshing) return;
+    refreshing = true;
     setLoading(true);
     setListError(null);
     try {
       const raw: GitFileEntry[] = JSON.parse(await invoke("cmd_get_git_diff", { seed: props.seed }));
-      setFiles(raw);
+      // A Git refresh invalidates every cached patch: a tool can update the selected file
+      // without changing its entry in the list.
+      setFiles(raw.map(file => ({ ...file, diffHtml: undefined })));
       setDiffError(null);
+      const selected = selectedFile();
+      if (selected && raw.some(file => file.path === selected)) {
+        await selectFile(selected);
+      } else if (selected) {
+        setSelectedFile(null);
+        setDiffHtml(null);
+      }
     } catch (e) {
       console.error("git_diff error:", e);
       setFiles([]);
       setListError(String(e));
     }
     setLoading(false);
+    refreshing = false;
   }
 
   async function loadBranches() {
@@ -157,10 +187,15 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
       });
       await refresh();
       await loadBranches();
+      setActionError(null);
+      setActionNotice(`Switched to ${name}`);
     } catch (e) {
       console.error("switch branch:", e);
+      setActionError(String(e));
+      setActionNotice(null);
+    } finally {
+      setSwitching(false);
     }
-    setSwitching(false);
   }
 
   async function commit() {
@@ -176,10 +211,15 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
       setSelectedFile(null);
       setDiffHtml(null);
       await refresh();
+      setActionError(null);
+      setActionNotice("Commit created");
     } catch (e) {
       console.error("commit:", e);
+      setActionError(String(e));
+      setActionNotice(null);
+    } finally {
+      setCommitting(false);
     }
-    setCommitting(false);
   }
 
   const totalStats = () => {
@@ -287,6 +327,12 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
                 {t().settings.cancel}
               </button>
             </span>
+          </div>
+        </Show>
+
+        <Show when={actionError() || actionNotice()}>
+          <div class={actionError() ? "git-action-feedback error" : "git-action-feedback"} role={actionError() ? "alert" : "status"}>
+            {actionError() || actionNotice()}
           </div>
         </Show>
 

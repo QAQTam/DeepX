@@ -300,4 +300,22 @@ describe("GitDiffPanel", () => {
     dispose();
     host.remove();
   });
+
+  it("11. switches branch directly when the worktree is clean", async () => {
+    mockInvoke({ diff: [] });
+    const { host, dispose } = setup();
+    await flush();
+
+    const select = host.querySelector<HTMLSelectElement>(".git-workspace-branch-select")!;
+    select.value = "feature/foo";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    expect(invokeMock.mock.calls).toContainEqual([
+      "cmd_switch_branch",
+      { seed: "test-seed", branch: "feature/foo", stash: false },
+    ]);
+    dispose();
+    host.remove();
+  });
 });

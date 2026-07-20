@@ -76,6 +76,7 @@ export default function ChatView(props: ChatViewProps) {
   const [statsOpen, setStatsOpen] = createSignal(false);
   const [branch, setBranch] = createSignal("");
   const [showGitWorkspace, setShowGitWorkspace] = createSignal(false);
+  const [selectedGitFile, setSelectedGitFile] = createSignal<string | undefined>();
   const [compactCompleteVisible, setCompactCompleteVisible] = createSignal(
     untrack(() => session().compact.completionRevision > 0),
   );
@@ -157,7 +158,10 @@ export default function ChatView(props: ChatViewProps) {
           workspace={props.ui.workspace()}
           branch={branch()}
           tasks={session().dashboard.tasks}
-          onOpenDiff={() => setShowGitWorkspace(true)}
+          onOpenDiff={(file) => {
+            setSelectedGitFile(file);
+            setShowGitWorkspace(true);
+          }}
           onTaskAction={(action, task) => void props.onTaskAction(action, task)}
         />
       </Show>
@@ -238,6 +242,8 @@ export default function ChatView(props: ChatViewProps) {
       <GitDiffPanel
         open={showGitWorkspace()}
         seed={seed()}
+        changeRevision={session().environment.gitRevision}
+        initialFile={selectedGitFile()}
         onClose={() => setShowGitWorkspace(false)}
       />
     </div>

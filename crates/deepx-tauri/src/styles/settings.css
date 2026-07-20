@@ -5,6 +5,9 @@
   background: var(--bg-primary);
 }
 
+/* Shared page hierarchy: quiet navigation, elevated content controls. */
+.settings-page-header{padding:16px 24px}.settings-nav{padding:12px 8px;background:var(--bg-secondary);border-right:var(--panel-border)}.settings-nav-item{border-radius:var(--radius);padding:8px 12px}.settings-nav-item.active{background:color-mix(in srgb,var(--accent) 12%,var(--bg-primary));box-shadow:inset 2px 0 var(--accent)}.settings-body{padding:24px 32px 40px;max-width:980px}.settings-section{padding:18px;border:var(--panel-border);border-radius:var(--radius-md);background:var(--bg-secondary);margin-bottom:14px}.settings-section-title{color:var(--text-secondary);margin-bottom:14px}.settings-row input,.settings-row select{background:var(--bg-primary);border-radius:var(--radius-sm);padding:8px 10px}.settings-save-btn{border-radius:var(--radius-sm);box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 25%,transparent)}
+
 /* ── Header ── */
 .settings-page-header {
   display: flex; align-items: center; justify-content: space-between;

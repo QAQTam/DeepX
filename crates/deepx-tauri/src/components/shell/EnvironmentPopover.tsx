@@ -1,57 +1,69 @@
 import { For, Show } from "solid-js";
 import type { RawSessionState } from "../../store/rawSession";
 import type { TaskInfo } from "../../lib/types";
+import { workspaceDisplayPath } from "../../lib/workspacePath";
+import { useI18n } from "../../i18n";
 
 export default function EnvironmentPopover(props: {
   session: RawSessionState;
   workspace: string;
   branch?: string;
   tasks?: TaskInfo[];
-  onOpenDiff?: () => void;
+  onOpenDiff?: (file?: string) => void;
   onTaskAction?: (action: "cancel" | "delete" | "ask", task: TaskInfo) => void;
 }) {
+  const { t } = useI18n();
   return (
     <aside class="environment-popover" data-environment-popover>
-      <div class="environment-heading">环境信息</div>
+      <div class="environment-heading">{t().environment.title}</div>
       <div
         class="environment-row environment-row-clickable"
-        onClick={props.onOpenDiff}
+        onClick={() => props.onOpenDiff?.()}
         role="button"
         tabindex={0}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") props.onOpenDiff?.();
         }}
       >
-        <span>变更</span>
+        <span>{t().environment.changes}</span>
         <span>
           <b class="added">+{props.session.environment.linesAdded}</b>{" "}
           <b class="removed">-{props.session.environment.linesRemoved}</b>
         </span>
       </div>
       <div class="environment-row">
-        <span>本地</span>
-        <span>{props.workspace || "未选择工作区"}</span>
+        <span>{t().environment.workspace}</span>
+        <span>{props.workspace || t().session.workspaceHint}</span>
       </div>
       <Show when={props.branch}>
         <div class="environment-row">
-          <span>分支</span>
+          <span>{t().environment.branch}</span>
           <span>{props.branch}</span>
         </div>
       </Show>
       <Show when={props.session.environment.changedFiles.length > 0}>
         <div class="environment-files">
           <For each={props.session.environment.changedFiles.slice(0, 8)}>
-            {(file) => <code>{file}</code>}
+            {(file) => (
+              <button
+                type="button"
+                class="environment-file"
+                title={file}
+                onClick={() => props.onOpenDiff?.(workspaceDisplayPath(file, props.workspace))}
+              >
+                {workspaceDisplayPath(file, props.workspace)}
+              </button>
+            )}
           </For>
         </div>
       </Show>
       <div class="environment-section-heading">
-        <span>执行任务</span>
+        <span>{t().environment.tasks}</span>
         <span>{props.tasks?.length ?? 0}</span>
       </div>
       <Show
         when={(props.tasks?.length ?? 0) > 0}
-        fallback={<div class="environment-empty">暂无执行任务</div>}
+        fallback={<div class="environment-empty">{t().environment.noTasks}</div>}
       >
         <div class="environment-tasks">
           <For each={props.tasks}>

@@ -5,6 +5,9 @@
   background: var(--bg-primary);
 }
 
+.skills-header,.settings-page-header{background:var(--bg-glass-bar);backdrop-filter:blur(var(--panel-glass-blur)) saturate(var(--panel-glass-saturate));}
+.skills-workbench{padding:16px;gap:12px}.skill-column{border:var(--panel-border);border-radius:var(--radius-md);background:var(--bg-secondary);box-shadow:0 1px 0 color-mix(in srgb,var(--text-primary) 4%,transparent)}.skill-column .skill-group-title{padding:12px 12px 9px}.skill-row-main{padding:10px 54px 10px 12px}.skill-row-main:hover{background:color-mix(in srgb,var(--accent) 7%,var(--bg-secondary))}.skill-scope-badge{background:color-mix(in srgb,var(--accent) 10%,var(--bg-primary));color:var(--accent)}.skill-row-actions button{border-color:var(--border-input);background:var(--bg-primary);padding:4px 7px}.skill-detail{padding:8px 12px 12px;background:color-mix(in srgb,var(--bg-primary) 70%,transparent)}
+
 /* ── Header ── */
 .skills-header {
   display: flex; align-items: center; justify-content: space-between;

@@ -78,13 +78,16 @@ describe("sessionEventRuntime", () => {
     expect(loadReloadSnapshot(storage, "seed-a")).toBeUndefined();
   });
 
-  it("removes a version-1 snapshot and commits when persistence throws", () => {
+  it("removes legacy snapshots and commits when persistence throws", () => {
     const values = new Map<string, string>();
     values.set("deepx:reload:v1:seed-a", JSON.stringify({
       version: 1, state: createRawSessionState("seed-a"),
     }));
     values.set("deepx:reload:v2:seed-a", JSON.stringify({
       version: 2, state: createRawSessionState("seed-a"),
+    }));
+    values.set("deepx:reload:v3:seed-a", JSON.stringify({
+      version: 3, state: createRawSessionState("seed-a"),
     }));
     const commits: RawSessionState[] = [];
     const storage: ReloadStorage = {
@@ -95,6 +98,7 @@ describe("sessionEventRuntime", () => {
     expect(loadReloadSnapshot(storage, "seed-a")).toBeUndefined();
     expect(values.has("deepx:reload:v1:seed-a")).toBe(false);
     expect(values.has("deepx:reload:v2:seed-a")).toBe(false);
+    expect(values.has("deepx:reload:v3:seed-a")).toBe(false);
     const runtime = createSessionEventRuntime({
       initialState: createRawSessionState("seed-a"),
       commit: state => commits.push(state),

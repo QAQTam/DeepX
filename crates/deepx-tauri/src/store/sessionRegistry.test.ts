@@ -21,7 +21,7 @@ it("hydrates once, remaps without replacing the entry, and removes frontend reso
   restored.turns.push({
     turnId: "t1", userText: "restored", status: "completed", rounds: [], interactions: [],
   });
-  values.set("deepx:reload:v3:old", JSON.stringify({ version: 3, state: restored }));
+  values.set("deepx:reload:v4:old", JSON.stringify({ version: 4, state: restored }));
 
   const registry = createSessionRegistry({ storage });
   const entry = registry.ensure("old");
@@ -38,8 +38,8 @@ it("hydrates once, remaps without replacing the entry, and removes frontend reso
   registry.remove("new");
   expect(unlisten).toHaveBeenCalledOnce();
   expect(registry.get("new")).toBeUndefined();
-  expect(values.has("deepx:reload:v3:old")).toBe(false);
-  expect(values.has("deepx:reload:v3:new")).toBe(false);
+  expect(values.has("deepx:reload:v4:old")).toBe(false);
+  expect(values.has("deepx:reload:v4:new")).toBe(false);
 });
 
 it("disposes only frontend-owned runtimes and listeners", () => {
@@ -61,7 +61,7 @@ it("keeps the new-seed snapshot when remap follows session_created reduction", (
 
   registry.remap("old", "new");
 
-  expect(values.has("deepx:reload:v3:old")).toBe(false);
-  expect(values.has("deepx:reload:v3:new")).toBe(true);
+  expect(values.has("deepx:reload:v4:old")).toBe(false);
+  expect(values.has("deepx:reload:v4:new")).toBe(true);
   expect(registry.get("new")).toBe(entry);
 });

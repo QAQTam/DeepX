@@ -5,9 +5,9 @@ import { reduceAgentEvent } from "./sessionEventReducer";
 export type ReloadStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 export type ScheduleFlush = (flush: () => void) => void;
 
-const SNAPSHOT_VERSION = 3;
-const SNAPSHOT_PREFIX = "deepx:reload:v3:";
-const LEGACY_SNAPSHOT_PREFIXES = ["deepx:reload:v1:", "deepx:reload:v2:"];
+const SNAPSHOT_VERSION = 4;
+const SNAPSHOT_PREFIX = "deepx:reload:v4:";
+const LEGACY_SNAPSHOT_PREFIXES = ["deepx:reload:v1:", "deepx:reload:v2:", "deepx:reload:v3:"];
 const MAX_RELOAD_TURNS = 20;
 const MAX_PROGRESS_CHUNKS = 200;
 

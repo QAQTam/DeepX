@@ -105,6 +105,8 @@ export type RawSessionState = {
     filesCreated: number;
     filesDeleted: number;
     changedFiles: string[];
+    /** Increments for every tool-reported write so Git views can refresh promptly. */
+    gitRevision: number;
   };
   session: {
     ready: boolean;

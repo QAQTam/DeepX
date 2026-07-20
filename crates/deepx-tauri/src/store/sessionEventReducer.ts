@@ -22,6 +22,7 @@ export function createRawSessionState(seed: string): RawSessionState {
       filesCreated: 0,
       filesDeleted: 0,
       changedFiles: [],
+      gitRevision: 0,
     },
     session: {
       ready: false,
@@ -380,6 +381,7 @@ export function reduceAgentEvent(
           changedFiles: event.file && !state.environment.changedFiles.includes(event.file)
             ? [...state.environment.changedFiles, event.file]
             : state.environment.changedFiles,
+          gitRevision: state.environment.gitRevision + 1,
         },
       };
     case "skills_changed": {

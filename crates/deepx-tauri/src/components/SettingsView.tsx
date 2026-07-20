@@ -616,12 +616,12 @@ export default function SettingsView(props: SettingsViewProps) {
               {/* Category: Advanced */}
               <Show when={activeCategory() === "advanced"}>
                 <section class="settings-section">
-                  <h2 class="settings-section-title">权限控制</h2>
+                  <h2 class="settings-section-title">{t().settings.permissionControl}</h2>
                   <div class="settings-row">
-                    <label>默认权限等级</label>
+                    <label>{t().settings.defaultPermission}</label>
                     <div class="settings-input-group">
                       <PermissionLevelSelect level={props.permissionLevel} onChange={props.onPermissionLevelChange} />
-                      <div class="settings-hint">切换后立即保存。L4 完全访问允许执行高风险操作。</div>
+                      <div class="settings-hint">{t().settings.defaultPermissionHint}</div>
                     </div>
                   </div>
                 </section>

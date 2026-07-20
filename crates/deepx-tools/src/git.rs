@@ -37,7 +37,10 @@ pub fn status_json(workspace: &str) -> Result<String, String> {
             let mut opts = DiffOptions::new();
             opts.pathspec(&path);
             head_tree
-                .and_then(|tree| repo.diff_tree_to_workdir(Some(&tree), Some(&mut opts)).ok())
+                .and_then(|tree| {
+                    repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+                        .ok()
+                })
                 .and_then(|d| d.stats().ok())
                 .map(|s| (s.insertions() as u32, s.deletions() as u32))
                 .unwrap_or((0, 0))
@@ -166,7 +169,8 @@ pub fn commit_all(workspace: &str, message: &str) -> Result<String, String> {
     Ok(oid.to_string())
 }
 
-/// Get the diff for a single file (working tree vs HEAD) as a unified patch.
+/// Get the diff for a single file (HEAD vs index + working tree) as a unified patch.
+/// `*_with_index` includes both staged and unstaged edits, matching the status list.
 pub fn file_diff(workspace: &str, file_path: &str) -> Result<String, String> {
     let repo = open_repo(workspace)?;
     let head = repo.head().map_err(|e| format!("head: {e}"))?;
@@ -176,7 +180,7 @@ pub fn file_diff(workspace: &str, file_path: &str) -> Result<String, String> {
     diff_opts.pathspec(file_path);
 
     let diff = repo
-        .diff_tree_to_workdir(Some(&head_tree), Some(&mut diff_opts))
+        .diff_tree_to_workdir_with_index(Some(&head_tree), Some(&mut diff_opts))
         .map_err(|e| format!("diff: {e}"))?;
 
     let mut patch_text = String::new();
