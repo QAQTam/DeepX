@@ -1,4 +1,4 @@
-import { createSignal, For, Show, onMount, createEffect } from "solid-js";
+import { createSignal, For, Show, onSettled, createEffect } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n";
 import { renderDiffHtml } from "../lib/diff";
@@ -48,8 +48,9 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
   const [showSwitchPrompt, setShowSwitchPrompt] = createSignal(false);
   const [pendingBranch, setPendingBranch] = createSignal("");
 
-  // ── Load data when opened ──
-  createEffect(() => {
+  createEffect(
+    () => props.open && props.seed,
+    () => {
     if (props.open && props.seed) {
       refresh();
       loadBranches();
@@ -57,7 +58,9 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
   });
 
   // ── Reset state when closed ──
-  createEffect(() => {
+  createEffect(
+    () => !props.open,
+    () => {
     if (!props.open) {
       setFiles([]);
       setListError(null);

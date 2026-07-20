@@ -1,4 +1,4 @@
-import { on, createEffect, onCleanup } from "solid-js";
+import { createEffect, onCleanup } from "solid-js";
 import { marked, Renderer } from "marked";
 import { createHighlighter, createOnigurumaEngine } from "shiki";
 
@@ -260,12 +260,12 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
     renderGeneration += 1;
   });
 
-  createEffect(on(
+  createEffect(
     // Use a string key so SolidJS compares by value, not array reference.
     // Returning an array here would cause the effect to re-fire on every
     // parent re-render, even when the markdown text hasn't changed.
     () => `${props.content}|${props.final}`,
-    async () => {
+    () => { void (async () => {
       const text = props.content;
       const final = !!props.final;
       const depsKey = `${text}|${final}`;
@@ -328,7 +328,8 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
     if (isStale()) return;
     patchDOM(container, blocks);
     prevBlocks = blocks;
-  }));
+    })();
+  });
 
   return <div ref={container} class={props.class} />;
 }

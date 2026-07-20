@@ -1,5 +1,5 @@
-import type { JSX } from "solid-js";
-import { Portal } from "solid-js/web";
+import type { JSX } from "@solidjs/web";
+import { Portal } from "@solidjs/web";
 
 export default function InteractionModal(props: {
   label: string;

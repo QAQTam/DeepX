@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createSignal } from "solid-js";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createI18n, I18nCtx } from "../i18n";
@@ -39,7 +39,7 @@ function setup(props: {
 
   const dispose = render(
     () => (
-      <I18nCtx.Provider value={i18n}>
+      <I18nCtx value={i18n}>
         <SkillsView
           seed={props.seed ?? "test-seed"}
           available={props.available ?? sampleSkills}
@@ -48,7 +48,7 @@ function setup(props: {
           onUnload={props.onUnload ?? vi.fn()}
           onReload={props.onReload ?? vi.fn()}
         />
-      </I18nCtx.Provider>
+      </I18nCtx>
     ),
     host,
   );
@@ -330,7 +330,7 @@ describe("SkillsView", () => {
 
     const dispose = render(
       () => (
-        <I18nCtx.Provider value={i18n}>
+        <I18nCtx value={i18n}>
           <SkillsView
             seed="test-seed"
             available={[skill({ name: "test-skill" })]}
@@ -339,7 +339,7 @@ describe("SkillsView", () => {
             onUnload={vi.fn()}
             onReload={vi.fn()}
           />
-        </I18nCtx.Provider>
+        </I18nCtx>
       ),
       host,
     );
@@ -391,7 +391,7 @@ describe("SkillsView", () => {
 
     const dispose = render(
       () => (
-        <I18nCtx.Provider value={i18n}>
+        <I18nCtx value={i18n}>
           <SkillsView
             seed="test-seed"
             available={available()}
@@ -400,7 +400,7 @@ describe("SkillsView", () => {
             onUnload={vi.fn()}
             onReload={onReload}
           />
-        </I18nCtx.Provider>
+        </I18nCtx>
       ),
       host,
     );
@@ -430,10 +430,10 @@ describe("SkillsView", () => {
     const runtime: SkillRuntimeInfo[] = ["catalog", "requested", "active", "review_due", "unavailable"].map((state, index) => ({
       name: `skill-${index}`, description: state, state, source: "test", token_count: index,
     }));
-    const dispose = render(() => <I18nCtx.Provider value={createI18n("en")}>
+    const dispose = render(() => <I18nCtx value={createI18n("en")}>
       <SkillsView seed="seed" available={[]} active={[]} runtime={runtime}
         onActivate={vi.fn()} onUnload={vi.fn()} onReload={vi.fn()} />
-    </I18nCtx.Provider>, host);
+    </I18nCtx>, host);
     await flush();
     for (const label of ["Catalog", "Requested", "Enabled", "Review Due", "Unavailable"]) {
       expect(host.textContent).toContain(label);

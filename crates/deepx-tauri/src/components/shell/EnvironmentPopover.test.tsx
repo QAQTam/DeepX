@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRawSessionState } from "../../store/sessionEventReducer";
 import EnvironmentPopover from "./EnvironmentPopover";

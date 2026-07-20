@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createSignal } from "solid-js";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { describe, expect, it } from "vitest";
 import ProcessDisclosure from "./ProcessDisclosure";
 

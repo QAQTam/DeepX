@@ -20,12 +20,12 @@ export default function ProcessEventRow(props: {
   const failed = () => props.item.kind === "tool" && props.item.success === false;
 
   return (
+    // @ts-expect-error SolidJS 2.x: tsc children type mismatch on div
     <div
-      class="process-event-row"
-      classList={{ "is-failed": failed() }}
+      class={{ "process-event-row": true, "is-failed": failed() }}
       data-process-row
       data-kind={props.item.kind}
-      aria-expanded={props.expanded()}
+      aria-expanded={String(props.expanded())}
       role="listitem"
     >
       <button type="button" class="process-event-trigger" onClick={props.onToggle}>

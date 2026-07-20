@@ -61,7 +61,9 @@ export default function SkillsView(props: SkillsViewProps) {
     return value;
   });
 
-  createEffect(() => {
+  createEffect(
+    () => ({ active: props.active, runtime: props.runtime, available: props.available, catalogRevision: props.catalogRevision }),
+    () => {
     const active = props.active;
     const runtime = props.runtime;
     void props.available;

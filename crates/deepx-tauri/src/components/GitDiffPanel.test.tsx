@@ -2,7 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createI18n, I18nCtx } from "../i18n";
@@ -81,9 +81,9 @@ function setup() {
 
   const dispose = render(
     () => (
-      <I18nCtx.Provider value={i18n}>
+      <I18nCtx value={i18n}>
         <GitDiffPanel open={open()} seed="test-seed" onClose={onClose} />
-      </I18nCtx.Provider>
+      </I18nCtx>
     ),
     host,
   );
@@ -269,9 +269,9 @@ describe("GitDiffPanel", () => {
 
     const dispose = render(
       () => (
-        <I18nCtx.Provider value={i18n}>
+        <I18nCtx value={i18n}>
           <GitDiffPanel open={open()} seed="test-seed" onClose={() => {}} />
-        </I18nCtx.Provider>
+        </I18nCtx>
       ),
       host,
     );

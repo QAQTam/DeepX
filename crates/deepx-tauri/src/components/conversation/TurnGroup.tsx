@@ -1,4 +1,4 @@
-import { Index, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import type { RoundRenderEntry, TurnViewModel } from "../../presentation/turnProjection";
 import ProcessDisclosure from "../process/ProcessDisclosure";
 import ProcessTimeline from "../process/ProcessTimeline";
@@ -21,9 +21,9 @@ export default function TurnGroup(props: { turn: TurnViewModel }) {
     <article class="conversation-turn" data-turn={props.turn.turnId}>
       <UserPromptBubble text={props.turn.userPrompt} />
 
-      <Index each={props.turn.rounds}>
+      <For each={props.turn.rounds} keyed={false}>
         {(round) => (
-          <Index each={round().entries}>
+          <For each={round().entries} keyed={false}>
             {(entry) => (
               <Show
                 when={assistantEntry(entry())}
@@ -51,9 +51,9 @@ export default function TurnGroup(props: { turn: TurnViewModel }) {
                 )}
               </Show>
             )}
-          </Index>
+          </For>
         )}
-      </Index>
+      </For>
     </article>
   );
 }

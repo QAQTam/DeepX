@@ -1,4 +1,4 @@
-import { createSignal, createResource, For, Show, createEffect } from "solid-js";
+import { createEffect, createSignal, For, onSettled, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { useI18n, type Lang } from "../i18n";
@@ -123,23 +123,45 @@ export default function SettingsView(props: SettingsViewProps) {
 
   const [activeCategory, setActiveCategory] = createSignal("models");
 
-  const [configData, { refetch: refetchConfig }] = createResource(async () => {
-    try { const raw = await invoke<string>("cmd_load_config"); return JSON.parse(raw); }
-    catch (e) { console.error(e); return null; }
-  });
+  const [configData, setConfigData] = createSignal<any>(null);
+  const [configLoading, setConfigLoading] = createSignal(true);
+  const [configError, setConfigError] = createSignal<any>(null);
 
-  const [allTools] = createResource(async () => {
-    try { const raw = await invoke<string>("cmd_list_available_tools"); return JSON.parse(raw) as string[]; }
-    catch (e) { console.error(e); return []; }
+  const refetchConfig = async () => {
+    setConfigLoading(true);
+    setConfigError(null);
+    try {
+      const raw = await invoke<string>("cmd_load_config");
+      setConfigData(JSON.parse(raw));
+    } catch (e) {
+      console.error(e);
+      setConfigError(e);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  onSettled(() => { void refetchConfig(); });
+
+  const [allTools, setAllTools] = createSignal<string[]>([]);
+  onSettled(() => {
+    void (async () => {
+    try {
+      const raw = await invoke<string>("cmd_list_available_tools");
+      setAllTools(JSON.parse(raw) as string[]);
+    } catch (e) { console.error(e); }
+    })();
   });
 
   const [loadError, setLoadError] = createSignal<string | null>(null);
 
-  createEffect(() => {
+  createEffect(
+    () => ({ data: configData(), loading: configLoading(), error: configError() }),
+    () => {
     const data = configData();
-    if (configData.loading) return;
-    if (configData.error) {
-      setLoadError(String(configData.error));
+    if (configLoading()) return;
+    if (configError()) {
+      setLoadError(String(configError()));
       return;
     }
     if (!data) {
@@ -246,13 +268,17 @@ export default function SettingsView(props: SettingsViewProps) {
   }
 
   // ── Migration ──
-  createEffect(async () => {
+  createEffect(
+    () => databaseEnabled(),
+    () => {
+    void (async () => {
     if (!databaseEnabled()) return;
     try {
       const raw = await invoke<string>("cmd_migration_count");
       const data = JSON.parse(raw);
       setMigrationPending(data.pending ?? 0);
     } catch (_) { setMigrationPending(0); }
+    })();
   });
 
   function startMigrate() {
@@ -349,12 +375,12 @@ export default function SettingsView(props: SettingsViewProps) {
     <div class="settings-page">
       <div class="settings-page-header">
         <h1>{t().settings.title}</h1>
-        <button class="settings-save-btn" classList={{ saved: saved() }} onClick={save}>
+        <button class={{ "settings-save-btn": true, saved: saved() }} onClick={save}>
           {saved() ? "✓ " + (t().settings.saved ?? "Saved") : t().settings.save}
         </button>
       </div>
 
-      <Show when={!configData.loading} fallback={<Loading />}>
+      <Show when={!configLoading()} fallback={<Loading />}>
         <Show when={!loadError()} fallback={<ErrorState />}>
           <div class="settings-layout">
             {/* ── Left Nav ── */}

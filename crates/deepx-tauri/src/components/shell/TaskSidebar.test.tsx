@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { expect, it, vi } from "vitest";
 import type { SessionMeta } from "../../lib/types";
 import TaskSidebar, { taskTitle } from "./TaskSidebar";

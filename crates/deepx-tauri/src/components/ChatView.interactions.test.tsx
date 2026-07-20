@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createSignal } from "solid-js";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createI18n, I18nCtx } from "../i18n";
 import type { RawSessionState } from "../store/rawSession";
@@ -37,7 +37,7 @@ function mountRawChat(initial: RawSessionState) {
   document.body.append(host);
   const i18n = createI18n("zh");
   cleanups.push(render(() => (
-    <I18nCtx.Provider value={i18n}>
+    <I18nCtx value={i18n}>
       <ChatView
         rawSession={state}
         ui={ui}
@@ -52,7 +52,7 @@ function mountRawChat(initial: RawSessionState) {
         onPermissionLevelChange={vi.fn()}
         onChangeWorkspace={vi.fn()}
       />
-    </I18nCtx.Provider>
+    </I18nCtx>
   ), host));
   return { host, state, setState, ui, callbacks };
 }

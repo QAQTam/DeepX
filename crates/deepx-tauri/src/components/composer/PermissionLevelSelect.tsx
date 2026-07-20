@@ -12,8 +12,7 @@ export default function PermissionLevelSelect(props: {
 }) {
   return (
     <label
-      class="permission-level-select"
-      classList={{ compact: props.compact, "is-danger": props.level === 4 }}
+      class={{ "permission-level-select": true, compact: props.compact ?? false, "is-danger": props.level === 4 }}
       data-permission-level={props.level}
       title="控制 DeepX 可执行的操作范围"
     >

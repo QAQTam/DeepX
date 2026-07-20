@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import PlanReviewPanel from "./PlanReviewPanel";

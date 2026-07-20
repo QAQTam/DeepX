@@ -1,4 +1,4 @@
-import { createSignal, Index } from "solid-js";
+import { createSignal, For } from "solid-js";
 import type { ProcessItem } from "../../presentation/processAggregation";
 import ProcessEventRow from "./ProcessEventRow";
 
@@ -7,7 +7,7 @@ export default function ProcessTimeline(props: { items: ProcessItem[] }) {
 
   return (
     <div class="process-timeline" role="list">
-      <Index each={props.items}>
+      <For each={props.items} keyed={false}>
         {(item) => (
           <ProcessEventRow
             item={item()}
@@ -15,7 +15,7 @@ export default function ProcessTimeline(props: { items: ProcessItem[] }) {
             onToggle={() => setExpandedId(current => current === item().id ? null : item().id)}
           />
         )}
-      </Index>
+      </For>
     </div>
   );
 }

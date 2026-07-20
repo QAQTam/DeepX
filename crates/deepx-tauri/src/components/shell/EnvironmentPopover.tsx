@@ -17,7 +17,7 @@ export default function EnvironmentPopover(props: {
         class="environment-row environment-row-clickable"
         onClick={props.onOpenDiff}
         role="button"
-        tabIndex={0}
+        tabindex={0}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") props.onOpenDiff?.();
         }}

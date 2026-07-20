@@ -1,4 +1,5 @@
-import { createEffect, createSignal, on, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 
 export function formatElapsed(elapsedMs?: number): string {
   if (elapsedMs === undefined) return "";
@@ -19,18 +20,15 @@ export default function ProcessDisclosure(props: {
   const [open, setOpen] = createSignal(props.defaultOpen ?? false);
   const panelId = `process-${Math.random().toString(36).slice(2)}`;
 
-  createEffect(on(
-    () => props.status,
-    (status, prev) => {
-      // Only auto-close on the transition to a terminal state,
-      // not on every re-render while already terminal.
-      if (prev !== undefined && prev !== status) {
-        if (status === "completed" || status === "failed" || status === "cancelled") {
-          setOpen(false);
-        }
+  let prevStatus: typeof props.status | undefined;
+  createEffect(() => props.status, status => {
+    if (prevStatus !== undefined && prevStatus !== status) {
+      if (status === "completed" || status === "failed" || status === "cancelled") {
+        setOpen(false);
       }
-    },
-  ));
+    }
+    prevStatus = status;
+  });
 
   const label = () => {
     const elapsed = formatElapsed(props.elapsedMs);
@@ -50,10 +48,11 @@ export default function ProcessDisclosure(props: {
 
   return (
     <section class="process-disclosure" data-process-disclosure>
+      {/* @ts-expect-error SolidJS 2.x: tsc children type mismatch */}
       <button
         type="button"
         class="process-disclosure-trigger"
-        aria-expanded={open()}
+        aria-expanded={String(open())}
         aria-controls={panelId}
         onClick={toggle}
       >

@@ -80,8 +80,9 @@ export default function ChatView(props: ChatViewProps) {
   let compactRevision = 0;
   let compactTimer: ReturnType<typeof setTimeout> | undefined;
 
-  createEffect(() => {
-    const revision = session().compact.completionRevision;
+  createEffect(
+    () => session().compact.completionRevision,
+    (revision) => {
     if (revision > compactRevision) {
       setCompactCompleteVisible(true);
       if (compactTimer) clearTimeout(compactTimer);
@@ -114,15 +115,18 @@ export default function ChatView(props: ChatViewProps) {
 
   const followUps = createFollowUpQueue(seed(), handleSend);
   let wasStreaming = streaming();
-  createEffect(() => {
-    const active = streaming();
+  createEffect(
+    () => streaming(),
+    (active) => {
     if (wasStreaming && !active) {
       void followUps.drainAfterTurnEnd({ hasPendingGate: activeInteraction(session()) !== null });
     }
     wasStreaming = active;
   });
 
-  createEffect(() => {
+  createEffect(
+    () => environmentOpen(),
+    () => {
     if (!environmentOpen()) return;
     invoke<string>("cmd_get_git_branch", { seed: seed() })
       .then(setBranch)

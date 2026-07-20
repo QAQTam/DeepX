@@ -1,4 +1,4 @@
-import { createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createSignal, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -431,7 +431,8 @@ export default function App() {
     applyTheme(nextTheme);
   }
 
-  onMount(async () => {
+  onSettled(() => {
+    void (async () => {
     const savedTheme = (localStorage.getItem(LS_THEME) ?? "system") as ThemeMode;
     setTheme(savedTheme);
     applyTheme(savedTheme);
@@ -495,6 +496,7 @@ export default function App() {
       return;
     }
     await resumeSession(savedSeed);
+  })();
   });
 
   onCleanup(() => {
@@ -507,7 +509,7 @@ export default function App() {
   });
 
   return (
-    <I18nCtx.Provider value={i18n}>
+    <I18nCtx value={i18n}>
       <AppShell
         sidebar={
           <TaskSidebar
@@ -589,6 +591,6 @@ export default function App() {
         }
       />
       <ToastContainer ctrl={toastCtrl} />
-    </I18nCtx.Provider>
+    </I18nCtx>
   );
 }

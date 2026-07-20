@@ -21,12 +21,11 @@ export default function CompactStatusRow(props: CompactStatusRowProps) {
 
   return (
     <div
-      class={`compact-row compact-${props.status}`}
-      classList={{
+      class={[`compact-row compact-${props.status}`, {
         "compact-active": props.active,
         "compact-complete": props.status === "complete",
         "compact-failed": props.status === "failed",
-      }}
+      }]}
     >
       <div class="compact-row-inner">
         {/* Status indicator */}
@@ -40,8 +39,7 @@ export default function CompactStatusRow(props: CompactStatusRowProps) {
 
         {/* Text (collapsed or expanded) */}
         <span
-          class="compact-text"
-          classList={{ "compact-text-expanded": expanded() }}
+          class={{ "compact-text": true, "compact-text-expanded": expanded() }}
           onClick={toggleExpanded}
         >
           {expanded()

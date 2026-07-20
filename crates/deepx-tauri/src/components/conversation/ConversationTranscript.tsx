@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Index, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import type { TurnViewModel } from "../../presentation/turnProjection";
 import TurnGroup from "./TurnGroup";
 
@@ -42,12 +42,12 @@ export default function ConversationTranscript(props: {
     });
   }
 
-  createEffect(() => {
-    props.turns;
-    queueMicrotask(scheduleScrollToBottom);
-  });
+  createEffect(
+    () => props.turns,
+    () => queueMicrotask(scheduleScrollToBottom),
+  );
 
-  onMount(() => {
+  onSettled(() => {
     if (typeof ResizeObserver === "undefined") return;
     resizeObserver = new ResizeObserver(() => scheduleScrollToBottom());
     resizeObserver.observe(transcript);
@@ -69,7 +69,7 @@ export default function ConversationTranscript(props: {
         >加载更早消息</button>
       </Show>
       <main ref={transcript} class="conversation-transcript" aria-live="polite">
-        <Index each={props.turns}>{(turn) => <TurnGroup turn={turn()} />}</Index>
+        <For each={props.turns} keyed={false}>{(turn) => <TurnGroup turn={turn()} />}</For>
       </main>
       <Show when={!followTail()}>
         <button

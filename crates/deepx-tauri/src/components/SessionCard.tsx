@@ -26,7 +26,7 @@ export default function SessionCard(props: SessionCardProps) {
       class="session-card"
       onClick={() => props.onResume(s.seed)}
       role="button"
-      tabIndex={0}
+      tabindex={0}
     >
       <div class="session-card-header">
         <span class={`session-card-dot ${s.running ? "running" : ""} ${s.turso_backed ? "turso" : ""}`} />

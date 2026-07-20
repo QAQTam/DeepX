@@ -2,7 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createI18n, I18nCtx, type Lang } from "../i18n";
@@ -65,7 +65,7 @@ function setup(props: { lang?: () => Lang; theme?: () => ThemeMode } = {}) {
 
   const dispose = render(
     () => (
-      <I18nCtx.Provider value={i18n}>
+      <I18nCtx value={i18n}>
         <SettingsView
           lang={lang}
           onLangChange={() => {}}
@@ -74,7 +74,7 @@ function setup(props: { lang?: () => Lang; theme?: () => ThemeMode } = {}) {
           permissionLevel={2}
           onPermissionLevelChange={() => {}}
         />
-      </I18nCtx.Provider>
+      </I18nCtx>
     ),
     host,
   );
@@ -212,7 +212,7 @@ describe("SettingsView – API Key behavior", () => {
 
     const dispose = render(
       () => (
-        <I18nCtx.Provider value={i18n}>
+        <I18nCtx value={i18n}>
           <SettingsView
             lang={lang}
             onLangChange={() => {}}
@@ -221,7 +221,7 @@ describe("SettingsView – API Key behavior", () => {
             permissionLevel={2}
             onPermissionLevelChange={() => {}}
           />
-        </I18nCtx.Provider>
+        </I18nCtx>
       ),
       host,
     );
