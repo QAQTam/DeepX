@@ -67,39 +67,36 @@ export default function StartupView(props: StartupViewProps) {
   }
 
   return (
-    <div class="startup-view">
-      <div class="startup-center">
-        <div class="startup-logo">{">"}</div>
-        <h1 class="startup-title">{t().app.title}</h1>
-        <p class="startup-subtitle">{t().app.subtitle}</p>
-
-        <div class="startup-input-wrap">
-          <textarea
-            ref={textareaRef}
-            rows={2}
-            placeholder={t().chat.placeholder}
-            onKeyDown={handleKeyDown}
-            onInput={autoResize}
-            autofocus
-          />
-          <button class="startup-send" onClick={submit} title={t().chat.send}>
-            <svg width="18" height="18" viewBox="0 0 16 16"><path d="M2 2l12 6-12 6 3-6-3-6z" fill="currentColor"/></svg>
-          </button>
-        </div>
-        <p class="startup-hint">{t().session.startupHint}</p>
-
-        {/* ── Session grid ── */}
-        <Show when={props.sessions.length > 0}>
-          <div class="session-grid">
-            <For each={props.sessions.slice(0, 12)}>
-              {(s) => <SessionCard session={s} onResume={props.onResume} />}
-            </For>
+    <main class="startup-view">
+      <div class="startup-center home-page">
+        <header class="home-hero">
+          <div class="startup-logo">{">_"}</div>
+          <div>
+            <h1 class="startup-title">{t().app.title}</h1>
+            <p class="startup-subtitle">{t().app.subtitle}</p>
           </div>
-        </Show>
+        </header>
 
-        {/* ── Heatmap (collapsible placeholder for now) ── */}
+        <section class="home-compose" aria-label={t().chat.newSession}>
+          <div class="startup-input-wrap">
+            <textarea
+              ref={textareaRef}
+              rows={2}
+              placeholder={t().chat.placeholder}
+              onKeyDown={handleKeyDown}
+              onInput={autoResize}
+              autofocus
+            />
+            <button class="startup-send" onClick={submit} title={t().chat.send} aria-label={t().chat.send}>
+              <svg width="18" height="18" viewBox="0 0 16 16"><path d="M2 2l12 6-12 6 3-6-3-6z" fill="currentColor"/></svg>
+            </button>
+          </div>
+          <p class="startup-hint">{t().session.startupHint}</p>
+        </section>
+
+        <div class="home-dashboard">
         <Show when={props.showHeatmap}>
-          <div class="heatmap-card">
+          <section class="heatmap-card">
             <div class="heatmap-header">
               <span class="heatmap-label">{t().startup.activity}</span>
               <span class="heatmap-total">{props.sessions.length} {t().startup.sessions}</span>
@@ -111,7 +108,7 @@ export default function StartupView(props: StartupViewProps) {
                   return (
                     <div
                       class={`heatmap-cell ${levelClass(count)}`}
-                      title={`${day}: ${count} messages`}
+                      title={`${day}: ${count} ${t().session.messages}`}
                     />
                   );
                 }}
@@ -126,9 +123,24 @@ export default function StartupView(props: StartupViewProps) {
               <span class="heatmap-cell hm-l4" />
               <span>{t().startup.more}</span>
             </div>
-          </div>
+          </section>
         </Show>
+
+        <Show when={props.sessions.length > 0}>
+          <section class="home-sessions">
+            <div class="home-section-heading">
+              <h2>{t().session.recent}</h2>
+              <span>{props.sessions.length} {t().startup.sessions}</span>
+            </div>
+            <div class="session-grid">
+              <For each={props.sessions.slice(0, 12)}>
+                {(s) => <SessionCard session={s} onResume={props.onResume} />}
+              </For>
+            </div>
+          </section>
+        </Show>
+        </div>
       </div>
-    </div>
+    </main>
   );
 }

@@ -576,7 +576,7 @@ export default function App() {
                 sessions={sessions()}
                 onResume={resumeSession}
                 onSend={startNewSessionAndSend}
-                showHeatmap={false}
+                showHeatmap={true}
               />
             </Match>
             <Match when={view() === "chat"}>
