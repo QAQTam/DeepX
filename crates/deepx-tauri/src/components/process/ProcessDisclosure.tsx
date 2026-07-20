@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, on, Show, type JSX } from "solid-js";
 
 export function formatElapsed(elapsedMs?: number): string {
   if (elapsedMs === undefined) return "";
@@ -19,11 +19,18 @@ export default function ProcessDisclosure(props: {
   const [open, setOpen] = createSignal(props.defaultOpen ?? false);
   const panelId = `process-${Math.random().toString(36).slice(2)}`;
 
-  createEffect(() => {
-    if (props.status === "completed" || props.status === "failed" || props.status === "cancelled") {
-      setOpen(false);
-    }
-  });
+  createEffect(on(
+    () => props.status,
+    (status, prev) => {
+      // Only auto-close on the transition to a terminal state,
+      // not on every re-render while already terminal.
+      if (prev !== undefined && prev !== status) {
+        if (status === "completed" || status === "failed" || status === "cancelled") {
+          setOpen(false);
+        }
+      }
+    },
+  ));
 
   const label = () => {
     const elapsed = formatElapsed(props.elapsedMs);

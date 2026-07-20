@@ -86,22 +86,11 @@
 }
 .md-body a:hover { text-decoration: underline; }
 
-/* ── Staggered fade-in for completed markdown blocks ── */
+/* ── Fade-in for completed markdown blocks ── */
 @keyframes md-fade-in {
-  from { opacity: 0; transform: translateY(3px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
-.md-body.final > * {
-  animation: md-fade-in 0.25s ease-out both;
+.md-body.final {
+  animation: md-fade-in 0.2s ease-out both;
 }
-.md-body.final > :nth-child(1)  { animation-delay: 0s; }
-.md-body.final > :nth-child(2)  { animation-delay: 0.04s; }
-.md-body.final > :nth-child(3)  { animation-delay: 0.08s; }
-.md-body.final > :nth-child(4)  { animation-delay: 0.12s; }
-.md-body.final > :nth-child(5)  { animation-delay: 0.16s; }
-.md-body.final > :nth-child(6)  { animation-delay: 0.20s; }
-.md-body.final > :nth-child(7)  { animation-delay: 0.24s; }
-.md-body.final > :nth-child(8)  { animation-delay: 0.28s; }
-.md-body.final > :nth-child(9)  { animation-delay: 0.32s; }
-.md-body.final > :nth-child(10) { animation-delay: 0.36s; }
-.md-body.final > :nth-child(n+11) { animation-delay: 0.4s; }

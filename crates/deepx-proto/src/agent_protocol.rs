@@ -316,6 +316,9 @@ pub struct RoundData {
     pub answer: Option<String>,
     pub tool_calls: Vec<ToolCallDef>,
     pub tool_results: Vec<ToolResultDef>,
+    /// Ordered blocks preserving the LLM's output sequence (reasoning ↔ text ↔ tool).
+    #[serde(default)]
+    pub blocks: Vec<RoundBlock>,
 }
 
 /// Backend-owned intrinsic impact of a permission-gated action.
@@ -727,7 +730,7 @@ fn default_load_count() -> u32 {
 }
 
 /// Streaming block kind for RoundDelta.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum RoundDeltaKind {

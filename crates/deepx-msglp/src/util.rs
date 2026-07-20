@@ -192,6 +192,34 @@ pub(crate) fn build_turns_from_context(
                     }
                 })
                 .collect();
+            let blocks: Vec<deepx_proto::RoundBlock> = step
+                .assistant
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Reasoning { reasoning } if !reasoning.is_empty() => {
+                        Some(deepx_proto::RoundBlock::Reasoning {
+                            content: reasoning.clone(),
+                        })
+                    }
+                    ContentBlock::Text { text } if !text.is_empty() => {
+                        Some(deepx_proto::RoundBlock::Text {
+                            content: text.clone(),
+                        })
+                    }
+                    ContentBlock::ToolUse { id, name, input } => {
+                        Some(deepx_proto::RoundBlock::Tool {
+                            card: deepx_proto::ToolCallDef {
+                                id: id.clone(),
+                                name: name.clone(),
+                                args_display: name.clone(),
+                                args_json: input.to_string(),
+                            },
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
             let trs: Vec<deepx_proto::ToolResultDef> = step
                 .tool_results
                 .iter()
@@ -222,6 +250,7 @@ pub(crate) fn build_turns_from_context(
                 answer,
                 tool_calls: tcs,
                 tool_results: trs,
+                blocks,
             });
         }
         let user_text = turn

@@ -72,11 +72,15 @@ function parseMarkdown(raw: string, renderer?: Renderer): string {
   });
   if (typeof html !== "string") return "";
   // Strip Shiki's inline background-color so CSS variables control the theme.
-  return html.replace(
-    /(<pre\b[^>]*style=")([^"]*)(")/gi,
-    (_, before, styles, after) =>
-      before + styles.replace(/background-color\s*:\s*[^;]+;?/gi, "") + after,
-  );
+  return html
+    .replace(
+      /(<pre\b[^>]*style=")([^"]*)(")/gi,
+      (_, before, styles, after) =>
+        before + styles.replace(/background-color\s*:\s*[^;]+;?/gi, "") + after,
+    )
+    // Strip Shiki's tabindex to prevent code blocks from stealing focus
+    // and interfering with native text selection behavior.
+    .replace(/<pre\b([^>]*)\s+tabindex="0"([^>]*)>/gi, "<pre$1$2>");
 }
 
 /** Render a single stable block's raw markdown to HTML. */
@@ -172,7 +176,6 @@ function createStableEl(block: MarkdownBlock): HTMLDivElement {
   const el = document.createElement("div");
   el.dataset.key = block.key;
   el.dataset.hash = block.hash;
-  el.style.display = "contents";
   el.innerHTML = block.html ?? "";
   return el;
 }
@@ -182,13 +185,19 @@ function createLiveEl(block: MarkdownBlock): HTMLDivElement {
   const el = document.createElement("div");
   el.dataset.key = block.key;
   el.dataset.hash = block.hash;
-  el.style.display = "contents";
   el.textContent = block.raw;
   return el;
 }
 
 /** P1: Patch container DOM children to match blocks array. */
 function patchDOM(container: HTMLDivElement, blocks: MarkdownBlock[]) {
+  // Clean up orphan text nodes left by earlier container.textContent assignments.
+  for (let i = container.childNodes.length - 1; i >= 0; i--) {
+    if (container.childNodes[i]!.nodeType === Node.TEXT_NODE) {
+      container.childNodes[i]!.remove();
+    }
+  }
+
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]!;
     const existing = container.children[i] as HTMLDivElement | undefined;
@@ -214,7 +223,8 @@ function patchDOM(container: HTMLDivElement, blocks: MarkdownBlock[]) {
       } else {
         container.appendChild(el);
       }
-    } else if (!block.stable) {
+    } else {
+      // Live blocks and stable blocks without HTML yet: show raw text.
       const el = createLiveEl(block);
       if (existing) {
         existing.replaceWith(el);
@@ -222,7 +232,6 @@ function patchDOM(container: HTMLDivElement, blocks: MarkdownBlock[]) {
         container.appendChild(el);
       }
     }
-    // If stable but no html yet, leave existing (will fill in next render)
   }
 
   // Remove excess children
@@ -244,24 +253,36 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
   let prevBlocks: MarkdownBlock[] = [];
   let renderGeneration = 0;
   let disposed = false;
+  let lastDeps = "";
 
   onCleanup(() => {
     disposed = true;
     renderGeneration += 1;
   });
 
-  createEffect(on(() => [props.content, props.final] as const, async ([text, final]) => {
-    const generation = ++renderGeneration;
-    const isStale = () => disposed || generation !== renderGeneration;
+  createEffect(on(
+    // Use a string key so SolidJS compares by value, not array reference.
+    // Returning an array here would cause the effect to re-fire on every
+    // parent re-render, even when the markdown text hasn't changed.
+    () => `${props.content}|${props.final}`,
+    async () => {
+      const text = props.content;
+      const final = !!props.final;
+      const depsKey = `${text}|${final}`;
+      if (depsKey === lastDeps) return;
+      lastDeps = depsKey;
 
-    if (!text) {
-      container.innerHTML = "";
-      container.classList.remove("final");
-      prevBlocks = [];
-      return;
-    }
+      const generation = ++renderGeneration;
+      const isStale = () => disposed || generation !== renderGeneration;
 
-    const blocks = projectBlocks(text, !!final, prevBlocks);
+      if (!text) {
+        container.innerHTML = "";
+        container.classList.remove("final");
+        prevBlocks = [];
+        return;
+      }
+
+      const blocks = projectBlocks(text, final, prevBlocks);
 
     if (final) {
       let html: string;
@@ -289,7 +310,6 @@ export default function MarkdownBody(props: MarkdownBodyProps) {
     container.classList.remove("final");
     const needsRender = blocks.some(block => block.stable && !block.html);
     if (needsRender) {
-      container.textContent = paceText(text);
       let hi: Awaited<ReturnType<typeof getHi>>;
       try {
         hi = await getHi();

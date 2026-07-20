@@ -45,4 +45,5 @@ pub mod engine_session;
 pub mod engine_tool;
 pub mod engine_turn;
 pub mod loop_core;
+pub mod paced_emitter;
 pub mod types;

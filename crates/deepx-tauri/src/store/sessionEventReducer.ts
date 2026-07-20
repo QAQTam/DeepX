@@ -54,6 +54,7 @@ function restoredRound(round: RoundData): RawRound {
     answer: round.answer ?? "",
     toolCalls: round.tool_calls,
     toolResults: Object.fromEntries(round.tool_results.map(result => [result.tool_call_id, result])),
+    blocks: round.blocks ?? [],
   };
 }
 

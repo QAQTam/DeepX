@@ -60,44 +60,13 @@ use super::engine_input::InputEngine;
 use super::engine_misc::MiscEngine;
 use super::engine_session::SessionEngine;
 use super::engine_tool::PermissionDisposition;
+use super::paced_emitter::{PacedEmitter, DEFAULT_RATE};
 use super::types::*;
 use crate::agent::AgentState;
 use crate::notification;
 
 /// Number of recent turns sent on session restore for incremental loading.
 const INITIAL_LOAD_COUNT: usize = 20;
-
-// ═══════════════════════════════════════════════════════
-// ChannelEmitter — Emitter impl backed by SyncSender
-// ═══════════════════════════════════════════════════════
-
-/// Production implementation of the Emitter trait.
-///
-/// `emit()` blocks if the channel is full (critical events must be delivered).
-/// `emit_delta()` uses `try_send` — drops the event if the channel is full
-/// (acceptable for streaming deltas where the next delta supersedes).
-struct ChannelEmitter {
-    tx: mpsc::SyncSender<Agent2Ui>,
-    writer_dead: Arc<AtomicBool>,
-}
-
-impl Emitter for ChannelEmitter {
-    fn emit(&self, event: Agent2Ui) {
-        if self.writer_dead.load(Ordering::SeqCst) {
-            return;
-        }
-        if self.tx.send(event).is_err() {
-            log::error!("[AGENT] emit failed: writer thread dead");
-        }
-    }
-    fn emit_delta(&self, event: Agent2Ui) {
-        // Use blocking send — streaming deltas (RoundDelta, ToolCallPreview)
-        // carry state-accumulating data. Every delta must be delivered because
-        // the downstream reducer appends to round.thinking / round.answer /
-        // round.toolCalls. Dropping a delta silently corrupts the render state.
-        let _ = self.tx.send(event);
-    }
-}
 
 // ═══════════════════════════════════════════════════════
 // Loop — the dispatcher
@@ -142,6 +111,10 @@ pub struct Loop {
 
     /// Pending compact result (set when compact is running in background).
     pending_compact_rx: Option<mpsc::Receiver<CompactMeta>>,
+
+    /// Paced output buffer: rate-limits RoundDelta events to 120/s.
+    /// Non-delta events (tool calls, etc.) pass through immediately.
+    paced_emitter: PacedEmitter,
 }
 
 impl Loop {
@@ -244,6 +217,12 @@ impl Loop {
             log::info!("[AGENT] writer thread exiting");
         });
 
+        let paced_emitter = PacedEmitter::new(
+            event_tx.clone(),
+            writer_dead.clone(),
+            DEFAULT_RATE,
+        );
+
         Loop {
             cmd_rx,
             event_tx,
@@ -261,6 +240,7 @@ impl Loop {
                 tx: notification::NotificationThread::spawn().into_sender(),
             },
             pending_compact_rx: None,
+            paced_emitter,
         }
     }
 
@@ -623,15 +603,9 @@ impl Loop {
             match rx.try_recv() {
                 Ok(meta) => {
                     self.pending_compact_rx = None;
-                    let emitter = ChannelEmitter {
-                        tx: self.event_tx.clone(),
-                        writer_dead: self.writer_dead.clone(),
-                    };
-                    let emitter_ref: &'static dyn Emitter =
-                        Box::leak(Box::new(emitter) as Box<dyn Emitter>);
                     let mut ctx = RingContext {
                         agent: &mut self.session.agent,
-                        emitter: emitter_ref,
+                        emitter: &self.paced_emitter,
                         cancel: &self.cancel,
                         phase: &mut self.phase,
                         pending: &mut self.pending,
@@ -925,15 +899,9 @@ impl Loop {
         }
 
         // ── Engines that need RingContext ──
-        // Build emitter inline — leak is safe because Loop outlives the borrow.
-        let emitter = ChannelEmitter {
-            tx: self.event_tx.clone(),
-            writer_dead: self.writer_dead.clone(),
-        };
-        let emitter_ref: &'static dyn Emitter = Box::leak(Box::new(emitter) as Box<dyn Emitter>);
         let mut ctx = RingContext {
             agent: &mut self.session.agent,
-            emitter: emitter_ref,
+            emitter: &self.paced_emitter,
             cancel: &self.cancel,
             phase: &mut self.phase,
             pending: &mut self.pending,
@@ -1105,16 +1073,9 @@ impl Loop {
                 usage,
             } => {
                 // Another lap: re-enter TurnEngine.
-                // Avoid borrow conflict by not using self.ctx() — build context inline.
-                let emitter = ChannelEmitter {
-                    tx: self.event_tx.clone(),
-                    writer_dead: self.writer_dead.clone(),
-                };
-                let emitter_ref: &'static dyn Emitter =
-                    Box::leak(Box::new(emitter) as Box<dyn Emitter>);
                 let mut ctx = RingContext {
                     agent: &mut self.session.agent,
-                    emitter: emitter_ref,
+                    emitter: &self.paced_emitter,
                     cancel: &self.cancel,
                     phase: &mut self.phase,
                     pending: &mut self.pending,

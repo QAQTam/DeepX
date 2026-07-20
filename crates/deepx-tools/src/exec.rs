@@ -678,6 +678,27 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn per_call_cancel_stops_only_the_running_command() {
+        let argv = vec![
+            "sleep".to_string(),
+            "6".to_string(),
+        ];
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let signal = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            signal.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let result = direct_exec(&argv, None, 100, 10, Some(cancel.as_ref()), None, "test");
+        assert!(
+            result.cancelled,
+            "per-call cancellation should stop the child"
+        );
+    }
+
     #[test]
     fn truncated_output_instructs_the_model_to_retry_narrowly() {
         let text = "token ".repeat(1_000);

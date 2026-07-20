@@ -21,7 +21,7 @@
 }
 .process-event-trigger:hover { background: var(--dx-surface-muted); color: var(--dx-text); }
 .process-event-trigger:focus-visible { outline: 2px solid var(--dx-accent); outline-offset: 1px; }
-.process-event-icon { font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; text-align: center; }
+.process-event-icon { font: 11px/1 var(--font-mono); text-align: center; }
 .process-event-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .process-event-expand { opacity: .55; text-align: center; }
 .process-event-row.is-failed .process-event-icon { color: var(--dx-danger); font-weight: 700; }
@@ -29,7 +29,7 @@
 .process-detail pre {
   margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; border: 1px solid var(--dx-border);
   border-radius: var(--dx-radius-sm); background: var(--dx-surface-muted); color: var(--dx-text);
-  font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 12px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .process-show-full { margin-top: 6px; border: 0; background: none; color: var(--dx-text-muted); cursor: pointer; }
 .process-group-children { margin: 0; padding-left: 18px; }
