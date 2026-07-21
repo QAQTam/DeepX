@@ -17,6 +17,7 @@ export default function ComposerDock(props: {
   contextLimit?: number;
   permissionLevel: number;
   onPermissionLevelChange: (level: number) => void | Promise<void>;
+  goalBar?: any;
 }) {
   const [text, setText] = createSignal("");
   const submit = async () => {
@@ -27,6 +28,7 @@ export default function ComposerDock(props: {
     setText("");
   };
   return <div class="composer-wrap">
+    {props.goalBar}
     <ComposerQueue queue={props.queue} />
     <section class="composer-dock" data-composer-dock>
       <textarea value={text()} onInput={event => setText(event.currentTarget.value)} onKeyDown={event => {

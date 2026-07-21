@@ -158,7 +158,6 @@ export default function ChatView(props: ChatViewProps) {
         undoDisabled={session().turns.length === 0 || streaming()}
         onUndo={() => void props.onUndo()}
       />
-      <GoalStatusStrip seed={seed()} refreshKey={session().turns.length} />
       <Show when={environmentOpen()}>
         <EnvironmentPopover
           session={session()}
@@ -237,6 +236,7 @@ export default function ChatView(props: ChatViewProps) {
         </Match>
       </Switch>
       <ComposerDock
+        goalBar={<GoalStatusStrip seed={seed()} refreshKey={session().turns.length} />}
         onSend={handleSend}
         onStop={handleStop}
         isStreaming={streaming}
