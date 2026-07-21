@@ -3,6 +3,12 @@ use deepx_types::{
 };
 use std::collections::HashMap; // still used by profiles
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ConfigMirrorOutbox {
+    version: u32,
+    config_json: String,
+}
+
 /// Subagent default configuration.
 ///
 /// These are defaults applied when spawning sub-agents. Individual
@@ -169,17 +175,33 @@ impl Config {
     /// 4. Apply active profile overrides
     pub fn load() -> Result<Self, String> {
         let store = ConfigStore::default_location();
+        let db_path = deepx_types::platform::data_dir().join("config.db");
+        Self::load_from_paths(store, db_path)
+    }
+
+    /// Load configuration from a TOML primary store, with a Turso fallback.
+    ///
+    /// The TOML file is authoritative whenever present because `save()` writes
+    /// it first. The database is a recovery mirror used when the TOML file is
+    /// missing or unreadable.
+    fn load_from_paths(store: ConfigStore, db_path: std::path::PathBuf) -> Result<Self, String> {
         let mut cfg = Self::default();
 
         // Step 1: always read TOML to get database.enabled flag (bootstrap)
         let pc_toml = store.load();
 
-        // Step 2: if database mirror is enabled, try ConfigDb (which may have newer data)
+        // Step 2: if database mirror is enabled, try ConfigDb as a recovery fallback.
         let db_enabled = pc_toml
             .as_ref()
             .and_then(|pc| pc.database.as_ref())
             .and_then(|db| db.enabled)
             .unwrap_or(true); // default: enabled
+
+        // A durable outbox is replayed before normal DB reads. TOML remains
+        // the bootstrap authority; the outbox only completes its DB mirror.
+        if db_enabled {
+            let _ = Self::replay_outbox_at(&db_path);
+        }
 
         // Clone TOML data before potential move
         let pc_toml_for_override = pc_toml.clone();
@@ -187,10 +209,14 @@ impl Config {
         let pc = if db_enabled {
             #[cfg(feature = "turso-backend")]
             {
-                match Self::try_load_from_db() {
+                match Self::try_load_from_db_at(&db_path) {
                     Ok(Some(db_pc)) => {
-                        log::info!("[Config] loaded from config.db");
-                        Some(db_pc)
+                        if pc_toml.is_some() {
+                            pc_toml
+                        } else {
+                            log::info!("[Config] restored from config.db");
+                            Some(db_pc)
+                        }
                     }
                     Ok(None) => {
                         // ConfigDb has no data yet (first boot after enabling)
@@ -447,6 +473,11 @@ impl Config {
             permission_level: Some(self.permission_level),
             tokenizer_path: self.tokenizer_path.clone(),
         };
+        let json = serde_json::to_string(&pc).map_err(|e| format!("serialize config mirror: {e}"))?;
+        let db_path = deepx_types::platform::data_dir().join("config.db");
+        if self.database.enabled {
+            Self::write_outbox_at(&db_path, &json)?;
+        }
         if !store.save(&pc) {
             return Err(format!(
                 "Failed to save config to {}",
@@ -458,10 +489,9 @@ impl Config {
         if self.database.enabled {
             #[cfg(feature = "turso-backend")]
             {
-                let json = serde_json::to_string(&pc).unwrap_or_default();
-                if let Err(e) = Self::save_to_db(&json) {
-                    log::warn!("[Config] save to config.db failed: {e}");
-                }
+                Self::save_to_db(&json)
+                    .map_err(|e| format!("config.toml was saved but config.db mirror failed: {e}"))?;
+                Self::remove_outbox_at(&db_path)?;
             }
             #[cfg(not(feature = "turso-backend"))]
             let _ = ();
@@ -470,14 +500,13 @@ impl Config {
         Ok(())
     }
 
-    /// Try loading config from config.db. Returns Ok(None) if db is empty/unavailable.
+    /// Try loading config from a config.db mirror. Returns Ok(None) if db is empty/unavailable.
     #[cfg(feature = "turso-backend")]
-    fn try_load_from_db() -> Result<Option<PersistentConfig>, String> {
-        let db_path = deepx_types::platform::data_dir().join("config.db");
+    fn try_load_from_db_at(db_path: &std::path::Path) -> Result<Option<PersistentConfig>, String> {
         if !db_path.exists() {
             return Ok(None);
         }
-        let db = crate::config_db::ConfigDb::open(&db_path)?;
+        let db = crate::config_db::ConfigDb::open(db_path)?;
         if let Err(e) = db.init_table() {
             log::warn!("[Config] config.db init failed: {e}");
             return Ok(None);
@@ -493,7 +522,7 @@ impl Config {
     }
 
     #[cfg(not(feature = "turso-backend"))]
-    fn try_load_from_db() -> Result<Option<PersistentConfig>, String> {
+    fn try_load_from_db_at(_db_path: &std::path::Path) -> Result<Option<PersistentConfig>, String> {
         Ok(None)
     }
 
@@ -570,5 +599,138 @@ impl Config {
     /// Protocol derived from (provider_id, endpoint) in the registry.
     pub fn protocol(&self) -> String {
         crate::registry::protocol_for(&self.provider_id, &self.endpoint)
+    }
+
+    fn outbox_path(db_path: &std::path::Path) -> std::path::PathBuf {
+        db_path.with_file_name("config-mirror-outbox.json")
+    }
+
+    fn write_outbox_at(db_path: &std::path::Path, json: &str) -> Result<(), String> {
+        let path = Self::outbox_path(db_path);
+        let tmp = path.with_extension("json.tmp");
+        let bytes = serde_json::to_vec_pretty(&ConfigMirrorOutbox { version: 1, config_json: json.into() })
+            .map_err(|e| format!("serialize config outbox: {e}"))?;
+        std::fs::write(&tmp, bytes).map_err(|e| format!("write config outbox: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("activate config outbox: {e}"))
+    }
+
+    fn remove_outbox_at(db_path: &std::path::Path) -> Result<(), String> {
+        let path = Self::outbox_path(db_path);
+        if path.exists() { std::fs::remove_file(path).map_err(|e| format!("remove config outbox: {e}"))?; }
+        Ok(())
+    }
+
+    fn replay_outbox_at(db_path: &std::path::Path) -> Result<(), String> {
+        let path = Self::outbox_path(db_path);
+        if !path.exists() { return Ok(()); }
+        let outbox: ConfigMirrorOutbox = serde_json::from_slice(&std::fs::read(&path)
+            .map_err(|e| format!("read config outbox: {e}"))?)
+            .map_err(|e| format!("parse config outbox: {e}"))?;
+        #[cfg(feature = "turso-backend")]
+        { let db = crate::config_db::ConfigDb::open(db_path)?; db.init_table()?; db.save_config(&outbox.config_json)?; Self::remove_outbox_at(db_path)?; }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "turso-backend"))]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "deepx-config-dual-store-{}-{}-{}",
+            std::process::id(),
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn toml_remains_authoritative_when_database_snapshot_is_stale() {
+        let root = temp_dir();
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let toml_path = root.join("config.toml");
+        let db_path = root.join("config.db");
+        let store = ConfigStore::new(toml_path);
+
+        let toml = PersistentConfig {
+            api_key: Some("toml-new-key".into()),
+            database: Some(PersistentDatabaseConfig {
+                enabled: Some(true),
+                url: None,
+            }),
+            ..Default::default()
+        };
+        assert!(store.save(&toml));
+
+        let db = crate::config_db::ConfigDb::open(&db_path).expect("open database");
+        db.init_table().expect("initialize database");
+        db.save_config(
+            &serde_json::to_string(&PersistentConfig {
+                api_key: Some("stale-db-key".into()),
+                database: Some(PersistentDatabaseConfig {
+                    enabled: Some(true),
+                    url: None,
+                }),
+                ..Default::default()
+            })
+            .expect("serialize database snapshot"),
+        )
+        .expect("write database snapshot");
+
+        let cfg = Config::load_from_paths(store, db_path).expect("load config");
+        assert_eq!(cfg.api_key, "toml-new-key");
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn database_restores_configuration_when_toml_is_missing() {
+        let root = temp_dir();
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let store = ConfigStore::new(root.join("config.toml"));
+        let db_path = root.join("config.db");
+        let db = crate::config_db::ConfigDb::open(&db_path).expect("open database");
+        db.init_table().expect("initialize database");
+        db.save_config(
+            &serde_json::to_string(&PersistentConfig {
+                api_key: Some("database-only-key".into()),
+                database: Some(PersistentDatabaseConfig {
+                    enabled: Some(true),
+                    url: None,
+                }),
+                ..Default::default()
+            })
+            .expect("serialize database snapshot"),
+        )
+        .expect("write database snapshot");
+
+        let cfg = Config::load_from_paths(store, db_path).expect("restore config");
+        assert_eq!(cfg.api_key, "database-only-key");
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn durable_outbox_replays_the_pending_database_config() {
+        let root = temp_dir();
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let db_path = root.join("config.db");
+        let json = serde_json::to_string(&PersistentConfig {
+            api_key: Some("outbox-key".into()),
+            database: Some(PersistentDatabaseConfig { enabled: Some(true), url: None }),
+            ..Default::default()
+        }).expect("serialize config");
+        Config::write_outbox_at(&db_path, &json).expect("write outbox");
+        Config::replay_outbox_at(&db_path).expect("replay outbox");
+        assert!(!Config::outbox_path(&db_path).exists());
+        let db = crate::config_db::ConfigDb::open(&db_path).expect("open database");
+        let saved = db.load_config().expect("read database").expect("database config");
+        assert_eq!(saved, json);
+        std::fs::remove_dir_all(root).expect("remove test directory");
     }
 }

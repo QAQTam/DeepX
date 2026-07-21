@@ -8,16 +8,16 @@
 //! A central `index.json` enables fast listing.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use deepx_types::{Message, SessionMeta};
 
+use crate::mirror::{MirrorManifest, MirrorOutbox, MirrorSnapshot};
 use crate::store;
 
 #[cfg(feature = "turso-backend")]
 use crate::store::turso_backend::TursoBackend;
-#[cfg(feature = "turso-backend")]
-use std::collections::HashMap;
 #[cfg(feature = "turso-backend")]
 use std::sync::Mutex;
 #[cfg(feature = "turso-backend")]
@@ -25,10 +25,71 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static INSTANCE: OnceLock<SessionManager> = OnceLock::new();
 
+/// Read-only comparison of a session's JSONL primary data and Turso mirror.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MirrorAudit {
+    pub seed: String,
+    pub consistent: bool,
+    pub jsonl_exists: bool,
+    pub database_exists: bool,
+    pub jsonl_message_count: Option<usize>,
+    pub database_message_count: Option<usize>,
+    pub metadata_matches: Option<bool>,
+    pub manifest_matches: Option<bool>,
+    pub file_revision: Option<u64>,
+    pub database_revision: Option<u64>,
+    pub outbox_exists: bool,
+    pub message_mismatch_indices: Vec<usize>,
+    pub errors: Vec<String>,
+}
+
+/// Explicit safety decision for a future DB-primary rollout.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DbPrimaryReadiness {
+    pub ready: bool,
+    pub sessions: Vec<MirrorAudit>,
+    pub pending_outboxes: Vec<String>,
+    pub reasons: Vec<String>,
+}
+
+/// One session's result from an explicit JSONL → Turso reconciliation run.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MigrationOutcome {
+    pub seed: String,
+    pub status: String,
+    pub messages: usize,
+    pub reason: Option<String>,
+}
+
+/// Structured migration result for UI feedback. Per-session failures do not
+/// discard successful migrations, and are always surfaced to the caller.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MigrationReport {
+    pub sessions: usize,
+    pub messages: usize,
+    pub failed: usize,
+    pub outcomes: Vec<MigrationOutcome>,
+}
+
+fn read_messages_without_deduplication(path: &std::path::Path) -> Result<Vec<Message>, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    content
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            serde_json::from_str(line)
+                .map_err(|error| format!("parse {} line {}: {error}", path.display(), index + 1))
+        })
+        .collect()
+}
+
 #[derive(Debug)]
 pub struct SessionManager {
     sessions_dir: PathBuf,
     active_path: PathBuf,
+    session_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     #[cfg(feature = "turso-backend")]
     turso_enabled: AtomicBool,
     #[cfg(feature = "turso-backend")]
@@ -53,6 +114,7 @@ impl SessionManager {
 
         let mgr = Self {
             active_path: data_dir.join(".active_session"),
+            session_locks: Mutex::new(HashMap::new()),
             sessions_dir,
             #[cfg(feature = "turso-backend")]
             turso_enabled: AtomicBool::new(turso_enabled),
@@ -88,7 +150,8 @@ impl SessionManager {
     // ── Session listing ──
 
     /// List all sessions sorted by updated_at descending.
-    /// Index-first; fallback scans directories with Turso-priority meta read.
+    /// Index-first; fallback scans JSON metadata, with Turso recovery only when
+    /// the JSON metadata is absent.
     pub fn list(&self) -> Vec<SessionMeta> {
         let mut metas = store::read_index(&self.sessions_dir);
 
@@ -101,8 +164,7 @@ impl SessionManager {
                         continue;
                     }
                     let seed = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    // Turso-first meta read, JSON fallback
-                    let meta = {
+                    let meta = store::read_meta(&path).or_else(|| {
                         #[cfg(feature = "turso-backend")]
                         if self.turso_enabled.load(Ordering::Relaxed) {
                             if let Some(dbs) = self.get_or_open_db(seed) {
@@ -123,8 +185,7 @@ impl SessionManager {
                         }
                         #[cfg(not(feature = "turso-backend"))]
                         None
-                    };
-                    let meta = meta.or_else(|| store::read_meta(&path));
+                    });
                     if let Some(meta) = meta {
                         metas.push(meta);
                     }
@@ -157,35 +218,57 @@ impl SessionManager {
 
     // ── Load / Save ──
 
-    /// Load session messages from disk. Reads from Turso when enabled,
-    /// falling back to JSONL.
+    /// Read both persistence channels and resume from the newest verified
+    /// snapshot. A newer channel repairs the older channel before returning.
     pub fn load(&self, seed: &str) -> Option<(SessionMeta, Vec<Message>)> {
-        let dir = self.session_dir(seed)?;
-        let meta = store::read_meta(&dir)?;
-        let messages = self.load_messages_inner(seed, &dir)?;
-        Some((meta, messages))
-    }
-
-    /// Try Turso first (lazy-open if needed), fall back to JSONL.
-    fn load_messages_inner(&self, seed: &str, dir: &std::path::Path) -> Option<Vec<Message>> {
+        let file = self.snapshot_from_files(seed).ok();
         #[cfg(feature = "turso-backend")]
         if self.turso_enabled.load(Ordering::Relaxed) {
+            let mut candidates: Vec<(u64, u8, MirrorSnapshot)> = Vec::new();
+            let database = self.read_database_snapshot(seed);
+            if let Some(outbox) = self.read_outbox(seed) {
+                candidates.push((outbox.manifest.revision, 3, outbox.snapshot));
+            }
+            if let Some(snapshot) = file.clone() {
+                let revision = self.read_file_manifest(seed).and_then(|manifest| {
+                    (snapshot.manifest(manifest.revision).ok().as_ref() == Some(&manifest))
+                        .then_some(manifest.revision)
+                });
+                // A changed JSONL file without a matching manifest is not a
+                // verified newer revision. Only use it when DB recovery is
+                // unavailable, preserving legacy file-only sessions.
+                if let Some(revision) = revision {
+                    candidates.push((revision, 2, snapshot));
+                } else if database.is_none() {
+                    candidates.push((0, 2, snapshot));
+                }
+            }
+            if let Some((snapshot, manifest)) = database {
+                candidates.push((manifest.revision, 1, snapshot));
+            }
+            candidates.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+            if let Some((_, source, snapshot)) = candidates.pop() {
+                if source != 2 {
+                    if let Err(error) = self.restore_file_snapshot(seed, &snapshot) {
+                        log::warn!("SessionManager: restore newer mirror for {seed} failed: {error}");
+                    }
+                }
+                if source != 1 {
+                    self.queue_and_sync_mirror(seed);
+                }
+                return Some((snapshot.meta, snapshot.messages));
+            }
+            // Legacy DB-only sessions predate manifests. Preserve the previous
+            // recovery behavior; the next successful write upgrades them.
             if let Some(dbs) = self.get_or_open_db(seed) {
                 if let Some(db) = dbs.get(seed) {
-                    if let Ok(msgs) = db.load_messages(seed) {
-                        if !msgs.is_empty() {
-                            log::info!(
-                                "SessionManager: loaded {} msgs from Turso for {seed}",
-                                msgs.len()
-                            );
-                            return Some(msgs);
-                        }
+                    if let (Ok(Some(meta)), Ok(messages)) = (db.load_meta(seed), db.load_messages(seed)) {
+                        return Some((meta, messages));
                     }
                 }
             }
         }
-        let _ = seed;
-        store::read_messages(dir).ok()
+        file.map(|snapshot| (snapshot.meta, snapshot.messages))
     }
 
     /// Check whether a session exists (directory on disk or Turso DB).
@@ -214,31 +297,271 @@ impl SessionManager {
         false
     }
 
-    /// Count sessions that have JSONL data but not yet migrated to Turso.
-    pub fn count_pending_migration(&self) -> usize {
-        let mut count = 0;
-        #[cfg(feature = "turso-backend")]
-        if self.turso_enabled.load(Ordering::Relaxed) {
-            if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if !path.is_dir() {
-                        continue;
-                    }
-                    if let Some(seed) = path.file_name().and_then(|n| n.to_str()) {
-                        if path.join("messages.jsonl").exists() && !self.is_turso_backed(seed) {
-                            count += 1;
-                        }
-                    }
+    /// Compare the JSONL primary data with an existing Turso mirror without
+    /// creating, mutating, or repairing either side.
+    pub fn audit_mirror(&self, seed: &str) -> MirrorAudit {
+        let dir = self.session_path_dir(seed);
+        let jsonl_path = dir.join("messages.jsonl");
+        let db_path = dir.join("sessions.db");
+        let jsonl_exists = jsonl_path.exists();
+        let database_exists = db_path.exists();
+        let outbox_exists = self.outbox_path(seed).exists();
+        let mut errors = Vec::new();
+        let file_manifest = self.read_file_manifest(seed);
+
+        let jsonl_meta = store::read_meta(&dir);
+        let jsonl_messages = if jsonl_exists {
+            match read_messages_without_deduplication(&jsonl_path) {
+                Ok(messages) => Some(messages),
+                Err(error) => {
+                    errors.push(error);
+                    None
                 }
             }
+        } else {
+            errors.push("messages.jsonl is missing".into());
+            None
+        };
+
+        #[cfg(feature = "turso-backend")]
+        let (database_meta, database_messages, database_manifest) = if database_exists {
+            match TursoBackend::open(&db_path) {
+                Ok(db) => {
+                    let meta = match db.load_meta(seed) {
+                        Ok(meta) => meta,
+                        Err(error) => {
+                            errors.push(format!("database metadata: {error}"));
+                            None
+                        }
+                    };
+                    let messages = match db.load_messages(seed) {
+                        Ok(messages) => Some(messages),
+                        Err(error) => {
+                            errors.push(format!("database messages: {error}"));
+                            None
+                        }
+                    };
+                    let manifest = match db.load_manifest(seed) {
+                        Ok(manifest) => manifest,
+                        Err(error) => {
+                            errors.push(format!("database manifest: {error}"));
+                            None
+                        }
+                    };
+                    (meta, messages, manifest)
+                }
+                Err(error) => {
+                    errors.push(format!("open database: {error}"));
+                    (None, None, None)
+                }
+            }
+        } else {
+            errors.push("sessions.db is missing".into());
+            (None, None, None)
+        };
+
+        #[cfg(not(feature = "turso-backend"))]
+        let (database_meta, database_messages, database_manifest): (
+            Option<SessionMeta>,
+            Option<Vec<Message>>,
+            Option<MirrorManifest>,
+        ) = {
+            errors.push("Turso backend is not compiled".into());
+            (None, None, None)
+        };
+
+        let metadata_matches = match (&jsonl_meta, &database_meta) {
+            (Some(jsonl), Some(database)) => {
+                Some(serde_json::to_string(jsonl).ok() == serde_json::to_string(database).ok())
+            }
+            _ => None,
+        };
+        let file_manifest_matches_data = match (&jsonl_meta, &jsonl_messages, &file_manifest) {
+            (Some(meta), Some(messages), Some(manifest)) => MirrorSnapshot::new(meta.clone(), messages.clone())
+                .manifest(manifest.revision)
+                .map(|computed| computed == *manifest)
+                .unwrap_or(false),
+            _ => false,
+        };
+        let manifest_matches = match (&file_manifest, &database_manifest) {
+            (Some(jsonl), Some(database)) => Some(
+                jsonl.schema_version == database.schema_version
+                    && jsonl.meta_sha256 == database.meta_sha256
+                    && jsonl.messages_sha256 == database.messages_sha256,
+            ),
+            _ => None,
+        };
+        if jsonl_meta.is_none() {
+            errors.push("meta.json is missing or unreadable".into());
         }
-        count
+        if database_meta.is_none() {
+            errors.push("database metadata is missing or unreadable".into());
+        }
+        if database_manifest.is_none() {
+            errors.push("database manifest is missing or unreadable".into());
+        }
+        if file_manifest.is_none() {
+            errors.push("file mirror manifest is missing or unreadable".into());
+        } else if !file_manifest_matches_data {
+            errors.push("file mirror manifest does not match JSONL snapshot".into());
+        }
+        if outbox_exists {
+            errors.push("durable mirror outbox is pending reconciliation".into());
+        }
+
+        let mut message_mismatch_indices = Vec::new();
+        if let (Some(jsonl), Some(database)) = (&jsonl_messages, &database_messages) {
+            let shared = jsonl.len().min(database.len());
+            for index in 0..shared {
+                if serde_json::to_string(&jsonl[index]).ok()
+                    != serde_json::to_string(&database[index]).ok()
+                {
+                    message_mismatch_indices.push(index);
+                }
+            }
+            message_mismatch_indices.extend(shared..jsonl.len().max(database.len()));
+        }
+
+        let jsonl_message_count = jsonl_messages.as_ref().map(Vec::len);
+        let database_message_count = database_messages.as_ref().map(Vec::len);
+        let consistent = errors.is_empty()
+            && metadata_matches == Some(true)
+            && manifest_matches == Some(true)
+            && message_mismatch_indices.is_empty()
+            && jsonl_message_count == database_message_count;
+
+        MirrorAudit {
+            seed: seed.to_string(),
+            consistent,
+            jsonl_exists,
+            database_exists,
+            jsonl_message_count,
+            database_message_count,
+            metadata_matches,
+            manifest_matches,
+            file_revision: file_manifest.as_ref().map(|manifest| manifest.revision),
+            database_revision: database_manifest.as_ref().map(|manifest| manifest.revision),
+            outbox_exists,
+            message_mismatch_indices,
+            errors,
+        }
+    }
+
+    /// Audit every session directory without mutating either persistence channel.
+    pub fn audit_all_mirrors(&self) -> Vec<MirrorAudit> {
+        let mut audits = std::fs::read_dir(&self.sessions_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                path.is_dir()
+                    .then(|| entry.file_name().to_str().map(str::to_owned))
+                    .flatten()
+            })
+            .map(|seed| self.audit_mirror(&seed))
+            .collect::<Vec<_>>();
+        audits.sort_by(|left, right| left.seed.cmp(&right.seed));
+        audits
+    }
+
+    /// Replay a durable file outbox, or snapshot the current JSONL session.
+    /// This is the only path that updates the versioned Turso manifest.
+    #[cfg(feature = "turso-backend")]
+    pub fn reconcile_mirror(&self, seed: &str) -> Result<(), String> {
+        if !self.turso_enabled.load(Ordering::Relaxed) {
+            return Err("Turso is disabled in settings".into());
+        }
+        let outbox_path = self.outbox_path(seed);
+        let outbox = if outbox_path.exists() {
+            let content = std::fs::read_to_string(&outbox_path)
+                .map_err(|error| format!("read mirror outbox: {error}"))?;
+            serde_json::from_str::<MirrorOutbox>(&content)
+                .map_err(|error| format!("parse mirror outbox: {error}"))?
+        } else {
+            let snapshot = self.snapshot_from_files(seed)?;
+            let file_revision = self.read_file_manifest(seed)
+                .filter(|manifest| snapshot.manifest(manifest.revision).ok().as_ref() == Some(manifest))
+                .map(|manifest| manifest.revision)
+                .unwrap_or(0);
+            let revision = file_revision.max(self.database_revision(seed).unwrap_or(0)).saturating_add(1);
+            MirrorOutbox {
+                manifest: snapshot.manifest(revision)?,
+                snapshot,
+            }
+        };
+
+        self.write_file_manifest(seed, &outbox.manifest)?;
+        self.write_outbox(seed, &outbox)?;
+        let dbs = self
+            .get_or_open_db(seed)
+            .ok_or_else(|| "open Turso mirror".to_string())?;
+        let db = dbs
+            .get(seed)
+            .ok_or_else(|| "missing Turso mirror".to_string())?;
+        db.replace_snapshot(&outbox.snapshot, &outbox.manifest)?;
+        drop(dbs);
+        std::fs::remove_file(&outbox_path)
+            .map_err(|error| format!("remove mirror outbox: {error}"))?;
+        Ok(())
+    }
+
+    #[cfg(feature = "turso-backend")]
+    pub fn reconcile_all_mirrors(&self) -> Vec<(String, Result<(), String>)> {
+        self.audit_all_mirrors()
+            .into_iter()
+            .map(|audit| {
+                let seed = audit.seed;
+                let result = self.reconcile_mirror(&seed);
+                (seed, result)
+            })
+            .collect()
+    }
+
+    /// Returns the non-mutating safety gate for a future DB-primary switch.
+    pub fn db_primary_readiness(&self) -> DbPrimaryReadiness {
+        let sessions = self.audit_all_mirrors();
+        let pending_outboxes = sessions
+            .iter()
+            .filter(|audit| audit.outbox_exists)
+            .map(|audit| audit.seed.clone())
+            .collect::<Vec<_>>();
+        let mut reasons = Vec::new();
+        if sessions.is_empty() {
+            reasons.push("no sessions were audited".into());
+        }
+        if !pending_outboxes.is_empty() {
+            reasons.push("durable mirror outboxes are pending".into());
+        }
+        if sessions.iter().any(|audit| !audit.consistent) {
+            reasons.push("one or more session mirrors are inconsistent".into());
+        }
+        DbPrimaryReadiness {
+            ready: reasons.is_empty(),
+            sessions,
+            pending_outboxes,
+            reasons,
+        }
+    }
+
+    /// Count sessions that have JSONL data but not yet migrated to Turso.
+    pub fn count_pending_migration(&self) -> usize {
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            return self
+                .audit_all_mirrors()
+                .into_iter()
+                .filter(|audit| audit.jsonl_exists && !audit.consistent)
+                .count();
+        }
+        0
     }
 
     /// Migrate all pending sessions from JSONL to Turso.
-    /// Returns (migrated_count, total_messages).
-    pub fn migrate_all_to_turso(&self) -> Result<(usize, usize), String> {
+    /// Reconcile every JSONL session into Turso and report each result.
+    /// A stale, incomplete, or missing database is migration-pending.
+    pub fn migrate_all_to_turso(&self) -> Result<MigrationReport, String> {
         #[cfg(not(feature = "turso-backend"))]
         return Err("Turso backend not compiled".into());
 
@@ -247,60 +570,55 @@ impl SessionManager {
             if !self.turso_enabled.load(Ordering::Relaxed) {
                 return Err("Turso is disabled in settings".into());
             }
-            let mut migrated = 0usize;
-            let mut total_msgs = 0usize;
-            let entries: Vec<_> = std::fs::read_dir(&self.sessions_dir)
-                .map_err(|e| format!("read sessions dir: {e}"))?
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .collect();
-
-            for entry in entries {
-                let path = entry.path();
-                let Some(seed) = path.file_name().and_then(|n| n.to_str()) else {
-                    continue;
-                };
-                let jsonl = path.join("messages.jsonl");
-                if !jsonl.exists() {
+            let mut outcomes = Vec::new();
+            for audit in self.audit_all_mirrors() {
+                if !audit.jsonl_exists || audit.consistent {
                     continue;
                 }
-                if self.is_turso_backed(seed) {
-                    continue;
-                } // already done
-
-                let msgs =
-                    store::read_messages(&path).map_err(|e| format!("read {}: {e}", seed))?;
-                if msgs.is_empty() {
-                    continue;
+                let messages = audit.jsonl_message_count.unwrap_or(0);
+                let status = if audit.database_exists { "repaired" } else { "migrated" };
+                match self.reconcile_mirror(&audit.seed) {
+                    Ok(()) => {
+                        let verified = self.audit_mirror(&audit.seed);
+                        if verified.consistent {
+                            outcomes.push(MigrationOutcome {
+                                seed: audit.seed,
+                                status: status.into(),
+                                messages,
+                                reason: None,
+                            });
+                        } else {
+                            outcomes.push(MigrationOutcome {
+                                seed: audit.seed,
+                                status: "failed".into(),
+                                messages,
+                                reason: Some(verified.errors.join("; ")),
+                            });
+                        }
+                    }
+                    Err(error) => outcomes.push(MigrationOutcome {
+                        seed: audit.seed,
+                        status: "failed".into(),
+                        messages,
+                        reason: Some(error),
+                    }),
                 }
-
-                let dbs = self
-                    .get_or_open_db(seed)
-                    .ok_or_else(|| "failed to open Turso db".to_string())?;
-                let db = dbs.get(seed).unwrap();
-
-                let count = msgs.len();
-                db.insert_messages_batch(seed, &msgs)
-                    .map_err(|e| format!("batch insert {}: {e}", seed))?;
-                // Also upsert meta to sessions table
-                if let Some(meta) = store::read_meta(&path) {
-                    let _ = db.upsert_meta(seed, &meta);
-                }
-
-                log::info!(
-                    "SessionManager: migrated {} messages to Turso for {seed}",
-                    count
-                );
-                migrated += 1;
-                total_msgs += count;
             }
-            Ok((migrated, total_msgs))
+            let sessions = outcomes.iter().filter(|outcome| outcome.status != "failed").count();
+            let messages = outcomes.iter().filter(|outcome| outcome.status != "failed").map(|outcome| outcome.messages).sum();
+            let failed = outcomes.iter().filter(|outcome| outcome.status == "failed").count();
+            Ok(MigrationReport { sessions, messages, failed, outcomes })
         }
     }
 
-    /// Load only metadata (fast, no message parsing).
-    /// Turso-first when enabled, falling back to JSON.
+    /// Load only metadata (fast, no message parsing). JSON remains primary
+    /// until the DB-primary readiness gate is explicitly promoted.
     pub fn load_meta(&self, seed: &str) -> Option<SessionMeta> {
+        if let Some(dir) = self.session_dir(seed) {
+            if let Some(meta) = store::read_meta(&dir) {
+                return Some(meta);
+            }
+        }
         #[cfg(feature = "turso-backend")]
         if self.turso_enabled.load(Ordering::Relaxed) {
             if let Some(dbs) = self.get_or_open_db(seed) {
@@ -313,26 +631,25 @@ impl SessionManager {
                 }
             }
         }
-        let dir = self.session_dir(seed)?;
-        store::read_meta(&dir)
+        None
     }
 
     /// Persist agent mode to meta.json without rewriting messages.
     /// Called when the user switches PLAN/CODE mode so it survives agent restart.
     pub fn persist_mode(&self, seed: &str, mode: u8) {
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
         let dir = self.session_path_dir(seed);
         let mut meta = self.load_meta(seed).unwrap_or_default();
         meta.mode = mode;
         let _ = store::write_meta(&dir, &meta);
         #[cfg(feature = "turso-backend")]
-        if self.turso_enabled.load(Ordering::Relaxed) {
-            if let Some(dbs) = self.get_or_open_db(seed) {
-                let _ = dbs.get(seed).unwrap().upsert_meta(seed, &meta);
-            }
-        }
+        self.queue_and_sync_mirror(seed);
     }
 
     pub fn persist_skills(&self, seed: &str, skills: deepx_types::SkillSessionStateV2) {
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
         let dir = self.session_path_dir(seed);
         let _ = std::fs::create_dir_all(&dir);
         let mut meta = self.load_meta(seed).unwrap_or_default();
@@ -346,25 +663,37 @@ impl SessionManager {
         let _ = store::write_meta(&dir, &meta);
         store::upsert_index(&self.sessions_dir, &meta);
         #[cfg(feature = "turso-backend")]
-        if self.turso_enabled.load(Ordering::Relaxed) {
-            if let Some(dbs) = self.get_or_open_db(seed) {
-                let _ = dbs.get(seed).unwrap().upsert_meta(seed, &meta);
-            }
-        }
+        self.queue_and_sync_mirror(seed);
     }
 
     /// Append a single message to JSONL immediately (per-message persistence).
-    /// Does NOT update meta or index — caller should update meta periodically.
+    /// Writes a complete target snapshot to the durable outbox before appending.
     pub fn save_one(&self, seed: &str, msg: &Message) {
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
         let dir = self.session_path_dir(seed);
         let _ = std::fs::create_dir_all(&dir);
+        let mut meta = self.load_meta(seed).unwrap_or_default();
+        let now = Self::now_epoch();
+        meta.seed = seed.to_string();
+        if meta.created_at == 0 { meta.created_at = now; }
+        meta.updated_at = now;
+        let mut target_messages = store::read_messages(&dir).unwrap_or_default();
+        target_messages.push(msg.clone());
+        meta.message_count = target_messages.len();
+        #[cfg(feature = "turso-backend")]
+        self.prepare_outbox_before_file_write(seed, MirrorSnapshot::new(meta.clone(), target_messages));
         if let Err(e) = store::append_one(&dir, msg) {
             log::error!("SessionManager: save_one failed: {e}");
+            return;
         }
+        if let Err(e) = store::write_meta(&dir, &meta) {
+            log::error!("SessionManager: save_one metadata write failed: {e}");
+            return;
+        }
+        store::upsert_index(&self.sessions_dir, &meta);
         #[cfg(feature = "turso-backend")]
-        if let Some(dbs) = self.get_or_open_db(seed) {
-            let _ = dbs.get(seed).unwrap().insert_message(seed, msg);
-        }
+        self.queue_and_sync_mirror(seed);
     }
 
     /// Update session metadata and index after messages have been appended.
@@ -376,6 +705,8 @@ impl SessionManager {
         compact_skip: usize,
         turn_count: usize,
     ) {
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
         let now = Self::now_epoch();
         let dir = self.session_path_dir(seed);
         let created_at = self.load_meta(seed).map(|m| m.created_at).unwrap_or(now);
@@ -403,6 +734,11 @@ impl SessionManager {
             skills: existing.skills,
             ..Default::default()
         };
+        #[cfg(feature = "turso-backend")]
+        self.prepare_outbox_before_file_write(
+            seed,
+            MirrorSnapshot::new(meta.clone(), store::read_messages(&dir).unwrap_or_default()),
+        );
         if let Err(e) = store::write_meta(&dir, &meta) {
             log::error!("SessionManager: write_meta failed: {e}");
             return;
@@ -410,11 +746,7 @@ impl SessionManager {
         store::upsert_index(&self.sessions_dir, &meta);
 
         #[cfg(feature = "turso-backend")]
-        if let Some(dbs) = self.get_or_open_db(seed) {
-            if let Err(e) = dbs.get(seed).unwrap().upsert_meta(seed, &meta) {
-                log::warn!("SessionManager: Turso upsert_meta failed for {seed}: {e}");
-            }
-        }
+        self.queue_and_sync_mirror(seed);
     }
 
     /// Save session: write meta + rewrite all messages.
@@ -428,6 +760,8 @@ impl SessionManager {
         compact_skip: usize,
         turn_count: usize,
     ) {
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
         let now = Self::now_epoch();
         let dir = self.session_path_dir(seed);
         let _ = std::fs::create_dir_all(&dir);
@@ -452,6 +786,9 @@ impl SessionManager {
             ..Default::default()
         };
 
+        #[cfg(feature = "turso-backend")]
+        self.prepare_outbox_before_file_write(seed, MirrorSnapshot::new(meta.clone(), messages.to_vec()));
+
         if let Err(e) = store::rewrite_messages(&dir, messages) {
             log::error!("SessionManager: rewrite_messages failed: {e}");
             return;
@@ -463,15 +800,7 @@ impl SessionManager {
         store::upsert_index(&self.sessions_dir, &meta);
 
         #[cfg(feature = "turso-backend")]
-        if let Some(dbs) = self.get_or_open_db(seed) {
-            let db = dbs.get(seed).unwrap();
-            if let Err(e) = db.upsert_meta(seed, &meta) {
-                log::warn!("SessionManager: Turso upsert_meta failed for {seed}: {e}");
-            }
-            if let Err(e) = db.rewrite_messages(seed, messages) {
-                log::warn!("SessionManager: Turso rewrite_messages failed for {seed}: {e}");
-            }
-        }
+        self.queue_and_sync_mirror(seed);
     }
 
     /// Append new messages (since last save) to the session JSONL.
@@ -485,6 +814,8 @@ impl SessionManager {
         compact_skip: usize,
         turn_count: usize,
     ) {
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
         if new_messages.is_empty() {
             return;
         }
@@ -500,32 +831,24 @@ impl SessionManager {
             existing.created_at
         };
 
+        let existing_messages = store::read_messages(&dir).unwrap_or_default();
+        let last_summary = Self::extract_summary(new_messages);
+        let meta = SessionMeta {
+            seed: seed.to_string(), created_at, updated_at: now, model: model.to_string(),
+            effort: effort.map(String::from), message_count: existing_messages.len() + new_messages.len(),
+            turn_count, last_summary, compact_skip, mode: existing.mode, skills: existing.skills,
+            ..Default::default()
+        };
+        let mut target_messages = existing_messages;
+        target_messages.extend_from_slice(new_messages);
+        #[cfg(feature = "turso-backend")]
+        self.prepare_outbox_before_file_write(seed, MirrorSnapshot::new(meta.clone(), target_messages));
+
         // Append messages
         if let Err(e) = store::append_messages(&dir, new_messages) {
             log::error!("SessionManager: append_messages failed: {e}");
             return;
         }
-
-        // Update total count
-        let total = store::count_message_lines(&dir).unwrap_or(0);
-
-        // Extract summary from new messages
-        let last_summary = Self::extract_summary(new_messages);
-
-        let meta = SessionMeta {
-            seed: seed.to_string(),
-            created_at,
-            updated_at: now,
-            model: model.to_string(),
-            effort: effort.map(String::from),
-            message_count: total,
-            turn_count,
-            last_summary,
-            compact_skip,
-            mode: existing.mode,
-            skills: existing.skills,
-            ..Default::default()
-        };
 
         if let Err(e) = store::write_meta(&dir, &meta) {
             log::error!("SessionManager: write_meta failed: {e}");
@@ -534,34 +857,20 @@ impl SessionManager {
         store::upsert_index(&self.sessions_dir, &meta);
 
         #[cfg(feature = "turso-backend")]
-        if let Some(dbs) = self.get_or_open_db(seed) {
-            let db = dbs.get(seed).unwrap();
-            if let Err(e) = db.upsert_meta(seed, &meta) {
-                log::warn!("SessionManager: Turso upsert_meta failed for {seed}: {e}");
-            }
-            if let Err(e) = db.insert_messages_batch(seed, new_messages) {
-                log::warn!("SessionManager: Turso insert_messages_batch failed for {seed}: {e}");
-            }
-        }
+        self.queue_and_sync_mirror(seed);
     }
 
     /// Truncate messages.jsonl to `keep_lines` lines.
     /// Returns the truncated messages.
     pub fn truncate_messages(&self, seed: &str, keep_lines: usize) -> Result<Vec<Message>, String> {
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
         let dir = self
             .session_dir(seed)
             .ok_or_else(|| format!("Session not found: {seed}"))?;
         let truncated = store::truncate_messages(&dir, keep_lines)?;
         #[cfg(feature = "turso-backend")]
-        if self.turso_enabled.load(Ordering::Relaxed) {
-            if let Some(dbs) = self.get_or_open_db(seed) {
-                if let Some(db) = dbs.get(seed) {
-                    if let Err(e) = db.rewrite_messages(seed, &truncated) {
-                        log::warn!("SessionManager: Turso truncate rewrite failed for {seed}: {e}");
-                    }
-                }
-            }
-        }
+        self.queue_and_sync_mirror(seed);
         Ok(truncated)
     }
 
@@ -617,6 +926,150 @@ impl SessionManager {
     }
 
     // ── Private ──
+
+    fn session_lock(&self, seed: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.session_locks.lock().unwrap();
+        locks.entry(seed.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    fn outbox_path(&self, seed: &str) -> PathBuf {
+        self.session_path_dir(seed).join(".mirror-outbox.json")
+    }
+
+    fn file_manifest_path(&self, seed: &str) -> PathBuf {
+        self.session_path_dir(seed).join(".mirror-state.json")
+    }
+
+    fn read_file_manifest(&self, seed: &str) -> Option<MirrorManifest> {
+        serde_json::from_str(&std::fs::read_to_string(self.file_manifest_path(seed)).ok()?).ok()
+    }
+
+    fn write_file_manifest(&self, seed: &str, manifest: &MirrorManifest) -> Result<(), String> {
+        let path = self.file_manifest_path(seed);
+        let temporary = path.with_extension("json.tmp");
+        let json = serde_json::to_vec_pretty(manifest)
+            .map_err(|error| format!("serialize file mirror manifest: {error}"))?;
+        std::fs::write(&temporary, json)
+            .map_err(|error| format!("write file mirror manifest: {error}"))?;
+        std::fs::rename(&temporary, &path)
+            .map_err(|error| format!("activate file mirror manifest: {error}"))
+    }
+
+    fn read_outbox(&self, seed: &str) -> Option<MirrorOutbox> {
+        serde_json::from_str(&std::fs::read_to_string(self.outbox_path(seed)).ok()?).ok()
+    }
+
+    fn restore_file_snapshot(&self, seed: &str, snapshot: &MirrorSnapshot) -> Result<(), String> {
+        let dir = self.session_path_dir(seed);
+        std::fs::create_dir_all(&dir).map_err(|error| format!("create session directory: {error}"))?;
+        store::rewrite_messages(&dir, &snapshot.messages)?;
+        store::write_meta(&dir, &snapshot.meta)?;
+        store::upsert_index(&self.sessions_dir, &snapshot.meta);
+        let revision = self.read_file_manifest(seed)
+            .map(|manifest| manifest.revision)
+            .unwrap_or(0)
+            .saturating_add(1);
+        self.write_file_manifest(seed, &snapshot.manifest(revision)?)
+    }
+
+    fn snapshot_from_files(&self, seed: &str) -> Result<MirrorSnapshot, String> {
+        let dir = self
+            .session_dir(seed)
+            .ok_or_else(|| format!("session directory is missing: {seed}"))?;
+        let meta = store::read_meta(&dir)
+            .ok_or_else(|| format!("meta.json is missing or unreadable: {seed}"))?;
+        let messages = read_messages_without_deduplication(&dir.join("messages.jsonl"))?;
+        Ok(MirrorSnapshot::new(meta, messages))
+    }
+
+    fn write_outbox(&self, seed: &str, outbox: &MirrorOutbox) -> Result<(), String> {
+        let path = self.outbox_path(seed);
+        let temporary = path.with_extension("json.tmp");
+        let json = serde_json::to_vec_pretty(outbox)
+            .map_err(|error| format!("serialize mirror outbox: {error}"))?;
+        std::fs::write(&temporary, json)
+            .map_err(|error| format!("write mirror outbox: {error}"))?;
+        std::fs::rename(&temporary, &path)
+            .map_err(|error| format!("activate mirror outbox: {error}"))
+    }
+
+    #[cfg(feature = "turso-backend")]
+    fn prepare_outbox_before_file_write(&self, seed: &str, snapshot: MirrorSnapshot) {
+        if !self.turso_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let revision = self
+            .read_file_manifest(seed)
+            .map(|manifest| manifest.revision)
+            .unwrap_or(0)
+            .max(self.database_revision(seed).unwrap_or(0))
+            .saturating_add(1);
+        match snapshot.manifest(revision) {
+            Ok(manifest) => {
+                if let Err(error) = self.write_outbox(seed, &MirrorOutbox { manifest, snapshot }) {
+                    log::error!("SessionManager: durable outbox write failed before file write for {seed}: {error}");
+                }
+            }
+            Err(error) => log::error!("SessionManager: create outbox manifest failed for {seed}: {error}"),
+        }
+    }
+
+    #[cfg(feature = "turso-backend")]
+    fn database_revision(&self, seed: &str) -> Option<u64> {
+        let path = self.session_path_dir(seed).join("sessions.db");
+        if !path.exists() {
+            return None;
+        }
+        TursoBackend::open(path)
+            .ok()?
+            .load_manifest(seed)
+            .ok()
+            .flatten()
+            .map(|manifest| manifest.revision)
+    }
+
+    #[cfg(feature = "turso-backend")]
+    fn read_database_snapshot(&self, seed: &str) -> Option<(MirrorSnapshot, MirrorManifest)> {
+        let path = self.session_path_dir(seed).join("sessions.db");
+        let db = TursoBackend::open(path).ok()?;
+        let meta = db.load_meta(seed).ok()??;
+        let messages = db.load_messages(seed).ok()?;
+        let snapshot = MirrorSnapshot::new(meta, messages);
+        let manifest = db
+            .load_manifest(seed)
+            .ok()?
+            .unwrap_or(snapshot.manifest(0).ok()?);
+        if manifest.revision == 0 || snapshot.manifest(manifest.revision).ok()? == manifest {
+            Some((snapshot, manifest))
+        } else {
+            None
+        }
+    }
+
+    #[cfg(feature = "turso-backend")]
+    fn queue_and_sync_mirror(&self, seed: &str) {
+        if !self.turso_enabled.load(Ordering::Relaxed) {
+            if let Ok(snapshot) = self.snapshot_from_files(seed) {
+                let revision = self
+                    .read_file_manifest(seed)
+                    .map(|manifest| manifest.revision)
+                    .unwrap_or(0)
+                    .max(self.database_revision(seed).unwrap_or(0))
+                    .saturating_add(1);
+                if let Ok(manifest) = snapshot.manifest(revision) {
+                    if let Err(error) = self.write_file_manifest(seed, &manifest) {
+                        log::warn!("SessionManager: write file-only manifest for {seed} failed: {error}");
+                    }
+                }
+            }
+            return;
+        }
+        if let Err(error) = self.reconcile_mirror(seed) {
+            log::warn!("SessionManager: queued Turso mirror reconciliation for {seed}: {error}");
+        }
+    }
 
     #[cfg(feature = "turso-backend")]
     fn get_or_open_db(
@@ -693,18 +1146,26 @@ impl SessionManager {
 mod skill_persistence_tests {
     use super::*;
     use deepx_types::{SkillSessionEntry, SkillSessionEntryState, SkillSessionStateV2};
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
     fn manager() -> (PathBuf, SessionManager) {
         let root = std::env::temp_dir().join(format!(
-            "deepx-session-skills-{}-{}",
+            "deepx-session-skills-{}-{}-{}",
             std::process::id(),
-            SessionManager::now_epoch(),
+            TEST_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos(),
         ));
         let sessions_dir = root.join("sessions");
         std::fs::create_dir_all(&sessions_dir).expect("create test sessions");
         let manager = SessionManager {
             sessions_dir,
             active_path: root.join(".active_session"),
+            session_locks: Mutex::new(HashMap::new()),
             #[cfg(feature = "turso-backend")]
             turso_enabled: AtomicBool::new(false),
             #[cfg(feature = "turso-backend")]
@@ -739,4 +1200,205 @@ mod skill_persistence_tests {
         assert_eq!(meta.skills, state());
         std::fs::remove_dir_all(root).expect("remove test directory");
     }
+
+    #[cfg(feature = "turso-backend")]
+    #[test]
+    fn load_recovers_a_session_from_turso_when_json_metadata_is_missing() {
+        let (root, manager) = manager();
+        manager.turso_enabled.store(true, Ordering::Relaxed);
+
+        let meta = SessionMeta {
+            seed: "db-only".into(),
+            ..Default::default()
+        };
+        let message = Message::user("persisted only in Turso");
+
+        {
+            let dbs = manager
+                .get_or_open_db(&meta.seed)
+                .expect("open Turso backend");
+            let db = dbs.get(&meta.seed).expect("session backend");
+            db.upsert_meta(&meta.seed, &meta).expect("write metadata");
+            db.insert_message(&meta.seed, &message)
+                .expect("write message");
+        }
+
+        let (loaded_meta, loaded_messages) = manager.load(&meta.seed).expect("restore from Turso");
+        assert_eq!(loaded_meta.seed, meta.seed);
+        assert_eq!(loaded_messages.len(), 1);
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(feature = "turso-backend")]
+    #[test]
+    fn mirror_audit_reports_a_database_message_mismatch() {
+        let (root, manager) = manager();
+        manager.turso_enabled.store(true, Ordering::Relaxed);
+        manager.save_full(
+            "audit-seed",
+            &[Message::user("from JSONL")],
+            "model",
+            None,
+            0,
+            1,
+        );
+
+        {
+            let dbs = manager
+                .get_or_open_db("audit-seed")
+                .expect("open Turso backend");
+            dbs.get("audit-seed")
+                .expect("session backend")
+                .rewrite_messages("audit-seed", &[Message::user("from database")])
+                .expect("rewrite database messages");
+        }
+
+        let audit = manager.audit_mirror("audit-seed");
+        assert!(!audit.consistent);
+        assert_eq!(audit.jsonl_message_count, Some(1));
+        assert_eq!(audit.database_message_count, Some(1));
+        assert_eq!(audit.message_mismatch_indices, vec![0]);
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(feature = "turso-backend")]
+    #[test]
+    fn reconciliation_replays_a_durable_outbox_and_unblocks_readiness() {
+        let (root, manager) = manager();
+        manager.turso_enabled.store(true, Ordering::Relaxed);
+        manager.save_full(
+            "outbox-seed",
+            &[Message::user("authoritative")],
+            "model",
+            None,
+            0,
+            1,
+        );
+
+        let snapshot = manager
+            .snapshot_from_files("outbox-seed")
+            .expect("file snapshot");
+        let outbox = MirrorOutbox {
+            manifest: snapshot.manifest(99).expect("manifest"),
+            snapshot,
+        };
+        manager
+            .write_outbox("outbox-seed", &outbox)
+            .expect("durable outbox");
+
+        let readiness = manager.db_primary_readiness();
+        assert!(!readiness.ready);
+        assert_eq!(readiness.pending_outboxes, vec!["outbox-seed"]);
+
+        manager
+            .reconcile_mirror("outbox-seed")
+            .expect("replay outbox");
+        assert!(!manager.outbox_path("outbox-seed").exists());
+        assert!(manager.audit_mirror("outbox-seed").consistent);
+        assert!(manager.db_primary_readiness().ready);
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(feature = "turso-backend")]
+    #[test]
+    fn migration_repairs_a_stale_database_instead_of_skipping_it() {
+        let (root, manager) = manager();
+        manager.turso_enabled.store(true, Ordering::Relaxed);
+        manager.save_full("stale-seed", &[Message::user("file version")], "model", None, 0, 1);
+        {
+            let dbs = manager.get_or_open_db("stale-seed").expect("open database");
+            dbs.get("stale-seed").expect("database")
+                .rewrite_messages("stale-seed", &[Message::user("stale database")])
+                .expect("make database stale");
+        }
+        assert_eq!(manager.count_pending_migration(), 1);
+        let report = manager.migrate_all_to_turso().expect("repair migration");
+        assert_eq!(report.sessions, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.outcomes[0].status, "repaired");
+        assert!(manager.audit_mirror("stale-seed").consistent);
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(feature = "turso-backend")]
+    #[test]
+    fn load_uses_a_newer_verified_database_snapshot_and_repairs_jsonl() {
+        let (root, manager) = manager();
+        manager.turso_enabled.store(true, Ordering::Relaxed);
+        manager.save_full("newest-seed", &[Message::user("file version")], "model", None, 0, 1);
+        let mut meta = manager.load_meta("newest-seed").expect("file metadata");
+        meta.last_summary = "database version".into();
+        let snapshot = MirrorSnapshot::new(meta, vec![Message::user("database version")]);
+        let manifest = snapshot
+            .manifest(manager.database_revision("newest-seed").unwrap_or(0) + 1)
+            .expect("database manifest");
+        {
+            let dbs = manager.get_or_open_db("newest-seed").expect("open database");
+            dbs.get("newest-seed").expect("database")
+                .replace_snapshot(&snapshot, &manifest)
+                .expect("make database newest");
+        }
+
+        let (loaded_meta, loaded_messages) = manager.load("newest-seed").expect("load newest snapshot");
+        assert_eq!(loaded_meta.last_summary, "database version");
+        assert_eq!(loaded_messages.len(), 1);
+        let audit = manager.audit_mirror("newest-seed");
+        assert!(audit.consistent, "{audit:?}");
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(feature = "turso-backend")]
+    #[test]
+    fn simulation_matrix_reports_realistic_recovery_outcomes() {
+        let (root, manager) = manager();
+        manager.turso_enabled.store(true, Ordering::Relaxed);
+
+        std::thread::scope(|scope| {
+            for number in 0..4 {
+                let manager = &manager;
+                scope.spawn(move || manager.save_full(
+                    &format!("subagent-{number}"), &[Message::user(&format!("message-{number}"))],
+                    "model", None, 0, 1,
+                ));
+            }
+        });
+        let parallel_ok = manager.audit_all_mirrors().iter().filter(|audit| audit.seed.starts_with("subagent-")).count() == 4
+            && manager.audit_all_mirrors().iter().filter(|audit| audit.seed.starts_with("subagent-")).all(|audit| audit.consistent);
+
+        manager.save_full("panic", &[Message::user("before interruption")], "model", None, 0, 1);
+        let snapshot = manager.snapshot_from_files("panic").expect("snapshot");
+        let outbox = MirrorOutbox { manifest: snapshot.manifest(manager.database_revision("panic").unwrap_or(0) + 1).expect("manifest"), snapshot };
+        manager.write_outbox("panic", &outbox).expect("outbox");
+        manager.reconcile_mirror("panic").expect("replay");
+        let panic_ok = manager.audit_mirror("panic").consistent;
+
+        manager.save_full("missing-jsonl", &[Message::user("recover from db")], "model", None, 0, 1);
+        let dir = manager.session_path_dir("missing-jsonl");
+        std::fs::remove_file(dir.join("messages.jsonl")).expect("delete JSONL");
+        let jsonl_recovery_ok = manager.load("missing-jsonl").map(|(_, messages)| messages.len()) == Some(1)
+            && dir.join("messages.jsonl").exists();
+
+        manager.save_full("missing-db", &[Message::user("recover database")], "model", None, 0, 1);
+        manager.dbs.lock().expect("database lock").remove("missing-db");
+        std::fs::remove_file(manager.session_path_dir("missing-db").join("sessions.db")).expect("delete database");
+        let db_recovery_ok = manager.load("missing-db").map(|(_, messages)| messages.len()) == Some(1)
+            && manager.audit_mirror("missing-db").consistent;
+
+        manager.save_full("toggle", &[Message::user("db on")], "model", None, 0, 1);
+        manager.set_turso_enabled(false);
+        manager.save_append("toggle", &[Message::user("db off")], "model", None, 0, 2);
+        manager.set_turso_enabled(true);
+        let toggle_ok = manager.load("toggle").map(|(_, messages)| messages.len()) == Some(2)
+            && manager.audit_mirror("toggle").consistent;
+
+        manager.save_full("manual-delete", &[Message::user("one"), Message::user("two")], "model", None, 0, 1);
+        store::rewrite_messages(&manager.session_path_dir("manual-delete"), &[Message::user("one")]).expect("manual edit");
+        let manual_delete_kept_history = manager.load("manual-delete").map(|(_, messages)| messages.len()) == Some(2);
+
+        assert!(manual_delete_kept_history, "a JSONL file whose manifest no longer matches must be restored from the verified DB snapshot");
+
+        println!("SIMULATION parallel={parallel_ok} panic_outbox={panic_ok} missing_jsonl={jsonl_recovery_ok} missing_db={db_recovery_ok} db_toggle={toggle_ok} manual_jsonl_delete_kept_history={manual_delete_kept_history}");
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
 }

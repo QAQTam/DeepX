@@ -41,6 +41,10 @@ impl ConfigDb {
         runtime()?.block_on(async {
             let _ = self.conn.execute("PRAGMA journal_mode=WAL", ()).await;
             self.conn
+                .execute("PRAGMA synchronous=FULL", ())
+                .await
+                .map_err(|e| format!("enable full synchronous writes: {e}"))?;
+            self.conn
                 .execute_batch(
                     "CREATE TABLE IF NOT EXISTS config (
                         key TEXT PRIMARY KEY,

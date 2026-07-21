@@ -17,14 +17,10 @@ pub fn cmd_migration_count() -> Result<String, String> {
 
 #[tauri::command]
 pub fn cmd_migrate_to_turso() -> Result<String, String> {
-    let (sessions, messages) = deepx_session::SessionManager::global()
+    let report = deepx_session::SessionManager::global()
         .migrate_all_to_turso()
         .map_err(|e| format!("migration failed: {e}"))?;
-    serde_json::to_string(&serde_json::json!({
-        "sessions": sessions,
-        "messages": messages,
-    }))
-    .map_err(|e| format!("serialize: {e}"))
+    serde_json::to_string(&report).map_err(|e| format!("serialize: {e}"))
 }
 
 /// Get activity log for a session: tool invocations with args + result.

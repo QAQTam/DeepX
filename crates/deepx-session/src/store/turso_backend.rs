@@ -6,6 +6,7 @@
 use std::path::Path;
 use std::sync::LazyLock;
 
+use crate::mirror::{MirrorManifest, MirrorSnapshot};
 use deepx_types::{Message, SessionMeta};
 
 static RT: LazyLock<Option<tokio::runtime::Runtime>> = LazyLock::new(|| {
@@ -51,6 +52,10 @@ impl TursoBackend {
             // PRAGMAs that return rows must run via execute(), not execute_batch().
             let _ = self.conn.execute("PRAGMA journal_mode=WAL", ()).await;
             self.conn
+                .execute("PRAGMA synchronous=FULL", ())
+                .await
+                .map_err(|e| format!("enable full synchronous writes: {e}"))?;
+            self.conn
                 .execute_batch(
                     "CREATE TABLE IF NOT EXISTS sessions (
                         seed TEXT PRIMARY KEY,
@@ -66,7 +71,14 @@ impl TursoBackend {
                         content_json TEXT NOT NULL DEFAULT '{}',
                         FOREIGN KEY (session_seed) REFERENCES sessions(seed) ON DELETE CASCADE
                     );
-                    CREATE INDEX IF NOT EXISTS idx_msgs ON messages(session_seed, msg_id);",
+                    CREATE INDEX IF NOT EXISTS idx_msgs ON messages(session_seed, msg_id);
+                    CREATE TABLE IF NOT EXISTS session_mirrors (
+                        seed TEXT PRIMARY KEY,
+                        schema_version INTEGER NOT NULL,
+                        revision INTEGER NOT NULL,
+                        meta_sha256 TEXT NOT NULL,
+                        messages_sha256 TEXT NOT NULL
+                    );",
                 )
                 .await
                 .map_err(|e| format!("init tables: {e}"))?;
@@ -87,6 +99,81 @@ impl TursoBackend {
                 .await
                 .map_err(|e| format!("checkpoint: {e}"))
                 .map(|_| ())
+        })
+    }
+
+    /// Replace a complete session snapshot and its manifest in one transaction.
+    /// A manifest is written last, so its presence proves the preceding rows
+    /// committed as one revision.
+    pub fn replace_snapshot(
+        &self,
+        snapshot: &MirrorSnapshot,
+        manifest: &MirrorManifest,
+    ) -> Result<(), String> {
+        let seed = snapshot.seed.clone();
+        let meta_json = serde_json::to_string(&snapshot.meta)
+            .map_err(|error| format!("serialize meta: {error}"))?;
+        runtime()?.block_on(async {
+            self.conn.execute_batch("BEGIN IMMEDIATE").await
+                .map_err(|error| format!("begin snapshot tx: {error}"))?;
+            let result: Result<(), String> = async {
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO sessions (seed, meta_json, updated_at) VALUES (?1, ?2, unixepoch())",
+                    turso::params![seed.clone(), meta_json],
+                ).await.map_err(|error| format!("snapshot meta: {error}"))?;
+                self.conn.execute(
+                    "DELETE FROM messages WHERE session_seed = ?1", turso::params![seed.clone()],
+                ).await.map_err(|error| format!("snapshot clear messages: {error}"))?;
+                for message in &snapshot.messages {
+                    let json = serde_json::to_string(message)
+                        .map_err(|error| format!("serialize message: {error}"))?;
+                    self.conn.execute(
+                        "INSERT INTO messages (session_seed, msg_id, role, content_json) VALUES (?1, ?2, ?3, ?4)",
+                        turso::params![seed.clone(), message.msg_id.map(|id| id as i64), message.role.clone(), json],
+                    ).await.map_err(|error| format!("snapshot message: {error}"))?;
+                }
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO session_mirrors (seed, schema_version, revision, meta_sha256, messages_sha256) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    turso::params![seed.clone(), manifest.schema_version as i64, manifest.revision as i64, manifest.meta_sha256.clone(), manifest.messages_sha256.clone()],
+                ).await.map_err(|error| format!("snapshot manifest: {error}"))?;
+                Ok(())
+            }.await;
+            if let Err(error) = result {
+                let _ = self.conn.execute_batch("ROLLBACK").await;
+                return Err(error);
+            }
+            self.conn.execute_batch("COMMIT").await
+                .map_err(|error| format!("commit snapshot tx: {error}"))?;
+            let _ = self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)", ()).await;
+            Ok(())
+        })
+    }
+
+    pub fn load_manifest(&self, seed: &str) -> Result<Option<MirrorManifest>, String> {
+        let seed = seed.to_string();
+        runtime()?.block_on(async {
+            let mut rows = self.conn.query(
+                "SELECT schema_version, revision, meta_sha256, messages_sha256 FROM session_mirrors WHERE seed = ?1",
+                turso::params![seed],
+            ).await.map_err(|error| format!("load manifest: {error}"))?;
+            let Some(row) = rows.next().await.map_err(|error| format!("manifest rows: {error}"))? else {
+                return Ok(None);
+            };
+            let integer = |index| -> Result<u64, String> {
+                row.get_value(index).map_err(|error| format!("manifest value: {error}"))?
+                    .as_integer().copied().map(|value| value as u64)
+                    .ok_or_else(|| "manifest integer has wrong type".into())
+            };
+            let text = |index| -> Result<String, String> {
+                row.get_value(index).map_err(|error| format!("manifest value: {error}"))?
+                    .as_text().cloned().ok_or_else(|| "manifest text has wrong type".into())
+            };
+            Ok(Some(MirrorManifest {
+                schema_version: integer(0)? as u32,
+                revision: integer(1)?,
+                meta_sha256: text(2)?,
+                messages_sha256: text(3)?,
+            }))
         })
     }
 

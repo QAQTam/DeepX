@@ -375,4 +375,29 @@ describe("SettingsView – API Key behavior", () => {
     dispose();
     host.remove();
   });
+
+  it("8. persists and applies the database toggle immediately", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "cmd_load_config") return cfg({ database: { enabled: false } });
+      if (command === "cmd_list_available_tools") return "[]";
+      if (command === "cmd_migration_count") return JSON.stringify({ pending: 0 });
+      return undefined;
+    });
+
+    const { host, dispose } = setup();
+    await waitForLayout(host);
+    clickNav(host, "数据与存储");
+    await new Promise((r) => setTimeout(r, 20));
+
+    const toggle = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("cmd_set_database_enabled", { enabled: true });
+    });
+
+    dispose();
+    host.remove();
+  });
 });

@@ -104,6 +104,7 @@ export default function SettingsView(props: SettingsViewProps) {
   const [migrationPending, setMigrationPending] = createSignal(0);
   const [migrating, setMigrating] = createSignal(false);
   const [migrationResult, setMigrationResult] = createSignal("");
+  const [migrationFailed, setMigrationFailed] = createSignal(false);
   const [migrationProgress, setMigrationProgress] = createSignal(0);
   const [migrationPhase, setMigrationPhase] = createSignal<"idle" | "confirm" | "running" | "done">("idle");
   const [dualWriteChecked, setDualWriteChecked] = createSignal(true);
@@ -227,6 +228,18 @@ export default function SettingsView(props: SettingsViewProps) {
     setSubTools(prev => prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name]);
   }
 
+  async function toggleDatabase(enabled: boolean) {
+    try {
+      await invoke("cmd_set_database_enabled", { enabled });
+      setDatabaseEnabled(enabled);
+      dbToggled = false;
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   async function save() {
     try {
       const apiKeyReplacement = showApiKeyInput() ? apiKeyValue() : "";
@@ -288,40 +301,34 @@ export default function SettingsView(props: SettingsViewProps) {
   async function doMigrate() {
     setMigrationPhase("running");
     setMigrationProgress(0);
-    const start = Date.now();
-    const DURATION = 10_000;
+    setMigrationFailed(false);
 
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - start;
-      const pct = Math.min(100, Math.round((elapsed / DURATION) * 100));
-      setMigrationProgress(pct);
-      if (pct >= 100) clearInterval(interval);
-    }, 80);
-
-    let sessions = 0, messages = 0;
     try {
       const raw = await invoke<string>("cmd_migrate_to_turso");
       const data = JSON.parse(raw);
-      sessions = data.sessions;
-      messages = data.messages;
-    } catch (e) {
-      setMigrationResult("Migration failed: " + String(e));
-      clearInterval(interval);
+      const failed = Number(data.failed ?? 0);
+      const failures = Array.isArray(data.outcomes)
+        ? data.outcomes
+          .filter((outcome: { status?: string }) => outcome.status === "failed")
+          .map((outcome: { seed?: string; reason?: string }) => `${outcome.seed ?? "unknown"}: ${outcome.reason ?? "unknown error"}`)
+        : [];
+      setMigrationResult(failed === 0
+        ? t().settings.migrateDone
+          .replace("{sessions}", String(data.sessions ?? 0))
+          .replace("{messages}", String(data.messages ?? 0))
+        : t().settings.migratePartial
+          .replace("{sessions}", String(data.sessions ?? 0))
+          .replace("{failed}", String(failed))
+          .replace("{reasons}", failures.join("\n")));
+      setMigrationFailed(failed > 0);
+      setMigrationPending(failed);
+      setMigrationProgress(100);
       setMigrationPhase("done");
-      return;
+    } catch (e) {
+      setMigrationResult(t().settings.migrateFailed.replace("{reason}", String(e)));
+      setMigrationFailed(true);
+      setMigrationPhase("done");
     }
-
-    setMigrationProgress(100);
-    const remain = DURATION - (Date.now() - start);
-    if (remain > 0) await new Promise(r => setTimeout(r, remain));
-    clearInterval(interval);
-
-    setMigrationResult(t().settings.migrateDone
-      .replace("{sessions}", String(sessions))
-      .replace("{messages}", String(messages)));
-    setMigrationPending(0);
-    setMigrationProgress(100);
-    setMigrationPhase("done");
     setDualWriteChecked(databaseEnabled());
   }
 
@@ -544,7 +551,7 @@ export default function SettingsView(props: SettingsViewProps) {
                     <label>{t().settings.databaseEnabled}</label>
                     <div class="settings-input-group">
                       <label class="settings-toggle">
-                        <input type="checkbox" checked={databaseEnabled()} onChange={(e) => { setDatabaseEnabled(e.currentTarget.checked); dbToggled = true; }} />
+                        <input type="checkbox" checked={databaseEnabled()} onChange={(e) => void toggleDatabase(e.currentTarget.checked)} />
                         <span class="settings-toggle-track" />
                       </label>
                       <div class="settings-hint">{t().settings.databaseEnabledHint}</div>
@@ -571,7 +578,7 @@ export default function SettingsView(props: SettingsViewProps) {
                   </Show>
                   <Show when={migrationResult()}>
                     <div class="settings-row">
-                      <div class="settings-hint" style="color: var(--accent-green)">{migrationResult()}</div>
+                      <div class="settings-hint" style={`color: ${migrationFailed() ? "var(--accent-red)" : "var(--accent-green)"}`}>{migrationResult()}</div>
                     </div>
                   </Show>
                 </section>
@@ -673,7 +680,7 @@ export default function SettingsView(props: SettingsViewProps) {
               <h3 style="margin:0 0 12px;font-size:16px;font-weight:600;">{t().settings.migrateDoneTitle}</h3>
               <p style="margin:0 0 16px;font-size:13px;color:var(--text-secondary);white-space:pre-wrap;">{migrationResult()}</p>
               <div style="display:flex;justify-content:flex-end;">
-                <button class="settings-save-btn" onClick={() => { setMigrationPhase("idle"); setMigrationResult(""); }}>
+                <button class="settings-save-btn" onClick={() => { setMigrationPhase("idle"); setMigrationResult(""); setMigrationFailed(false); }}>
                   {t().settings.ok}
                 </button>
               </div>

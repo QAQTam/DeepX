@@ -262,3 +262,14 @@ src/components/SettingsView.test.tsx
 | `src/store/sessionUiState.ts` | （信号创建，**待审查 createRoot 兼容**） |
 | `src/store/sessionRegistry.ts` | （remap，**待修复**） |
 | `src/store/sessionEventRuntime.ts` | （flush 传播，**待审查**） |
+# DB 主存储准备度基线（2026-07-21）
+
+- 真实数据目录 `C:\Users\QAQTam\.deepx\sessions` 检出 2 个 JSONL 会话，均有 `meta.json` 与 `messages.jsonl`，但均没有 `sessions.db`。
+- 因此 `cmd_check_db_primary_readiness` 在当前数据上应拒绝 DB 主存储切换；这是预期保护行为，不执行自动迁移或覆盖真实聊天记录。
+- 迁移后的验收顺序：先调用 `cmd_reconcile_turso_mirrors`，再调用 `cmd_audit_turso_mirrors`，最后仅在 `cmd_check_db_primary_readiness` 返回 `ready: true` 时考虑后续版本的读优先级切换。
+
+## 授权真实数据重放验证（2026-07-21）
+
+- 在完整备份后，临时启用数据库并对 2 个真实 JSONL 会话执行镜像迁移。
+- 两个镜像均通过审计与 DB 主存储门禁；随后人为写入 durable outbox、丢弃会话管理器并重新创建，重放后再次通过审计与门禁。
+- 测试结束后已恢复原始 `config.toml`（数据库关闭）、删除测试生成的 `sessions.db`/outbox，并对两个会话的 `meta.json`、`messages.jsonl` 与配置文件逐项 SHA-256 比对备份：全部一致。

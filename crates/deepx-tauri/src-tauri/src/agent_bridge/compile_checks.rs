@@ -47,9 +47,11 @@ fn all_git_commands_visible() {
 #[test]
 fn all_config_commands_visible() {
     let _ = agent_bridge::cmd_save_config; // 20-param fn, can't fn-ptr cast
+    let _ = agent_bridge::cmd_set_database_enabled as fn(_) -> _;
     let _ = agent_bridge::cmd_load_config as fn() -> _;
     let _ = agent_bridge::cmd_list_sessions as fn() -> _;
     let _ = agent_bridge::cmd_list_session_activity as fn() -> _;
+    let _ = agent_bridge::cmd_audit_turso_mirrors as fn() -> _;
     let _ = agent_bridge::cmd_delete_session as fn(_) -> _;
     let _ = agent_bridge::cmd_get_workspace as fn(_) -> _;
     let _ = agent_bridge::cmd_set_workspace as fn(_, _) -> _;

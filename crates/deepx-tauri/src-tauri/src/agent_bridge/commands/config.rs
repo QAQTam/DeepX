@@ -135,7 +135,28 @@ pub fn cmd_save_config(
         cfg.tokenizer_path = None;
     }
     cfg.save()?;
+    deepx_session::SessionManager::global().set_turso_enabled(cfg.database.enabled);
     // Broadcast reload to all running agents
+    let registry = AgentRegistry::get()
+        .lock()
+        .map_err(|e| format!("lock: {e}"))?;
+    for seed in registry.instances.keys() {
+        let _ = registry.send_to(seed, &Ui2Agent::ReloadConfig);
+    }
+    Ok(())
+}
+
+/// Persist the database mirror toggle and apply it to the running session manager.
+///
+/// This is intentionally separate from the general settings form so a toggle takes
+/// effect even when no agent process is currently running.
+#[tauri::command]
+pub fn cmd_set_database_enabled(enabled: bool) -> Result<(), String> {
+    let mut cfg = deepx_config::Config::load().unwrap_or_default();
+    cfg.database.enabled = enabled;
+    cfg.save()?;
+    deepx_session::SessionManager::global().set_turso_enabled(enabled);
+
     let registry = AgentRegistry::get()
         .lock()
         .map_err(|e| format!("lock: {e}"))?;
@@ -281,6 +302,28 @@ pub fn cmd_list_session_activity() -> Result<Vec<deepx_proto::SessionActivity>, 
         .lock()
         .map_err(|error| format!("lock: {error}"))?;
     Ok(registry.session_activity())
+}
+
+/// Compare every JSONL session with its Turso mirror without changing data.
+#[tauri::command]
+pub fn cmd_audit_turso_mirrors() -> Result<String, String> {
+    serde_json::to_string(&deepx_session::SessionManager::global().audit_all_mirrors())
+        .map_err(|e| format!("serialize mirror audit: {e}"))
+}
+
+/// Replay durable file outboxes and bring JSONL-authoritative sessions back
+/// into parity with their Turso mirrors.
+#[tauri::command]
+pub fn cmd_reconcile_turso_mirrors() -> Result<String, String> {
+    serde_json::to_string(&deepx_session::SessionManager::global().reconcile_all_mirrors())
+        .map_err(|e| format!("serialize mirror reconciliation: {e}"))
+}
+
+/// Non-mutating release gate for enabling DB-primary reads in a later version.
+#[tauri::command]
+pub fn cmd_check_db_primary_readiness() -> Result<String, String> {
+    serde_json::to_string(&deepx_session::SessionManager::global().db_primary_readiness())
+        .map_err(|e| format!("serialize DB-primary readiness: {e}"))
 }
 
 /// Count sessions pending JSONL → Turso migration.
