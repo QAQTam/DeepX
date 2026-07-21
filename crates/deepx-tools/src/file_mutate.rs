@@ -4,8 +4,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::file_shared::{
-    apply_diff_and_format, closest_line, diff_stats, disambiguate_match, is_binary_read_error,
-    normalize_newlines, unified_diff,
+    apply_diff_and_format, atomic_write, closest_line, diff_stats, disambiguate_match,
+    is_binary_read_error, normalize_newlines, unified_diff, verify_expected_hash,
 };
 use crate::{JsonArgs, ToolCallCtx, ToolHandler, ToolResult, ToolRisk, handler};
 
@@ -169,6 +169,7 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
     let path = crate::resolve_workspace_path(&args.s("path"));
     let content = args.s("content");
     let append = args.opt_bool("append").unwrap_or(false);
+    let expected_hash = args.s("expected_hash");
     if let Some(parent) = std::path::Path::new(&path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -176,6 +177,14 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
 
     // Read old content if file exists (for diff on overwrite)
     let old_content = std::fs::read_to_string(&path).ok();
+    let normalized_old = old_content
+        .as_deref()
+        .map(normalize_newlines)
+        .map(|(content, _)| content)
+        .unwrap_or_default();
+    if let Err(error) = verify_expected_hash(&path, &normalized_old, Some(&expected_hash)) {
+        return error;
+    }
 
     if append {
         use std::io::Write;
@@ -224,7 +233,7 @@ pub(super) fn exec_write_file(args: &serde_json::Value) -> String {
             ),
         }
     } else {
-        match std::fs::write(&path, &content) {
+        match atomic_write(&path, &content) {
             Ok(_) => {
                 crate::file_state::record_write(&path, line_count);
                 if let Some(ref old) = old_content {
@@ -277,6 +286,7 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
     let replace_all = args.opt_bool("replace_all").unwrap_or(false);
     let use_regex = args.opt_bool("regex").unwrap_or(false);
     let dry_run = args.opt_bool("dry_run").unwrap_or(false);
+    let expected_hash = args.s("expected_hash");
 
     let raw = match std::fs::read_to_string(&path) {
         Ok(c) => c,
@@ -289,6 +299,9 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
     };
 
     let (orig, was_crlf) = normalize_newlines(&raw);
+    if let Err(error) = verify_expected_hash(&path, &orig, Some(&expected_hash)) {
+        return error;
+    }
     if was_crlf {
         log::info!("edit_file: {path} had CRLF, normalized to LF");
     }
@@ -318,7 +331,7 @@ pub(super) fn exec_edit_file(args: &serde_json::Value) -> String {
     } else {
         content.clone()
     };
-    match std::fs::write(&path, &write_content) {
+    match atomic_write(&path, &write_content) {
         Ok(_) => {
             crate::file_state::record_edit(&path, 0);
             let diff = unified_diff(&orig, &content, &path);
@@ -504,6 +517,8 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
         .get("end_line")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize);
+    let expected_hash = args.s("expected_hash");
+    let allow_fuzzy = args.opt_bool("allow_fuzzy").unwrap_or(false);
 
     let err = |code: &str, msg: &str, hint: &str| -> String {
         format!("[ERROR] {path}: {code} — {msg}\n[HINT] {hint}")
@@ -542,6 +557,9 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
         }
     };
     let (content, was_crlf) = normalize_newlines(&raw);
+    if let Err(error) = verify_expected_hash(&path, &content, Some(&expected_hash)) {
+        return error;
+    }
     if was_crlf {
         log::info!(
             "file_edit_diff: {} had CRLF, normalized to LF for matching",
@@ -551,6 +569,13 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
     let file_lines: Vec<&str> = content.lines().collect();
 
     if let Some(start) = start_line {
+        if old_lines.is_empty() && expected_hash.is_empty() {
+            return err(
+                "UNVERIFIED_LINE_EDIT",
+                "line-number editing requires old_lines or expected_hash",
+                "Read the target range and pass its old_lines (preferred), or pass the hash returned by read.",
+            );
+        }
         let s = start.saturating_sub(1);
         let e = end_line.map(|n| n.saturating_sub(1)).unwrap_or(s);
         if s >= file_lines.len() {
@@ -614,6 +639,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
             false,
             dry_run,
             was_crlf,
+            content.ends_with('\n'),
         );
     }
 
@@ -642,7 +668,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
             candidates.push(i);
         }
     }
-    if candidates.is_empty() {
+    if candidates.is_empty() && allow_fuzzy {
         was_fuzzy = true;
         for i in 0..=file_lines.len() - win {
             let window: Vec<String> = file_lines[i..i + win]
@@ -701,6 +727,7 @@ pub(super) fn exec_edit_fuzzy(args: &serde_json::Value) -> String {
         was_fuzzy,
         dry_run,
         was_crlf,
+        content.ends_with('\n'),
     )
 }
 
@@ -712,7 +739,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: "write".to_string(),
         description: "Create, overwrite, or append to a file.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false}},"required":["path","content"],"additionalProperties":false}),
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"If true, append to file instead of overwriting","default":false},"expected_hash":{"type":"string","description":"Optional hash returned by read. Write fails safely if the file changed."}},"required":["path","content"],"additionalProperties":false}),
         handler: handle_write_file,
         risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),
@@ -720,7 +747,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: "edit".to_string(),
         description: "String replacement in files. Supports exact match, regex (with capture groups). Set dry_run=true to preview the diff before applying. For fuzzy or line-number addressing use edit_block.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file. Use for complex edits; call again with false to apply.","default":false}},"required":["path"],"additionalProperties":false}),
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_string":{"type":"string","description":"Text to find"},"new_string":{"type":"string","description":"Replacement text"},"regex":{"type":"boolean","description":"Treat old_string as regex","default":false},"replace_all":{"type":"boolean","description":"Replace all occurrences","default":false},"dry_run":{"type":"boolean","description":"Preview diff only, do not write file. Use for complex edits; call again with false to apply.","default":false},"expected_hash":{"type":"string","description":"Optional hash returned by read. Edit fails safely if the file changed."}},"required":["path"],"additionalProperties":false}),
         handler: handle_edit_file,
         risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(60),
@@ -728,7 +755,7 @@ pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: "edit_block".to_string(),
         description: "Multi-line edit with fuzzy matching. Provide new_lines to insert; use old_lines for content-based matching or start_line/end_line for line-number addressing. context_before/after disambiguate identical text.",
-        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to find and replace (not needed when start_line is set)"},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert. REQUIRED."},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change, for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change, for disambiguation"},"start_line":{"type":"integer","description":"1-based line to start replacement at (bypasses old_lines matching)"},"end_line":{"type":"integer","description":"1-based line to end replacement at (inclusive, defaults to start_line)"},"dry_run":{"type":"boolean","description":"Preview diff only (default: false)","default":false},"description":{"type":"string","description":"Brief note explaining why this change is needed (optional)"}},"required":["path","new_lines"],"additionalProperties":false}),
+        input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"File path"},"old_lines":{"type":"array","items":{"type":"string"},"description":"Lines to find and replace. Required for safe line-number edits unless expected_hash is supplied."},"new_lines":{"type":"array","items":{"type":"string"},"description":"Lines to insert. REQUIRED."},"context_before":{"type":"array","items":{"type":"string"},"description":"Lines just before the change, for disambiguation"},"context_after":{"type":"array","items":{"type":"string"},"description":"Lines just after the change, for disambiguation"},"start_line":{"type":"integer","description":"1-based line to start replacement at"},"end_line":{"type":"integer","description":"1-based line to end replacement at (inclusive, defaults to start_line)"},"expected_hash":{"type":"string","description":"Optional hash returned by read; required for line-number edits without old_lines."},"allow_fuzzy":{"type":"boolean","description":"Allow whitespace-normalized fallback matching. Default false for safety.","default":false},"dry_run":{"type":"boolean","description":"Preview diff only (default: false)","default":false},"description":{"type":"string","description":"Brief note explaining why this change is needed (optional)"}},"required":["path","new_lines"],"additionalProperties":false}),
         handler: handle_edit_file_diff,
         risk: ToolRisk::Write,
         default_timeout: std::time::Duration::from_secs(30),
@@ -741,4 +768,74 @@ pub fn register(mgr: &mut crate::ToolManager) {
         risk: ToolRisk::Destructive,
         default_timeout: std::time::Duration::from_secs(15),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(path: &std::path::Path, extra: serde_json::Value) -> serde_json::Value {
+        let mut value = serde_json::json!({ "path": path.to_string_lossy() });
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        value
+    }
+
+    #[test]
+    fn edit_block_preserves_terminal_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("example.txt");
+        std::fs::write(&path, "first\nsecond\n").unwrap();
+
+        let result = exec_edit_fuzzy(&args(
+            &path,
+            serde_json::json!({
+                "old_lines": ["second"], "new_lines": ["changed"],
+            }),
+        ));
+
+        assert!(result.starts_with("[OK]"), "{result}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "first\nchanged\n");
+    }
+
+    #[test]
+    fn line_edit_without_content_or_hash_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("example.txt");
+        std::fs::write(&path, "first\nsecond\n").unwrap();
+
+        let result = exec_edit_fuzzy(&args(
+            &path,
+            serde_json::json!({
+                "start_line": 2, "new_lines": ["changed"],
+            }),
+        ));
+
+        assert!(result.contains("UNVERIFIED_LINE_EDIT"), "{result}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "first\nsecond\n");
+    }
+
+    #[test]
+    fn stale_hash_prevents_string_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("example.txt");
+        std::fs::write(&path, "before\n").unwrap();
+        let stale_hash = super::super::file_shared::content_hash("before\n");
+        std::fs::write(&path, "changed elsewhere\n").unwrap();
+
+        let result = exec_edit_file(&args(
+            &path,
+            serde_json::json!({
+                "old_string": "before", "new_string": "after", "expected_hash": stale_hash,
+            }),
+        ));
+
+        assert!(result.contains("STALE_FILE"), "{result}");
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "changed elsewhere\n"
+        );
+    }
 }

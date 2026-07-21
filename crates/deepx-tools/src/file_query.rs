@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-use super::file_shared::{is_binary_read_error, rust_grep, unified_diff};
+use super::file_shared::{content_hash, is_binary_read_error, rust_grep, unified_diff};
 use crate::{JsonArgs, ToolCallCtx, ToolHandler, ToolResult, ToolRisk, handler};
 
 // ------ exec_read_file (from file_read.rs) ------
@@ -53,7 +53,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
 
     const MAX_READ_LINES: usize = 300;
     if let (Some(s), Some(e)) = (start, end) {
-        if e > s && e - s > MAX_READ_LINES {
+        if e >= s && e - s + 1 > MAX_READ_LINES {
             return serde_json::json!({
                 "timeis": crate::now_utc8(),
                 "status": "error",
@@ -119,6 +119,7 @@ pub(super) fn exec_read_file(args: &serde_json::Value) -> String {
                 "start_line": start_idx + 1,
                 "end_line": start_idx + shown,
                 "total_lines": total,
+                "hash": content_hash(&content),
                 "truncated": truncated,
                 "content": body,
             })
@@ -362,7 +363,7 @@ handler!(handle_diff, exec_diff);
 pub fn register(mgr: &mut crate::ToolManager) {
     mgr.register(ToolHandler {
         key: "read".to_string(),
-        description: "Read one or more files. Use path for one file or paths for a batch. Use list for directories and start_line/end_line for a range. Full files auto-truncate to head 50 + tail 30 lines (>200 lines); when truncated, call read again with a smaller range.",
+        description: "Read one or more files. Use path for one file or paths for a batch. Use list for directories and start_line/end_line for a range. Returns a content hash; pass it as expected_hash to edit/write to prevent stale writes. Full files auto-truncate to head 50 + tail 30 lines (>200 lines); when truncated, call read again with a smaller range.",
         input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"One file path, not a directory. Relative to workspace or absolute."},"paths":{"type":"array","items":{"type":"string"},"description":"Multiple file paths; cannot be combined with path."},"start_line":{"type":"integer","description":"First line to read (1-based, optional)"},"end_line":{"type":"integer","description":"Last line to read, inclusive (optional). Max range: 300 lines."}},"anyOf":[{"required":["path"]},{"required":["paths"]}],"additionalProperties":false}),
         handler: handle_read_file,
         risk: ToolRisk::ReadOnly,

@@ -21,9 +21,8 @@ export default function ChangeReviewPanel(props: {
     if (!changes.some(change => change.path === selected())) setSelected(changes[0]?.path);
   });
 
-  if (!props.open) return null;
-
   return (
+    <Show when={props.open}>
     <div class="change-review-overlay" onClick={props.onClose}>
       <aside class="change-review-panel" aria-label={t().review.title} onClick={event => event.stopPropagation()}>
         <header class="change-review-header">
@@ -69,5 +68,6 @@ export default function ChangeReviewPanel(props: {
         </div>
       </aside>
     </div>
+    </Show>
   );
 }

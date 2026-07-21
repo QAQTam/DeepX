@@ -1,5 +1,65 @@
 //! Shared helpers for file edit tools.
 
+use std::io::Write;
+use std::path::Path;
+
+/// Stable content fingerprint exposed by `read` and accepted as a write precondition.
+pub(super) fn content_hash(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(content.as_bytes()))
+}
+
+/// Refuse an edit based on a stale read without changing the file.
+pub(super) fn verify_expected_hash(
+    path: &str,
+    content: &str,
+    expected: Option<&str>,
+) -> Result<(), String> {
+    let Some(expected) = expected.filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    let actual = content_hash(content);
+    if actual == expected {
+        return Ok(());
+    }
+    Err(serde_json::json!({
+        "timeis": crate::now_utc8(), "status": "error", "code": "STALE_FILE", "path": path,
+        "message": "File content changed since the referenced read",
+        "expected_hash": expected, "actual_hash": actual,
+        "hint": "Use read to obtain current content and hash, then retry the edit."
+    })
+    .to_string())
+}
+
+/// Write through a sibling temporary file, so a failed write never leaves a partially
+/// truncated destination. Rename is atomic on supported filesystems.
+pub(super) fn atomic_write(path: &str, content: &str) -> std::io::Result<()> {
+    let target = Path::new(path);
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("deepx-file");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(".{name}.deepx-{}-{nonce}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// Normalize CRLF → LF in content. Returns (normalized, was_crlf).
 pub(super) fn normalize_newlines(content: &str) -> (String, bool) {
     if content.contains("\r\n") {
@@ -160,13 +220,19 @@ pub(super) fn apply_diff_and_format(
     was_fuzzy: bool,
     dry_run: bool,
     was_crlf: bool,
+    had_final_newline: bool,
 ) -> String {
     let mut out_lines: Vec<&str> = file_lines.to_vec();
     out_lines.splice(match_idx..match_idx + win, std::iter::empty());
     for (j, line) in new_lines.iter().enumerate() {
         out_lines.insert(match_idx + j, line);
     }
-    let new_content = out_lines.join("\n");
+    let mut new_content = out_lines.join("\n");
+    // `str::lines()` omits the terminal empty item. Preserve the final newline so
+    // line-oriented edits do not introduce formatting-only churn.
+    if had_final_newline && !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
 
     if dry_run {
         let line = match_idx + 1;

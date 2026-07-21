@@ -228,13 +228,13 @@ pub(crate) fn build_turns_from_context(
                         if let ContentBlock::ToolResult {
                             tool_use_id,
                             content,
-                            ..
+                            success,
                         } = b
                         {
                             Some(deepx_proto::ToolResultDef {
                                 tool_call_id: tool_use_id.clone(),
                                 output: content.clone(),
-                                success: true,
+                                success: *success,
                                 file: None,
                             })
                         } else {
