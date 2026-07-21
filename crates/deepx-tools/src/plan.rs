@@ -82,6 +82,10 @@ struct GoalRun {
     /// model turn has cleanly ended.
     awaiting_next_turn: bool,
     status: GoalRunStatus,
+    #[serde(default)]
+    paused_reason: Option<String>,
+    #[serde(default)]
+    auto_turns: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,8 +100,12 @@ struct GoalStep {
 enum GoalRunStatus {
     Active,
     Completed,
+    Paused,
     Stopped,
 }
+
+const MAX_GOAL_STEPS: usize = 12;
+const MAX_GOAL_AUTO_TURNS: u32 = 24;
 
 fn goal_path() -> Result<std::path::PathBuf, String> {
     let session = crate::runtime::context()
@@ -113,6 +121,30 @@ fn goal_path() -> Result<std::path::PathBuf, String> {
 
 fn goal_authorization_path() -> Result<std::path::PathBuf, String> {
     Ok(goal_path()?.with_file_name("goal_activation.json"))
+}
+
+/// Apply an explicit desktop control without relying on model cooperation.
+pub fn set_goal_action(seed: &str, action: &str) -> Result<(), String> {
+    if seed.is_empty() { return Err("No active session".into()); }
+    let path = deepx_types::platform::sessions_dir().join(seed).join("goal_run.json");
+    let content = std::fs::read_to_string(&path).map_err(|error| format!("read goal run: {error}"))?;
+    let mut run: GoalRun = serde_json::from_str(&content).map_err(|error| format!("parse goal run: {error}"))?;
+    match action {
+        "pause" if run.status == GoalRunStatus::Active => {
+            run.status = GoalRunStatus::Paused;
+            run.awaiting_next_turn = false;
+            run.paused_reason = Some("用户暂停".into());
+        }
+        "stop" if matches!(run.status, GoalRunStatus::Active | GoalRunStatus::Paused) => {
+            run.status = GoalRunStatus::Stopped;
+            run.awaiting_next_turn = false;
+            run.paused_reason = Some("用户停止".into());
+        }
+        "resume" if run.status == GoalRunStatus::Paused => return Ok(()),
+        _ => return Err(format!("Goal cannot {action} from {:?}", run.status)),
+    }
+    let output = serde_json::to_vec_pretty(&run).map_err(|error| format!("serialize goal run: {error}"))?;
+    std::fs::write(path, output).map_err(|error| format!("write goal run: {error}"))
 }
 
 /// Record a user-originated approval from the plan-review UI. This is kept
@@ -175,12 +207,71 @@ pub fn take_pending_goal_prompt() -> Option<String> {
     if run.status != GoalRunStatus::Active || !run.awaiting_next_turn {
         return None;
     }
+    if run.auto_turns >= MAX_GOAL_AUTO_TURNS {
+        run.status = GoalRunStatus::Paused;
+        run.paused_reason = Some(format!("已达到连续执行上限（{MAX_GOAL_AUTO_TURNS} 回合）"));
+        run.awaiting_next_turn = false;
+        let _ = write_goal_run(&run);
+        return None;
+    }
     let step = run.items.get(run.next_index)?.clone();
     run.awaiting_next_turn = false;
+    run.auto_turns += 1;
     if write_goal_run(&run).is_err() {
         return None;
     }
     Some(goal_prompt(&run, &step))
+}
+
+/// A real user message is an interruption point. Preserve the current item,
+/// but prevent the host from injecting a later item until the user resumes.
+pub fn pause_goal_for_interruption() {
+    let Ok(_lock) = PLAN_LOCK.lock() else { return; };
+    let Ok(Some(mut run)) = read_goal_run() else { return; };
+    if run.status == GoalRunStatus::Active {
+        run.status = GoalRunStatus::Paused;
+        run.awaiting_next_turn = false;
+        run.paused_reason = Some("用户临时插话".into());
+        let _ = write_goal_run(&run);
+    }
+}
+
+/// Resume the current item as a synthetic user directive.
+pub fn resume_goal_prompt() -> Result<Option<String>, String> {
+    let _lock = PLAN_LOCK.lock().map_err(|_| "goal state lock poisoned".to_string())?;
+    let Some(mut run) = read_goal_run()? else { return Ok(None); };
+    if run.status != GoalRunStatus::Paused {
+        return Ok(None);
+    }
+    let Some(step) = run.items.get(run.next_index).cloned() else { return Ok(None); };
+    run.status = GoalRunStatus::Active;
+    run.paused_reason = None;
+    write_goal_run(&run)?;
+    Ok(Some(goal_prompt(&run, &step)))
+}
+
+/// Read-only session status for the desktop Goal strip.
+pub fn goal_status_json(seed: &str) -> Result<String, String> {
+    if seed.is_empty() { return Ok("null".into()); }
+    let path = deepx_types::platform::sessions_dir().join(seed).join("goal_run.json");
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("null".into()),
+        Err(error) => return Err(format!("read goal run: {error}")),
+    };
+    let run: GoalRun = serde_json::from_str(&content).map_err(|error| format!("parse goal run: {error}"))?;
+    let current = run.items.get(run.next_index);
+    serde_json::to_string(&serde_json::json!({
+        "objective": run.objective,
+        "status": run.status,
+        "current_id": current.map(|step| &step.id),
+        "current_title": current.map(|step| &step.title),
+        "completed": run.next_index,
+        "total": run.items.len(),
+        "paused_reason": run.paused_reason,
+        "auto_turns": run.auto_turns,
+        "max_auto_turns": MAX_GOAL_AUTO_TURNS,
+    })).map_err(|error| format!("serialize goal status: {error}"))
 }
 
 fn parse_plan(content: &str) -> Vec<PlanItem> {
@@ -503,6 +594,16 @@ fn handle_plan_activate(ctx: ToolCallCtx) -> ToolResult {
             ),
         };
     }
+    if items.len() > MAX_GOAL_STEPS {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "GOAL_STEP_LIMIT",
+                &format!("autonomous plans support at most {MAX_GOAL_STEPS} steps"),
+                "Split the plan into a smaller independently reviewable goal.",
+            ),
+        };
+    }
     if matches!(
         read_goal_run(),
         Ok(Some(GoalRun {
@@ -526,6 +627,8 @@ fn handle_plan_activate(ctx: ToolCallCtx) -> ToolResult {
         next_index: 0,
         awaiting_next_turn: false,
         status: GoalRunStatus::Active,
+        paused_reason: None,
+        auto_turns: 0,
     };
     let first = run.items.first().expect("non-empty goal items");
     if let Err(error) = write_goal_run(&run) {
@@ -654,7 +757,7 @@ fn handle_plan_goal_stop(ctx: ToolCallCtx) -> ToolResult {
         Err(error) => error.into_inner(),
     };
     let mut run = match read_goal_run() {
-        Ok(Some(run)) if run.status == GoalRunStatus::Active => run,
+        Ok(Some(run)) if matches!(run.status, GoalRunStatus::Active | GoalRunStatus::Paused) => run,
         Ok(_) => {
             return ToolResult {
                 success: false,
@@ -790,6 +893,8 @@ mod tests {
             next_index: 0,
             awaiting_next_turn: true,
             status: GoalRunStatus::Active,
+            paused_reason: None,
+            auto_turns: 0,
         };
         let prompt = goal_prompt(&run, &run.items[0]);
 

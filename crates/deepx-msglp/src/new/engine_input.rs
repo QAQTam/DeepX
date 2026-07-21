@@ -28,6 +28,19 @@ impl InputEngine {
             // emit_dashboard handled by MiscEngine
         }
 
+        let text = if text == "[DeepX Goal: resume]" {
+            match deepx_tools::plan::resume_goal_prompt() {
+                Ok(Some(prompt)) => prompt,
+                Ok(None) => "目标模式无法恢复：当前没有已暂停的步骤。".to_string(),
+                Err(error) => format!("目标模式恢复失败：{error}"),
+            }
+        } else {
+            if !text.starts_with("[自动执行计划 /") {
+                deepx_tools::plan::pause_goal_for_interruption();
+            }
+            text.to_string()
+        };
+
         ctx.cancel.clear();
         deepx_tools::CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
 
@@ -38,7 +51,7 @@ impl InputEngine {
 
         // ── Compliance guard ──
         if ctx.agent.config.compliance_enabled {
-            if let Err(reason) = deepx_gate::guard::content_guard(text) {
+            if let Err(reason) = deepx_gate::guard::content_guard(&text) {
                 log::info!("[INPUT] compliance blocked: {reason}");
                 ctx.emitter.emit(Agent2Ui::Error {
                     message: reason.clone(),
@@ -53,7 +66,7 @@ impl InputEngine {
             }
         }
 
-        ctx.agent.activate_explicit_skills(text);
+        ctx.agent.activate_explicit_skills(&text);
 
         // Emit updated skills status so the frontend panel can refresh
         {
@@ -66,7 +79,7 @@ impl InputEngine {
         }
 
         // Push user message
-        ctx.agent.msg.push_user(text);
+        ctx.agent.msg.push_user(&text);
         ctx.agent
             .msg
             .flush_meta(&ctx.agent.config.model, &ctx.agent.config.reasoning_effort);
@@ -74,7 +87,7 @@ impl InputEngine {
         let turn_id = format!("t{}", ctx.agent.msg.turn_count());
         ctx.emitter.emit(Agent2Ui::TurnStart {
             turn_id: turn_id.clone(),
-            user_text: text.to_string(),
+            user_text: text,
         });
 
         // Enter the ring: start a new turn

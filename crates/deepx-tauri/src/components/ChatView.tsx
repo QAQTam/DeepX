@@ -26,6 +26,7 @@ import PlanReviewPanel from "./PlanReviewPanel";
 import ContextPanel from "./ContextPanel";
 import EnvironmentPopover from "./shell/EnvironmentPopover";
 import ThreadHeader from "./shell/ThreadHeader";
+import GoalStatusStrip from "./GoalStatusStrip";
 
 interface ChatViewProps {
   rawSession: Accessor<RawSessionState>;
@@ -157,6 +158,7 @@ export default function ChatView(props: ChatViewProps) {
         undoDisabled={session().turns.length === 0 || streaming()}
         onUndo={() => void props.onUndo()}
       />
+      <GoalStatusStrip seed={seed()} />
       <Show when={environmentOpen()}>
         <EnvironmentPopover
           session={session()}

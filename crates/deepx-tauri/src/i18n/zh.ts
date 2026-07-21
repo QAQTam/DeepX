@@ -277,6 +277,7 @@ const zh: I18nStrings = {
     reject: "拒绝",
     askItem: "询问此项",
   },
+  goal: { title: "目标模式", step: "步骤", pause: "暂停", resume: "继续", stop: "停止", paused: "已暂停", active: "执行中", completed: "已完成" },
   mode: {
     normal: "普通",
     plan: "规划",

@@ -65,6 +65,8 @@ fn all_config_commands_visible() {
 fn all_plan_commands_visible() {
     let _ = agent_bridge::cmd_read_plan as fn(_) -> _;
     let _ = agent_bridge::cmd_plan_action as fn(_, _, _, _, _) -> _;
+    let _ = agent_bridge::cmd_get_goal_status as fn(_) -> _;
+    let _ = agent_bridge::cmd_goal_action as fn(_, _) -> _;
     let _ = agent_bridge::cmd_task_action as fn(_, _, _) -> _;
     let _ = agent_bridge::cmd_get_context_stats as fn(_) -> _;
     let _ = agent_bridge::cmd_migration_count as fn() -> _;

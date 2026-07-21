@@ -7,6 +7,19 @@ use deepx_proto::Ui2Agent;
 use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
+pub fn cmd_get_goal_status(seed: String) -> Result<String, String> {
+    deepx_tools::plan::goal_status_json(&seed)
+}
+
+#[tauri::command]
+pub fn cmd_goal_action(seed: String, action: String) -> Result<(), String> {
+    if action == "resume" {
+        return send_to_agent(&seed, Ui2Agent::UserInput { text: "[DeepX Goal: resume]".into() });
+    }
+    deepx_tools::plan::set_goal_action(&seed, &action)
+}
+
+#[tauri::command]
 pub fn cmd_migration_count() -> Result<String, String> {
     let count = deepx_session::SessionManager::global().count_pending_migration();
     serde_json::to_string(&serde_json::json!({ "pending": count }))

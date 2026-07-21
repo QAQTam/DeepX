@@ -275,6 +275,7 @@ const en = {
     reject: "Reject",
     askItem: "Ask about this item",
   },
+  goal: { title: "Goal mode", step: "Step", pause: "Pause", resume: "Resume", stop: "Stop", paused: "Paused", active: "Running", completed: "Completed" },
   mode: {
     normal: "Normal",
     plan: "PLAN",
