@@ -23,8 +23,7 @@ build-tauri: clean-fe
 # Clean Vite dist + TypeScript cache (run before build/release/dev)
 clean-fe:
     @echo "Cleaning dist + tsbuildinfo..."
-    -rm -rf crates/deepx-tauri/dist
-    -rm -f crates/deepx-tauri/tsconfig.tsbuildinfo
+    node -e "const fs = require('node:fs'); for (const path of ['crates/deepx-tauri/dist', 'crates/deepx-tauri/tsconfig.tsbuildinfo']) fs.rmSync(path, { recursive: true, force: true });"
 
 # Build frontend only
 fe:
