@@ -196,6 +196,13 @@ const en = {
     branch: "Branch",
     tasks: "Tasks",
     noTasks: "No active tasks",
+    taskDetails: "Task details",
+    askTask: "Ask about this task",
+    cancelTask: "Cancel task",
+    taskPending: "Pending",
+    taskInProgress: "In progress",
+    taskCompleted: "Completed",
+    taskCancelled: "Cancelled",
   },
   context: {
     title: "Context breakdown",

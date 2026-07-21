@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import type { RawSessionState } from "../../store/rawSession";
 import type { TaskInfo } from "../../lib/types";
 import { workspaceDisplayPath } from "../../lib/workspacePath";
@@ -13,6 +13,14 @@ export default function EnvironmentPopover(props: {
   onTaskAction?: (action: "cancel" | "delete" | "ask", task: TaskInfo) => void;
 }) {
   const { t } = useI18n();
+  const [expandedTask, setExpandedTask] = createSignal<string | null>(null);
+  const taskStatusLabel = (status: TaskInfo["status"]) => {
+    const labels = t().environment;
+    return status === "pending" ? labels.taskPending
+      : status === "in_progress" ? labels.taskInProgress
+        : status === "completed" ? labels.taskCompleted
+          : labels.taskCancelled;
+  };
   return (
     <aside class="environment-popover" data-environment-popover>
       <div class="environment-heading">{t().environment.title}</div>
@@ -68,23 +76,23 @@ export default function EnvironmentPopover(props: {
         <div class="environment-tasks">
           <For each={props.tasks}>
             {(task) => (
-              <div class="environment-task">
-                <span class={`environment-task-state task-${task.status}`} aria-label={task.status} />
+              <div class={`environment-task task-${task.status} ${expandedTask() === task.id ? "expanded" : ""}`}>
+                <span class={`environment-task-state task-${task.status}`} aria-label={taskStatusLabel(task.status)} title={taskStatusLabel(task.status)}>{task.status === "pending" ? "○" : task.status === "in_progress" ? "◌" : task.status === "completed" ? "✓" : "−"}</span>
                 <button
                   type="button"
                   class="environment-task-main"
-                  title={task.description}
-                  onClick={() => props.onTaskAction?.("ask", task)}
+                  aria-expanded={expandedTask() === task.id ? "true" : "false"}
+                  onClick={() => setExpandedTask(expandedTask() === task.id ? null : task.id)}
                 >
                   <b>{task.id}</b>
+                  <em class={`environment-task-status-text task-${task.status}`}>{taskStatusLabel(task.status)}</em>
                   <span>{task.subject}</span>
                 </button>
+                <button type="button" class="environment-task-question" title={t().environment.askTask} aria-label={t().environment.askTask} onClick={() => props.onTaskAction?.("ask", task)}>?</button>
                 <Show when={task.status === "pending" || task.status === "in_progress"}>
-                  <button type="button" class="environment-task-action" title="取消任务" onClick={() => props.onTaskAction?.("cancel", task)}>×</button>
+                  <button type="button" class="environment-task-action" title={t().environment.cancelTask} onClick={() => props.onTaskAction?.("cancel", task)}>×</button>
                 </Show>
-                <Show when={task.status === "completed" || task.status === "cancelled"}>
-                  <button type="button" class="environment-task-action" title="删除任务" onClick={() => props.onTaskAction?.("delete", task)}>×</button>
-                </Show>
+                <Show when={expandedTask() === task.id}><div class="environment-task-detail"><b>{t().environment.taskDetails}</b><p>{task.description || task.subject}</p></div></Show>
               </div>
             )}
           </For>

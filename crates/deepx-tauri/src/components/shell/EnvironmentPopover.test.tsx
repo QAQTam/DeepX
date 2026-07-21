@@ -10,7 +10,7 @@ let dispose: (() => void) | undefined;
 afterEach(() => { dispose?.(); dispose = undefined; document.body.innerHTML = ""; });
 
 describe("EnvironmentPopover tasks", () => {
-  it("renders session tasks and forwards task actions", () => {
+  it("expands task details and only asks when the question control is clicked", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     const onTaskAction = vi.fn();
@@ -26,7 +26,12 @@ describe("EnvironmentPopover tasks", () => {
 
     expect(host.textContent).toContain("T1");
     expect(host.textContent).toContain("实现审批");
+    expect(host.textContent).toContain("进行中");
     host.querySelector<HTMLButtonElement>(".environment-task-main")!.click();
+    await Promise.resolve();
+    expect(host.textContent).toContain("接通计划审核");
+    expect(onTaskAction).not.toHaveBeenCalled();
+    host.querySelector<HTMLButtonElement>(".environment-task-question")!.click();
     expect(onTaskAction).toHaveBeenCalledWith("ask", task);
     host.querySelector<HTMLButtonElement>(".environment-task-action")!.click();
     expect(onTaskAction).toHaveBeenCalledWith("cancel", task);

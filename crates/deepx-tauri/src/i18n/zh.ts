@@ -198,6 +198,13 @@ const zh: I18nStrings = {
     branch: "分支",
     tasks: "执行任务",
     noTasks: "暂无执行任务",
+    taskDetails: "任务详情",
+    askTask: "询问此任务",
+    cancelTask: "取消任务",
+    taskPending: "待处理",
+    taskInProgress: "进行中",
+    taskCompleted: "已完成",
+    taskCancelled: "已取消",
   },
   context: {
     title: "上下文构成",
