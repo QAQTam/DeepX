@@ -274,7 +274,12 @@ impl TurnEngine {
             }
         }
 
-        let content = if approved {
+        let content = if approved && autonomous {
+            format!(
+                "Plan approved with explicit Goal-mode authorization. Call plan_activate(objective=...) now, then execute only its current step.\n\n{}",
+                plan.content
+            )
+        } else if approved {
             format!("Plan approved.\n\n{}", plan.content)
         } else {
             format!(

@@ -158,7 +158,7 @@ export default function ChatView(props: ChatViewProps) {
         undoDisabled={session().turns.length === 0 || streaming()}
         onUndo={() => void props.onUndo()}
       />
-      <GoalStatusStrip seed={seed()} />
+      <GoalStatusStrip seed={seed()} refreshKey={session().turns.length} />
       <Show when={environmentOpen()}>
         <EnvironmentPopover
           session={session()}
