@@ -214,6 +214,11 @@ const zh: I18nStrings = {
     messages: "消息：{count}",
     thinkingBlocks: "思考块：{count}",
     toolCallBlocks: "工具调用：{count}",
+    promptTokens: "请求输入 Token",
+    cacheHitRate: "缓存命中率",
+    seconds: "{n}秒",
+    cacheUnavailable: "暂无缓存数据",
+    updated: "更新于 {time}",
   },
   session: {
     resume: "对话列表",

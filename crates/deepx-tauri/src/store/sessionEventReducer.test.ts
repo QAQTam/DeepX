@@ -186,8 +186,28 @@ describe("sessionEventReducer", () => {
     expect(state.dashboard.recentEdits).toEqual(["src/a.ts"]);
     expect(state.dashboard.activity[0].toolName).toBe("exec");
     expect(state.compact).toMatchObject({ active: false, turnsCompacted: 2 });
-    expect(state.telemetry[state.telemetry.length - 1]?.context_tokens).toBe(100);
+    expect(state.telemetry[state.telemetry.length - 1]?.prompt_tokens).toBe(100);
     expect(removeTurnFromSession(state, "t1").turns).toHaveLength(0);
+  });
+
+  it("deduplicates the Dashboard and TurnEnd copies of one usage snapshot", () => {
+    const usage = {
+      prompt_tokens: 100, completion_tokens: 20, total_tokens: 120,
+      prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 0, reasoning_tokens: 0,
+    };
+    let state = reduceAgentEvent(createRawSessionState("seed-a"), {
+      type: "turn_start", turn_id: "t1", user_text: "run",
+    }, 10);
+    state = reduceAgentEvent(state, {
+      type: "dashboard", hp_connected: true, session_seed: "seed-a", tool_calls_total: 0,
+      tool_failures: 0, current_phase: "answering", streaming: true, dsml_compat_count: 0,
+      tasks: [], recent_edits: [], session_title: "Title", context_limit: 200000, model: "model-a", usage,
+    }, 20);
+    state = reduceAgentEvent(state, { type: "turn_end", turn_id: "t1", usage }, 30);
+
+    expect(state.telemetry).toHaveLength(1);
+    expect(state.telemetry[0]).toMatchObject({ prompt_tokens: 100, cache_available: false });
+    expect(state.telemetry[0].ts).toBe(30);
   });
 
   it("treats done as a terminal fallback and resets a newly created seed", () => {

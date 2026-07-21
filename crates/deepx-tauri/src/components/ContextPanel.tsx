@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import StreamMetricsChart, { type MetricPoint } from "./StreamMetricsChart";
 import { useI18n } from "../i18n";
@@ -17,12 +17,12 @@ interface ContextStats {
 }
 
 const COLORS = [
-  "#5a8a4a", // chat_text - green
-  "#8b6baa", // thinking - purple
-  "#d4783c", // tool_calls - orange
-  "#c4553d", // tool_results - red
-  "#6b8db5", // tools_schema - blue
-  "#9b8d7a", // system_prompt - grey
+  "var(--dx-chart-chat)",
+  "var(--dx-chart-thinking)",
+  "var(--dx-chart-tool-call)",
+  "var(--dx-chart-tool-result)",
+  "var(--dx-chart-schema)",
+  "var(--dx-chart-system)",
 ];
 
 function buildPiePaths(stats: ContextStats, caption: string): string {
@@ -52,22 +52,30 @@ function buildPiePaths(stats: ContextStats, caption: string): string {
     `<text x="60" y="72" text-anchor="middle" fill="var(--text-muted)" font-size="7">${caption}</text>`;
 }
 
-export default function ContextPanel(props: { seed: string; metricHistory: MetricPoint[]; contextLimit: number; initialOpen?: boolean }) {
+export default function ContextPanel(props: { seed: string; metricHistory: MetricPoint[]; contextLimit: number; onClose: () => void }) {
   const { t } = useI18n();
   const [stats, setStats] = createSignal<ContextStats | null>(null);
-  const [open, setOpen] = createSignal(props.initialOpen ?? false);
   const [tab, setTab] = createSignal<"breakdown" | "timeline">("breakdown");
+  const [updatedAt, setUpdatedAt] = createSignal<number | null>(null);
 
   async function refresh() {
     if (!props.seed) return;
     try {
       const raw = await invoke<string>("cmd_get_context_stats", { seed: props.seed });
       setStats(JSON.parse(raw));
+      setUpdatedAt(Date.now());
     } catch (e) { console.error("context_stats:", e); }
   }
 
-  // No auto-polling — refreshed only on explicit open (avoids periodic Tauri IPC overhead)
-  refresh();
+  // The panel is mounted only while visible. Refresh at mount and after a confirmed
+  // usage sample, rather than polling or coupling telemetry to the transcript.
+  createEffect(
+    () => {
+      const latest = props.metricHistory[props.metricHistory.length - 1];
+      return `${props.seed}:${latest?.sample_key ?? ""}:${latest?.ts ?? 0}`;
+    },
+    () => void refresh(),
+  );
 
   const piePaths = () => stats() ? buildPiePaths(stats()!, t().chat.tokens) : "";
 
@@ -87,22 +95,13 @@ export default function ContextPanel(props: { seed: string; metricHistory: Metri
 
   return (
     <div class="context-panel">
-      <button class="context-panel-trigger" onClick={() => { setOpen(!open()); if (!open()) refresh(); }} title={t().context.title}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 20V10M12 20V4M6 20v-6"/>
-        </svg>
-        <Show when={total_tokens() > 0}>
-          <span class="context-token-badge">{total_tokens()}t</span>
-        </Show>
-      </button>
-      <Show when={open()}>
-        <div class="context-dropdown">
+      <div class="context-dropdown">
           <div class="context-dropdown-hd">
             <div class="context-tabs">
               <button class={`context-tab ${tab() === "breakdown" ? "active" : ""}`} onClick={() => setTab("breakdown")}>{t().context.breakdown}</button>
               <button class={`context-tab ${tab() === "timeline" ? "active" : ""}`} onClick={() => setTab("timeline")}>{t().context.timeline}</button>
             </div>
-            <button class="context-close" onClick={() => setOpen(false)}>×</button>
+            <button class="context-close" onClick={props.onClose} aria-label={t().review.close}>×</button>
           </div>
           <div class="context-dropdown-body">
             <Show when={tab() === "breakdown"}>
@@ -127,6 +126,7 @@ export default function ContextPanel(props: { seed: string; metricHistory: Metri
                 <span>{t().context.thinkingBlocks.replace("{count}", String(stats()?.thinking_blocks ?? 0))}</span>
                 <span>{t().context.toolCallBlocks.replace("{count}", String(stats()?.tool_call_blocks ?? 0))}</span>
               </div>
+              <Show when={updatedAt()}>{time => <div class="context-updated">{t().context.updated.replace("{time}", new Date(time()).toLocaleTimeString())}</div>}</Show>
             </Show>
             </Show>
             <Show when={tab() === "timeline"}>
@@ -135,8 +135,7 @@ export default function ContextPanel(props: { seed: string; metricHistory: Metri
               </Show>
             </Show>
           </div>
-        </div>
-      </Show>
+      </div>
     </div>
   );
 }

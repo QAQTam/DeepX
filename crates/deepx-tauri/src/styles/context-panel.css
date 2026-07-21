@@ -1,19 +1,7 @@
-.context-panel { position: relative; display: flex; align-items: center; }
-.context-panel-trigger {
-  display: flex; align-items: center; gap: 4px;
-  padding: 3px 6px; border: 0.5px solid var(--border-card); border-radius: var(--radius);
-  background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer;
-  transition: all var(--transition);
-}
-.context-panel-trigger:hover { background: var(--bg-primary); color: var(--text-primary); border-color: var(--accent); }
-.context-token-badge {
-  font-size: 10px; font-family: var(--font-mono); color: var(--accent);
-  background: rgba(var(--accent-rgb), 0.15); padding: 1px 4px; border-radius: 3px;
-}
+.context-panel { position: absolute; right: 16px; top: var(--dx-header-height); z-index: 100; }
 
 .context-dropdown {
-  position: absolute; top: 100%; right: 0; margin-top: 6px; z-index: 100;
-  width: 292px; background: var(--bg-glass-panel); border: var(--panel-border);
+  width: 310px; margin-top: 6px; background: var(--bg-glass-panel); border: var(--panel-border);
   border-radius: var(--radius-md); box-shadow: var(--shadow-card);
   overflow: hidden; backdrop-filter: blur(var(--panel-glass-blur)) saturate(var(--panel-glass-saturate));
 }
@@ -36,3 +24,15 @@
 .context-legend-pct { color: var(--text-muted); font-family: var(--font-mono); }
 
 .context-detail { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
+.context-updated { font-size: 10px; color: var(--text-muted); text-align: right; }
+.context-chart-grid { stroke: var(--border-divider); stroke-width: .5; }
+.context-chart-line { stroke-width: 1.8; }
+.context-chart-line-tokens, .context-chart-dot-tokens { stroke: var(--dx-chart-request); fill: var(--dx-chart-request); }
+.context-chart-line-cache, .context-chart-dot-cache { stroke: var(--dx-chart-cache); fill: var(--dx-chart-cache); }
+.context-chart-line-cache { stroke-dasharray: 3 2; }
+.context-chart-label { fill: var(--text-muted); font-size: 8px; font-family: var(--font-mono); }
+.context-chart-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; font-size: 10px; color: var(--text-secondary); }
+.legend-swatch { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; }
+.legend-swatch.tokens { background: var(--dx-chart-request); }
+.legend-swatch.cache { background: var(--dx-chart-cache); }
+.context-chart-unavailable { color: var(--text-muted); }

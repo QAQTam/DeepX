@@ -174,7 +174,7 @@ export default function ChatView(props: ChatViewProps) {
           seed={seed()}
           metricHistory={session().telemetry}
           contextLimit={usage().contextLimit || 200000}
-          initialOpen={true}
+          onClose={() => setStatsOpen(false)}
         />
       </Show>
       <ConversationTranscript

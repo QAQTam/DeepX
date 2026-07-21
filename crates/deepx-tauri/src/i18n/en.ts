@@ -212,6 +212,11 @@ const en = {
     messages: "Messages: {count}",
     thinkingBlocks: "Thinking blocks: {count}",
     toolCallBlocks: "Tool calls: {count}",
+    promptTokens: "Request input tokens",
+    cacheHitRate: "Cache hit rate",
+    seconds: "{n}s",
+    cacheUnavailable: "Cache data unavailable",
+    updated: "Updated {time}",
   },
   session: {
     resume: "Sessions",

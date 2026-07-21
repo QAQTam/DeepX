@@ -112,19 +112,39 @@ function appendNoticeOnce(
   return { ...state, notices: [...state.notices, notice] };
 }
 
-function appendMetric(
+function usageFingerprint(usage: UsageInfo): string {
+  return [
+    usage.prompt_tokens,
+    usage.completion_tokens,
+    usage.total_tokens,
+    usage.prompt_cache_hit_tokens,
+    usage.prompt_cache_miss_tokens,
+    usage.reasoning_tokens,
+  ].join(":");
+}
+
+function upsertMetric(
   state: RawSessionState,
   usage: UsageInfo,
   now: number,
+  turnId = lastTurnId(state) ?? "session",
 ): RawSessionState {
+  const sampleKey = `${turnId}:${usageFingerprint(usage)}`;
+  const metric = {
+    ts: now,
+    prompt_tokens: usage.prompt_tokens,
+    cache_hit: usage.prompt_cache_hit_tokens,
+    cache_miss: usage.prompt_cache_miss_tokens,
+    cache_available: usage.prompt_cache_hit_tokens + usage.prompt_cache_miss_tokens > 0,
+    sample_key: sampleKey,
+  };
+  const existingIndex = state.telemetry.findIndex(point => point.sample_key === sampleKey);
+  const telemetry = existingIndex < 0
+    ? [...state.telemetry, metric].slice(-MAX_METRICS)
+    : state.telemetry.map((point, index) => index === existingIndex ? metric : point);
   return {
     ...state,
-    telemetry: [...state.telemetry, {
-      ts: now,
-      context_tokens: usage.prompt_tokens,
-      cache_hit: usage.prompt_cache_hit_tokens,
-      cache_miss: usage.prompt_cache_miss_tokens,
-    }].slice(-MAX_METRICS),
+    telemetry,
   };
 }
 
@@ -218,10 +238,10 @@ export function reduceAgentEvent(
         usage: event.usage,
       }));
       if (event.usage) {
-        next = appendMetric({
+        next = upsertMetric({
           ...next,
           session: { ...next.session, usage: event.usage },
-        }, event.usage, now);
+        }, event.usage, now, event.turn_id);
       }
       return next;
     }
@@ -367,7 +387,7 @@ export function reduceAgentEvent(
           recentEdits: event.recent_edits ?? state.dashboard.recentEdits,
         },
       };
-      if (event.usage) next = appendMetric(next, event.usage, now);
+      if (event.usage) next = upsertMetric(next, event.usage, now);
       return next;
     }
     case "code_delta":

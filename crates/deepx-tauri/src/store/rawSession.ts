@@ -44,9 +44,14 @@ export type InteractionRecord = {
 
 export type RawMetricPoint = {
   ts: number;
-  context_tokens: number;
+  /** Provider-confirmed request input tokens; not the local context estimate. */
+  prompt_tokens: number;
   cache_hit: number;
   cache_miss: number;
+  /** Providers commonly omit cache usage. Zero/zero is not a 0% cache hit rate. */
+  cache_available: boolean;
+  /** Allows Dashboard and TurnEnd to refer to the same immutable usage snapshot. */
+  sample_key: string;
 };
 
 export type RawActivityEntry = {

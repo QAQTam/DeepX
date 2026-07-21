@@ -41,6 +41,14 @@
   --yellow: #b8860b;
   --yellow-rgb: 184,134,11;
   --purple: #8b6baa;
+  --dx-chart-chat: #5a8a4a;
+  --dx-chart-thinking: #8b6baa;
+  --dx-chart-tool-call: #d4783c;
+  --dx-chart-tool-result: #c4553d;
+  --dx-chart-schema: #4a7ab5;
+  --dx-chart-system: #8a7565;
+  --dx-chart-request: #d4783c;
+  --dx-chart-cache: #5a8a4a;
   --font-sans: "MiSans", "Noto Sans SC", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code", "MiSans", "Noto Sans SC", monospace;
   --radius-sm: 3px;
@@ -119,6 +127,14 @@
   --yellow: #c8961b;
   --yellow-rgb: 200,150,27;
   --purple: #9b7bba;
+  --dx-chart-chat: #8fcf7a;
+  --dx-chart-thinking: #c6a7ee;
+  --dx-chart-tool-call: #f0a264;
+  --dx-chart-tool-result: #ee8b78;
+  --dx-chart-schema: #8db9dc;
+  --dx-chart-system: #c1ad99;
+  --dx-chart-request: #f0a264;
+  --dx-chart-cache: #8fcf7a;
 
   --text-diff-del: #ff9080;
   --text-diff-add: #a0d090;
@@ -177,6 +193,14 @@
   --yellow: #b8860b;
   --yellow-rgb: 184,134,11;
   --purple: #8b6baa;
+  --dx-chart-chat: #8fcf7a;
+  --dx-chart-thinking: #c6a7ee;
+  --dx-chart-tool-call: #f0a264;
+  --dx-chart-tool-result: #ee8b78;
+  --dx-chart-schema: #8db9dc;
+  --dx-chart-system: #c1ad99;
+  --dx-chart-request: #f0a264;
+  --dx-chart-cache: #8fcf7a;
 
   --text-diff-del: #f09080;
   --text-diff-add: #98cf88;
