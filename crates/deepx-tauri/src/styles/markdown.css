@@ -94,3 +94,17 @@
 .md-body.final {
   animation: md-fade-in 0.2s ease-out both;
 }
+
+/* ── Mathematics (KaTeX) ── */
+.md-body .katex { color: var(--text-primary, inherit); font-size: 1.05em; }
+.md-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0.9em 0;
+  padding: 0.55em 0.8em;
+  border: 0.5px solid var(--border-card);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-secondary) 88%, var(--accent) 12%);
+  text-align: center;
+}
+.md-body .katex-display > .katex { min-width: max-content; }

@@ -1,6 +1,7 @@
 import { createEffect, onCleanup } from "solid-js";
 import { marked, Renderer } from "marked";
 import { createHighlighter, createOnigurumaEngine } from "shiki";
+import renderMathInElement from "katex/contrib/auto-render";
 
 let hiPromise: ReturnType<typeof createHighlighter> | null = null;
 
@@ -72,7 +73,7 @@ function parseMarkdown(raw: string, renderer?: Renderer): string {
   });
   if (typeof html !== "string") return "";
   // Strip Shiki's inline background-color so CSS variables control the theme.
-  return html
+  const cleaned = html
     .replace(
       /(<pre\b[^>]*style=")([^"]*)(")/gi,
       (_, before, styles, after) =>
@@ -81,6 +82,25 @@ function parseMarkdown(raw: string, renderer?: Renderer): string {
     // Strip Shiki's tabindex to prevent code blocks from stealing focus
     // and interfering with native text selection behavior.
     .replace(/<pre\b([^>]*)\s+tabindex="0"([^>]*)>/gi, "<pre$1$2>");
+  return renderMath(cleaned);
+}
+
+/** Render TeX only after Markdown is parsed, so code fences remain literal. */
+function renderMath(html: string): string {
+  if (typeof document === "undefined" || (!html.includes("$") && !html.includes("\\("))) return html;
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  renderMathInElement(root, {
+    delimiters: [
+      { left: "$$", right: "$$", display: true },
+      { left: "\\[", right: "\\]", display: true },
+      { left: "\\(", right: "\\)", display: false },
+      { left: "$", right: "$", display: false },
+    ],
+    ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code", "option"],
+    throwOnError: false,
+  });
+  return root.innerHTML;
 }
 
 /** Render a single stable block's raw markdown to HTML. */

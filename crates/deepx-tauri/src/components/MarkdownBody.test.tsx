@@ -86,3 +86,16 @@ it("does not allow an older asynchronous final render to overwrite newer content
   expect(host.textContent).not.toContain("old answer");
   dispose();
 });
+
+it("renders inline and display LaTeX while preserving Markdown code as literal text", async () => {
+  const host = document.createElement("div");
+  const dispose = render(
+    () => <MarkdownBody content={'Inline: $x^2$.\n\n$$\\frac{a}{b}$$\n\n`$not_math$`'} final={true} />,
+    host,
+  );
+
+  await vi.waitFor(() => expect(host.querySelectorAll(".katex").length).toBe(2));
+  expect(host.querySelector(".katex-display")).not.toBeNull();
+  expect(host.querySelector("code")?.textContent).toBe("$not_math$");
+  dispose();
+});

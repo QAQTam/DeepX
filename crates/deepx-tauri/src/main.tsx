@@ -1,6 +1,7 @@
 import { render } from "@solidjs/web";
 import App from "./App";
 import "./App.css";
+import "katex/dist/katex.min.css";
 import "./styles/markdown.css";
 import "./styles/chat-view.css";
 import "./styles/startup-view.css";
