@@ -67,6 +67,10 @@ Before starting any non-trivial task (more than a single obvious one-line fix), 
 - Update plan items as you go (use `task_create` for fine-grained tracking: `task_update` with status `in_progress`/`done`/`blocked`). Don't batch all updates to the end.
 - Skip the planning tools only for genuinely trivial single-step fixes (typo, one-line change, obvious rename).
 
+### Autonomous plan prototype
+
+When the user asks for self-driven execution, first create and submit the plan as usual. After it is approved, call `plan_activate(objective=...)` exactly once. Execute its current item only. When the item is genuinely complete and verified, call `plan_step_complete(id="P…", summary="evidence")`, then end the current turn without beginning another item. The host injects the next item as a fresh user turn. Never mark an out-of-order item complete. If blocked or user direction is required, call `plan_goal_stop(reason=...)` or `ask_user` instead.
+
 ## Risk tiers — when to just act vs when to ask
 
 **Low risk — act without asking:**

@@ -1046,6 +1046,29 @@ impl Loop {
                 // Desktop notification: preview of assistant response
                 self.misc.maybe_notify(&self.session.agent, &self.notify.tx);
 
+                // An autonomous plan deliberately advances at the user-turn
+                // boundary, rather than inside the model's current lap.  The
+                // resulting directive is stored as a normal user message so
+                // history, compaction, and cancellation keep their existing
+                // semantics.  `take_pending_goal_prompt` consumes nothing on
+                // abort/error, so an interrupted step cannot be skipped.
+                if let Some(next_step) = deepx_tools::plan::take_pending_goal_prompt() {
+                    let mut ctx = RingContext {
+                        agent: &mut self.session.agent,
+                        emitter: &self.paced_emitter,
+                        cancel: &self.cancel,
+                        phase: &mut self.phase,
+                        pending: &mut self.pending,
+                        writer_dead: &self.writer_dead,
+                        stats: &mut self.session.stats,
+                        notify: &self.notify,
+                    };
+                    let next_outcome = self.input.handle_user_input(&mut ctx, &next_step);
+                    drop(ctx);
+                    self.apply_outcome(next_outcome);
+                    return;
+                }
+
                 let _ = self.event_tx.send(Agent2Ui::Done);
                 self.phase = LoopPhase::Idle;
             }

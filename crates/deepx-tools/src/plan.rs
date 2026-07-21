@@ -12,6 +12,7 @@
 //! Status markers: `[ ]` pending, `[✓]` approved, `[-]` rejected.
 
 use crate::{ToolCallCtx, ToolResult};
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
@@ -66,6 +67,94 @@ struct PlanItem {
     deps: String,
     effort: String,
     comment: String,
+}
+
+/// Session-scoped state for the first, deliberately small, autonomous-plan
+/// prototype.  PLAN.md remains the human-readable plan of record; this file
+/// only records execution progress, so plan review markers keep their current
+/// meaning in the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GoalRun {
+    objective: String,
+    items: Vec<GoalStep>,
+    next_index: usize,
+    /// Set by `plan_step_complete`; consumed by the host after the current
+    /// model turn has cleanly ended.
+    awaiting_next_turn: bool,
+    status: GoalRunStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GoalStep {
+    id: String,
+    title: String,
+    description: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum GoalRunStatus {
+    Active,
+    Completed,
+    Stopped,
+}
+
+fn goal_path() -> Result<std::path::PathBuf, String> {
+    let session = crate::runtime::context()
+        .map(|ctx| ctx.active_session)
+        .unwrap_or_default();
+    if session.is_empty() {
+        return Err("An active session is required to run an autonomous plan.".into());
+    }
+    Ok(deepx_types::platform::sessions_dir()
+        .join(session)
+        .join("goal_run.json"))
+}
+
+fn read_goal_run() -> Result<Option<GoalRun>, String> {
+    let path = goal_path()?;
+    match std::fs::read_to_string(path) {
+        Ok(content) => serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|error| format!("parse goal run: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("read goal run: {error}")),
+    }
+}
+
+fn write_goal_run(run: &GoalRun) -> Result<(), String> {
+    let path = goal_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create goal directory: {error}"))?;
+    }
+    let content =
+        serde_json::to_vec_pretty(run).map_err(|error| format!("serialize goal run: {error}"))?;
+    std::fs::write(path, content).map_err(|error| format!("write goal run: {error}"))
+}
+
+fn goal_prompt(run: &GoalRun, step: &GoalStep) -> String {
+    format!(
+        "[自动执行计划 / 目标：{}]\n\n继续执行 {}：{}\n{}\n\n完成此步骤后，必须调用 plan_step_complete(id=\"{}\", summary=\"…\")。如果遇到无法自行安全解决的阻塞，调用 plan_goal_stop(reason=\"…\") 或 ask_user；不要跳过步骤，也不要在本 turn 提前开始下一步骤。",
+        run.objective, step.id, step.title, step.description, step.id
+    )
+}
+
+/// Consume one queued autonomous-plan continuation.  The loop calls this
+/// only after a normal `TurnComplete`, which ensures a cancelled/failed turn
+/// can never advance the plan.
+pub fn take_pending_goal_prompt() -> Option<String> {
+    let _lock = PLAN_LOCK.lock().ok()?;
+    let mut run = read_goal_run().ok()??;
+    if run.status != GoalRunStatus::Active || !run.awaiting_next_turn {
+        return None;
+    }
+    let step = run.items.get(run.next_index)?.clone();
+    run.awaiting_next_turn = false;
+    if write_goal_run(&run).is_err() {
+        return None;
+    }
+    Some(goal_prompt(&run, &step))
 }
 
 fn parse_plan(content: &str) -> Vec<PlanItem> {
@@ -334,6 +423,225 @@ fn handle_plan_submit(_ctx: ToolCallCtx) -> ToolResult {
     }
 }
 
+fn handle_plan_activate(ctx: ToolCallCtx) -> ToolResult {
+    let objective = ctx.get_str("objective").unwrap_or("").trim();
+    if objective.is_empty() {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "MISSING_OBJECTIVE",
+                "objective is required",
+                "State the concrete outcome this autonomous plan should achieve.",
+            ),
+        };
+    }
+
+    let _lock = match PLAN_LOCK.lock() {
+        Ok(lock) => lock,
+        Err(error) => error.into_inner(),
+    };
+    let items = match read_plan() {
+        Ok(content) => parse_plan(&content)
+            .into_iter()
+            .filter(|item| item.status != "rejected")
+            .map(|item| GoalStep {
+                id: item.id,
+                title: item.title,
+                description: item.description,
+            })
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err("READ_FAILED", &error, "Check PLAN.md permissions."),
+            };
+        }
+    };
+    if items.is_empty() {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "EMPTY_PLAN",
+                "PLAN.md has no runnable items",
+                "Create and submit at least one non-rejected plan item first.",
+            ),
+        };
+    }
+    if matches!(
+        read_goal_run(),
+        Ok(Some(GoalRun {
+            status: GoalRunStatus::Active,
+            ..
+        }))
+    ) {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "GOAL_ALREADY_ACTIVE",
+                "an autonomous plan is already active",
+                "Finish it with plan_step_complete or stop it with plan_goal_stop first.",
+            ),
+        };
+    }
+
+    let run = GoalRun {
+        objective: objective.to_string(),
+        items,
+        next_index: 0,
+        awaiting_next_turn: false,
+        status: GoalRunStatus::Active,
+    };
+    let first = run.items.first().expect("non-empty goal items");
+    if let Err(error) = write_goal_run(&run) {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "WRITE_FAILED",
+                &error,
+                "Check the active session directory.",
+            ),
+        };
+    }
+    ToolResult {
+        success: true,
+        content: crate::json_ok(serde_json::json!({
+            "objective": objective,
+            "status": "active",
+            "current_step": first.id,
+            "content": format!("Autonomous plan activated. Execute {}: {} now. When it is truly complete, call plan_step_complete with id={}. Do not start the next item in this turn.", first.id, first.title, first.id),
+        })),
+    }
+}
+
+fn handle_plan_step_complete(ctx: ToolCallCtx) -> ToolResult {
+    let id = ctx.get_str("id").unwrap_or("").trim();
+    let summary = ctx.get_str("summary").unwrap_or("").trim();
+    if id.is_empty() || summary.is_empty() {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "MISSING_PARAM",
+                "id and summary are required",
+                "Use the active plan ID and a concise, evidence-based completion summary.",
+            ),
+        };
+    }
+    let _lock = match PLAN_LOCK.lock() {
+        Ok(lock) => lock,
+        Err(error) => error.into_inner(),
+    };
+    let mut run = match read_goal_run() {
+        Ok(Some(run)) if run.status == GoalRunStatus::Active => run,
+        Ok(_) => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err(
+                    "NO_ACTIVE_GOAL",
+                    "no autonomous plan is active",
+                    "Call plan_activate after submitting a plan.",
+                ),
+            };
+        }
+        Err(error) => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err("READ_FAILED", &error, "Check the session state."),
+            };
+        }
+    };
+    let current = match run.items.get(run.next_index) {
+        Some(step) => step,
+        None => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err(
+                    "INVALID_GOAL_STATE",
+                    "active goal has no current step",
+                    "Stop and reactivate the plan.",
+                ),
+            };
+        }
+    };
+    if current.id != id {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "OUT_OF_ORDER_STEP",
+                &format!("{id} cannot complete before {}", current.id),
+                "Complete only the current plan step, or stop the autonomous plan.",
+            ),
+        };
+    }
+    run.next_index += 1;
+    let next = run.items.get(run.next_index).cloned();
+    if next.is_some() {
+        run.awaiting_next_turn = true;
+    } else {
+        run.status = GoalRunStatus::Completed;
+        run.awaiting_next_turn = false;
+    }
+    if let Err(error) = write_goal_run(&run) {
+        return ToolResult {
+            success: false,
+            content: crate::json_err("WRITE_FAILED", &error, "Check the session state directory."),
+        };
+    }
+    let content = match next {
+        Some(step) => format!(
+            "{} completed: {}. End this turn cleanly. The host will inject {} as a new user turn only after this turn completes.",
+            id, summary, step.id
+        ),
+        None => format!("{} completed: {}. All autonomous plan items are complete; provide the final result now.", id, summary),
+    };
+    ToolResult {
+        success: true,
+        content: crate::json_ok(
+            serde_json::json!({"completed_step": id, "status": run.status, "content": content}),
+        ),
+    }
+}
+
+fn handle_plan_goal_stop(ctx: ToolCallCtx) -> ToolResult {
+    let reason = ctx.get_str("reason").unwrap_or("stopped by agent").trim();
+    let _lock = match PLAN_LOCK.lock() {
+        Ok(lock) => lock,
+        Err(error) => error.into_inner(),
+    };
+    let mut run = match read_goal_run() {
+        Ok(Some(run)) if run.status == GoalRunStatus::Active => run,
+        Ok(_) => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err(
+                    "NO_ACTIVE_GOAL",
+                    "no autonomous plan is active",
+                    "There is nothing to stop.",
+                ),
+            }
+        }
+        Err(error) => {
+            return ToolResult {
+                success: false,
+                content: crate::json_err("READ_FAILED", &error, "Check the session state."),
+            }
+        }
+    };
+    run.status = GoalRunStatus::Stopped;
+    run.awaiting_next_turn = false;
+    match write_goal_run(&run) {
+        Ok(()) => ToolResult {
+            success: true,
+            content: crate::json_ok(
+                serde_json::json!({"status":"stopped", "content": format!("Autonomous plan stopped: {reason}")}),
+            ),
+        },
+        Err(error) => ToolResult {
+            success: false,
+            content: crate::json_err("WRITE_FAILED", &error, "Check the session state directory."),
+        },
+    }
+}
+
 // ── registration ──
 
 pub fn register(mgr: &mut crate::ToolManager) {
@@ -342,7 +650,8 @@ pub fn register(mgr: &mut crate::ToolManager) {
 
     mgr.register(ToolHandler {
         key: "plan_list".to_string(),
-        description: "List all plan items from PLAN.md with status, dependencies, and effort estimates.",
+        description:
+            "List all plan items from PLAN.md with status, dependencies, and effort estimates.",
         input_schema: serde_json::json!({
             "type": "object", "properties": {}, "additionalProperties": false
         }),
@@ -377,4 +686,69 @@ pub fn register(mgr: &mut crate::ToolManager) {
         risk: ToolRisk::ReadOnly,
         default_timeout: Duration::from_secs(15),
     });
+
+    mgr.register(ToolHandler {
+        key: "plan_activate".to_string(),
+        description: "Activate the submitted PLAN.md as a session-scoped autonomous goal. It starts P1 now; each later item is injected by the host as a new user turn only after plan_step_complete confirms the current item.",
+        input_schema: serde_json::json!({
+            "type": "object", "properties": {
+                "objective": {"type": "string", "description": "The concrete outcome the complete plan must achieve"}
+            }, "required": ["objective"], "additionalProperties": false
+        }),
+        handler: handle_plan_activate,
+        risk: ToolRisk::Write,
+        default_timeout: Duration::from_secs(15),
+    });
+
+    mgr.register(ToolHandler {
+        key: "plan_step_complete".to_string(),
+        description: "Mark only the current autonomous plan item complete, with evidence. The host queues the next plan item as a new user turn after this turn ends; never start it yourself in the current turn.",
+        input_schema: serde_json::json!({
+            "type": "object", "properties": {
+                "id": {"type": "string", "description": "Current plan item ID, e.g. P1"},
+                "summary": {"type": "string", "description": "Concise evidence-based completion summary"}
+            }, "required": ["id", "summary"], "additionalProperties": false
+        }),
+        handler: handle_plan_step_complete,
+        risk: ToolRisk::Write,
+        default_timeout: Duration::from_secs(15),
+    });
+
+    mgr.register(ToolHandler {
+        key: "plan_goal_stop".to_string(),
+        description: "Stop the active autonomous plan without modifying PLAN.md. Use when blocked or when user direction is required.",
+        input_schema: serde_json::json!({
+            "type": "object", "properties": {
+                "reason": {"type": "string", "description": "Why execution was stopped"}
+            }, "required": ["reason"], "additionalProperties": false
+        }),
+        handler: handle_plan_goal_stop,
+        risk: ToolRisk::Write,
+        default_timeout: Duration::from_secs(15),
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autonomous_prompt_is_a_single_step_user_directive() {
+        let run = GoalRun {
+            objective: "ship the verified prototype".into(),
+            items: vec![GoalStep {
+                id: "P2".into(),
+                title: "verify the result".into(),
+                description: "Run the targeted test suite.".into(),
+            }],
+            next_index: 0,
+            awaiting_next_turn: true,
+            status: GoalRunStatus::Active,
+        };
+        let prompt = goal_prompt(&run, &run.items[0]);
+
+        assert!(prompt.contains("继续执行 P2：verify the result"));
+        assert!(prompt.contains("plan_step_complete(id=\"P2\""));
+        assert!(prompt.contains("不要跳过步骤"));
+    }
 }
