@@ -45,6 +45,7 @@ interface ChatViewProps {
     item: Extract<PendingInteraction, { kind: "plan" }>,
     approved: boolean,
     message?: string,
+    autonomous?: boolean,
   ) => void | Promise<void>;
   onTaskAction: (action: "cancel" | "delete" | "ask", task: TaskInfo) => void | Promise<void>;
   onUndo: () => void | Promise<void>;
@@ -227,7 +228,7 @@ export default function ChatView(props: ChatViewProps) {
           {item => <InteractionModal label="审核执行计划">
             <PlanReviewPanel
               planContent={item().content}
-              onApprove={() => props.onPlanRespond(item(), true)}
+              onApprove={autonomous => props.onPlanRespond(item(), true, undefined, autonomous)}
               onReject={message => props.onPlanRespond(item(), false, message)}
             />
           </InteractionModal>}

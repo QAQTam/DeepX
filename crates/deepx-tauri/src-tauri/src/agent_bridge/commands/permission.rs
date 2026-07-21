@@ -75,6 +75,7 @@ pub fn cmd_plan_review(
     call_id: String,
     approved: bool,
     message: Option<String>,
+    autonomous: Option<bool>,
 ) -> Result<(), String> {
     log::info!(
         "[REGISTRY] cmd_plan_review seed={} call_id={} approved={approved}",
@@ -88,6 +89,7 @@ pub fn cmd_plan_review(
         CompanionInteractionResponse::PlanReview {
             approved,
             message: message.unwrap_or_default(),
+            autonomous: autonomous.unwrap_or(false),
         },
     )
 }

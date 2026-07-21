@@ -51,6 +51,7 @@
 .plan-review-copy { display:grid; gap:2px; min-width:0; flex:1; }.plan-review-copy strong { font-size:13px; }.plan-review-copy small { color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .plan-review-item-actions { display:flex; gap:3px; }.plan-review-item-actions button { width:28px; height:26px; border:1px solid var(--border-input); border-radius:7px; background:var(--bg-primary); color:var(--text-secondary); cursor:pointer; }.plan-review-item-actions .item-approve { color:var(--green); }
 .plan-review-feedback { box-sizing:border-box; width:100%; resize:vertical; margin-top:14px; padding:9px 10px; border:1px solid var(--border-input); border-radius:9px; background:var(--bg-secondary); color:var(--text-primary); font:inherit; font-size:12px; outline:none; }.plan-review-feedback:focus { border-color:var(--accent); }
+.plan-goal-mode { display:flex; align-items:flex-start; gap:9px; margin-top:12px; padding:10px 11px; border:1px solid var(--border-divider); border-radius:9px; background:var(--bg-secondary); cursor:pointer; }.plan-goal-mode input { margin:2px 0 0; accent-color:var(--accent); }.plan-goal-mode span { display:grid; gap:3px; }.plan-goal-mode strong { font-size:12px; color:var(--text-primary); }.plan-goal-mode small { font-size:11px; color:var(--text-muted); line-height:1.45; }
 .plan-review-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
 .plan-review-empty { padding:28px; text-align:center; color:var(--text-muted); }
 

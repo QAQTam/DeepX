@@ -50,8 +50,24 @@ describe("PlanReviewPanel", () => {
     host.querySelector<HTMLButtonElement>(".interaction-approve")!.click();
     await flush();
 
-    expect(onApprove).toHaveBeenCalledOnce();
+    expect(onApprove).toHaveBeenCalledWith(false);
     expect(invoke).not.toHaveBeenCalled();
     expect(host.querySelector(".plan-review-close")).toBeNull();
+  });
+
+  it("passes the explicit goal-mode opt-in with approval", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const onApprove = vi.fn().mockResolvedValue(undefined);
+    dispose = render(() => (
+      <PlanReviewPanel planContent="test plan" onApprove={onApprove} onReject={vi.fn()} />
+    ), host);
+    await flush();
+
+    host.querySelector<HTMLInputElement>(".plan-goal-mode input")!.click();
+    host.querySelector<HTMLButtonElement>(".interaction-approve")!.click();
+    await flush();
+
+    expect(onApprove).toHaveBeenCalledWith(true);
   });
 });

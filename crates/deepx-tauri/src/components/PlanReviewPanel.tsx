@@ -2,19 +2,20 @@ import { Show, createSignal } from "solid-js";
 
 interface PlanReviewPanelProps {
   planContent: string;
-  onApprove: () => void | Promise<void>;
+  onApprove: (autonomous: boolean) => void | Promise<void>;
   onReject: (message?: string) => void | Promise<void>;
 }
 
 export default function PlanReviewPanel(props: PlanReviewPanelProps) {
   const [feedback, setFeedback] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  const [autonomous, setAutonomous] = createSignal(false);
 
-  async function handleApprove() {
+  async function handleApprove(autonomousOverride = autonomous()) {
     if (busy()) return;
     setBusy(true);
     try {
-      await props.onApprove();
+      await props.onApprove(autonomousOverride);
     } finally {
       setBusy(false);
     }
@@ -52,12 +53,29 @@ export default function PlanReviewPanel(props: PlanReviewPanelProps) {
         onInput={(event) => setFeedback(event.currentTarget.value)}
         placeholder="拒绝原因或修改意见（拒绝时可选）"
       />
+      <label class="plan-goal-mode">
+        <input
+          type="checkbox"
+          checked={autonomous()}
+          onChange={(event) => setAutonomous(event.currentTarget.checked)}
+        />
+        <span>
+          <strong>以目标模式执行</strong>
+          <small>逐项自动推进；每一步完成后会生成新的执行回合，可随时停止。</small>
+        </span>
+      </label>
       <footer class="plan-review-actions">
         <button type="button" class="interaction-reject" disabled={busy()} onClick={handleReject}>
           拒绝计划
         </button>
-        <button type="button" class="interaction-approve" disabled={busy()} onClick={handleApprove}>
-          {busy() ? "提交中…" : "批准并继续"}
+        <button type="button" class="interaction-approve" disabled={busy()} onClick={(event) => {
+          const enabled = event.currentTarget
+            .closest(".plan-review-prompt")
+            ?.querySelector<HTMLInputElement>(".plan-goal-mode input")
+            ?.checked ?? autonomous();
+          void handleApprove(enabled);
+        }}>
+          {busy() ? "提交中…" : autonomous() ? "批准并启动目标模式" : "批准并继续"}
         </button>
       </footer>
     </section>

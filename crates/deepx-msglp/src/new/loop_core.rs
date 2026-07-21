@@ -929,12 +929,14 @@ impl Loop {
                 call_id,
                 approved,
                 message,
+                autonomous,
             } => Some(self.session.turn.handle_plan_response(
                 &mut ctx,
                 &mut self.session.tool,
                 &call_id,
                 *approved,
                 &message,
+                *autonomous,
             )),
             Ui2Agent::ToolCall {
                 id,

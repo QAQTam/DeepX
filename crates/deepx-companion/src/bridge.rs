@@ -114,11 +114,16 @@ pub fn response_to_agent_frame(
         }),
         (
             CompanionInteractionKind::PlanReview,
-            CompanionInteractionResponse::PlanReview { approved, message },
+            CompanionInteractionResponse::PlanReview {
+                approved,
+                message,
+                autonomous,
+            },
         ) => Ok(Ui2Agent::PlanReview {
             call_id: key.request_id.clone(),
             approved,
             message,
+            autonomous,
         }),
         _ => Err(ResponseFrameError::KindMismatch),
     }
@@ -234,12 +239,14 @@ mod tests {
             response_to_agent_frame(
                 &plan_key,
                 CompanionInteractionResponse::PlanReview {
-                    approved: false,
-                    message: "revise".into()
+                    approved: true,
+                    message: "revise".into(),
+                    autonomous: true,
                 }
             ),
             Ok(Ui2Agent::PlanReview {
-                approved: false,
+                approved: true,
+                autonomous: true,
                 ..
             })
         ));
@@ -258,7 +265,8 @@ mod tests {
                 &key,
                 CompanionInteractionResponse::PlanReview {
                     approved: true,
-                    message: String::new()
+                    message: String::new(),
+                    autonomous: false,
                 }
             ),
             Err(ResponseFrameError::KindMismatch)

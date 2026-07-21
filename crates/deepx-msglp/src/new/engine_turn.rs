@@ -244,6 +244,7 @@ impl TurnEngine {
         call_id: &str,
         approved: bool,
         message: &str,
+        autonomous: bool,
     ) -> Outcome {
         let active_id = self
             .suspended
@@ -264,6 +265,14 @@ impl TurnEngine {
             .pending_plans
             .pop_front()
             .expect("pending plan exists");
+
+        if approved && autonomous {
+            if let Err(error) = deepx_tools::plan::grant_goal_activation() {
+                ctx.emitter.emit(Agent2Ui::Error {
+                    message: format!("Goal mode authorization could not be saved: {error}"),
+                });
+            }
+        }
 
         let content = if approved {
             format!("Plan approved.\n\n{}", plan.content)

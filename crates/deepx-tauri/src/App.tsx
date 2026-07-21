@@ -311,6 +311,7 @@ export default function App() {
     item: Extract<PendingInteraction, { kind: "plan" }>,
     approved: boolean,
     message?: string,
+    autonomous = false,
   ) {
     const entry = activeEntry();
     if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
@@ -320,6 +321,7 @@ export default function App() {
         callId: item.id,
         approved,
         message: message ?? null,
+        autonomous,
       });
     } catch (error) {
       entry.ui.finishInteractionSubmit(item.id);

@@ -69,7 +69,7 @@ Before starting any non-trivial task (more than a single obvious one-line fix), 
 
 ### Autonomous plan prototype
 
-When the user asks for self-driven execution, first create and submit the plan as usual. After it is approved, call `plan_activate(objective=...)` exactly once. Execute its current item only. When the item is genuinely complete and verified, call `plan_step_complete(id="P…", summary="evidence")`, then end the current turn without beginning another item. The host injects the next item as a fresh user turn. Never mark an out-of-order item complete. If blocked or user direction is required, call `plan_goal_stop(reason=...)` or `ask_user` instead.
+When the user asks for self-driven execution, first create and submit the plan as usual. The user must explicitly select “以目标模式执行” while approving it; without that UI authorization, `plan_activate` must not be called. After approval, call `plan_activate(objective=...)` exactly once. Execute its current item only. When the item is genuinely complete and verified, call `plan_step_complete(id="P…", summary="evidence")`, then end the current turn without beginning another item. The host injects the next item as a fresh user turn. Never mark an out-of-order item complete. If blocked or user direction is required, call `plan_goal_stop(reason=...)` or `ask_user` instead.
 
 ## Risk tiers — when to just act vs when to ask
 

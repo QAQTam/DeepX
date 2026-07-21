@@ -165,6 +165,8 @@ pub enum CompanionInteractionResponse {
         approved: bool,
         #[serde(default)]
         message: String,
+        #[serde(default)]
+        autonomous: bool,
     },
 }
 
@@ -300,6 +302,7 @@ mod tests {
                 response: CompanionInteractionResponse::PlanReview {
                     approved: false,
                     message: "Revise the tests".into(),
+                    autonomous: false,
                 },
             },
         ];

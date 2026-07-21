@@ -111,6 +111,32 @@ fn goal_path() -> Result<std::path::PathBuf, String> {
         .join("goal_run.json"))
 }
 
+fn goal_authorization_path() -> Result<std::path::PathBuf, String> {
+    Ok(goal_path()?.with_file_name("goal_activation.json"))
+}
+
+/// Record a user-originated approval from the plan-review UI. This is kept
+/// separate from the goal run so an LLM cannot manufacture activation merely
+/// by calling `plan_activate`.
+pub fn grant_goal_activation() -> Result<(), String> {
+    let path = goal_authorization_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create goal directory: {error}"))?;
+    }
+    std::fs::write(path, br#"{"authorized":true}"#)
+        .map_err(|error| format!("write goal authorization: {error}"))
+}
+
+fn consume_goal_activation() -> Result<bool, String> {
+    let path = goal_authorization_path()?;
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("consume goal authorization: {error}")),
+    }
+}
+
 fn read_goal_run() -> Result<Option<GoalRun>, String> {
     let path = goal_path()?;
     match std::fs::read_to_string(path) {
@@ -440,6 +466,16 @@ fn handle_plan_activate(ctx: ToolCallCtx) -> ToolResult {
         Ok(lock) => lock,
         Err(error) => error.into_inner(),
     };
+    if !goal_authorization_path().is_ok_and(|path| path.exists()) {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "GOAL_NOT_AUTHORIZED",
+                "autonomous plan activation requires explicit user approval",
+                "Ask the user to select '以目标模式执行' in the plan review panel, then resume this plan.",
+            ),
+        };
+    }
     let items = match read_plan() {
         Ok(content) => parse_plan(&content)
             .into_iter()
@@ -499,6 +535,16 @@ fn handle_plan_activate(ctx: ToolCallCtx) -> ToolResult {
                 "WRITE_FAILED",
                 &error,
                 "Check the active session directory.",
+            ),
+        };
+    }
+    if let Err(error) = consume_goal_activation() {
+        return ToolResult {
+            success: false,
+            content: crate::json_err(
+                "AUTHORIZATION_FAILED",
+                &error,
+                "Stop and ask the user to approve Goal mode again.",
             ),
         };
     }

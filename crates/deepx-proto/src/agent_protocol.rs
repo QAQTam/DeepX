@@ -150,6 +150,9 @@ pub enum Ui2Agent {
         /// Optional rejection reason.
         #[serde(default)]
         message: String,
+        /// Explicit UI opt-in for autonomous execution of this approved plan.
+        #[serde(default)]
+        autonomous: bool,
     },
 
     /// Unload an explicitly-activated skill ($name mention) from context.
