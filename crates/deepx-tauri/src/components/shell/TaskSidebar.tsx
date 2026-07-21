@@ -21,11 +21,12 @@ export default function TaskSidebar(props: {
   onNew: () => void;
   onOpen: (seed: string) => void;
   onDelete: (seed: string) => void;
+  onHome: () => void;
   onSkills: () => void;
   onSettings: () => void;
 }) {
   return <aside class="task-sidebar" data-task-sidebar>
-    <div class="task-sidebar-brand"><span>&gt;</span><strong>DeepX</strong></div>
+    <button type="button" class="task-sidebar-brand" onClick={props.onHome} aria-label="返回首页"><span>&gt;</span><strong>DeepX</strong></button>
     <nav class="task-sidebar-primary">
       <button onClick={props.onNew}>＋ 新建任务</button>
       <button onClick={props.onSkills}>◇ 技能</button>

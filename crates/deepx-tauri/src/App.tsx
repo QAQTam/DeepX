@@ -16,7 +16,7 @@ import { dispatchAgentEvent } from "./runtime/agentEventDispatcher";
 import { createSessionReplayBuffer } from "./runtime/sessionReplayBuffer";
 import { startSessionActivityClient } from "./runtime/sessionActivityClient";
 import type { SessionActivityMap } from "./runtime/sessionActivityStore";
-import { hasRestorableTranscript, shouldAttemptSavedResume } from "./runtime/sessionStartup";
+import { hasRestorableTranscript } from "./runtime/sessionStartup";
 import type { PendingInteraction } from "./store/rawSession";
 import {
   applyDashboardData,
@@ -499,14 +499,9 @@ export default function App() {
       ) setPermissionLevel(config.permission_level!);
     } catch {}
 
-    const listingSucceeded = await refreshSessions();
-    const savedSeed = localStorage.getItem(LS_KEY);
-    if (!savedSeed) return;
-    if (!shouldAttemptSavedResume(savedSeed, sessions(), listingSucceeded)) {
-      localStorage.removeItem(LS_KEY);
-      return;
-    }
-    await resumeSession(savedSeed);
+    await refreshSessions();
+    // Home is the stable entry point. A previous task stays available in the
+    // sidebar and the home list, but never hijacks navigation on application start.
   })();
   });
 
@@ -530,6 +525,7 @@ export default function App() {
             onNew={() => void newSession()}
             onOpen={seed => void resumeSession(seed)}
             onDelete={seed => void deleteSession(seed)}
+            onHome={() => setView("home")}
             onSkills={() => setView("skills")}
             onSettings={() => setView("settings")}
           />

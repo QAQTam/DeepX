@@ -94,7 +94,7 @@ export default function StartupView(props: StartupViewProps) {
           <p class="startup-hint">{t().session.startupHint}</p>
         </section>
 
-        <div class="home-dashboard">
+        <div class={`home-dashboard ${props.sessions.length > 0 ? "has-sessions" : "empty"}`}>
         <Show when={props.showHeatmap}>
           <section class="heatmap-card">
             <div class="heatmap-header">

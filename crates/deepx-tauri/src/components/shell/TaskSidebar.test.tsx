@@ -14,9 +14,18 @@ it("uses dashboard title, summary, then seed", () => {
 
 it("renders sessions once without open tabs", () => {
   const host = document.createElement("div");
-  const dispose = render(() => <TaskSidebar sessions={[session("a"), session("b")]} activeSeed="a" onNew={vi.fn()} onOpen={vi.fn()} onDelete={vi.fn()} onSkills={vi.fn()} onSettings={vi.fn()} />, host);
+  const dispose = render(() => <TaskSidebar sessions={[session("a"), session("b")]} activeSeed="a" onNew={vi.fn()} onOpen={vi.fn()} onDelete={vi.fn()} onHome={vi.fn()} onSkills={vi.fn()} onSettings={vi.fn()} />, host);
   expect(host.querySelectorAll("[data-task-session]")).toHaveLength(2);
   expect(host.querySelector(".open-tabs")).toBeNull();
+  dispose();
+});
+
+it("uses the brand as a persistent home navigation control", () => {
+  const host = document.createElement("div");
+  const onHome = vi.fn();
+  const dispose = render(() => <TaskSidebar sessions={[]} activeSeed="" onNew={vi.fn()} onOpen={vi.fn()} onDelete={vi.fn()} onHome={onHome} onSkills={vi.fn()} onSettings={vi.fn()} />, host);
+  (host.querySelector(".task-sidebar-brand") as HTMLButtonElement).click();
+  expect(onHome).toHaveBeenCalledOnce();
   dispose();
 });
 
@@ -32,6 +41,7 @@ it("shows authoritative activity independently for every session", () => {
     onNew={vi.fn()}
     onOpen={vi.fn()}
     onDelete={vi.fn()}
+    onHome={vi.fn()}
     onSkills={vi.fn()}
     onSettings={vi.fn()}
   />, host);
