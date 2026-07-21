@@ -7,8 +7,8 @@
 //!
 //! A central `index.json` enables fast listing.
 
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use deepx_types::{Message, SessionMeta};
@@ -19,11 +19,23 @@ use crate::store;
 #[cfg(feature = "turso-backend")]
 use crate::store::turso_backend::TursoBackend;
 #[cfg(feature = "turso-backend")]
-use std::sync::Mutex;
-#[cfg(feature = "turso-backend")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "turso-backend")]
+use std::sync::Mutex;
 
 static INSTANCE: OnceLock<SessionManager> = OnceLock::new();
+
+/// The LLM-facing view after a compact operation.  Raw messages remain in the
+/// normal session archive; this is deliberately a separate, replaceable view.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompactContext {
+    pub version: u32,
+    pub checkpoint_id: String,
+    pub parent_checkpoint_id: Option<String>,
+    pub created_at: u64,
+    pub archive_message_count: usize,
+    pub messages: Vec<Message>,
+}
 
 /// Read-only comparison of a session's JSONL primary data and Turso mirror.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -250,7 +262,9 @@ impl SessionManager {
             if let Some((_, source, snapshot)) = candidates.pop() {
                 if source != 2 {
                     if let Err(error) = self.restore_file_snapshot(seed, &snapshot) {
-                        log::warn!("SessionManager: restore newer mirror for {seed} failed: {error}");
+                        log::warn!(
+                            "SessionManager: restore newer mirror for {seed} failed: {error}"
+                        );
                     }
                 }
                 if source != 1 {
@@ -262,13 +276,136 @@ impl SessionManager {
             // recovery behavior; the next successful write upgrades them.
             if let Some(dbs) = self.get_or_open_db(seed) {
                 if let Some(db) = dbs.get(seed) {
-                    if let (Ok(Some(meta)), Ok(messages)) = (db.load_meta(seed), db.load_messages(seed)) {
+                    if let (Ok(Some(meta)), Ok(messages)) =
+                        (db.load_meta(seed), db.load_messages(seed))
+                    {
                         return Some((meta, messages));
                     }
                 }
             }
         }
         file.map(|snapshot| (snapshot.meta, snapshot.messages))
+    }
+
+    /// Load the immutable archive plus the latest compact context, if one
+    /// exists.  Callers must use `active_messages` for the model loop and
+    /// retain `archive_messages` for replay/pagination.
+    pub fn load_for_resume(
+        &self,
+        seed: &str,
+    ) -> Option<(SessionMeta, Vec<Message>, Option<CompactContext>)> {
+        let (meta, archive_messages) = self.load(seed)?;
+        let file = self.read_compact_context(seed);
+        #[cfg(feature = "turso-backend")]
+        let database = if self.turso_enabled.load(Ordering::Relaxed) {
+            self.get_or_open_db(seed).and_then(|dbs| {
+                dbs.get(seed)
+                    .and_then(|db| db.load_compact_context(seed).ok().flatten())
+            })
+        } else {
+            None
+        };
+        #[cfg(not(feature = "turso-backend"))]
+        let database: Option<CompactContext> = None;
+
+        let selected = match (file, database) {
+            (Some(file), Some(database)) if database.created_at > file.created_at => {
+                let _ = self.write_compact_context(seed, &database);
+                Some(database)
+            }
+            (Some(file), Some(database)) => {
+                #[cfg(feature = "turso-backend")]
+                if serde_json::to_string(&file).ok() != serde_json::to_string(&database).ok() {
+                    if let Some(dbs) = self.get_or_open_db(seed) {
+                        if let Some(db) = dbs.get(seed) {
+                            let _ = db.save_compact_context(seed, &file);
+                        }
+                    }
+                }
+                Some(file)
+            }
+            (Some(file), None) => {
+                #[cfg(feature = "turso-backend")]
+                if let Some(dbs) = self.get_or_open_db(seed) {
+                    if let Some(db) = dbs.get(seed) {
+                        let _ = db.save_compact_context(seed, &file);
+                    }
+                }
+                Some(file)
+            }
+            (None, Some(database)) => {
+                let _ = self.write_compact_context(seed, &database);
+                Some(database)
+            }
+            (None, None) => None,
+        };
+        let selected =
+            selected.filter(|context| context.archive_message_count <= archive_messages.len());
+        Some((meta, archive_messages, selected))
+    }
+
+    /// Persist a new checkpoint without rewriting the raw history archive.
+    pub fn save_compact_context(&self, seed: &str, messages: &[Message]) {
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
+        let archive_count = store::read_messages(&self.session_path_dir(seed))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let parent_checkpoint_id = self
+            .read_compact_context(seed)
+            .map(|context| context.checkpoint_id);
+        let now = Self::now_epoch();
+        let context = CompactContext {
+            version: 1,
+            checkpoint_id: format!("compact-{now}-{archive_count}"),
+            parent_checkpoint_id,
+            created_at: now,
+            archive_message_count: archive_count,
+            messages: messages.to_vec(),
+        };
+        if let Err(error) = self.write_compact_context(seed, &context) {
+            log::error!("SessionManager: write compact context failed for {seed}: {error}");
+            return;
+        }
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Some(dbs) = self.get_or_open_db(seed) {
+                if let Some(db) = dbs.get(seed) {
+                    if let Err(error) = db.save_compact_context(seed, &context) {
+                        log::error!(
+                            "SessionManager: mirror compact context failed for {seed}: {error}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Refresh the active view after later raw messages were appended.
+    pub fn update_compact_context(&self, seed: &str, messages: &[Message]) {
+        let Some(mut context) = self.read_compact_context(seed) else {
+            return;
+        };
+        let lock = self.session_lock(seed);
+        let _guard = lock.lock().unwrap();
+        context.archive_message_count = store::read_messages(&self.session_path_dir(seed))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        context.messages = messages.to_vec();
+        if let Err(error) = self.write_compact_context(seed, &context) {
+            log::error!("SessionManager: update compact context failed for {seed}: {error}");
+            return;
+        }
+        #[cfg(feature = "turso-backend")]
+        if self.turso_enabled.load(Ordering::Relaxed) {
+            if let Some(dbs) = self.get_or_open_db(seed) {
+                if let Some(db) = dbs.get(seed) {
+                    if let Err(error) = db.save_compact_context(seed, &context) {
+                        log::error!("SessionManager: mirror compact context update failed for {seed}: {error}");
+                    }
+                }
+            }
+        }
     }
 
     /// Check whether a session exists (directory on disk or Turso DB).
@@ -377,10 +514,12 @@ impl SessionManager {
             _ => None,
         };
         let file_manifest_matches_data = match (&jsonl_meta, &jsonl_messages, &file_manifest) {
-            (Some(meta), Some(messages), Some(manifest)) => MirrorSnapshot::new(meta.clone(), messages.clone())
-                .manifest(manifest.revision)
-                .map(|computed| computed == *manifest)
-                .unwrap_or(false),
+            (Some(meta), Some(messages), Some(manifest)) => {
+                MirrorSnapshot::new(meta.clone(), messages.clone())
+                    .manifest(manifest.revision)
+                    .map(|computed| computed == *manifest)
+                    .unwrap_or(false)
+            }
             _ => false,
         };
         let manifest_matches = match (&file_manifest, &database_manifest) {
@@ -481,11 +620,16 @@ impl SessionManager {
                 .map_err(|error| format!("parse mirror outbox: {error}"))?
         } else {
             let snapshot = self.snapshot_from_files(seed)?;
-            let file_revision = self.read_file_manifest(seed)
-                .filter(|manifest| snapshot.manifest(manifest.revision).ok().as_ref() == Some(manifest))
+            let file_revision = self
+                .read_file_manifest(seed)
+                .filter(|manifest| {
+                    snapshot.manifest(manifest.revision).ok().as_ref() == Some(manifest)
+                })
                 .map(|manifest| manifest.revision)
                 .unwrap_or(0);
-            let revision = file_revision.max(self.database_revision(seed).unwrap_or(0)).saturating_add(1);
+            let revision = file_revision
+                .max(self.database_revision(seed).unwrap_or(0))
+                .saturating_add(1);
             MirrorOutbox {
                 manifest: snapshot.manifest(revision)?,
                 snapshot,
@@ -576,7 +720,11 @@ impl SessionManager {
                     continue;
                 }
                 let messages = audit.jsonl_message_count.unwrap_or(0);
-                let status = if audit.database_exists { "repaired" } else { "migrated" };
+                let status = if audit.database_exists {
+                    "repaired"
+                } else {
+                    "migrated"
+                };
                 match self.reconcile_mirror(&audit.seed) {
                     Ok(()) => {
                         let verified = self.audit_mirror(&audit.seed);
@@ -604,10 +752,25 @@ impl SessionManager {
                     }),
                 }
             }
-            let sessions = outcomes.iter().filter(|outcome| outcome.status != "failed").count();
-            let messages = outcomes.iter().filter(|outcome| outcome.status != "failed").map(|outcome| outcome.messages).sum();
-            let failed = outcomes.iter().filter(|outcome| outcome.status == "failed").count();
-            Ok(MigrationReport { sessions, messages, failed, outcomes })
+            let sessions = outcomes
+                .iter()
+                .filter(|outcome| outcome.status != "failed")
+                .count();
+            let messages = outcomes
+                .iter()
+                .filter(|outcome| outcome.status != "failed")
+                .map(|outcome| outcome.messages)
+                .sum();
+            let failed = outcomes
+                .iter()
+                .filter(|outcome| outcome.status == "failed")
+                .count();
+            Ok(MigrationReport {
+                sessions,
+                messages,
+                failed,
+                outcomes,
+            })
         }
     }
 
@@ -676,13 +839,18 @@ impl SessionManager {
         let mut meta = self.load_meta(seed).unwrap_or_default();
         let now = Self::now_epoch();
         meta.seed = seed.to_string();
-        if meta.created_at == 0 { meta.created_at = now; }
+        if meta.created_at == 0 {
+            meta.created_at = now;
+        }
         meta.updated_at = now;
         let mut target_messages = store::read_messages(&dir).unwrap_or_default();
         target_messages.push(msg.clone());
         meta.message_count = target_messages.len();
         #[cfg(feature = "turso-backend")]
-        self.prepare_outbox_before_file_write(seed, MirrorSnapshot::new(meta.clone(), target_messages));
+        self.prepare_outbox_before_file_write(
+            seed,
+            MirrorSnapshot::new(meta.clone(), target_messages),
+        );
         if let Err(e) = store::append_one(&dir, msg) {
             log::error!("SessionManager: save_one failed: {e}");
             return;
@@ -787,7 +955,10 @@ impl SessionManager {
         };
 
         #[cfg(feature = "turso-backend")]
-        self.prepare_outbox_before_file_write(seed, MirrorSnapshot::new(meta.clone(), messages.to_vec()));
+        self.prepare_outbox_before_file_write(
+            seed,
+            MirrorSnapshot::new(meta.clone(), messages.to_vec()),
+        );
 
         if let Err(e) = store::rewrite_messages(&dir, messages) {
             log::error!("SessionManager: rewrite_messages failed: {e}");
@@ -834,15 +1005,26 @@ impl SessionManager {
         let existing_messages = store::read_messages(&dir).unwrap_or_default();
         let last_summary = Self::extract_summary(new_messages);
         let meta = SessionMeta {
-            seed: seed.to_string(), created_at, updated_at: now, model: model.to_string(),
-            effort: effort.map(String::from), message_count: existing_messages.len() + new_messages.len(),
-            turn_count, last_summary, compact_skip, mode: existing.mode, skills: existing.skills,
+            seed: seed.to_string(),
+            created_at,
+            updated_at: now,
+            model: model.to_string(),
+            effort: effort.map(String::from),
+            message_count: existing_messages.len() + new_messages.len(),
+            turn_count,
+            last_summary,
+            compact_skip,
+            mode: existing.mode,
+            skills: existing.skills,
             ..Default::default()
         };
         let mut target_messages = existing_messages;
         target_messages.extend_from_slice(new_messages);
         #[cfg(feature = "turso-backend")]
-        self.prepare_outbox_before_file_write(seed, MirrorSnapshot::new(meta.clone(), target_messages));
+        self.prepare_outbox_before_file_write(
+            seed,
+            MirrorSnapshot::new(meta.clone(), target_messages),
+        );
 
         // Append messages
         if let Err(e) = store::append_messages(&dir, new_messages) {
@@ -929,7 +1111,8 @@ impl SessionManager {
 
     fn session_lock(&self, seed: &str) -> Arc<Mutex<()>> {
         let mut locks = self.session_locks.lock().unwrap();
-        locks.entry(seed.to_string())
+        locks
+            .entry(seed.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
@@ -940,6 +1123,27 @@ impl SessionManager {
 
     fn file_manifest_path(&self, seed: &str) -> PathBuf {
         self.session_path_dir(seed).join(".mirror-state.json")
+    }
+
+    fn compact_context_path(&self, seed: &str) -> PathBuf {
+        self.session_path_dir(seed).join("compact-context.json")
+    }
+
+    fn read_compact_context(&self, seed: &str) -> Option<CompactContext> {
+        serde_json::from_str(&std::fs::read_to_string(self.compact_context_path(seed)).ok()?).ok()
+    }
+
+    fn write_compact_context(&self, seed: &str, context: &CompactContext) -> Result<(), String> {
+        let path = self.compact_context_path(seed);
+        std::fs::create_dir_all(self.session_path_dir(seed))
+            .map_err(|error| format!("create compact context directory: {error}"))?;
+        let temporary = path.with_extension("json.tmp");
+        let data = serde_json::to_vec_pretty(context)
+            .map_err(|error| format!("serialize compact context: {error}"))?;
+        std::fs::write(&temporary, data)
+            .map_err(|error| format!("write compact context: {error}"))?;
+        std::fs::rename(&temporary, &path)
+            .map_err(|error| format!("activate compact context: {error}"))
     }
 
     fn read_file_manifest(&self, seed: &str) -> Option<MirrorManifest> {
@@ -963,11 +1167,13 @@ impl SessionManager {
 
     fn restore_file_snapshot(&self, seed: &str, snapshot: &MirrorSnapshot) -> Result<(), String> {
         let dir = self.session_path_dir(seed);
-        std::fs::create_dir_all(&dir).map_err(|error| format!("create session directory: {error}"))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|error| format!("create session directory: {error}"))?;
         store::rewrite_messages(&dir, &snapshot.messages)?;
         store::write_meta(&dir, &snapshot.meta)?;
         store::upsert_index(&self.sessions_dir, &snapshot.meta);
-        let revision = self.read_file_manifest(seed)
+        let revision = self
+            .read_file_manifest(seed)
             .map(|manifest| manifest.revision)
             .unwrap_or(0)
             .saturating_add(1);
@@ -1012,7 +1218,9 @@ impl SessionManager {
                     log::error!("SessionManager: durable outbox write failed before file write for {seed}: {error}");
                 }
             }
-            Err(error) => log::error!("SessionManager: create outbox manifest failed for {seed}: {error}"),
+            Err(error) => {
+                log::error!("SessionManager: create outbox manifest failed for {seed}: {error}")
+            }
         }
     }
 
@@ -1060,7 +1268,9 @@ impl SessionManager {
                     .saturating_add(1);
                 if let Ok(manifest) = snapshot.manifest(revision) {
                     if let Err(error) = self.write_file_manifest(seed, &manifest) {
-                        log::warn!("SessionManager: write file-only manifest for {seed} failed: {error}");
+                        log::warn!(
+                            "SessionManager: write file-only manifest for {seed} failed: {error}"
+                        );
                     }
                 }
             }
@@ -1203,6 +1413,73 @@ mod skill_persistence_tests {
 
     #[cfg(feature = "turso-backend")]
     #[test]
+    fn compact_context_preserves_archive_and_restores_the_active_view() {
+        let (root, manager) = manager();
+        manager.turso_enabled.store(true, Ordering::Relaxed);
+        let archive = vec![
+            Message::user("one"),
+            Message::user("two"),
+            Message::user("three"),
+        ];
+        manager.save_full("compact-seed", &archive, "model", None, 0, 2);
+        let active = vec![
+            Message::user("[Compacted 1 turns]\nsummary"),
+            Message::user("three"),
+        ];
+        manager.save_compact_context("compact-seed", &active);
+
+        let (_, restored_archive, context) =
+            manager.load_for_resume("compact-seed").expect("resume");
+        assert_eq!(
+            restored_archive.len(),
+            archive.len(),
+            "raw archive must not be rewritten"
+        );
+        let context = context.expect("compact checkpoint");
+        assert_eq!(context.messages.len(), active.len());
+        assert_eq!(context.parent_checkpoint_id, None);
+        let dbs = manager.get_or_open_db("compact-seed").expect("database");
+        assert!(dbs
+            .get("compact-seed")
+            .expect("backend")
+            .load_compact_context("compact-seed")
+            .expect("load context")
+            .is_some());
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(feature = "turso-backend")]
+    #[test]
+    fn repeated_compact_links_checkpoints_without_losing_archive() {
+        let (root, manager) = manager();
+        manager.turso_enabled.store(true, Ordering::Relaxed);
+        let archive = vec![
+            Message::user("one"),
+            Message::user("two"),
+            Message::user("three"),
+        ];
+        manager.save_full("multi-compact", &archive, "model", None, 0, 3);
+        manager.save_compact_context("multi-compact", &[Message::user("[Compacted]\nfirst")]);
+        let first = manager
+            .read_compact_context("multi-compact")
+            .expect("first checkpoint");
+        manager.save_compact_context("multi-compact", &[Message::user("[Compacted]\nsecond")]);
+        let second = manager
+            .read_compact_context("multi-compact")
+            .expect("second checkpoint");
+        assert_eq!(
+            second.parent_checkpoint_id.as_deref(),
+            Some(first.checkpoint_id.as_str())
+        );
+        assert_eq!(
+            manager.load("multi-compact").expect("archive").1.len(),
+            archive.len()
+        );
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(feature = "turso-backend")]
+    #[test]
     fn load_recovers_a_session_from_turso_when_json_metadata_is_missing() {
         let (root, manager) = manager();
         manager.turso_enabled.store(true, Ordering::Relaxed);
@@ -1304,10 +1581,18 @@ mod skill_persistence_tests {
     fn migration_repairs_a_stale_database_instead_of_skipping_it() {
         let (root, manager) = manager();
         manager.turso_enabled.store(true, Ordering::Relaxed);
-        manager.save_full("stale-seed", &[Message::user("file version")], "model", None, 0, 1);
+        manager.save_full(
+            "stale-seed",
+            &[Message::user("file version")],
+            "model",
+            None,
+            0,
+            1,
+        );
         {
             let dbs = manager.get_or_open_db("stale-seed").expect("open database");
-            dbs.get("stale-seed").expect("database")
+            dbs.get("stale-seed")
+                .expect("database")
                 .rewrite_messages("stale-seed", &[Message::user("stale database")])
                 .expect("make database stale");
         }
@@ -1325,7 +1610,14 @@ mod skill_persistence_tests {
     fn load_uses_a_newer_verified_database_snapshot_and_repairs_jsonl() {
         let (root, manager) = manager();
         manager.turso_enabled.store(true, Ordering::Relaxed);
-        manager.save_full("newest-seed", &[Message::user("file version")], "model", None, 0, 1);
+        manager.save_full(
+            "newest-seed",
+            &[Message::user("file version")],
+            "model",
+            None,
+            0,
+            1,
+        );
         let mut meta = manager.load_meta("newest-seed").expect("file metadata");
         meta.last_summary = "database version".into();
         let snapshot = MirrorSnapshot::new(meta, vec![Message::user("database version")]);
@@ -1333,13 +1625,17 @@ mod skill_persistence_tests {
             .manifest(manager.database_revision("newest-seed").unwrap_or(0) + 1)
             .expect("database manifest");
         {
-            let dbs = manager.get_or_open_db("newest-seed").expect("open database");
-            dbs.get("newest-seed").expect("database")
+            let dbs = manager
+                .get_or_open_db("newest-seed")
+                .expect("open database");
+            dbs.get("newest-seed")
+                .expect("database")
                 .replace_snapshot(&snapshot, &manifest)
                 .expect("make database newest");
         }
 
-        let (loaded_meta, loaded_messages) = manager.load("newest-seed").expect("load newest snapshot");
+        let (loaded_meta, loaded_messages) =
+            manager.load("newest-seed").expect("load newest snapshot");
         assert_eq!(loaded_meta.last_summary, "database version");
         assert_eq!(loaded_messages.len(), 1);
         let audit = manager.audit_mirror("newest-seed");
@@ -1356,32 +1652,84 @@ mod skill_persistence_tests {
         std::thread::scope(|scope| {
             for number in 0..4 {
                 let manager = &manager;
-                scope.spawn(move || manager.save_full(
-                    &format!("subagent-{number}"), &[Message::user(&format!("message-{number}"))],
-                    "model", None, 0, 1,
-                ));
+                scope.spawn(move || {
+                    manager.save_full(
+                        &format!("subagent-{number}"),
+                        &[Message::user(&format!("message-{number}"))],
+                        "model",
+                        None,
+                        0,
+                        1,
+                    )
+                });
             }
         });
-        let parallel_ok = manager.audit_all_mirrors().iter().filter(|audit| audit.seed.starts_with("subagent-")).count() == 4
-            && manager.audit_all_mirrors().iter().filter(|audit| audit.seed.starts_with("subagent-")).all(|audit| audit.consistent);
+        let parallel_ok = manager
+            .audit_all_mirrors()
+            .iter()
+            .filter(|audit| audit.seed.starts_with("subagent-"))
+            .count()
+            == 4
+            && manager
+                .audit_all_mirrors()
+                .iter()
+                .filter(|audit| audit.seed.starts_with("subagent-"))
+                .all(|audit| audit.consistent);
 
-        manager.save_full("panic", &[Message::user("before interruption")], "model", None, 0, 1);
+        manager.save_full(
+            "panic",
+            &[Message::user("before interruption")],
+            "model",
+            None,
+            0,
+            1,
+        );
         let snapshot = manager.snapshot_from_files("panic").expect("snapshot");
-        let outbox = MirrorOutbox { manifest: snapshot.manifest(manager.database_revision("panic").unwrap_or(0) + 1).expect("manifest"), snapshot };
+        let outbox = MirrorOutbox {
+            manifest: snapshot
+                .manifest(manager.database_revision("panic").unwrap_or(0) + 1)
+                .expect("manifest"),
+            snapshot,
+        };
         manager.write_outbox("panic", &outbox).expect("outbox");
         manager.reconcile_mirror("panic").expect("replay");
         let panic_ok = manager.audit_mirror("panic").consistent;
 
-        manager.save_full("missing-jsonl", &[Message::user("recover from db")], "model", None, 0, 1);
+        manager.save_full(
+            "missing-jsonl",
+            &[Message::user("recover from db")],
+            "model",
+            None,
+            0,
+            1,
+        );
         let dir = manager.session_path_dir("missing-jsonl");
         std::fs::remove_file(dir.join("messages.jsonl")).expect("delete JSONL");
-        let jsonl_recovery_ok = manager.load("missing-jsonl").map(|(_, messages)| messages.len()) == Some(1)
+        let jsonl_recovery_ok = manager
+            .load("missing-jsonl")
+            .map(|(_, messages)| messages.len())
+            == Some(1)
             && dir.join("messages.jsonl").exists();
 
-        manager.save_full("missing-db", &[Message::user("recover database")], "model", None, 0, 1);
-        manager.dbs.lock().expect("database lock").remove("missing-db");
-        std::fs::remove_file(manager.session_path_dir("missing-db").join("sessions.db")).expect("delete database");
-        let db_recovery_ok = manager.load("missing-db").map(|(_, messages)| messages.len()) == Some(1)
+        manager.save_full(
+            "missing-db",
+            &[Message::user("recover database")],
+            "model",
+            None,
+            0,
+            1,
+        );
+        manager
+            .dbs
+            .lock()
+            .expect("database lock")
+            .remove("missing-db");
+        std::fs::remove_file(manager.session_path_dir("missing-db").join("sessions.db"))
+            .expect("delete database");
+        let db_recovery_ok = manager
+            .load("missing-db")
+            .map(|(_, messages)| messages.len())
+            == Some(1)
             && manager.audit_mirror("missing-db").consistent;
 
         manager.save_full("toggle", &[Message::user("db on")], "model", None, 0, 1);
@@ -1391,14 +1739,27 @@ mod skill_persistence_tests {
         let toggle_ok = manager.load("toggle").map(|(_, messages)| messages.len()) == Some(2)
             && manager.audit_mirror("toggle").consistent;
 
-        manager.save_full("manual-delete", &[Message::user("one"), Message::user("two")], "model", None, 0, 1);
-        store::rewrite_messages(&manager.session_path_dir("manual-delete"), &[Message::user("one")]).expect("manual edit");
-        let manual_delete_kept_history = manager.load("manual-delete").map(|(_, messages)| messages.len()) == Some(2);
+        manager.save_full(
+            "manual-delete",
+            &[Message::user("one"), Message::user("two")],
+            "model",
+            None,
+            0,
+            1,
+        );
+        store::rewrite_messages(
+            &manager.session_path_dir("manual-delete"),
+            &[Message::user("one")],
+        )
+        .expect("manual edit");
+        let manual_delete_kept_history = manager
+            .load("manual-delete")
+            .map(|(_, messages)| messages.len())
+            == Some(2);
 
         assert!(manual_delete_kept_history, "a JSONL file whose manifest no longer matches must be restored from the verified DB snapshot");
 
         println!("SIMULATION parallel={parallel_ok} panic_outbox={panic_ok} missing_jsonl={jsonl_recovery_ok} missing_db={db_recovery_ok} db_toggle={toggle_ok} manual_jsonl_delete_kept_history={manual_delete_kept_history}");
         std::fs::remove_dir_all(root).expect("remove test directory");
     }
-
 }

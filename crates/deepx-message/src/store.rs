@@ -267,6 +267,9 @@ pub struct MessageStore {
     tool_executor: Option<ToolExecutorFn>,
     /// Number of earliest turns that have been compacted (skipped in LLM context).
     compact_skip: usize,
+    /// True once the store is backed by a separate compact checkpoint instead
+    /// of treating `messages.jsonl` as its active context.
+    has_compact_context: bool,
     /// Next message ID to assign (monotonic per session).
     next_msg_id: u64,
     /// If true, save_msg is a no-op — used during from_messages replay.
@@ -299,6 +302,7 @@ impl Clone for MessageStore {
             cancelled: self.cancelled,
             tool_executor: None,
             compact_skip: self.compact_skip,
+            has_compact_context: self.has_compact_context,
             next_msg_id: self.next_msg_id,
             replaying: false,
             pending_save: Vec::new(),
@@ -316,6 +320,7 @@ impl MessageStore {
             cancelled: false,
             tool_executor: None,
             compact_skip: 0,
+            has_compact_context: false,
             next_msg_id: 1,
             replaying: false,
             pending_save: Vec::new(),
@@ -340,6 +345,7 @@ impl MessageStore {
         self.turns.clear();
         self.cancelled = false;
         self.compact_skip = 0;
+        self.has_compact_context = false;
         self.next_msg_id = 1;
         self.replaying = false;
         self.pending_save.clear();
@@ -386,6 +392,9 @@ impl MessageStore {
                 turn_count,
             );
             self.pending_save.clear();
+            if self.has_compact_context {
+                SessionManager::global().update_compact_context(&self.seed, &self.to_vec());
+            }
         } else {
             SessionManager::global().update_meta(
                 &self.seed,
@@ -891,14 +900,18 @@ impl MessageStore {
         }
         let msgs = self.to_vec();
         let turn_count = self.turns.len();
-        SessionManager::global().save_full(
-            &self.seed,
-            &msgs,
-            model,
-            Some(effort),
-            self.compact_skip,
-            turn_count,
-        );
+        if self.has_compact_context {
+            SessionManager::global().save_compact_context(&self.seed, &msgs);
+        } else {
+            SessionManager::global().save_full(
+                &self.seed,
+                &msgs,
+                model,
+                Some(effort),
+                self.compact_skip,
+                turn_count,
+            );
+        }
         self.pending_save.clear();
     }
 
@@ -1006,7 +1019,11 @@ impl MessageStore {
                                         ..
                                     } = b
                                     {
-                                        if tid == id { Some(name.clone()) } else { None }
+                                        if tid == id {
+                                            Some(name.clone())
+                                        } else {
+                                            None
+                                        }
                                     } else {
                                         None
                                     }
@@ -1035,6 +1052,19 @@ impl MessageStore {
         store.replaying = false;
 
         (store, repairs)
+    }
+
+    /// Mark a restored store as being driven by a compact checkpoint.  New
+    /// messages still append to the immutable archive, while the checkpoint
+    /// is refreshed with the active model context.
+    pub fn set_compact_context_active(&mut self, active: bool) {
+        self.has_compact_context = active;
+    }
+
+    /// Keep IDs monotonic against the raw archive when restoring a compact
+    /// checkpoint (the checkpoint intentionally omits archived messages).
+    pub fn ensure_next_msg_id(&mut self, next: u64) {
+        self.next_msg_id = self.next_msg_id.max(next);
     }
 
     pub fn remove_last_step_if_incomplete(&mut self) -> bool {
@@ -1113,6 +1143,7 @@ impl MessageStore {
         self.turns.insert(0, compact_turn);
         // No skipping needed — compacted data is physically gone.
         self.compact_skip = 0;
+        self.has_compact_context = true;
     }
 
     /// Get the text of any previous compaction summary (for incremental update mode).
@@ -1293,7 +1324,11 @@ fn auto_complete_unfulfilled(step: &mut Step, reason: &str) {
                     .iter()
                     .find_map(|b| {
                         if let deepx_types::ContentBlock::ToolUse { id: tid, name, .. } = b {
-                            if tid == id { Some(name.clone()) } else { None }
+                            if tid == id {
+                                Some(name.clone())
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
@@ -1471,11 +1506,8 @@ mod tests {
         let content = truncated["content"].as_str().expect("content string");
 
         assert!(truncated["truncated"].as_bool().unwrap_or(false));
-        assert!(
-            content.contains(
-                "Call read again with the same path and a later start_line/end_line range."
-            )
-        );
+        assert!(content
+            .contains("Call read again with the same path and a later start_line/end_line range."));
     }
 
     #[test]
@@ -1484,11 +1516,8 @@ mod tests {
         let truncated = truncate_tool_result("read", &result);
 
         assert!(truncated.len() < result.len());
-        assert!(
-            truncated.contains(
-                "Call read again with the same path and a later start_line/end_line range."
-            )
-        );
+        assert!(truncated
+            .contains("Call read again with the same path and a later start_line/end_line range."));
     }
 
     #[test]

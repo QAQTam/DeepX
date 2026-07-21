@@ -25,16 +25,35 @@ pub fn init_session(agent: &mut AgentState, restore_seed: Option<&str>) -> bool 
                 );
                 return false;
             }
-            if let Some((meta, messages)) = SessionManager::global().load(s) {
-                log::info!("[LIFECYCLE] loaded session, {} messages", messages.len());
+            if let Some((meta, archive_messages, compact_context)) =
+                SessionManager::global().load_for_resume(s)
+            {
+                let active_messages = compact_context
+                    .as_ref()
+                    .map(|context| context.messages.as_slice())
+                    .unwrap_or(archive_messages.as_slice());
+                log::info!(
+                    "[LIFECYCLE] loaded session, {} archived messages, {} active messages",
+                    archive_messages.len(),
+                    active_messages.len()
+                );
                 agent.session = meta;
                 agent.session.from_resume = true;
                 agent.session.tokens = 0;
                 let (msg, repairs) = deepx_message::MessageStore::from_messages(
                     &agent.session.seed,
-                    &messages,
+                    active_messages,
                     agent.session.compact_skip,
                 );
+                let archive_next_id = archive_messages
+                    .iter()
+                    .filter_map(|message| message.msg_id)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                let mut msg = msg;
+                msg.set_compact_context_active(compact_context.is_some());
+                msg.ensure_next_msg_id(archive_next_id);
                 log::info!(
                     "[LIFECYCLE] from_messages done, {} turns, {} repairs",
                     msg.turn_count(),
