@@ -1,5 +1,6 @@
 import { createEffect, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import type { TurnViewModel } from "../../presentation/turnProjection";
+import type { ChangeReviewFile } from "../../presentation/turnProjection";
 import TurnGroup from "./TurnGroup";
 
 const BOTTOM_THRESHOLD = 120;
@@ -8,6 +9,7 @@ export default function ConversationTranscript(props: {
   turns: TurnViewModel[];
   hasMore?: boolean;
   onLoadMore?: () => void | Promise<void>;
+  onReviewChanges?: (changes: ChangeReviewFile[]) => void;
 }) {
   let scroller!: HTMLDivElement;
   let transcript!: HTMLElement;
@@ -71,7 +73,7 @@ export default function ConversationTranscript(props: {
         >加载更早消息</button>
       </Show>
       <main ref={transcript} class="conversation-transcript" aria-live="polite">
-        <For each={props.turns} keyed={false}>{(turn) => <TurnGroup turn={turn()} />}</For>
+        <For each={props.turns} keyed={false}>{(turn) => <TurnGroup turn={turn()} onReviewChanges={props.onReviewChanges} />}</For>
       </main>
       <Show when={!followTail()}>
         <button

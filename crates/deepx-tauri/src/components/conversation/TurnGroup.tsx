@@ -1,9 +1,10 @@
 import { For, Show } from "solid-js";
-import type { RoundRenderEntry, TurnViewModel } from "../../presentation/turnProjection";
+import type { ChangeReviewFile, RoundRenderEntry, TurnViewModel } from "../../presentation/turnProjection";
 import ProcessDisclosure from "../process/ProcessDisclosure";
 import ProcessTimeline from "../process/ProcessTimeline";
 import AssistantAnswer from "./AssistantAnswer";
 import UserPromptBubble from "./UserPromptBubble";
+import { useI18n } from "../../i18n";
 
 export type ProcessStatus = "running" | "waiting" | "completed" | "failed" | "cancelled";
 
@@ -13,7 +14,8 @@ function assistantEntry(entry: RoundRenderEntry): AssistantEntry | undefined {
   return entry.kind === "assistant" ? entry : undefined;
 }
 
-export default function TurnGroup(props: { turn: TurnViewModel }) {
+export default function TurnGroup(props: { turn: TurnViewModel; onReviewChanges?: (changes: ChangeReviewFile[]) => void }) {
+  const { t } = useI18n();
   const status = () => props.turn.status as ProcessStatus;
   const activity = () => props.turn.rounds.flatMap(round =>
     round.entries.flatMap(entry => entry.kind === "process" ? entry.items : []),
@@ -24,6 +26,11 @@ export default function TurnGroup(props: { turn: TurnViewModel }) {
     const count = toolCount();
     return count > 0 ? `完成 ${count} 项操作` : "处理过程";
   };
+  const changes = () => props.turn.changes ?? [];
+  const changeTotals = () => changes().reduce(
+    (sum, change) => ({ added: sum.added + change.added, removed: sum.removed + change.removed }),
+    { added: 0, removed: 0 },
+  );
 
   return (
     <article class="conversation-turn" data-turn={props.turn.turnId}>
@@ -61,6 +68,17 @@ export default function TurnGroup(props: { turn: TurnViewModel }) {
           </For>
         )}
       </For>
+
+      <Show when={status() === "completed" && changes().length > 0}>
+        <div class="turn-change-receipt" data-part="turn-change-receipt">
+          <span class="turn-change-receipt-files">{t().review.changedFiles.replace("{n}", String(changes().length))}</span>
+          <Show when={changeTotals().added > 0}><span class="turn-change-add">+{changeTotals().added}</span></Show>
+          <Show when={changeTotals().removed > 0}><span class="turn-change-del">-{changeTotals().removed}</span></Show>
+          <Show when={props.onReviewChanges}>
+            <button type="button" class="turn-change-review" onClick={() => props.onReviewChanges?.(changes())}>{t().review.reviewChanges}</button>
+          </Show>
+        </div>
+      </Show>
     </article>
   );
 }

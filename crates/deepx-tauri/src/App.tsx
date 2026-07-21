@@ -30,6 +30,7 @@ import {
 import { isSessionStreaming } from "./store/sessionSelectors";
 import "./styles/context-panel.css";
 import "./styles/git-diff-panel.css";
+import "./styles/change-review.css";
 import "./styles/skills.css";
 
 type View = "home" | "chat" | "settings" | "skills";

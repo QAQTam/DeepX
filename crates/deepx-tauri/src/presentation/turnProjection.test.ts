@@ -106,4 +106,25 @@ describe("turn projection", () => {
     const view = projectTurn(turn);
     expect(view.interactions).toEqual([]);
   });
+
+  it("builds a review receipt only from successful file mutations", () => {
+    const turn = rawTurn();
+    turn.rounds[0]!.toolCalls = [
+      { id: "edit-1", name: "edit", args_display: "src/a.ts", args_json: '{"path":"src/a.ts"}' },
+      { id: "edit-2", name: "edit", args_display: "src/b.ts", args_json: '{"path":"src/b.ts"}' },
+    ];
+    turn.rounds[0]!.toolResults = {
+      "edit-1": {
+        tool_call_id: "edit-1",
+        output: "[OK] src/a.ts:8 +3 -1 | edit_file\n\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -8 +8 @@\n-old\n+new",
+        success: true,
+      },
+      "edit-2": { tool_call_id: "edit-2", output: "[ERROR] denied", success: false },
+    };
+
+    expect(projectTurn(turn).changes).toEqual([expect.objectContaining({
+      path: "src/a.ts", added: 3, removed: 1,
+      diff: expect.stringContaining("@@ -8 +8 @@"),
+    })]);
+  });
 });

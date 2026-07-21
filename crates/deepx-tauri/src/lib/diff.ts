@@ -32,10 +32,9 @@ export function renderDiffHtml(text: string): string {
 
     const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunkMatch) {
-      if (oldLn === 0 && newLn === 0) {
-        oldLn = parseInt(hunkMatch[1]) - 1;
-        newLn = parseInt(hunkMatch[3]) - 1;
-      }
+      oldLn = parseInt(hunkMatch[1]) - 1;
+      newLn = parseInt(hunkMatch[3]) - 1;
+      rows.push({ line: esc(line), oldLn: "", newLn: "", cls: "diff-row-hunk" });
       continue;
     }
 

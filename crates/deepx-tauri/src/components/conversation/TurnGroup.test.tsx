@@ -6,6 +6,12 @@ import { expect, it, vi } from "vitest";
 import type { TurnViewModel } from "../../presentation/turnProjection";
 import TurnGroup from "./TurnGroup";
 
+vi.mock("../../i18n", () => ({
+  useI18n: () => ({
+    t: () => ({ review: { changedFiles: "Changed {n} files", reviewChanges: "Review changes" } }),
+  }),
+}));
+
 vi.mock("../MarkdownBody", () => ({
   default: (props: { content: string; final?: boolean }) => (
     <div data-markdown-final={props.final ? "true" : "false"}>{props.content}</div>

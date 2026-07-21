@@ -5,6 +5,12 @@ import { expect, it, vi } from "vitest";
 import type { TurnViewModel } from "../../presentation/turnProjection";
 import ConversationTranscript from "./ConversationTranscript";
 
+vi.mock("../../i18n", () => ({
+  useI18n: () => ({
+    t: () => ({ review: { changedFiles: "Changed {n} files", reviewChanges: "Review changes" } }),
+  }),
+}));
+
 class ResizeObserverMock {
   static instances: ResizeObserverMock[] = [];
 

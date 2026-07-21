@@ -103,14 +103,24 @@ fn truncate_tool_result(tool_name: &str, result: &str) -> String {
 /// Fold a completed-turn tool result into a compact status summary.
 /// Deterministic: same input → same output, preserving KV-cache prefix stability.
 ///
-/// - `read` / `search` / `skills`: exempt — code, grep,
-///   active instructions, and their on-demand references remain available.
+/// - `skills` remains complete because its activation instructions are active
+///   context. High-volume read/search results are converted into a stable
+///   retrieval reference once they are no longer in the active step.
 /// - JSON results: preserve metadata, replace content with a fold marker.
 /// - Plain results: keep only the first non-empty line (status + key metadata).
 fn fold_completed_tool_result(tool_name: &str, result: &str) -> String {
-    // Exempt: code and grep results must stay visible for reference.
-    if matches!(tool_name, "read" | "search" | "skills") {
+    // Active skill instructions are an explicit part of the system context and
+    // must not be folded into an opaque marker.
+    if tool_name == "skills" {
         return result.to_string();
+    }
+
+    if matches!(tool_name, "read" | "search") {
+        return fold_retrieval_result(tool_name, result);
+    }
+
+    if matches!(tool_name, "edit" | "edit_block" | "write") {
+        return fold_file_mutation_result(tool_name, result);
     }
 
     // ── JSON-aware folding ──
@@ -155,6 +165,62 @@ fn fold_completed_tool_result(tool_name: &str, result: &str) -> String {
     }
     let cap = first.floor_char_boundary(first.len().min(400));
     format!("{}{}", &first[..cap], hint)
+}
+
+/// Fold a historical read/search result into deterministic metadata plus an
+/// explicit recovery action. This keeps old tool output out of the stable
+/// prefix while preserving the information an agent needs to re-open it.
+fn fold_retrieval_result(tool_name: &str, result: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(result) {
+        let mut folded = serde_json::Map::new();
+        for key in [
+            "status",
+            "path",
+            "start_line",
+            "end_line",
+            "total_lines",
+            "hash",
+            "unchanged",
+            "truncated",
+        ] {
+            if let Some(value) = value.get(key) {
+                folded.insert(key.to_string(), value.clone());
+            }
+        }
+        let hint = if tool_name == "read" {
+            "[read content folded; call read with path and start_line/end_line to retrieve code]"
+        } else {
+            "[search matches folded; call search with the same or narrower query to retrieve matches]"
+        };
+        folded.insert("content".to_string(), serde_json::Value::String(hint.to_string()));
+        return serde_json::Value::Object(folded).to_string();
+    }
+
+    let first = result.lines().find(|line| !line.trim().is_empty()).unwrap_or("");
+    let cap = first.floor_char_boundary(first.len().min(400));
+    let hint = if tool_name == "read" {
+        " [read content folded; call read again with a path and range]"
+    } else {
+        " [search matches folded; call search again with a narrower query]"
+    };
+    format!("{}{}", &first[..cap], hint)
+}
+
+/// Preserve a small, verifiable edit receipt instead of only reporting that a
+/// write succeeded. The full diff remains in persistence/UI; later turns get
+/// the changed path/range and a deterministic instruction to verify it.
+fn fold_file_mutation_result(tool_name: &str, result: &str) -> String {
+    let first = result.lines().find(|line| !line.trim().is_empty()).unwrap_or("");
+    let cap = first.floor_char_boundary(first.len().min(400));
+    let action = match tool_name {
+        "edit" | "edit_block" => "edit",
+        "write" => "write",
+        _ => "change",
+    };
+    format!(
+        "{}\n[{} diff folded; verify the affected range with read before making dependent changes]",
+        &first[..cap], action
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -1407,7 +1473,7 @@ mod tests {
 
         assert_eq!(
             context_result(&context, "write-1"),
-            "WRITE_RESULT [details folded]"
+            "WRITE_RESULT\n[write diff folded; verify the affected range with read before making dependent changes]"
         );
         assert_eq!(context_result(&context, "read-1"), "READ_RESULT");
         assert_eq!(context_result(&context, "exec-1"), "EXEC_RESULT");
@@ -1429,9 +1495,60 @@ mod tests {
 
         assert_eq!(
             context_result(&context, "write-1"),
-            "WRITE_RESULT [details folded]"
+            "WRITE_RESULT\n[write diff folded; verify the affected range with read before making dependent changes]"
         );
-        assert_eq!(context_result(&context, "read-1"), "READ_RESULT");
+        assert_eq!(
+            context_result(&context, "read-1"),
+            "READ_RESULT [read content folded; call read again with a path and range]"
+        );
+    }
+
+    #[test]
+    fn historical_read_keeps_location_metadata_but_not_source_body() {
+        let mut store = MessageStore::new_ephemeral("test");
+        store.push_user("inspect file");
+        store.push_assistant(assistant_with_tools(&[("read-1", "read")]));
+        store.push_tool_result_direct(
+            "read-1",
+            &serde_json::json!({
+                "status": "ok",
+                "path": "src/lib.rs",
+                "start_line": 40,
+                "end_line": 80,
+                "total_lines": 300,
+                "content": "sensitive and lengthy source body"
+            })
+            .to_string(),
+            true,
+        );
+        store.push_user("continue");
+
+        let folded: serde_json::Value = serde_json::from_str(&context_result(
+            &store.build_context_for_gate(&[]),
+            "read-1",
+        ))
+        .expect("folded read remains valid JSON");
+        assert_eq!(folded["path"], "src/lib.rs");
+        assert_eq!(folded["start_line"], 40);
+        assert!(folded["content"].as_str().unwrap().contains("folded"));
+        assert!(!folded.to_string().contains("lengthy source body"));
+    }
+
+    #[test]
+    fn historical_edit_keeps_verification_receipt_not_full_diff() {
+        let mut store = MessageStore::new_ephemeral("test");
+        store.push_user("make edit");
+        store.push_assistant(assistant_with_tools(&[("edit-1", "edit")]));
+        store.push_tool_result_direct(
+            "edit-1",
+            "[OK] src/lib.rs:42 +3 -2 | edit_file\n\n@@ -42,2 +42,3 @@\n-full diff body",
+            true,
+        );
+
+        assert_eq!(
+            context_result(&store.build_context_for_gate(&[]), "edit-1"),
+            "[OK] src/lib.rs:42 +3 -2 | edit_file\n[edit diff folded; verify the affected range with read before making dependent changes]"
+        );
     }
 
     #[test]

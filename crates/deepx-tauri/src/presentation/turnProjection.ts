@@ -25,6 +25,16 @@ export type TurnViewModel = {
   totalTokens?: number;
   /** Approximate tokens per second (total tokens / total elapsed). */
   tokensPerSec?: number;
+  /** Files successfully mutated during this turn, for the post-answer review receipt. */
+  changes?: ChangeReviewFile[];
+};
+
+export type ChangeReviewFile = {
+  path: string;
+  added: number;
+  removed: number;
+  /** Exact tool patch when available; undefined means the review panel shows a receipt only. */
+  diff?: string;
 };
 
 export function toolFamily(name: string): string {
@@ -56,6 +66,55 @@ function toolItem(round: RawRound, call: ToolCallDef): Extract<ProcessItem, { ki
     progress: round.progress[call.id]?.chunks,
     success: result?.success,
   };
+}
+
+const MUTATING_TOOLS = new Set(["write", "edit", "edit_block", "delete"]);
+
+function extractUnifiedDiff(output: string): string | undefined {
+  const start = output.search(/^--- (?:a\/|\/|\S)/m);
+  return start >= 0 ? output.slice(start).trim() : undefined;
+}
+
+function syntheticNewFileDiff(path: string, argsJson: string): string | undefined {
+  try {
+    const content = JSON.parse(argsJson).content;
+    if (typeof content !== "string" || !content) return undefined;
+    const lines = content.replace(/\r\n?/g, "\n").split("\n");
+    if (lines[lines.length - 1] === "") lines.pop();
+    return `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line => `+${line}`).join("\n")}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function changeCount(output: string): { added: number; removed: number } {
+  const match = output.match(/\+(\d+)\s+-(\d+)/);
+  return match ? { added: Number(match[1]), removed: Number(match[2]) } : { added: 0, removed: 0 };
+}
+
+function projectChanges(rawTurn: RawTurn): ChangeReviewFile[] {
+  const files = new Map<string, ChangeReviewFile>();
+  for (const round of rawTurn.rounds) {
+    for (const call of round.toolCalls) {
+      if (!MUTATING_TOOLS.has(call.name)) continue;
+      const result = round.toolResults[call.id];
+      if (!result?.success) continue;
+      let path: string | undefined;
+      try { path = JSON.parse(call.args_json).path; } catch { /* tool output remains available */ }
+      if (typeof path !== "string" || !path) continue;
+      const counts = changeCount(result.output);
+      const diff = extractUnifiedDiff(result.output) ??
+        (call.name === "write" ? syntheticNewFileDiff(path, call.args_json) : undefined);
+      const previous = files.get(path);
+      files.set(path, {
+        path,
+        added: (previous?.added ?? 0) + counts.added,
+        removed: (previous?.removed ?? 0) + counts.removed,
+        diff: previous?.diff && diff ? `${previous.diff}\n\n${diff}` : diff ?? previous?.diff,
+      });
+    }
+  }
+  return [...files.values()];
 }
 
 function projectRoundEntries(
@@ -172,5 +231,6 @@ export function projectTurn(rawTurn: RawTurn): TurnViewModel {
     interactions,
     totalTokens,
     tokensPerSec,
+    changes: projectChanges(rawTurn),
   };
 }

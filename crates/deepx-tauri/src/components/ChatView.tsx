@@ -15,6 +15,8 @@ import type { SessionUiState } from "../store/sessionUiState";
 import ComposerDock from "./composer/ComposerDock";
 import ConversationTranscript from "./conversation/ConversationTranscript";
 import GitDiffPanel from "./GitDiffPanel";
+import ChangeReviewPanel from "./ChangeReviewPanel";
+import type { ChangeReviewFile } from "../presentation/turnProjection";
 import AskUserPrompt from "./interactions/AskUserPrompt";
 import CompactStatusRow from "./interactions/CompactStatusRow";
 import InteractionDock from "./interactions/InteractionDock";
@@ -77,6 +79,8 @@ export default function ChatView(props: ChatViewProps) {
   const [branch, setBranch] = createSignal("");
   const [showGitWorkspace, setShowGitWorkspace] = createSignal(false);
   const [selectedGitFile, setSelectedGitFile] = createSignal<string | undefined>();
+  const [reviewChanges, setReviewChanges] = createSignal<ChangeReviewFile[]>([]);
+  const [showChangeReview, setShowChangeReview] = createSignal(false);
   const [compactCompleteVisible, setCompactCompleteVisible] = createSignal(
     untrack(() => session().compact.completionRevision > 0),
   );
@@ -177,6 +181,10 @@ export default function ChatView(props: ChatViewProps) {
         turns={turns()}
         hasMore={canLoadMore(session())}
         onLoadMore={props.onLoadMore}
+        onReviewChanges={(changes) => {
+          setReviewChanges(changes);
+          setShowChangeReview(true);
+        }}
       />
       <Show when={session().compact.active || compactCompleteVisible()}>
         <InteractionDock>
@@ -245,6 +253,11 @@ export default function ChatView(props: ChatViewProps) {
         changeRevision={session().environment.gitRevision}
         initialFile={selectedGitFile()}
         onClose={() => setShowGitWorkspace(false)}
+      />
+      <ChangeReviewPanel
+        open={showChangeReview()}
+        changes={reviewChanges()}
+        onClose={() => setShowChangeReview(false)}
       />
     </div>
   );
