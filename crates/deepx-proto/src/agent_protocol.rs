@@ -733,7 +733,7 @@ fn default_load_count() -> u32 {
 }
 
 /// Streaming block kind for RoundDelta.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum RoundDeltaKind {

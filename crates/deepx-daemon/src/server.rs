@@ -10,7 +10,7 @@ use deepx_proto::{
 use deepx_runtime::{DeepxService, EventBus, LeaseDecision, LeaseManager};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{Semaphore, mpsc, watch};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
@@ -19,6 +19,15 @@ const MAX_FRAME_BYTES: usize = 1024 * 1024;
 const HEARTBEAT_INTERVAL_MS: u64 = 5_000;
 const LEASE_TIMEOUT_MS: u64 = 15_000;
 const MAX_CONNECTIONS: usize = 32;
+const OUTBOUND_QUEUE_CAPACITY: usize = 2_048;
+const PRIORITY_QUEUE_CAPACITY: usize = 128;
+const REQUEST_QUEUE_CAPACITY: usize = 64;
+
+struct RequestJob {
+    request_id: String,
+    method: String,
+    params: serde_json::Value,
+}
 
 fn daemon_channel() -> String {
     std::env::var("DEEPX_CHANNEL").unwrap_or_else(|_| {
@@ -227,6 +236,51 @@ async fn handle_connection(
     let mut daemon_shutdown = shutdown.subscribe();
     let mut command_window = Instant::now();
     let mut command_count = 0_u32;
+    let (priority_tx, mut priority_rx) = mpsc::channel(PRIORITY_QUEUE_CAPACITY);
+    let (event_tx, mut event_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+    let mut writer = tokio::spawn(async move {
+        loop {
+            let message = tokio::select! {
+                biased;
+                message=priority_rx.recv()=>message,
+                message=event_rx.recv()=>message,
+            };
+            let Some(message) = message else { break };
+            send(&mut sink, &message).await?;
+        }
+        Ok::<(), String>(())
+    });
+    let (request_tx, mut request_rx) = mpsc::channel::<RequestJob>(REQUEST_QUEUE_CAPACITY);
+    let request_service = service.clone();
+    let request_outbound = priority_tx.clone();
+    let request_worker = tokio::spawn(async move {
+        while let Some(job) = request_rx.recv().await {
+            let RequestJob {
+                request_id,
+                method,
+                params,
+            } = job;
+            let service = request_service.clone();
+            let handled =
+                tokio::task::spawn_blocking(move || service.handle(&method, &params)).await;
+            let message = match handled {
+                Ok(Ok(result)) => ControlServerMessage::Response { request_id, result },
+                Ok(Err(message)) => ControlServerMessage::Error {
+                    request_id: Some(request_id),
+                    code: "request_failed".into(),
+                    message,
+                },
+                Err(error) => ControlServerMessage::Error {
+                    request_id: Some(request_id),
+                    code: "runtime_failed".into(),
+                    message: error.to_string(),
+                },
+            };
+            if request_outbound.send(message).await.is_err() {
+                break;
+            }
+        }
+    });
     loop {
         tokio::select! {
             incoming=source.next()=>{
@@ -236,13 +290,13 @@ async fn handle_connection(
                 match message {
                     ControlClientMessage::Heartbeat{nonce}=>{
                         leases.lock().unwrap_or_else(|e|e.into_inner()).renew_connection(&connection_id,Instant::now());
-                        send(&mut sink,&ControlServerMessage::Heartbeat{server_epoch:service.events().epoch().into(),seq:service.events().current_seq(),nonce}).await?;
+                        priority_tx.send(ControlServerMessage::Heartbeat{server_epoch:service.events().epoch().into(),seq:service.events().current_seq(),nonce}).await.map_err(|_|"control writer stopped".to_string())?;
                     }
                     ControlClientMessage::SessionAttach{request_id,seed}=>{
                         let decision=leases.lock().unwrap_or_else(|e|e.into_inner()).attach(&seed,&client_instance_id,&client_kind,&connection_id,Instant::now());
                         match decision {
                             LeaseDecision::Acquired|LeaseDecision::Resumed=>{
-                                send(&mut sink,&ControlServerMessage::Response{request_id,result:serde_json::json!({"seed":seed})}).await?;
+                                priority_tx.send(ControlServerMessage::Response{request_id,result:serde_json::json!({"seed":seed})}).await.map_err(|_|"control writer stopped".to_string())?;
                                 // An attach only needs the canonical state for
                                 // that session. Rebuilding every previously
                                 // attached session here turns multi-session
@@ -251,29 +305,29 @@ async fn handle_connection(
                                 let attached=vec![seed];
                                 let snapshot_seq=service.events().current_seq();
                                 let snapshot=build_snapshot(&service,attached).await?;
-                                send(&mut sink,&ControlServerMessage::Snapshot{server_epoch:service.events().epoch().into(),seq:snapshot_seq,snapshot}).await?;
+                                priority_tx.send(ControlServerMessage::Snapshot{server_epoch:service.events().epoch().into(),seq:snapshot_seq,snapshot}).await.map_err(|_|"control writer stopped".to_string())?;
                                 delivered_seq=snapshot_seq;
                             }
-                            LeaseDecision::Denied{owner_kind,retry_after_ms}=>send(&mut sink,&ControlServerMessage::LeaseDenied{request_id,seed,owner_kind,retry_after_ms}).await?
+                            LeaseDecision::Denied{owner_kind,retry_after_ms}=>priority_tx.send(ControlServerMessage::LeaseDenied{request_id,seed,owner_kind,retry_after_ms}).await.map_err(|_|"control writer stopped".to_string())?
                         }
                     }
                     ControlClientMessage::SessionDetach{request_id,seed}=>{
                         let detached=leases.lock().unwrap_or_else(|e|e.into_inner()).detach(&seed,&client_instance_id);
-                        send(&mut sink,&ControlServerMessage::Response{request_id,result:serde_json::json!({"detached":detached})}).await?;
+                        priority_tx.send(ControlServerMessage::Response{request_id,result:serde_json::json!({"detached":detached})}).await.map_err(|_|"control writer stopped".to_string())?;
                     }
                     ControlClientMessage::Request{request_id,method,params}=>{
                         if DeepxService::session_scoped(&method){
                             let seed=params.get("seed").and_then(serde_json::Value::as_str).unwrap_or_default();
                             if !leases.lock().unwrap_or_else(|e|e.into_inner()).owns(seed,&client_instance_id,Instant::now()){
-                                send(&mut sink,&ControlServerMessage::Error{request_id:Some(request_id),code:"session_lease_required".into(),message:format!("session {seed} is not attached")}).await?;continue;
+                                priority_tx.send(ControlServerMessage::Error{request_id:Some(request_id),code:"session_lease_required".into(),message:format!("session {seed} is not attached")}).await.map_err(|_|"control writer stopped".to_string())?;continue;
                             }
                         }
-                        let request_service=service.clone();
-                        let handled=tokio::task::spawn_blocking(move||request_service.handle(&method,&params)).await;
-                        match handled {
-                            Ok(Ok(result))=>send(&mut sink,&ControlServerMessage::Response{request_id,result}).await?,
-                            Ok(Err(message))=>send(&mut sink,&ControlServerMessage::Error{request_id:Some(request_id),code:"request_failed".into(),message}).await?,
-                            Err(error)=>send(&mut sink,&ControlServerMessage::Error{request_id:Some(request_id),code:"runtime_failed".into(),message:error.to_string()}).await?,
+                        if let Err(error)=request_tx.try_send(RequestJob{request_id:request_id.clone(),method,params}) {
+                            let code=match error {
+                                mpsc::error::TrySendError::Full(_)=>"request_queue_full",
+                                mpsc::error::TrySendError::Closed(_)=>"runtime_failed",
+                            };
+                            priority_tx.send(ControlServerMessage::Error{request_id:Some(request_id),code:code.into(),message:"daemon request worker is unavailable".into()}).await.map_err(|_|"control writer stopped".to_string())?;
                         }
                     }
                     ControlClientMessage::ClientHello{..}=>break,
@@ -283,27 +337,37 @@ async fn handle_connection(
                 Ok(ControlServerMessage::Event{seq,..}) if seq<=delivered_seq=>{},
                 Ok(message @ ControlServerMessage::Event{seq,..})=>{
                     delivered_seq=seq;
-                    if event_allowed(&message,&leases,&client_instance_id){send(&mut sink,&message).await?;}
+                    if event_allowed(&message,&leases,&client_instance_id){queue_runtime_event(&event_tx,message)?;}
                 },
-                Ok(message)=>send(&mut sink,&message).await?,
+                Ok(message)=>queue_runtime_event(&event_tx,message)?,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_))=>{
                     let attached=leases.lock().unwrap_or_else(|e|e.into_inner()).attached_for(&client_instance_id,Instant::now());
                     let snapshot_seq=service.events().current_seq();
                     let snapshot=build_snapshot(&service,attached).await?;
-                    send(&mut sink,&ControlServerMessage::Snapshot{server_epoch:service.events().epoch().into(),seq:snapshot_seq,snapshot}).await?;
+                    priority_tx.send(ControlServerMessage::Snapshot{server_epoch:service.events().epoch().into(),seq:snapshot_seq,snapshot}).await.map_err(|_|"control writer stopped".to_string())?;
                     delivered_seq=snapshot_seq;
                 }
                 Err(_)=>break,
             },
-            _=heartbeat.tick()=>send(&mut sink,&ControlServerMessage::Heartbeat{server_epoch:service.events().epoch().into(),seq:service.events().current_seq(),nonce:service.events().current_seq()}).await?,
+            _=heartbeat.tick()=>priority_tx.send(ControlServerMessage::Heartbeat{server_epoch:service.events().epoch().into(),seq:service.events().current_seq(),nonce:service.events().current_seq()}).await.map_err(|_|"control writer stopped".to_string())?,
             changed=daemon_shutdown.changed()=>{
                 if changed.is_err() || *daemon_shutdown.borrow() {
-                    send(&mut sink,&ControlServerMessage::Shutdown{server_epoch:service.events().epoch().into(),seq:service.events().current_seq(),reason:"daemon_stop_requested".into()}).await?;
+                    priority_tx.send(ControlServerMessage::Shutdown{server_epoch:service.events().epoch().into(),seq:service.events().current_seq(),reason:"daemon_stop_requested".into()}).await.map_err(|_|"control writer stopped".to_string())?;
                     break;
                 }
             },
+            result=&mut writer=>{
+                match result {
+                    Ok(Ok(()))=>{},
+                    Ok(Err(error))=>return Err(error),
+                    Err(error)=>return Err(error.to_string()),
+                }
+                break;
+            },
         }
     }
+    request_worker.abort();
+    writer.abort();
     Ok(())
 }
 
@@ -330,6 +394,19 @@ fn event_allowed(
         _ => true,
     }
 }
+
+fn queue_runtime_event(
+    sender: &mpsc::Sender<ControlServerMessage>,
+    message: ControlServerMessage,
+) -> Result<(), String> {
+    sender.try_send(message).map_err(|error| match error {
+        mpsc::error::TrySendError::Full(_) => {
+            "control event writer overloaded; reconnect to recover from snapshot".to_string()
+        }
+        mpsc::error::TrySendError::Closed(_) => "control writer stopped".to_string(),
+    })
+}
+
 async fn send<S>(sink: &mut S, message: &ControlServerMessage) -> Result<(), String>
 where
     S: futures_util::Sink<Message> + Unpin,

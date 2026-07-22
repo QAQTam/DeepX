@@ -60,7 +60,7 @@ use super::engine_input::InputEngine;
 use super::engine_misc::MiscEngine;
 use super::engine_session::SessionEngine;
 use super::engine_tool::PermissionDisposition;
-use super::paced_emitter::{PacedEmitter, DEFAULT_RATE};
+use super::paced_emitter::{DEFAULT_FLUSH_INTERVAL, PacedEmitter};
 use super::types::*;
 use crate::agent::AgentState;
 use crate::notification;
@@ -220,7 +220,7 @@ impl Loop {
         let paced_emitter = PacedEmitter::new(
             event_tx.clone(),
             writer_dead.clone(),
-            DEFAULT_RATE,
+            DEFAULT_FLUSH_INTERVAL,
         );
 
         Loop {
