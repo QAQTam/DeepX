@@ -9,8 +9,9 @@ import {
 
 class MemoryStorage implements ReloadStorage {
   private values = new Map<string, string>();
+  writeCount = 0;
   getItem(key: string) { return this.values.get(key) ?? null; }
-  setItem(key: string, value: string) { this.values.set(key, value); }
+  setItem(key: string, value: string) { this.writeCount += 1; this.values.set(key, value); }
   removeItem(key: string) { this.values.delete(key); }
 }
 
@@ -37,10 +38,12 @@ describe("sessionEventRuntime", () => {
 
     scheduled[0]!();
     expect(commits[commits.length - 1]).toBe("AB");
+    expect(storage.writeCount).toBe(1);
 
     runtime.push({ type: "turn_end", turn_id: "t1" });
     expect(runtime.current().turns[0].status).toBe("completed");
     expect(commits).toHaveLength(3);
+    expect(storage.writeCount).toBe(2);
   });
 
   it("flushes on dispose and restores the last twenty turns", () => {
@@ -90,9 +93,10 @@ describe("sessionEventRuntime", () => {
       version: 3, state: createRawSessionState("seed-a"),
     }));
     const commits: RawSessionState[] = [];
+    let writeAttempts = 0;
     const storage: ReloadStorage = {
       getItem: key => values.get(key) ?? null,
-      setItem: () => { throw new Error("quota"); },
+      setItem: () => { writeAttempts += 1; throw new Error("quota"); },
       removeItem: key => { values.delete(key); },
     };
     expect(loadReloadSnapshot(storage, "seed-a")).toBeUndefined();
@@ -105,6 +109,9 @@ describe("sessionEventRuntime", () => {
       storage,
     });
     runtime.push({ type: "ready" });
+    runtime.push({ type: "done" });
     expect(commits[commits.length - 1]?.session.ready).toBe(true);
+    expect(writeAttempts).toBe(1);
+    expect(values.has("deepx:reload:v4:seed-a")).toBe(false);
   });
 });

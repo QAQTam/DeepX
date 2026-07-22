@@ -982,8 +982,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepx-client"
+version = "0.9.0"
+dependencies = [
+ "deepx-proto",
+ "deepx-types",
+ "futures-util",
+ "rand 0.9.5",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "deepx-companion"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "deepx-proto",
  "futures-util",
@@ -995,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-config"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "deepx-types",
  "log",
@@ -1007,8 +1020,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepx-daemon"
+version = "0.9.0"
+dependencies = [
+ "deepx-proto",
+ "deepx-runtime",
+ "deepx-types",
+ "futures-util",
+ "log",
+ "rand 0.9.5",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "deepx-gate"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "deepx-config",
@@ -1023,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-gate-testui"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "deepx-gate",
  "deepx-types",
@@ -1033,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-message"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "deepx-proto",
  "deepx-session",
@@ -1045,7 +1073,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-msglp"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "deepx-config",
  "deepx-gate",
@@ -1066,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-proto"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "deepx-types",
  "serde",
@@ -1075,8 +1103,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepx-runtime"
+version = "0.9.0"
+dependencies = [
+ "deepx-config",
+ "deepx-msglp",
+ "deepx-proto",
+ "deepx-session",
+ "deepx-tools",
+ "deepx-types",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "deepx-session"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "deepx-types",
  "log",
@@ -1090,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-skills"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "log",
  "serde",
@@ -1100,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-subagent"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "deepx-session",
  "deepx-tools",
@@ -1112,27 +1156,23 @@ dependencies = [
 
 [[package]]
 name = "deepx-tauri"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
- "deepx-companion",
- "deepx-config",
- "deepx-msglp",
+ "deepx-client",
  "deepx-proto",
- "deepx-session",
- "deepx-tools",
- "deepx-types",
  "log",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
+ "tokio",
  "ts-rs",
 ]
 
 [[package]]
 name = "deepx-tools"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "deepx-message",
@@ -1154,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "deepx-types"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5551,6 +5591,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

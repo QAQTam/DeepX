@@ -89,7 +89,10 @@ mod tests {
     }
 
     #[test]
-    fn prompt_starts_with_identity() {
-        assert!(full_system_prompt().starts_with("[IDENTITY]"));
+    fn prompt_places_identity_before_operating_rules() {
+        let prompt = full_system_prompt();
+        let identity = prompt.find("[IDENTITY]").expect("identity section");
+        let rules = prompt.find("[WHAT IS SKILLS]").expect("rules section");
+        assert!(identity < rules);
     }
 }

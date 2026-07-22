@@ -9,7 +9,7 @@ import { createRawSessionState } from "../store/sessionEventReducer";
 import { createSessionUiState } from "../store/sessionUiState";
 import ChatView from "./ChatView";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../runtime/backendClient", () => ({ request: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn().mockResolvedValue(undefined) }));
 
 const cleanups: Array<() => void> = [];

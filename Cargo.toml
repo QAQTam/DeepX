@@ -9,6 +9,9 @@ members = [
     "crates/deepx-types",
     "crates/deepx-proto",
     "crates/deepx-companion",
+    "crates/deepx-runtime",
+    "crates/deepx-client",
+    "crates/deepx-daemon",
     "crates/deepx-tools",
     "crates/deepx-session",
     "crates/deepx-subagent",
@@ -17,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 license = "MIT"
 

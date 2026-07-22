@@ -32,12 +32,20 @@ impl NotificationThread {
             .name("deepx-notify".into())
             .spawn(move || {
                 #[cfg(windows)]
-                unsafe {
-                    let _ = windows::Win32::System::Com::CoInitializeEx(
-                        None,
-                        windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
-                    );
-                }
+                let winrt_initialized = std::env::var_os("DEEPX_NATIVE_NOTIFICATIONS")
+                    .is_some_and(|value| value == "1")
+                    && unsafe {
+                        windows::Win32::System::WinRT::RoInitialize(
+                            windows::Win32::System::WinRT::RO_INIT_SINGLETHREADED,
+                        )
+                        .map(|_| true)
+                        .unwrap_or_else(|error| {
+                            log::warn!(
+                                "Windows Runtime initialization failed; notifications disabled: {error}"
+                            );
+                            false
+                        })
+                    };
                 'outer: loop {
                     let mut got_any = false;
                     loop {
@@ -45,14 +53,20 @@ impl NotificationThread {
                             Ok(NotifyMessage::Toast(body)) => {
                                 got_any = true;
                                 #[cfg(windows)]
-                                show_toast_windows(&body);
+                                if winrt_initialized {
+                                    show_toast_windows(&body);
+                                }
                                 #[cfg(not(windows))]
                                 let _ = &body;
                             }
                             Ok(NotifyMessage::ToastWithInput { body, reply_tx }) => {
                                 got_any = true;
                                 #[cfg(windows)]
-                                show_toast_with_input_windows(&body, reply_tx);
+                                if winrt_initialized {
+                                    show_toast_with_input_windows(&body, reply_tx);
+                                } else {
+                                    let _ = reply_tx.send(None);
+                                }
                                 #[cfg(not(windows))]
                                 {
                                     let _ = &body;
@@ -70,8 +84,10 @@ impl NotificationThread {
                     }
                 }
                 #[cfg(windows)]
-                unsafe {
-                    windows::Win32::System::Com::CoUninitialize();
+                if winrt_initialized {
+                    unsafe {
+                        windows::Win32::System::WinRT::RoUninitialize();
+                    }
                 }
             })
             .expect("failed to spawn notification thread");

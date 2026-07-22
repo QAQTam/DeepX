@@ -1,5 +1,5 @@
 import { createEffect, createSignal, For, onSettled, Show } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
+import { request } from "../runtime/backendClient";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { useI18n, type Lang } from "../i18n";
 import PermissionLevelSelect from "./composer/PermissionLevelSelect";
@@ -132,8 +132,7 @@ export default function SettingsView(props: SettingsViewProps) {
     setConfigLoading(true);
     setConfigError(null);
     try {
-      const raw = await invoke<string>("cmd_load_config");
-      setConfigData(JSON.parse(raw));
+      setConfigData(await request<unknown>("config.load"));
     } catch (e) {
       console.error(e);
       setConfigError(e);
@@ -148,8 +147,7 @@ export default function SettingsView(props: SettingsViewProps) {
   onSettled(() => {
     void (async () => {
     try {
-      const raw = await invoke<string>("cmd_list_available_tools");
-      setAllTools(JSON.parse(raw) as string[]);
+      setAllTools(await request<string[]>("skills.list_tools"));
     } catch (e) { console.error(e); }
     })();
   });
@@ -230,7 +228,7 @@ export default function SettingsView(props: SettingsViewProps) {
 
   async function toggleDatabase(enabled: boolean) {
     try {
-      await invoke("cmd_set_database_enabled", { enabled });
+      await request("config.set_database_enabled", { enabled });
       setDatabaseEnabled(enabled);
       dbToggled = false;
       setSaved(true);
@@ -244,7 +242,7 @@ export default function SettingsView(props: SettingsViewProps) {
     try {
       const apiKeyReplacement = showApiKeyInput() ? apiKeyValue() : "";
       const subApiKeyReplacement = showSubApiKeyInput() ? subApiKeyValue() : "";
-      await invoke("cmd_save_config", {
+      await request("config.save", {
         apiKey: apiKeyReplacement,
         model: model(), baseUrl: baseUrl(),
         providerId: providerId(), endpoint: endpointId(),
@@ -286,8 +284,7 @@ export default function SettingsView(props: SettingsViewProps) {
     void (async () => {
     if (!enabled) return;
     try {
-      const raw = await invoke<string>("cmd_migration_count");
-      const data = JSON.parse(raw);
+      const data = await request<{ pending?: number }>("config.database_migration_count");
       setMigrationPending(data.pending ?? 0);
     } catch (_) { setMigrationPending(0); }
     })();
@@ -304,8 +301,7 @@ export default function SettingsView(props: SettingsViewProps) {
     setMigrationFailed(false);
 
     try {
-      const raw = await invoke<string>("cmd_migrate_to_turso");
-      const data = JSON.parse(raw);
+      const data = await request<{ failed?: number; sessions?: number; messages?: number; outcomes?: { status?: string; seed?: string; reason?: string }[] }>("config.database_migrate");
       const failed = Number(data.failed ?? 0);
       const failures = Array.isArray(data.outcomes)
         ? data.outcomes
@@ -336,7 +332,7 @@ export default function SettingsView(props: SettingsViewProps) {
     if (dualWriteChecked() !== databaseEnabled()) {
       setDatabaseEnabled(dualWriteChecked());
       dbToggled = true;
-      await invoke("cmd_save_config", {
+      await request("config.save", {
         apiKey: showApiKeyInput() ? apiKeyValue() : "",
         model: model(), baseUrl: baseUrl(),
         providerId: providerId(), endpoint: endpointId(),

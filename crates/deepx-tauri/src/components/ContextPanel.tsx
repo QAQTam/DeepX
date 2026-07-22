@@ -1,5 +1,5 @@
 import { createEffect, createSignal, Show } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
+import { request } from "../runtime/backendClient";
 import StreamMetricsChart, { type MetricPoint } from "./StreamMetricsChart";
 import { useI18n } from "../i18n";
 
@@ -61,8 +61,8 @@ export default function ContextPanel(props: { seed: string; metricHistory: Metri
   async function refresh() {
     if (!props.seed) return;
     try {
-      const raw = await invoke<string>("cmd_get_context_stats", { seed: props.seed });
-      setStats(JSON.parse(raw));
+      const stats = await request<ContextStats>("plan.context_stats", { seed: props.seed });
+      setStats(stats);
       setUpdatedAt(Date.now());
     } catch (e) { console.error("context_stats:", e); }
   }

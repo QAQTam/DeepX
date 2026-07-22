@@ -22,6 +22,7 @@ use std::fmt;
 
 mod agent_protocol;
 mod companion;
+mod control;
 
 // ── Re-exports ──────────────────────────────────────────────────────────
 
@@ -36,6 +37,10 @@ pub use companion::{
     CompanionInteraction, CompanionInteractionKey, CompanionInteractionKind,
     CompanionInteractionPayload, CompanionInteractionResponse, CompanionServerMessage,
     CompanionSession, CompanionSnapshot, CompanionVisualState,
+};
+pub use control::{
+    CONTROL_PROTOCOL_VERSION, ControlClientMessage, ControlServerMessage, ControlSnapshot,
+    DaemonDiscovery,
 };
 
 // ── Redacted (prevents API key leaks in debug logs) ─────────────────────

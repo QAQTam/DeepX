@@ -26,7 +26,6 @@ fn ten_parallel_reads_same_file() {
     agent.ephemeral = true;
 
     // ── Create IPC loop with pipe channels ──
-    let (cmd_tx_to_agent, cmd_rx_from_test) = mpsc::channel::<Ui2Agent>();
     let (event_tx_from_agent, event_rx_to_test) = mpsc::channel::<Agent2Ui>();
 
     // We need to create a Loop, but Loop::new_ipc uses stdin/stdout.
@@ -38,7 +37,6 @@ fn ten_parallel_reads_same_file() {
     let mut loop_ = Loop::new_ipc(agent, BufReader::new(input_reader), output_writer);
 
     // ── Spawn a thread that feeds commands and collects events ──
-    let cmd_tx = cmd_tx_to_agent.clone();
     let event_rx = event_rx_to_test;
     let event_tx = event_tx_from_agent;
 
@@ -108,8 +106,13 @@ fn ten_parallel_reads_same_file() {
 
         // Drain events and check for errors
         let mut error_count = 0;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            match event_rx.recv_timeout(Duration::from_secs(10)) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match event_rx.recv_timeout(remaining) {
                 Ok(Agent2Ui::Error { message }) => {
                     eprintln!("Error event: {}", message);
                     error_count += 1;

@@ -37,6 +37,14 @@ pub fn hp_port_path() -> PathBuf {
     data_dir().join("hp.port")
 }
 
+pub fn daemon_discovery_path() -> PathBuf {
+    data_dir().join("daemon.json")
+}
+
+pub fn daemon_lock_path() -> PathBuf {
+    data_dir().join("daemon.lock")
+}
+
 /// deepx sessions directory.
 pub fn sessions_dir() -> PathBuf {
     data_dir().join("sessions")
@@ -57,11 +65,8 @@ pub fn workspace_path() -> PathBuf {
 /// - Unix: `kill -9`
 pub fn kill_process(pid: u32) {
     if cfg!(target_os = "windows") {
-        drop(
-            std::process::Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
-                .output(),
-        );
+        let mut command = background_command("taskkill");
+        drop(command.args(["/F", "/PID", &pid.to_string()]).output());
     } else {
         drop(
             std::process::Command::new("kill")
@@ -69,6 +74,43 @@ pub fn kill_process(pid: u32) {
                 .output(),
         );
     }
+}
+
+/// Return whether a process id currently exists without mutating it.
+pub fn process_is_running(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    if cfg!(target_os = "windows") {
+        background_command("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .is_some_and(|output| {
+                String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+                    line.split(',')
+                        .nth(1)
+                        .is_some_and(|field| field.trim_matches('"').trim() == pid.to_string())
+                })
+            })
+    } else {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+}
+
+fn background_command(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 /// Convert days since epoch 0000-01-01 to (year, month, day).

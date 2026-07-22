@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, Match, onCleanup, Show, Switch, untrack, type Accessor } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
+import { request } from "../runtime/backendClient";
 import { open } from "@tauri-apps/plugin-shell";
 import type { AskAnswer, TaskInfo } from "../lib/types";
 import { createSessionProjector } from "../presentation/useConversationView";
@@ -103,22 +103,22 @@ export default function ChatView(props: ChatViewProps) {
 
   async function handleSetMode(nextMode: string) {
     setMode(nextMode);
-    try { await invoke("cmd_set_mode", { seed: seed(), mode: nextMode }); }
+    try { await request("session.set_mode", { seed: seed(), mode: nextMode }); }
     catch (error) { console.error("set_mode error:", error); }
   }
 
   async function handleSend(text: string, files: string[]) {
-    try { await invoke("cmd_send_message", { seed: seed(), text, files }); }
+    try { await request("session.send_message", { seed: seed(), text, files }); }
     catch (error) { console.error("send_message error:", error); }
   }
 
   async function handleStop() {
-    try { await invoke("cmd_cancel", { seed: seed() }); }
+    try { await request("session.cancel", { seed: seed() }); }
     catch (error) { console.error("cancel error:", error); }
   }
 
   async function handleCompact() {
-    try { await invoke("cmd_compact", { seed: seed() }); }
+    try { await request("session.compact", { seed: seed() }); }
     catch (error) { console.error("compact error:", error); }
   }
 
@@ -137,7 +137,7 @@ export default function ChatView(props: ChatViewProps) {
     () => ({ open: environmentOpen(), seed: seed() }),
     ({ open, seed: currentSeed }) => {
     if (!open) return;
-    invoke<string>("cmd_get_git_branch", { seed: currentSeed })
+    request<string>("git.branch", { seed: currentSeed })
       .then(setBranch)
       .catch(() => setBranch(""));
   });

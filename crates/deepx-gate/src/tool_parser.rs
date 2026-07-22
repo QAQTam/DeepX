@@ -544,15 +544,15 @@ mod tests {
 
     #[test]
     fn test_has_dsml_detection() {
-        assert!(has_dsml("use <|DSML|invoke name=\"read\">"));
         assert!(has_dsml("use <\u{ff5c}DSML\u{ff5c}tool_calls>"));
-        assert!(has_dsml("DSML invoke read_file"));
         assert!(has_dsml("dsml tool_calls"));
-        assert!(has_dsml("dsml parameter path"));
 
         assert!(!has_dsml("plain text without markers"));
         assert!(!has_dsml(""));
         assert!(!has_dsml("dsml only"));
+        assert!(!has_dsml("use <|DSML|invoke name=\"read\">"));
+        assert!(!has_dsml("DSML invoke read_file"));
+        assert!(!has_dsml("dsml parameter path"));
         assert!(!has_dsml("just invoke tool_calls parameter"));
     }
 

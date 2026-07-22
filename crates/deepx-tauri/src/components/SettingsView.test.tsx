@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { invoke } from "@tauri-apps/api/core";
+import { request } from "../runtime/backendClient";
 import { createSignal } from "solid-js";
 import { render } from "@solidjs/web";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createI18n, I18nCtx, type Lang } from "../i18n";
 import SettingsView from "./SettingsView";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("../runtime/backendClient", () => ({ request: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn(), open: vi.fn() }));
 
-const invokeMock = vi.mocked(invoke);
+const invokeMock = vi.mocked(request);
 
 type ThemeMode = "system" | "light" | "dark" | "dark-gray";
 
@@ -32,7 +32,7 @@ const sampleProviders = [
 ];
 
 function cfg(overrides: Record<string, unknown> = {}) {
-  return JSON.stringify({
+  return {
     api_key: "****",
     model: "deepseek-chat",
     base_url: "https://api.deepseek.com/v1",
@@ -53,7 +53,7 @@ function cfg(overrides: Record<string, unknown> = {}) {
       default_tools: ["read_file", "search"],
     },
     ...overrides,
-  });
+  };
 }
 
 function setup(props: { lang?: () => Lang; theme?: () => ThemeMode } = {}) {
@@ -196,12 +196,12 @@ describe("SettingsView – API Key behavior", () => {
     host.remove();
   });
 
-  it("4. save calls cmd_save_config with all original fields intact", async () => {
+  it("4. save requests config.save with all original fields intact", async () => {
     invokeMock
       .mockResolvedValueOnce(cfg()) // load
-      .mockResolvedValueOnce("[]")  // cmd_list_available_tools
-      .mockResolvedValueOnce(JSON.stringify({ pending: 0 })) // cmd_migration_count
-      .mockResolvedValue(undefined); // cmd_save_config + any extra
+      .mockResolvedValueOnce([])  // skills.list_tools
+      .mockResolvedValueOnce({ pending: 0 }) // config.database_migration_count
+      .mockResolvedValue(undefined); // config.save + any extra
 
     // For English i18n to get exact button text
     const [lang] = createSignal<Lang>("en");
@@ -242,7 +242,7 @@ describe("SettingsView – API Key behavior", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const saveCalls = invokeMock.mock.calls.filter(
-      (c) => c[0] === "cmd_save_config",
+      (c) => c[0] === "config.save",
     );
     expect(saveCalls.length).toBeGreaterThanOrEqual(1);
 
@@ -338,9 +338,9 @@ describe("SettingsView – API Key behavior", () => {
 
   it("7. clears a replacement key from the form after save succeeds", async () => {
     invokeMock.mockImplementation(async (command) => {
-      if (command === "cmd_load_config") return cfg();
-      if (command === "cmd_list_available_tools") return "[]";
-      if (command === "cmd_migration_count") return JSON.stringify({ pending: 0 });
+      if (command === "config.load") return cfg();
+      if (command === "skills.list_tools") return [];
+      if (command === "config.database_migration_count") return { pending: 0 };
       return undefined;
     });
 
@@ -364,7 +364,7 @@ describe("SettingsView – API Key behavior", () => {
     )!;
     save.click();
     await vi.waitFor(() => {
-      expect(invokeMock.mock.calls.some((call) => call[0] === "cmd_save_config")).toBe(true);
+      expect(invokeMock.mock.calls.some((call) => call[0] === "config.save")).toBe(true);
     });
 
     await vi.waitFor(() => {
@@ -378,9 +378,9 @@ describe("SettingsView – API Key behavior", () => {
 
   it("8. persists and applies the database toggle immediately", async () => {
     invokeMock.mockImplementation(async (command) => {
-      if (command === "cmd_load_config") return cfg({ database: { enabled: false } });
-      if (command === "cmd_list_available_tools") return "[]";
-      if (command === "cmd_migration_count") return JSON.stringify({ pending: 0 });
+      if (command === "config.load") return cfg({ database: { enabled: false } });
+      if (command === "skills.list_tools") return [];
+      if (command === "config.database_migration_count") return { pending: 0 };
       return undefined;
     });
 
@@ -394,7 +394,7 @@ describe("SettingsView – API Key behavior", () => {
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
 
     await vi.waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("cmd_set_database_enabled", { enabled: true });
+      expect(invokeMock).toHaveBeenCalledWith("config.set_database_enabled", { enabled: true });
     });
 
     dispose();

@@ -10,6 +10,7 @@ const SNAPSHOT_PREFIX = "deepx:reload:v4:";
 const LEGACY_SNAPSHOT_PREFIXES = ["deepx:reload:v1:", "deepx:reload:v2:", "deepx:reload:v3:"];
 const MAX_RELOAD_TURNS = 20;
 const MAX_PROGRESS_CHUNKS = 200;
+const MAX_RELOAD_CHARS = 512 * 1024;
 
 const IMMEDIATE_EVENT_TYPES = new Set<Agent2Ui["type"]>([
   "turn_start",
@@ -55,14 +56,28 @@ function compactReloadState(state: RawSessionState): RawSessionState {
   };
 }
 
-function saveReloadSnapshot(storage: ReloadStorage, state: RawSessionState): void {
+function saveReloadSnapshot(storage: ReloadStorage, state: RawSessionState): boolean {
   try {
-    storage.setItem(reloadKey(state.seed), JSON.stringify({
+    const serialized = JSON.stringify({
       version: SNAPSHOT_VERSION,
       state: compactReloadState(state),
-    }));
-  } catch (error) {
-    console.warn("[reload-snapshot] save failed", error);
+    });
+    if (serialized.length > MAX_RELOAD_CHARS) {
+      storage.removeItem(reloadKey(state.seed));
+      return false;
+    }
+    storage.setItem(reloadKey(state.seed), serialized);
+    return true;
+  } catch {
+    // The daemon owns the canonical snapshot. A local reload cache is only an
+    // optimization, so a full WebView quota must never become a per-delta error
+    // loop or slow down streaming. Drop this cache and disable it for the view.
+    try {
+      storage.removeItem(reloadKey(state.seed));
+    } catch {
+      // Storage can also reject removal in private/locked-down WebViews.
+    }
+    return false;
   }
 }
 
@@ -74,6 +89,10 @@ export function loadReloadSnapshot(
     for (const prefix of LEGACY_SNAPSHOT_PREFIXES) storage.removeItem(`${prefix}${seed}`);
     const raw = storage.getItem(reloadKey(seed));
     if (!raw) return undefined;
+    if (raw.length > MAX_RELOAD_CHARS) {
+      storage.removeItem(reloadKey(seed));
+      return undefined;
+    }
     const parsed = JSON.parse(raw) as { version?: number; state?: RawSessionState };
     if (
       parsed.version !== SNAPSHOT_VERSION ||
@@ -112,20 +131,23 @@ export function createSessionEventRuntime(options: {
   let state = options.initialState;
   let scheduled = false;
   let disposed = false;
+  let persistenceEnabled = true;
   const now = options.now ?? Date.now;
   const schedule = options.schedule ?? ((flush: () => void) => {
     requestAnimationFrame(flush);
   });
 
-  const commitAndPersist = () => {
+  const commitState = (persist: boolean) => {
     options.commit(state);
-    saveReloadSnapshot(options.storage, state);
+    if (persist && persistenceEnabled) {
+      persistenceEnabled = saveReloadSnapshot(options.storage, state);
+    }
   };
 
   const flush = () => {
     if (disposed) return;
     scheduled = false;
-    commitAndPersist();
+    commitState(true);
   };
 
   const scheduleCommit = () => {
@@ -133,7 +155,11 @@ export function createSessionEventRuntime(options: {
     scheduled = true;
     schedule(() => {
       if (disposed || !scheduled) return;
-      flush();
+      scheduled = false;
+      // Streaming deltas are already canonical in the daemon. Updating the
+      // Solid view every frame is useful; serializing the whole session every
+      // frame is not. Persist only at terminal/immediate boundaries.
+      commitState(false);
     });
   };
 

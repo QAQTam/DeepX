@@ -1,5 +1,5 @@
 import { createSignal, For, Show, createEffect, onCleanup } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
+import { request } from "../runtime/backendClient";
 import { useI18n } from "../i18n";
 import { renderDiffHtml } from "../lib/diff";
 
@@ -99,7 +99,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
     setLoading(true);
     setListError(null);
     try {
-      const raw: GitFileEntry[] = JSON.parse(await invoke("cmd_get_git_diff", { seed: props.seed }));
+      const raw = await request<GitFileEntry[]>("git.diff", { seed: props.seed });
       // A Git refresh invalidates every cached patch: a tool can update the selected file
       // without changing its entry in the list.
       setFiles(raw.map(file => ({ ...file, diffHtml: undefined })));
@@ -122,8 +122,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
 
   async function loadBranches() {
     try {
-      const raw = await invoke<string>("cmd_list_branches", { seed: props.seed });
-      const list: { name: string; current: boolean }[] = JSON.parse(raw);
+      const list = await request<{ name: string; current: boolean }[]>("git.branches", { seed: props.seed });
       setBranches(list);
       const current = list.find((b) => b.current)?.name ?? "";
       setBranch(current);
@@ -147,7 +146,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
     }
 
     try {
-      const rawDiff: string = await invoke("cmd_get_git_file_diff", {
+      const rawDiff = await request<string>("git.file_diff", {
         seed: props.seed,
         filePath: path,
       });
@@ -180,7 +179,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
     setSwitching(true);
     setShowSwitchPrompt(false);
     try {
-      await invoke<string>("cmd_switch_branch", {
+      await request("git.switch_branch", {
         seed: props.seed,
         branch: name,
         stash,
@@ -203,7 +202,7 @@ export default function GitDiffPanel(props: GitDiffPanelProps) {
     if (!msg) return;
     setCommitting(true);
     try {
-      await invoke<string>("cmd_git_commit", {
+      await request("git.commit", {
         seed: props.seed,
         message: msg,
       });

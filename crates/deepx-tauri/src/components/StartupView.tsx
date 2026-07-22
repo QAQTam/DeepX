@@ -1,5 +1,5 @@
 import { For, createMemo, Show } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
+import { request } from "../runtime/backendClient";
 import { useI18n } from "../i18n";
 import type { SessionMeta } from "../lib/types";
 import SessionCard from "./SessionCard";
@@ -49,7 +49,10 @@ export default function StartupView(props: StartupViewProps) {
 
   async function handleSend(text: string) {
     if (props.onSend) { props.onSend(text); return; }
-    try { await invoke("cmd_send_message", { seed: "", text }); } catch (e) { console.error(e); }
+    try {
+      const seed = await request<string>("session.new");
+      await request("session.send_message", { seed, text });
+    } catch (e) { console.error(e); }
   }
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }

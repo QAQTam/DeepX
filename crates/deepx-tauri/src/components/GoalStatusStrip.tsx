@@ -1,5 +1,5 @@
 import { Show, createEffect, createSignal } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
+import { request } from "../runtime/backendClient";
 import { useI18n } from "../i18n";
 
 type GoalStatus = { objective: string; status: "active" | "paused" | "completed" | "stopped"; current_id?: string; current_title?: string; completed: number; total: number; paused_reason?: string };
@@ -9,13 +9,13 @@ export default function GoalStatusStrip(props: { seed: string; refreshKey: numbe
   const [goal, setGoal] = createSignal<GoalStatus | null>(null);
   const [busy, setBusy] = createSignal(false);
   async function refresh() {
-    try { const raw = await invoke<string>("cmd_get_goal_status", { seed: props.seed }); setGoal(raw === "null" ? null : JSON.parse(raw) as GoalStatus); }
+    try { setGoal(await request<GoalStatus | null>("plan.goal_status", { seed: props.seed })); }
     catch { setGoal(null); }
   }
   async function action(action: "pause" | "resume" | "stop") {
     if (busy()) return;
     setBusy(true);
-    try { await invoke("cmd_goal_action", { seed: props.seed, action }); }
+    try { await request("plan.goal_action", { seed: props.seed, action }); }
     finally { setBusy(false); await refresh(); }
   }
   createEffect(() => [props.seed, props.refreshKey], () => { void refresh(); });

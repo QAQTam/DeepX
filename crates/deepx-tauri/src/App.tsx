@@ -1,6 +1,5 @@
 import { createSignal, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { backendStatus, connect, listen, request } from "./runtime/backendClient";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Agent2Ui, AskAnswer, SessionMeta, TaskInfo } from "./lib/types";
 import ChatView from "./components/ChatView";
@@ -63,10 +62,10 @@ export default function App() {
   const [hasChosenSession, setHasChosenSession] = createSignal(false);
   const [workspaceDraft, setWorkspaceDraft] = createSignal(localStorage.getItem(LS_WORKSPACE) ?? "");
   const [theme, setTheme] = createSignal<ThemeMode>("system");
+  const [backendError, setBackendError] = createSignal("");
   let unlistenTheme: (() => void) | undefined;
   let unlistenSessionActivity: (() => void) | undefined;
-  let unlistenCompanionResolved: (() => void) | undefined;
-  let unlistenCompanionFocus: (() => void) | undefined;
+  let unlistenBackendStatus: (() => void) | undefined;
   let resumeRequest = 0;
 
   function activeEntry(): SessionEntry | undefined {
@@ -76,8 +75,7 @@ export default function App() {
 
   async function refreshSessions(): Promise<boolean> {
     try {
-      const raw = await invoke<string>("cmd_list_sessions");
-      const list = JSON.parse(raw) as SessionMeta[];
+      const list = await request<SessionMeta[]>("session.list");
       list.sort((a, b) => Number(b.updated_at) - Number(a.updated_at));
       setSessions(list);
       return true;
@@ -89,8 +87,7 @@ export default function App() {
 
   async function loadDashboardFromDisk(entry: SessionEntry) {
     try {
-      const raw = await invoke<string>("cmd_get_dashboard_data", { seed: entry.state().seed });
-      const parsed = JSON.parse(raw) as { tasks?: TaskInfo[]; recent_edits?: string[] };
+      const parsed = await request<{ tasks?: TaskInfo[]; recent_edits?: string[] }>("session.dashboard", { seed: entry.state().seed });
       entry.runtime.update(state => applyDashboardData(state, {
         tasks: parsed.tasks ?? [],
         recentEdits: parsed.recent_edits ?? [],
@@ -102,7 +99,7 @@ export default function App() {
 
   async function loadWorkspace(entry: SessionEntry) {
     try {
-      const workspace = await invoke<string>("cmd_get_workspace", { seed: entry.state().seed });
+      const workspace = await request<string>("workspace.get", { seed: entry.state().seed });
       entry.ui.setWorkspace(workspace);
       if (entry.state().seed === activeSeed()) {
         setWorkspaceDraft(workspace);
@@ -200,7 +197,7 @@ export default function App() {
   }
 
   async function resumeSession(seed: string) {
-    const request = ++resumeRequest;
+    const requestToken = ++resumeRequest;
     sessionReplay.begin(seed);
     // Swap to the locally persisted transcript immediately. Agent startup and
     // replay may take seconds on a cold session and must not block navigation.
@@ -211,8 +208,8 @@ export default function App() {
     let entry: SessionEntry | undefined = cachedEntry;
     try {
       entry = await getOrCreateSessionEntry(seed);
-      await invoke("cmd_resume_session", { seed });
-      const rawReplay = await invoke<unknown[]>("cmd_replay_session_events", { seed }).catch(() => []);
+      await request("session.resume", { seed });
+      const rawReplay = await request<unknown[]>("session.replay_events", { seed }).catch(() => []);
       const replayed = rawReplay.flatMap(payload => {
         try { return [parseAgentEvent(payload)]; }
         catch (error) {
@@ -221,7 +218,7 @@ export default function App() {
         }
       });
       sessionReplay.complete(seed, replayed, event => handleAgentEvent(entry!, event));
-      if (request !== resumeRequest) return;
+      if (requestToken !== resumeRequest) return;
       const currentSeed = entry.state().seed;
       localStorage.setItem(LS_KEY, currentSeed);
       setActiveSeed(currentSeed);
@@ -231,7 +228,7 @@ export default function App() {
     } catch (error) {
       if (entry) sessionReplay.abort(seed, event => handleAgentEvent(entry!, event));
       else sessionReplay.abort(seed, () => {});
-      if (request !== resumeRequest) return;
+      if (requestToken !== resumeRequest) return;
       console.error("[App] resumeSession error", error);
       if (!hasRestorableTranscript(entry?.state())) {
         setHasChosenSession(false);
@@ -248,7 +245,7 @@ export default function App() {
   async function changePermissionLevel(level: number) {
     if (level < 1 || level > 4) return;
     try {
-      await invoke("cmd_set_permission_level", { level });
+      await request("config.set_permission_level", { level });
       setPermissionLevel(level);
     } catch (error) {
       console.error("set permission level", error);
@@ -264,7 +261,7 @@ export default function App() {
     const entry = activeEntry();
     if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
     try {
-      await invoke("cmd_permission_response", {
+      await request("interaction.permission", {
         seed: entry.state().seed,
         toolCallId: item.id,
         approved,
@@ -289,7 +286,7 @@ export default function App() {
     const entry = activeEntry();
     if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
     try {
-      await invoke("cmd_ask_response", { seed: entry.state().seed, askId: item.id, answers });
+      await request("interaction.ask_response", { seed: entry.state().seed, askId: item.id, answers });
     } catch (error) {
       entry.ui.finishInteractionSubmit(item.id);
       toastCtrl.push(String(error), "error");
@@ -300,7 +297,7 @@ export default function App() {
     const entry = activeEntry();
     if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
     try {
-      await invoke("cmd_ask_dismiss", { seed: entry.state().seed, askId: item.id });
+      await request("interaction.ask_dismiss", { seed: entry.state().seed, askId: item.id });
     } catch (error) {
       entry.ui.finishInteractionSubmit(item.id);
       toastCtrl.push(String(error), "error");
@@ -316,7 +313,7 @@ export default function App() {
     const entry = activeEntry();
     if (!entry || !entry.ui.beginInteractionSubmit(item.id)) return;
     try {
-      await invoke("cmd_plan_review", {
+      await request("interaction.plan_review", {
         seed: entry.state().seed,
         callId: item.id,
         approved,
@@ -333,7 +330,7 @@ export default function App() {
     const entry = activeEntry();
     if (!entry) return;
     if (action === "ask") {
-      await invoke("cmd_send_message", {
+      await request("session.send_message", {
         seed: entry.state().seed,
         text: `Look at ${task.id}: ${task.subject}. Explain the implementation plan and current status in detail.`,
       });
@@ -341,7 +338,7 @@ export default function App() {
     }
     const taskId = Number.parseInt(task.id.replace(/^T/, ""), 10);
     if (!Number.isFinite(taskId)) return;
-    await invoke("cmd_task_action", { seed: entry.state().seed, action, taskId });
+    await request("plan.task_action", { seed: entry.state().seed, action, taskId });
     await loadDashboardFromDisk(entry);
   }
 
@@ -350,7 +347,7 @@ export default function App() {
     const firstId = entry?.state().turns[0]?.turnId;
     if (!entry || !firstId) return;
     try {
-      await invoke("cmd_load_more_turns", {
+      await request("session.load_more_turns", {
         seed: entry.state().seed,
         beforeTurnId: firstId,
       });
@@ -364,19 +361,19 @@ export default function App() {
     const turns = entry?.state().turns;
     const turnId = turns?.[turns.length - 1]?.turnId;
     if (!entry || !turnId || isSessionStreaming(entry.state())) return;
-    await invoke("cmd_undo_turn", { seed: entry.state().seed, turnId });
+    await request("session.undo_turn", { seed: entry.state().seed, turnId });
     entry.runtime.update(state => removeTurnFromSession(state, turnId));
   }
 
   async function newSession() {
-    const seed = await invoke<string>("cmd_new_session");
+    const seed = await request<string>("session.new");
     localStorage.removeItem(LS_KEY);
     await resumeSession(seed);
     const entry = activeEntry();
     const workspace = workspaceDraft();
     if (entry && workspace) {
       entry.ui.setWorkspace(workspace);
-      await invoke("cmd_set_workspace", { seed: entry.state().seed, path: workspace });
+      await request("workspace.set", { seed: entry.state().seed, path: workspace });
     }
     await refreshSessions();
   }
@@ -384,12 +381,12 @@ export default function App() {
   async function startNewSessionAndSend(text: string) {
     await newSession();
     const entry = activeEntry();
-    if (entry) await invoke("cmd_send_message", { seed: entry.state().seed, text });
+    if (entry) await request("session.send_message", { seed: entry.state().seed, text });
   }
 
   async function deleteSession(seed: string) {
     try {
-      await invoke("cmd_delete_session", { seed });
+      await request("session.delete", { seed });
       registry.remove(seed);
       if (activeSeed() === seed) {
         localStorage.removeItem(LS_KEY);
@@ -416,7 +413,7 @@ export default function App() {
       const entry = activeEntry();
       if (!entry) return;
       entry.ui.setWorkspace(selected);
-      await invoke("cmd_set_workspace", { seed: entry.state().seed, path: selected });
+      await request("workspace.set", { seed: entry.state().seed, path: selected });
     } catch (error) {
       console.error("browseWorkspace", error);
     }
@@ -427,7 +424,7 @@ export default function App() {
     setConfigLang(lang);
     localStorage.setItem("deepx:lang", lang);
     try {
-      await invoke("cmd_save_config", {
+      await request("config.save", {
         apiKey: "", model: "", baseUrl: "", providerId: "", endpoint: "",
         maxTokens: 0, contextLimit: 0, reasoningEffort: "", lang,
         subagentModel: "", subagentBaseUrl: "", subagentApiKey: "",
@@ -456,29 +453,21 @@ export default function App() {
     media.addEventListener("change", onSystemThemeChange);
     unlistenTheme = () => media.removeEventListener("change", onSystemThemeChange);
 
-    unlistenCompanionResolved = await listen<{
-      seed: string;
-      request_id: string;
-    }>("companion-interaction-resolved", event => {
-      const entry = registry.get(event.payload.seed);
-      if (!entry) return;
-      entry.runtime.update(state => resolvePendingInteraction(
-        state,
-        event.payload.request_id,
-        "answered",
-      ));
-      entry.ui.finishInteractionSubmit(event.payload.request_id);
-    });
-    unlistenCompanionFocus = await listen<string>("companion-focus-session", event => {
-      const seed = event.payload;
-      if (!seed) return;
-      void resumeSession(seed);
-    });
+    try {
+      unlistenBackendStatus = await listen<{ connected: boolean; error?: string }>("backend-status", event => {
+        setBackendError(event.payload.connected ? "" : (event.payload.error ?? "Daemon unavailable"));
+      });
+      await connect();
+      const status = await backendStatus();
+      setBackendError(status.connected ? "" : (status.error ?? "Daemon unavailable"));
+    } catch (error) {
+      setBackendError(String(error));
+    }
 
     try {
       unlistenSessionActivity = await startSessionActivityClient({
         listen: handler => listen<unknown>("session-activity", event => handler(event.payload)),
-        loadSnapshot: () => invoke<unknown[]>("cmd_list_session_activity"),
+        loadSnapshot: () => request<unknown[]>("session.activity"),
         onChange: setSessionActivities,
         onError: error => console.error("session activity", error),
       });
@@ -487,8 +476,7 @@ export default function App() {
     }
 
     try {
-      const raw = await invoke<string>("cmd_load_config");
-      const config = JSON.parse(raw) as { lang?: Lang; permission_level?: number };
+      const config = await request<{ lang?: Lang; permission_level?: number }>("config.load");
       if (config.lang === "en" || config.lang === "zh") {
         i18n.setLang(config.lang);
         setConfigLang(config.lang);
@@ -512,8 +500,7 @@ export default function App() {
     sessionReplay.clear();
     unlistenTheme?.();
     unlistenSessionActivity?.();
-    unlistenCompanionResolved?.();
-    unlistenCompanionFocus?.();
+    unlistenBackendStatus?.();
   });
 
   return (
@@ -533,6 +520,10 @@ export default function App() {
           />
         }
         workspace={
+          <>
+          <Show when={backendError()}>
+            {error => <div class="backend-disconnected" role="alert">Backend disconnected: {error()}</div>}
+          </Show>
           <Switch>
             <Match when={view() === "settings"}>
               <SettingsView
@@ -555,19 +546,19 @@ export default function App() {
                 tokenBudget={activeEntry()?.state().skills.tokenBudget}
                 tokenUsage={activeEntry()?.state().skills.tokenUsage}
                 diagnostics={activeEntry()?.state().skills.diagnostics ?? []}
-                onActivate={async name => { await invoke("cmd_skill_operation", {
+                onActivate={async name => { await request("skills.operation", {
                   seed: activeSeed(), operationId: crypto.randomUUID(), action: "request", name,
                   expectedRevision: activeEntry()?.state().skills.operationRevision ?? 0,
                 }); }}
-                onUnload={async name => { await invoke("cmd_skill_operation", {
+                onUnload={async name => { await request("skills.operation", {
                   seed: activeSeed(), operationId: crypto.randomUUID(), action: "release", name,
                   expectedRevision: activeEntry()?.state().skills.operationRevision ?? 0,
                 }); }}
-                onRetain={async name => { await invoke("cmd_skill_operation", {
+                onRetain={async name => { await request("skills.operation", {
                   seed: activeSeed(), operationId: crypto.randomUUID(), action: "retain", name,
                   expectedRevision: activeEntry()?.state().skills.operationRevision ?? 0,
                 }); }}
-                onReload={async () => { await invoke("cmd_reload_skills", { seed: activeSeed() }); }}
+                onReload={async () => { await request("skills.reload", { seed: activeSeed() }); }}
               />
             </Match>
             <Match when={view() === "home"}>
@@ -597,6 +588,7 @@ export default function App() {
               </Show>
             </Match>
           </Switch>
+          </>
         }
       />
       <ToastContainer ctrl={toastCtrl} />

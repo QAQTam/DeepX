@@ -144,8 +144,55 @@ pub(crate) fn build_turns_from_context(
     start: Option<usize>,
     max_count: Option<usize>,
 ) -> Vec<deepx_proto::TurnData> {
+    build_turns(agent.msg.turns(), start, max_count)
+}
+
+/// Build the same UI turn projection directly from persisted messages.
+///
+/// The daemon uses this before an Agent worker exists, so a cold attach can
+/// return a canonical transcript without depending on a later live event.
+pub fn build_turns_from_messages(
+    seed: &str,
+    messages: &[deepx_types::Message],
+    start: Option<usize>,
+    max_count: Option<usize>,
+) -> Vec<deepx_proto::TurnData> {
+    project_turns_from_messages(seed, messages, start, max_count).1
+}
+
+/// Return both the total persisted turn count and the requested UI window.
+pub fn project_turns_from_messages(
+    seed: &str,
+    messages: &[deepx_types::Message],
+    start: Option<usize>,
+    max_count: Option<usize>,
+) -> (usize, Vec<deepx_proto::TurnData>) {
+    let (store, _) = deepx_message::MessageStore::from_messages(seed, messages, 0);
+    let total = store.turns().len();
+    (total, build_turns(store.turns(), start, max_count))
+}
+
+/// Build only the tail window used by a cold daemon Snapshot.
+pub fn project_recent_turns_from_messages(
+    seed: &str,
+    messages: &[deepx_types::Message],
+    max_count: usize,
+) -> (usize, Vec<deepx_proto::TurnData>) {
+    let (store, _) = deepx_message::MessageStore::from_messages(seed, messages, 0);
+    let total = store.turns().len();
+    let start = total.saturating_sub(max_count);
+    (
+        total,
+        build_turns(store.turns(), Some(start), Some(max_count)),
+    )
+}
+
+fn build_turns(
+    all_turns: &[deepx_message::Turn],
+    start: Option<usize>,
+    max_count: Option<usize>,
+) -> Vec<deepx_proto::TurnData> {
     use deepx_types::ContentBlock;
-    let all_turns = agent.msg.turns();
     let range_start = start.unwrap_or(0).min(all_turns.len());
     let range_end = match max_count {
         Some(n) => (range_start + n).min(all_turns.len()),
@@ -465,4 +512,36 @@ pub(crate) fn emit_round_complete_via_emitter(
         blocks,
         is_final: tool_calls.is_empty(),
     });
+}
+
+#[cfg(test)]
+mod persisted_projection_tests {
+    use super::project_recent_turns_from_messages;
+    use deepx_types::{ContentBlock, Message};
+
+    fn assistant(text: &str) -> Message {
+        Message {
+            msg_id: None,
+            role: "assistant".into(),
+            name: None,
+            content: vec![ContentBlock::text(text)],
+        }
+    }
+
+    #[test]
+    fn cold_snapshot_projects_the_recent_persisted_turns() {
+        let messages = vec![
+            Message::system("system"),
+            Message::user("first"),
+            assistant("answer one"),
+            Message::user("second"),
+            assistant("answer two"),
+        ];
+        let (total, turns) = project_recent_turns_from_messages("seed", &messages, 1);
+        assert_eq!(total, 2);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].turn_id, "t2");
+        assert_eq!(turns[0].user_text, "second");
+        assert_eq!(turns[0].rounds[0].answer.as_deref(), Some("answer two"));
+    }
 }

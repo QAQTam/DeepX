@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { invoke } from "@tauri-apps/api/core";
+import { request } from "../runtime/backendClient";
 import { createSignal } from "solid-js";
 import { render } from "@solidjs/web";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createI18n, I18nCtx } from "../i18n";
 import GitDiffPanel, { type GitFileEntry } from "./GitDiffPanel";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("../runtime/backendClient", () => ({ request: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn(), open: vi.fn() }));
 
-const invokeMock = vi.mocked(invoke);
+const invokeMock = vi.mocked(request);
 
 function file(overrides: Partial<GitFileEntry> = {}): GitFileEntry {
   return {
@@ -35,7 +35,7 @@ const sampleBranches = [
   { name: "feature/foo", current: false },
 ];
 
-/** Set up invoke mock to dispatch by command name. */
+/** Set up the backend request mock to dispatch by domain method. */
 function mockInvoke(opts: {
   diff?: GitFileEntry[] | Error;
   branches?: { name: string; current: boolean }[];
@@ -44,26 +44,26 @@ function mockInvoke(opts: {
 } = {}) {
   invokeMock.mockImplementation(async (cmd: string, args?: any) => {
     switch (cmd) {
-      case "cmd_get_git_diff": {
+      case "git.diff": {
         const val = opts.diff ?? sampleFiles;
         if (val instanceof Error) throw val;
-        return JSON.stringify(val);
+        return val;
       }
-      case "cmd_list_branches": {
+      case "git.branches": {
         const val = opts.branches ?? sampleBranches;
-        return JSON.stringify(val);
+        return val;
       }
-      case "cmd_get_git_file_diff": {
+      case "git.file_diff": {
         const val = opts.fileDiff;
         if (val instanceof Error) throw val;
         return val ?? "";
       }
-      case "cmd_git_commit": {
+      case "git.commit": {
         const val = opts.commit;
         if (val instanceof Error) throw val;
         return val ?? "ok";
       }
-      case "cmd_switch_branch":
+      case "git.switch_branch":
         return "switched";
       default:
         return undefined;
@@ -119,7 +119,7 @@ describe("GitDiffPanel", () => {
     host.remove();
   });
 
-  it("2. clicking a file calls cmd_get_git_file_diff", async () => {
+  it("2. clicking a file requests git.file_diff", async () => {
     mockInvoke({ fileDiff: "<div>diff</div>" });
 
     const { host, dispose } = setup();
@@ -131,7 +131,7 @@ describe("GitDiffPanel", () => {
     await flush();
 
     const diffCalls = invokeMock.mock.calls.filter(
-      (c) => c[0] === "cmd_get_git_file_diff",
+      (c) => c[0] === "git.file_diff",
     );
     expect(diffCalls.length).toBeGreaterThanOrEqual(1);
     expect(diffCalls[0]?.[1]).toMatchObject({
@@ -227,7 +227,7 @@ describe("GitDiffPanel", () => {
     host.remove();
   });
 
-  it("8. commit success calls cmd_git_commit with message", async () => {
+  it("8. commit success requests git.commit with message", async () => {
     mockInvoke();
 
     const { host, dispose } = setup();
@@ -247,7 +247,7 @@ describe("GitDiffPanel", () => {
     await flush();
 
     const commitCalls = invokeMock.mock.calls.filter(
-      (c) => c[0] === "cmd_git_commit",
+      (c) => c[0] === "git.commit",
     );
     expect(commitCalls.length).toBeGreaterThanOrEqual(1);
     expect(commitCalls[0]?.[1]).toMatchObject({
@@ -312,7 +312,7 @@ describe("GitDiffPanel", () => {
     await flush();
 
     expect(invokeMock.mock.calls).toContainEqual([
-      "cmd_switch_branch",
+      "git.switch_branch",
       { seed: "test-seed", branch: "feature/foo", stash: false },
     ]);
     dispose();

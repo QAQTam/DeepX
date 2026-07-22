@@ -21,7 +21,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,9 @@ struct CharBuffer {
     turn_id: String,
     round_num: u32,
     kind: RoundDeltaKind,
+    /// True after a character leaves the queue and until its event has been
+    /// written to the output channel. Terminal events must wait for this too.
+    in_flight: bool,
 }
 
 /// Rate-limits [`RoundDelta`] text to `rate_per_sec` characters/second.
@@ -83,6 +86,7 @@ impl PacedEmitter {
             turn_id: String::new(),
             round_num: 0,
             kind: RoundDeltaKind::Answering,
+            in_flight: false,
         }));
         let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -107,12 +111,8 @@ impl PacedEmitter {
                             continue;
                         }
                         let ch = guard.chars.pop_front().unwrap();
-                        (
-                            ch,
-                            guard.turn_id.clone(),
-                            guard.round_num,
-                            guard.kind,
-                        )
+                        guard.in_flight = true;
+                        (ch, guard.turn_id.clone(), guard.round_num, guard.kind)
                     };
 
                     let (ch, turn_id, round_num, kind) = chunk;
@@ -128,6 +128,7 @@ impl PacedEmitter {
                         };
                         let _ = tx_clone.send(event);
                     }
+                    s.lock().unwrap().in_flight = false;
 
                     let elapsed = tick.elapsed();
                     if elapsed < interval {
@@ -184,7 +185,7 @@ impl Emitter for PacedEmitter {
         if Self::is_terminal(&event) {
             loop {
                 let guard = self.state.lock().unwrap();
-                if guard.chars.is_empty() {
+                if guard.chars.is_empty() && !guard.in_flight {
                     break;
                 }
                 drop(guard);
@@ -263,10 +264,7 @@ mod tests {
 
             thread::spawn(move || {
                 while let Ok(event) = rx.recv() {
-                    events_clone
-                        .lock()
-                        .unwrap()
-                        .push((event, Instant::now()));
+                    events_clone.lock().unwrap().push((event, Instant::now()));
                 }
             });
 
@@ -418,9 +416,7 @@ mod tests {
 
         let events = h.take_events();
 
-        let done_pos = events
-            .iter()
-            .position(|(e, _)| matches!(e, Agent2Ui::Done));
+        let done_pos = events.iter().position(|(e, _)| matches!(e, Agent2Ui::Done));
         assert!(done_pos.is_some(), "Done should be emitted");
         let done_pos = done_pos.unwrap();
 

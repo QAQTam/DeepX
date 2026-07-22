@@ -2,11 +2,8 @@
 
 import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
 import PlanReviewPanel from "./PlanReviewPanel";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 
 let dispose: (() => void) | undefined;
 afterEach(() => { dispose?.(); dispose = undefined; document.body.innerHTML = ""; vi.clearAllMocks(); });
@@ -51,7 +48,6 @@ describe("PlanReviewPanel", () => {
     await flush();
 
     expect(onApprove).toHaveBeenCalledWith(false);
-    expect(invoke).not.toHaveBeenCalled();
     expect(host.querySelector(".plan-review-close")).toBeNull();
   });
 

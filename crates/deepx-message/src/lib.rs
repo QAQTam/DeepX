@@ -7,4 +7,4 @@ pub mod effect;
 pub mod store;
 
 pub use effect::{Effect, PendingTool, ToolExecReport, ToolExecRequest, ToolExecutorFn};
-pub use store::MessageStore;
+pub use store::{MessageStore, Turn};
