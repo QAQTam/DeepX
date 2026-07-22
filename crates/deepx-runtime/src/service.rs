@@ -339,6 +339,27 @@ impl DeepxService {
             .shutdown_all();
     }
 
+    /// True while stopping the daemon would interrupt work or abandon an
+    /// interaction waiting for its lease owner. Used by lifecycle takeover so
+    /// an updater cannot race a newly-started turn.
+    pub fn has_active_work(&self) -> bool {
+        use deepx_proto::SessionActivityState;
+
+        self.registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .activities()
+            .iter()
+            .any(|activity| {
+                matches!(
+                    activity.state,
+                    SessionActivityState::Starting
+                        | SessionActivityState::Working
+                        | SessionActivityState::WaitingUser
+                )
+            })
+    }
+
     fn registry(&self) -> Result<std::sync::MutexGuard<'_, AgentRegistry>, String> {
         self.registry
             .lock()

@@ -3,6 +3,7 @@ name = "deepx-daemon"
 version.workspace = true
 edition.workspace = true
 description = "Headless DeepX application daemon"
+build = "build.rs"
 
 [dependencies]
 deepx-proto = { path = "../deepx-proto" }

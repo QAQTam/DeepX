@@ -20,6 +20,16 @@ const HEARTBEAT_INTERVAL_MS: u64 = 5_000;
 const LEASE_TIMEOUT_MS: u64 = 15_000;
 const MAX_CONNECTIONS: usize = 32;
 
+fn daemon_channel() -> String {
+    std::env::var("DEEPX_CHANNEL").unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            "dev".into()
+        } else {
+            "stable".into()
+        }
+    })
+}
+
 pub async fn run() -> Result<(), String> {
     std::fs::create_dir_all(deepx_types::platform::data_dir()).map_err(stringify)?;
     let _lock = acquire_single_instance()?;
@@ -33,6 +43,14 @@ pub async fn run() -> Result<(), String> {
         pid: std::process::id(),
         server_epoch: epoch.clone(),
         protocol_version: CONTROL_PROTOCOL_VERSION,
+        daemon_version: env!("CARGO_PKG_VERSION").into(),
+        build_id: env!("DEEPX_BUILD_ID").into(),
+        channel: daemon_channel(),
+        executable: std::env::current_exe()
+            .ok()
+            .and_then(|path| path.canonicalize().ok().or(Some(path)))
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
     };
     write_discovery(&discovery)?;
     let events = EventBus::new(epoch);
@@ -74,19 +92,25 @@ async fn handle_connection(
     let mut peek = [0_u8; 2048];
     let count = stream.peek(&mut peek).await.map_err(stringify)?;
     let preview = String::from_utf8_lossy(&peek[..count]);
-    if preview.starts_with("POST /control/v1/stop ") {
+    if preview.starts_with("POST /control/v1/stop ")
+        || preview.starts_with("POST /control/v1/stop-if-idle ")
+    {
         use tokio::io::AsyncWriteExt;
         let authorized = preview
             .lines()
             .any(|line| line.eq_ignore_ascii_case(&format!("Authorization: Bearer {token}")));
-        let response = if authorized {
-            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_slice()
-        } else {
+        let idle_required = preview.starts_with("POST /control/v1/stop-if-idle ");
+        let busy = idle_required && service.has_active_work();
+        let response = if !authorized {
             b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 .as_slice()
+        } else if busy {
+            b"HTTP/1.1 409 Conflict\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_slice()
+        } else {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_slice()
         };
         stream.write_all(response).await.map_err(stringify)?;
-        if authorized {
+        if authorized && !busy {
             let _ = shutdown.send(true);
         }
         return Ok(());
