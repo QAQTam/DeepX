@@ -1,4 +1,5 @@
 target/
+dist/
 crates/deepx-tauri/src-tauri/binaries/
 **/*.rs.bk
 *.swp
