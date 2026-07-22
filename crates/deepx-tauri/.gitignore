@@ -1,8 +1,0 @@
-target/
-**/*.rs.bk
-*.swp
-*.swo
-.env
-node_modules/
-.dsx-trash/
-dist/

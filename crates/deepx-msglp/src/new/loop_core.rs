@@ -191,7 +191,7 @@ impl Loop {
                 // Zero-buffer writer: block on recv(), write + flush each
                 // event immediately.  No timeout, no drain batches — every
                 // Agent2Ui event reaches stdout as fast as the OS pipe can
-                // deliver it.  The downstream reader (Tauri registry) picks
+                // deliver it. The downstream daemon worker reader picks
                 // up each line without buffering delay.
                 let mut writer = output;
                 loop {

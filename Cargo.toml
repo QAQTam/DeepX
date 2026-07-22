@@ -15,7 +15,6 @@ members = [
     "crates/deepx-tools",
     "crates/deepx-session",
     "crates/deepx-subagent",
-    "crates/deepx-tauri/src-tauri",
     "crates/deepx-gate-testui",
 ]
 

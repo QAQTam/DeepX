@@ -1,7 +1,7 @@
 //! Git utility functions — thin wrappers around git2 for backend use.
 //!
 //! These are NOT LLM-invocable tools. They are called directly by the
-//! Tauri bridge layer to provide git information to the frontend.
+//! Git service functions exposed to clients through the daemon control protocol.
 
 use git2::{DiffOptions, Repository};
 use std::path::Path;

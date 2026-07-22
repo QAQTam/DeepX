@@ -5,7 +5,7 @@ use deepx_proto::{CompanionCommandStatus, CompanionInteraction, CompanionInterac
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InteractionSource {
-    Tauri,
+    Desktop,
     Pet,
 }
 

@@ -90,18 +90,18 @@ mod tests {
         let pending = interaction(7);
         coordinator.register(pending.clone());
 
-        let claim = match coordinator.begin(&pending.key, "command-main", InteractionSource::Tauri)
-        {
-            BeginClaim::Claimed(claim) => claim,
-            other => panic!("expected claim, got {other:?}"),
-        };
+        let claim =
+            match coordinator.begin(&pending.key, "command-main", InteractionSource::Desktop) {
+                BeginClaim::Claimed(claim) => claim,
+                other => panic!("expected claim, got {other:?}"),
+            };
         assert_eq!(
             coordinator.begin(&pending.key, "command-pet", InteractionSource::Pet),
             BeginClaim::Rejected(CompanionCommandStatus::AlreadyResolved)
         );
         assert!(coordinator.commit(&claim));
         assert_eq!(
-            coordinator.begin(&pending.key, "command-main", InteractionSource::Tauri),
+            coordinator.begin(&pending.key, "command-main", InteractionSource::Desktop),
             BeginClaim::Duplicate(CompanionCommandStatus::Accepted)
         );
     }
@@ -111,11 +111,11 @@ mod tests {
         let coordinator = InteractionCoordinator::default();
         let pending = interaction(7);
         coordinator.register(pending.clone());
-        let claim = match coordinator.begin(&pending.key, "command-main", InteractionSource::Tauri)
-        {
-            BeginClaim::Claimed(claim) => claim,
-            other => panic!("expected claim, got {other:?}"),
-        };
+        let claim =
+            match coordinator.begin(&pending.key, "command-main", InteractionSource::Desktop) {
+                BeginClaim::Claimed(claim) => claim,
+                other => panic!("expected claim, got {other:?}"),
+            };
         assert!(coordinator.rollback(&claim));
         assert!(matches!(
             coordinator.begin(&pending.key, "command-pet", InteractionSource::Pet),
@@ -161,7 +161,7 @@ mod tests {
             vec![pending.key.clone()]
         );
         assert_eq!(
-            coordinator.begin(&pending.key, "after-disconnect", InteractionSource::Tauri),
+            coordinator.begin(&pending.key, "after-disconnect", InteractionSource::Desktop),
             BeginClaim::Rejected(CompanionCommandStatus::AlreadyResolved)
         );
     }
@@ -177,13 +177,13 @@ mod tests {
         };
         coordinator.register(pending.clone());
         assert_eq!(
-            coordinator.begin(&pending.key, "second", InteractionSource::Tauri),
+            coordinator.begin(&pending.key, "second", InteractionSource::Desktop),
             BeginClaim::Rejected(CompanionCommandStatus::AlreadyResolved)
         );
         assert!(coordinator.commit(&claim));
         coordinator.register(pending.clone());
         assert_eq!(
-            coordinator.begin(&pending.key, "third", InteractionSource::Tauri),
+            coordinator.begin(&pending.key, "third", InteractionSource::Desktop),
             BeginClaim::Rejected(CompanionCommandStatus::AlreadyResolved)
         );
     }

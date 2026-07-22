@@ -34,7 +34,7 @@ Skills are project-specific reference files under the skills directory . Each sk
 ### How to use skills
 
 - Each skill's frontmatter `description` field states exactly when it applies. Match the current task against these descriptions before starting non-trivial work — do not skip this because the task "seems obvious."
-- More than one skill can apply to a single task (e.g. a refactor touching UI state might need both `deepx-arch` and `deepx-refactor-workflow`, or `deepx-ui` and `tauri-solidjs`). Check all of them, not just the first match.
+- More than one skill can apply to a single task (e.g. a refactor touching UI state might need both `deepx-arch` and `deepx-refactor-workflow`, or `deepx-ui` and a framework-specific skill). Check all of them, not just the first match.
 - When a skill's guidance conflicts with a literal user instruction, surface the conflict rather than silently picking one — the user may not remember the constraint the skill encodes. Do not silently override the user, and do not silently ignore the skill either.
 - When a skill's checklist or decision tree applies (e.g. deepx-arch's "重构前检查清单", deepx-debug's five-step method, deepx-refactor-workflow's three-question gate), actually run through it — don't paraphrase it as having been considered without concretely answering each point.
 - If a skill references "known issues" or "known violations" (e.g. deepx-arch's 当前待处理的已知问题), treat those as current known state, not resolved — verify against current code before assuming they're still accurate or still open.

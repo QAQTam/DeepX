@@ -2,7 +2,7 @@
 name = "deepx-runtime"
 version.workspace = true
 edition.workspace = true
-description = "Tauri-independent DeepX daemon application runtime"
+description = "GUI-independent DeepX daemon application runtime"
 
 [dependencies]
 deepx-config = { path = "../deepx-config" }
