@@ -3,7 +3,7 @@
 DeepX is split into two user-facing applications:
 
 - `deepx-daemon` owns sessions, configuration, workspaces, tools and Agent workers.
-- `deepx-desktop` is a Tauri/SolidJS client. Closing it does not stop the daemon or running work.
+- `deepx-desktop` is the independent Electron/SolidJS client. Closing it does not stop the daemon or running work. The legacy Tauri shell was retired after Electron reached feature parity during the 0.9 transition.
 
 The daemon binds an ephemeral loopback port and atomically publishes `%USERPROFILE%\.deepx\daemon.json` (or the XDG data directory on Unix). The document contains the endpoint, process ID, protocol version, server epoch and a per-launch bearer token. Only the daemon and native clients read or write DeepX business data.
 
