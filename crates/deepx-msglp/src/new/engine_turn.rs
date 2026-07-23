@@ -582,6 +582,7 @@ impl TurnEngine {
                 .map(|e| e.cache_field.clone())
                 .unwrap_or_default(),
             ep.as_ref().map(|e| e.supports_thinking).unwrap_or(true),
+            ep.as_ref().and_then(|e| e.do_sample),
         )
         .with_stateful(ep.as_ref().map(|e| e.stateful).unwrap_or(false));
 

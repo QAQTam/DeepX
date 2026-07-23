@@ -27,6 +27,9 @@ pub struct ProviderConfig {
     pub thinking_mode: ThinkingParamMode,
     pub cache_field: CacheTokenField,
     pub supports_thinking: bool,
+    /// When Some, explicitly sets `do_sample` in the request body. Used by GLM for
+    /// deterministic codegen (do_sample=false). None means don't send the field.
+    pub do_sample: Option<bool>,
 
     // ── Stateful proxy mode (e.g. DeepSeek Web CDP proxy) ──
     /// When true, only send incremental messages (not full history).
@@ -46,6 +49,7 @@ impl ProviderConfig {
         thinking_mode: ThinkingParamMode,
         cache_field: CacheTokenField,
         supports_thinking: bool,
+        do_sample: Option<bool>,
     ) -> Self {
         Self {
             kind: ProviderKind::OpenAi,
@@ -57,6 +61,7 @@ impl ProviderConfig {
             thinking_mode,
             cache_field,
             supports_thinking,
+            do_sample,
             stateful: false,
             supports_tail_system: true,
         }

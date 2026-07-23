@@ -66,6 +66,7 @@ fn glm() -> ProviderSpec {
             models_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
             chat_path: Some("/api/paas/v4/chat/completions".into()),
             cache_field: CacheTokenField::PromptDetailsCached,
+            do_sample: Some(false),
             has_balance: false,
             ..Default::default()
         }],

@@ -562,6 +562,7 @@ fn handle_chat(
         Default::default(),
         Default::default(),
         false,
+        None,
     );
 
     let messages = vec![

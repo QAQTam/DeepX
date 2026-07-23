@@ -172,6 +172,9 @@ pub fn chat_stream_openai(
     if let Some(ref e) = effort {
         body_map.insert("reasoning_effort".into(), serde_json::json!(e));
     }
+    if let Some(sample) = provider.do_sample {
+        body_map.insert("do_sample".into(), serde_json::json!(sample));
+    }
     if let Some(ref t) = openai_tools {
         body_map.insert("tools".into(), serde_json::Value::Array(t.clone()));
     }

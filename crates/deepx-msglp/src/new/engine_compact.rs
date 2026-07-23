@@ -155,6 +155,7 @@ impl CompactEngine {
             Default::default(),
             Default::default(),
             false,
+            None,
         );
         Some((prompt, kept_user_count, head_user_count, provider))
     }

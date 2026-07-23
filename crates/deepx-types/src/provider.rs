@@ -91,6 +91,9 @@ pub struct EndpointSpec {
     /// When true, the gate sends only incremental messages instead of full conversation
     /// history. Used for stateful proxy endpoints (e.g. DeepSeek Web CDP proxy).
     pub stateful: bool,
+    /// Explicitly set `do_sample` in the request body. GLM-5.2 benefits from `false` for
+    /// deterministic code generation. `None` means the field is not sent (API default).
+    pub do_sample: Option<bool>,
 }
 
 impl Default for EndpointSpec {
@@ -111,6 +114,7 @@ impl Default for EndpointSpec {
             has_balance: true,
             supports_thinking: true,
             stateful: false,
+            do_sample: None,
         }
     }
 }
