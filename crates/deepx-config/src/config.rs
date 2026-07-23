@@ -526,11 +526,6 @@ impl Config {
         Ok(Some(pc))
     }
 
-    #[cfg(not(feature = "turso-backend"))]
-    fn try_load_from_db_at(_db_path: &std::path::Path) -> Result<Option<PersistentConfig>, String> {
-        Ok(None)
-    }
-
     /// Write config JSON to config.db.
     #[cfg(feature = "turso-backend")]
     fn save_to_db(json: &str) -> Result<(), String> {
@@ -540,10 +535,6 @@ impl Config {
         db.save_config(json)
     }
 
-    #[cfg(not(feature = "turso-backend"))]
-    fn save_to_db(_json: &str) -> Result<(), String> {
-        Ok(())
-    }
 
     pub fn apply_profile(&mut self, name: &str) -> Option<String> {
         let profile = self.profiles.get(name)?.clone();
@@ -619,6 +610,7 @@ impl Config {
         std::fs::rename(&tmp, &path).map_err(|e| format!("activate config outbox: {e}"))
     }
 
+    #[cfg(feature = "turso-backend")]
     fn remove_outbox_at(db_path: &std::path::Path) -> Result<(), String> {
         let path = Self::outbox_path(db_path);
         if path.exists() { std::fs::remove_file(path).map_err(|e| format!("remove config outbox: {e}"))?; }
@@ -628,7 +620,7 @@ impl Config {
     fn replay_outbox_at(db_path: &std::path::Path) -> Result<(), String> {
         let path = Self::outbox_path(db_path);
         if !path.exists() { return Ok(()); }
-        let outbox: ConfigMirrorOutbox = serde_json::from_slice(&std::fs::read(&path)
+        let _outbox: ConfigMirrorOutbox = serde_json::from_slice(&std::fs::read(&path)
             .map_err(|e| format!("read config outbox: {e}"))?)
             .map_err(|e| format!("parse config outbox: {e}"))?;
         #[cfg(feature = "turso-backend")]
