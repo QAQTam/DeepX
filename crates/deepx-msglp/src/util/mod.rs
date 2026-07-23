@@ -1,6 +1,8 @@
 //! Utility functions for the message loop: calendar, token logging, tool display formatting.
+//! TODO: split into `datetime.rs` (chrono_local_date, chrono_local_datetime, epoch_to_date)
+//! and `format.rs` (resolve_effective_name, has_xml, format_tool_args_display).
 
-use crate::agent::AgentState;
+use crate::state::agent::AgentState;
 use deepx_proto;
 use deepx_types;
 
@@ -452,7 +454,7 @@ pub(crate) fn emit_round_complete(
 
 /// Emitter-trait version of emit_round_complete for the new Loop architecture.
 pub(crate) fn emit_round_complete_via_emitter(
-    emitter: &dyn crate::new::types::Emitter,
+    emitter: &dyn crate::ring::types::Emitter,
     turn_id: &str,
     round_num: u32,
     assistant_msg: &deepx_types::Message,

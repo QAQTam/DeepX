@@ -12,8 +12,8 @@ use deepx_types::UsageInfo;
 
 use super::engine_tool::ToolEngine;
 use super::types::*;
-use crate::conflict;
-use crate::dashboard;
+use crate::services::conflict;
+use crate::services::dashboard;
 use crate::util;
 
 /// Why the turn is being resumed.

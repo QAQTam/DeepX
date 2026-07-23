@@ -30,7 +30,7 @@ use std::sync::mpsc;
 use deepx_proto::{Agent2Ui, AskMode, AskQuestion};
 use deepx_types::UsageInfo;
 
-use crate::agent::AgentState;
+use crate::state::agent::AgentState;
 
 // ═══════════════════════════════════════════════════════
 // CancelToken — shared abort flag
@@ -351,14 +351,14 @@ impl StatsCollector {
 
 /// Wrapper around the notification thread's sender channel.
 pub struct NotifyHandle {
-    pub tx: mpsc::Sender<crate::notification::NotifyMessage>,
+    pub tx: mpsc::Sender<crate::services::notification::NotifyMessage>,
 }
 
 impl NotifyHandle {
     pub fn notify(&self, body: String) {
         let _ = self
             .tx
-            .send(crate::notification::NotifyMessage::Toast(body));
+            .send(crate::services::notification::NotifyMessage::Toast(body));
     }
 }
 

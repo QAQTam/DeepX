@@ -387,6 +387,15 @@ impl DeepxService {
     }
 
     fn save_config(&self, params: &Value) -> Result<(), String> {
+        log::info!(
+            "[config.save] received params: {}",
+            serde_json::to_string(params).unwrap_or_else(|_| "<unprintable>".into())
+        );
+        log::info!(
+            "[config.save] params.apiKey={:?} params.api_key={:?}",
+            params.get("apiKey").and_then(|v| v.as_str()),
+            params.get("api_key").and_then(|v| v.as_str()),
+        );
         let mut cfg = deepx_config::Config::load().unwrap_or_default();
         update_string(&mut cfg.api_key, params, "api_key", "apiKey");
         update_string(&mut cfg.model, params, "model", "model");
@@ -523,6 +532,13 @@ fn update_string(target: &mut String, params: &Value, snake: &str, camel: &str) 
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
     {
+        // Guard: skip the masked placeholder used by load_config
+        if value == "****" {
+            log::info!(
+                "[update_string] skipping masked placeholder '****' for field '{snake}'"
+            );
+            return;
+        }
         *target = value.to_string();
     }
 }
@@ -665,7 +681,7 @@ fn load_config() -> Result<Value, String> {
     let cfg = deepx_config::Config::load().map_err(err)?;
     let providers = deepx_config::registry::all_providers().into_iter().map(|provider| json!({"id":provider.id,"display":provider.display,"endpoints":provider.endpoints.into_iter().map(|endpoint|json!({"id":endpoint.id,"display":endpoint.display,"base_url":endpoint.base_url,"default_model":endpoint.default_model,"models":endpoint.models,"stateful":endpoint.stateful})).collect::<Vec<_>>() })).collect::<Vec<_>>();
     Ok(
-        json!({"api_key":if cfg.api_key.is_empty(){""}else{"****"},"model":cfg.model,"base_url":cfg.base_url,"provider_id":cfg.provider_id,"endpoint":cfg.endpoint,"max_tokens":cfg.max_tokens,"context_limit":cfg.context_limit,"reasoning_effort":cfg.reasoning_effort,"permission_level":cfg.permission_level,"lang":cfg.lang,"active_profile":cfg.active_profile,"providers":providers,"subagent":{"model":cfg.subagent.model,"base_url":cfg.subagent.base_url,"api_key":if cfg.subagent.api_key.is_empty(){""}else{"****"},"max_tokens":cfg.subagent.max_tokens,"timeout_secs":cfg.subagent.timeout_secs,"default_tools":cfg.subagent.default_tools},"database":{"enabled":cfg.database.enabled},"tokenizer_path":cfg.tokenizer_path}),
+        json!({"api_key":if cfg.api_key.is_empty(){""}else{"****"},"api_key_set":!cfg.api_key.is_empty(),"model":cfg.model,"base_url":cfg.base_url,"provider_id":cfg.provider_id,"endpoint":cfg.endpoint,"max_tokens":cfg.max_tokens,"context_limit":cfg.context_limit,"reasoning_effort":cfg.reasoning_effort,"permission_level":cfg.permission_level,"lang":cfg.lang,"active_profile":cfg.active_profile,"providers":providers,"subagent":{"model":cfg.subagent.model,"base_url":cfg.subagent.base_url,"api_key":if cfg.subagent.api_key.is_empty(){""}else{"****"},"api_key_set":!cfg.subagent.api_key.is_empty(),"max_tokens":cfg.subagent.max_tokens,"timeout_secs":cfg.subagent.timeout_secs,"default_tools":cfg.subagent.default_tools},"database":{"enabled":cfg.database.enabled},"tokenizer_path":cfg.tokenizer_path}),
     )
 }
 

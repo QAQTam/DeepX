@@ -478,6 +478,11 @@ impl Config {
         if self.database.enabled {
             Self::write_outbox_at(&db_path, &json)?;
         }
+        log::info!(
+            "[Config::save] writing to {}, api_key={:?}",
+            deepx_types::platform::config_path().display(),
+            pc.api_key.as_deref().unwrap_or("(none)")
+        );
         if !store.save(&pc) {
             return Err(format!(
                 "Failed to save config to {}",

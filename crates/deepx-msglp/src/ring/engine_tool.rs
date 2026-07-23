@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::agent::PendingApproval;
+use crate::state::agent::PendingApproval;
 use deepx_proto::{Agent2Ui, AskMode, AskQuestion};
 
 use super::types::*;

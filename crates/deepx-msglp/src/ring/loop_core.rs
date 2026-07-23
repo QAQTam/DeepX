@@ -62,8 +62,8 @@ use super::engine_session::SessionEngine;
 use super::engine_tool::PermissionDisposition;
 use super::paced_emitter::{DEFAULT_FLUSH_INTERVAL, PacedEmitter};
 use super::types::*;
-use crate::agent::AgentState;
-use crate::notification;
+use crate::state::agent::AgentState;
+use crate::services::notification;
 
 /// Number of recent turns sent on session restore for incremental loading.
 const INITIAL_LOAD_COUNT: usize = 20;

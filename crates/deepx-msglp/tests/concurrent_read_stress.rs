@@ -6,8 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use deepx_msglp::agent::AgentState;
-use deepx_msglp::new::loop_core::Loop;
+use deepx_msglp::state::agent::AgentState;
+use deepx_msglp::ring::loop_core::Loop;
 use deepx_proto::{Agent2Ui, Ui2Agent};
 
 #[test]
@@ -20,7 +20,6 @@ fn ten_parallel_reads_same_file() {
 
     // ── Init agent ──
     deepx_session::SessionManager::init(deepx_types::platform::data_dir(), false);
-    let _ = deepx_msglp::logger::init_agent_logger(&deepx_types::platform::data_dir());
     let mut agent = AgentState::init("test");
     // Make the session ephemeral to avoid disk I/O interference
     agent.ephemeral = true;

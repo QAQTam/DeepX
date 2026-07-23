@@ -1,7 +1,7 @@
 use deepx_config::Config;
 use deepx_session::SessionMeta;
 
-use crate::skill_context::SkillContextManager;
+use super::skill_context::SkillContextManager;
 use deepx_message::{ToolExecReport, ToolExecRequest};
 use deepx_tools::runtime;
 use std::path::Path;
@@ -182,11 +182,11 @@ impl AgentState {
                 name: item.name,
                 description: item.description,
                 state: match item.state {
-                    crate::skill_context::SkillRuntimeState::Catalog => "catalog",
-                    crate::skill_context::SkillRuntimeState::Requested => "requested",
-                    crate::skill_context::SkillRuntimeState::Active => "active",
-                    crate::skill_context::SkillRuntimeState::ReviewDue => "review_due",
-                    crate::skill_context::SkillRuntimeState::Unavailable => "unavailable",
+                    super::skill_context::SkillRuntimeState::Catalog => "catalog",
+                    super::skill_context::SkillRuntimeState::Requested => "requested",
+                    super::skill_context::SkillRuntimeState::Active => "active",
+                    super::skill_context::SkillRuntimeState::ReviewDue => "review_due",
+                    super::skill_context::SkillRuntimeState::Unavailable => "unavailable",
                 }
                 .to_string(),
                 source: item.source,

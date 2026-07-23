@@ -4,7 +4,7 @@
 //! Delegates to: lifecycle.rs for core session operations.
 
 use super::types::*;
-use crate::lifecycle;
+use crate::state::lifecycle;
 use crate::util;
 
 /// Number of recent turns sent on session restore.
@@ -18,14 +18,14 @@ impl SessionEngine {
     }
 
     /// Create a new session with a fresh seed.
-    pub fn create(&self, agent: &mut crate::agent::AgentState, _cancel: &CancelToken) {
+    pub fn create(&self, agent: &mut crate::state::agent::AgentState, _cancel: &CancelToken) {
         lifecycle::create_session(agent);
         agent.rebind_store();
         deepx_tools::runtime::set_context(&agent.session.seed, agent.config.permission_level);
     }
 
     /// Create a new session with a pre-set seed (from CLI --seed).
-    pub fn create_with_seed(&self, agent: &mut crate::agent::AgentState, _cancel: &CancelToken) {
+    pub fn create_with_seed(&self, agent: &mut crate::state::agent::AgentState, _cancel: &CancelToken) {
         lifecycle::create_session_with_seed(agent);
         agent.rebind_store();
         deepx_tools::runtime::set_context(&agent.session.seed, agent.config.permission_level);
@@ -34,7 +34,7 @@ impl SessionEngine {
     /// Resume an existing session. Returns false if the session doesn't exist.
     pub fn resume(
         &self,
-        agent: &mut crate::agent::AgentState,
+        agent: &mut crate::state::agent::AgentState,
         seed: &str,
         _cancel: &CancelToken,
     ) -> bool {
@@ -71,7 +71,7 @@ impl SessionEngine {
     }
 
     /// Reload config from disk and apply to agent.
-    pub fn reload_config(&self, agent: &mut crate::agent::AgentState, _cancel: &CancelToken) {
+    pub fn reload_config(&self, agent: &mut crate::state::agent::AgentState, _cancel: &CancelToken) {
         if let Ok(cfg) = deepx_config::Config::load() {
             agent.config.api_key = cfg.api_key;
             agent.config.model = cfg.model;

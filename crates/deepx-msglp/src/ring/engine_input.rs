@@ -20,7 +20,7 @@ impl InputEngine {
         // Auto-create session on first input
         if ctx.agent.session.seed.is_empty() {
             log::info!("[INPUT] auto-creating session on first user input");
-            crate::lifecycle::create_session(ctx.agent);
+            crate::state::lifecycle::create_session(ctx.agent);
             ctx.agent.rebind_store();
             ctx.emitter.emit(Agent2Ui::SessionCreated {
                 seed: ctx.agent.session.seed.clone(),

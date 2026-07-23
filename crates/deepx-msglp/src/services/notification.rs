@@ -165,11 +165,11 @@ fn show_toast_with_input_windows(body: &str, reply_tx: mpsc::Sender<Option<Strin
 
     static TOAST_ID: AtomicU64 = AtomicU64::new(1);
 
-    crate::toast_com::init();
+    super::toast_com::init();
 
     let id = format!("deepx:{}", TOAST_ID.fetch_add(1, Ordering::Relaxed));
 
-    crate::toast_com::push_pending(id.clone(), reply_tx);
+    super::toast_com::push_pending(id.clone(), reply_tx);
 
     let escaped = escape_xml(body);
     let xml = format!(
@@ -191,20 +191,20 @@ fn show_toast_with_input_windows(body: &str, reply_tx: mpsc::Sender<Option<Strin
     let doc = match windows::Data::Xml::Dom::XmlDocument::new() {
         Ok(d) => d,
         Err(e) => {
-            let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+            let _ = super::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
             log::error!("XmlDocument::new failed: {e:?}");
             return;
         }
     };
     if let Err(e) = doc.LoadXml(&windows::core::HSTRING::from(xml.as_str())) {
-        let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+        let _ = super::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
         log::error!("show_toast_input: LoadXml failed: {e:?}");
         return;
     }
     let toast = match windows::UI::Notifications::ToastNotification::CreateToastNotification(&doc) {
         Ok(t) => t,
         Err(e) => {
-            let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+            let _ = super::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
             log::error!("CreateToastNotification failed: {e:?}");
             return;
         }
@@ -217,7 +217,7 @@ fn show_toast_with_input_windows(body: &str, reply_tx: mpsc::Sender<Option<Strin
         ) {
             Ok(n) => n,
             Err(e) => {
-                let _ = crate::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
+                let _ = super::toast_com::take_pending(&id).and_then(|tx| tx.send(None).ok());
                 log::error!("CreateToastNotifierWithId({aumid}) failed: {e:?}");
                 return;
             }

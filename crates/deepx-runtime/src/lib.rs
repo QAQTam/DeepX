@@ -1,6 +1,7 @@
 mod activity;
 mod event_bus;
 mod lease;
+mod logger;
 mod registry;
 mod service;
 mod worker;

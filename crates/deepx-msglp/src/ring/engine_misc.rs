@@ -15,8 +15,8 @@ use std::sync::mpsc;
 
 use deepx_proto::Agent2Ui;
 
-use crate::agent::AgentState;
-use crate::dashboard;
+use crate::state::agent::AgentState;
+use crate::services::dashboard;
 use crate::util;
 
 const INITIAL_LOAD_COUNT: usize = 20;
@@ -131,7 +131,7 @@ impl MiscEngine {
     pub fn maybe_notify(
         &self,
         agent: &AgentState,
-        notify_tx: &mpsc::Sender<crate::notification::NotifyMessage>,
+        notify_tx: &mpsc::Sender<crate::services::notification::NotifyMessage>,
     ) {
         let preview = agent
             .msg
@@ -157,7 +157,7 @@ impl MiscEngine {
             } else {
                 words.join(" ")
             };
-            let _ = notify_tx.send(crate::notification::NotifyMessage::Toast(body));
+            let _ = notify_tx.send(crate::services::notification::NotifyMessage::Toast(body));
         }
     }
 }

@@ -18,12 +18,12 @@ pub fn run_agent_worker(args: &[String]) -> Result<(), String> {
         }
         index += 1;
     }
-    let _ = deepx_msglp::logger::init_agent_logger(&deepx_types::platform::data_dir());
+    let _ = crate::logger::init_agent_logger(&deepx_types::platform::data_dir());
     let enabled = deepx_config::Config::load()
         .map(|config| config.turso_enabled())
         .unwrap_or(true);
     deepx_session::SessionManager::init(deepx_types::platform::data_dir(), enabled);
-    let mut agent = deepx_msglp::agent::AgentState::init("daemon");
+    let mut agent = deepx_msglp::state::agent::AgentState::init("daemon");
     if let Some(seed) = resume_seed {
         agent.session.resume_seed = Some(seed);
     }
@@ -33,7 +33,7 @@ pub fn run_agent_worker(args: &[String]) -> Result<(), String> {
     }
     let stdin = BufReader::new(std::io::stdin());
     let stdout = std::io::stdout();
-    let mut loop_ = deepx_msglp::new::loop_core::Loop::new_ipc(agent, stdin, stdout);
+    let mut loop_ = deepx_msglp::ring::loop_core::Loop::new_ipc(agent, stdin, stdout);
     loop_.run();
     Ok(())
 }
