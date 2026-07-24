@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Daemon（全平台编译 + 打包）─────────────────
+  daemon:
+    name: daemon-${{ matrix.target_id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            target_id: windows-x86_64
+            binary: target/x86_64-pc-windows-msvc/release/deepx-daemon.exe
+          - os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            target_id: linux-x86_64
+            binary: target/x86_64-unknown-linux-gnu/release/deepx-daemon
+          - os: macos-14
+            rust_target: aarch64-apple-darwin
+            target_id: macos-arm64
+            binary: target/aarch64-apple-darwin/release/deepx-daemon
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup target add ${{ matrix.rust_target }}
+      - run: cargo build --locked --release -p deepx-daemon --target ${{ matrix.rust_target }}
+      - run: node scripts/package-daemon.mjs --target-id ${{ matrix.target_id }} --binary ${{ matrix.binary }} --output dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemon-${{ matrix.target_id }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ── Desktop（Windows Electron 安装包）───────────
+  desktop:
+    name: desktop-windows-x86_64
+    needs: daemon
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v5
+        with:
+          name: daemon-windows-x86_64
+          path: apps/desktop/build/sidecar
+      - name: Create daemon manifest
+        shell: bash
+        run: |
+          V=$(cat version.txt)
+          cat > apps/desktop/build/sidecar/daemon-manifest.json << EOF
+          {"version":"$V","protocol_version":1,"build_id":"$GITHUB_SHA","channel":"stable"}
+          EOF
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11.15.0"
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
+      - run: pnpm build
+        working-directory: apps/desktop
+      - run: pnpm exec electron-builder --win nsis --x64 --publish never
+        working-directory: apps/desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepx-desktop-windows-x86_64
+          path: |
+            apps/desktop/release/*-Setup.exe
+            apps/desktop/release/*.blockmap
+          if-no-files-found: error
+
+  # ── GitHub Release ─────────────────────────────
+  publish:
+    name: publish
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [daemon, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: daemon-*
+          path: dist/daemon
+          merge-multiple: true
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: deepx-desktop-*
+          path: dist/desktop
+          merge-multiple: true
+      - run: node scripts/build-release-manifest.mjs --input dist/daemon
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/daemon/* dist/desktop/* \
+            --verify-tag --generate-notes \
+            --title "DeepX ${GITHUB_REF_NAME}"

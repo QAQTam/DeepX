@@ -211,7 +211,7 @@ async fn handle_connection(
             if let ControlServerMessage::Event { seq, .. } = &message {
                 delivered_seq = delivered_seq.max(*seq);
             }
-            if event_allowed(&message, &leases, &client_instance_id) {
+            if event_allowed(&message, &leases, &client_instance_id, &client_kind) {
                 send(&mut sink, &message).await?;
             }
         }
@@ -293,7 +293,11 @@ async fn handle_connection(
                         priority_tx.send(ControlServerMessage::Heartbeat{server_epoch:service.events().epoch().into(),seq:service.events().current_seq(),nonce}).await.map_err(|_|"control writer stopped".to_string())?;
                     }
                     ControlClientMessage::SessionAttach{request_id,seed}=>{
-                        let decision=leases.lock().unwrap_or_else(|e|e.into_inner()).attach(&seed,&client_instance_id,&client_kind,&connection_id,Instant::now());
+                        let decision=if client_kind=="clawd"{
+                            LeaseDecision::Acquired
+                        }else{
+                            leases.lock().unwrap_or_else(|e|e.into_inner()).attach(&seed,&client_instance_id,&client_kind,&connection_id,Instant::now())
+                        };
                         match decision {
                             LeaseDecision::Acquired|LeaseDecision::Resumed=>{
                                 priority_tx.send(ControlServerMessage::Response{request_id,result:serde_json::json!({"seed":seed})}).await.map_err(|_|"control writer stopped".to_string())?;
@@ -337,7 +341,7 @@ async fn handle_connection(
                 Ok(ControlServerMessage::Event{seq,..}) if seq<=delivered_seq=>{},
                 Ok(message @ ControlServerMessage::Event{seq,..})=>{
                     delivered_seq=seq;
-                    if event_allowed(&message,&leases,&client_instance_id){queue_runtime_event(&event_tx,message)?;}
+                    if event_allowed(&message,&leases,&client_instance_id,&client_kind){queue_runtime_event(&event_tx,message)?;}
                 },
                 Ok(message)=>queue_runtime_event(&event_tx,message)?,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_))=>{
@@ -384,13 +388,18 @@ async fn build_snapshot(
 fn event_allowed(
     message: &ControlServerMessage,
     leases: &Arc<Mutex<LeaseManager>>,
-    client_id: &str,
+    client_instance_id: &str,
+    client_kind: &str,
 ) -> bool {
+    // 观察者客户端（clawd 等）接收所有事件，不检查租约
+    if client_kind == "clawd" {
+        return true;
+    }
     match message {
         ControlServerMessage::Event { seed, .. } => leases
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .owns(seed, client_id, Instant::now()),
+            .owns(seed, client_instance_id, Instant::now()),
         _ => true,
     }
 }

@@ -1,0 +1,32 @@
+import { Show, createEffect, createSignal } from "solid-js";
+import { request } from "../runtime/backendClient";
+import { useI18n } from "../i18n";
+
+type GoalStatus = { objective: string; status: "active" | "paused" | "completed" | "stopped"; current_id?: string; current_title?: string; completed: number; total: number; paused_reason?: string };
+
+export default function GoalStatusStrip(props: { seed: string; refreshKey: string | number }) {
+  const { t } = useI18n();
+  const [goal, setGoal] = createSignal<GoalStatus | null>(null);
+  const [busy, setBusy] = createSignal(false);
+  let refreshGeneration = 0;
+  async function refresh() {
+    const generation = ++refreshGeneration;
+    try {
+      const next = await request<GoalStatus | null>("plan.goal_status", { seed: props.seed });
+      if (generation !== refreshGeneration) return;
+      setGoal(next?.status === "active" || next?.status === "paused" ? next : null);
+    }
+    catch { if (generation === refreshGeneration) setGoal(null); }
+  }
+  async function action(action: "pause" | "resume" | "stop") {
+    if (busy()) return;
+    setBusy(true);
+    try { await request("plan.goal_action", { seed: props.seed, action }); }
+    finally { setBusy(false); await refresh(); }
+  }
+  createEffect(() => [props.seed, props.refreshKey], () => { void refresh(); });
+  return <Show when={goal()}>{item => <section class={`goal-status-strip ${item().status}`} aria-label={t().goal.title}>
+    <div class="goal-status-copy"><span class="goal-status-label"><i class="goal-status-dot" />{t().goal.title} · {item().status === "active" ? t().goal.active : item().status === "paused" ? t().goal.paused : t().goal.completed}</span><strong>{item().objective}</strong><small>{t().goal.step} {Math.min(item().completed + 1, item().total)}/{item().total}{item().current_title ? ` · ${item().current_id}: ${item().current_title}` : ""}{item().paused_reason ? ` · ${item().paused_reason}` : ""}</small></div>
+    <div class="goal-status-actions"><Show when={item().status === "active"}><button disabled={busy()} onClick={() => void action("pause")}>{t().goal.pause}</button></Show><Show when={item().status === "paused"}><button disabled={busy()} onClick={() => void action("resume")}>{t().goal.resume}</button></Show><Show when={item().status === "active" || item().status === "paused"}><button disabled={busy()} class="danger" onClick={() => void action("stop")}>{t().goal.stop}</button></Show></div>
+  </section>}</Show>;
+}

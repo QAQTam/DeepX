@@ -16,6 +16,7 @@ members = [
     "crates/deepx-session",
     "crates/deepx-subagent",
     "crates/deepx-gate-testui",
+    "apps/installer",
 ]
 
 [workspace.package]

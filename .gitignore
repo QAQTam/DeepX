@@ -7,9 +7,15 @@ crates/deepx-tauri/src-tauri/binaries/
 .env
 node_modules/
 .deepx-trash/
-deepx.exe
-*.js
+*.exe
 bindings/
 tmp/
 .deepx/
 skills/
+# monorepo additions
+apps/desktop/out/
+apps/desktop/release/
+apps/desktop/build/
+apps/desktop/.cache/
+apps/installer/payload/desktop/
+apps/installer/dist/

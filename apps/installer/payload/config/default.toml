@@ -1,0 +1,11 @@
+# DeepX 安装默认配置
+[daemon]
+port = 18921
+host = "127.0.0.1"
+
+[gate]
+port = 18922
+host = "127.0.0.1"
+
+[companion]
+enabled = true
