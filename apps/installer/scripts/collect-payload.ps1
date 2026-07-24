@@ -1,7 +1,8 @@
 # collect-payload.ps1 — 收集前后端产物到 payload/
+# 所有路径相对于 workspace 根 (D:\DeepX)
 param(
-    [string]$FrontendRoot = "..\desktop",
-    [string]$PayloadDir   = "payload"
+    [string]$FrontendRoot = "apps\desktop",
+    [string]$PayloadDir   = "apps\installer\payload"
 )
 
 Write-Host "=== 收集安装文件到 $PayloadDir/ ==="
@@ -23,7 +24,7 @@ if (Test-Path $src) {
 }
 
 # 卸载器二进制
-$uninstaller = "../../target/release/deepx-uninstaller.exe"
+$uninstaller = "target/release/deepx-uninstaller.exe"
 if (Test-Path $uninstaller) {
     Write-Host "  → 复制卸载器 deepx-uninstaller.exe"
     Copy-Item -Force $uninstaller "$PayloadDir/deepx-uninstaller.exe"

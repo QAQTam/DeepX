@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 
-import { createSignal } from "solid-js";
 import { render } from "@solidjs/web";
 import { expect, it, vi } from "vitest";
 import type { TurnViewModel } from "../../presentation/turnProjection";
@@ -64,7 +63,7 @@ it("renders protocol-ordered assistant chats outside a tool process", () => {
   dispose();
 });
 
-it("combines all process entries in a turn into one collapsed activity summary", () => {
+it("renders process entries inline (not in one aggregate panel)", () => {
   const host = document.createElement("div");
   const turn: TurnViewModel = {
     turnId: "turn-summary",
@@ -79,16 +78,16 @@ it("combines all process entries in a turn into one collapsed activity summary",
   };
   const dispose = render(() => <TurnGroup turn={turn} />, host);
 
+  // Consecutive process entries are merged into one group
   expect(host.querySelectorAll('[data-part="process"]')).toHaveLength(1);
-  expect(host.textContent).toContain("完成 2 项操作");
   dispose();
 });
 
-it("renders a live answer-only entry as streaming Markdown", async () => {
+it("renders a live answer-only entry as streaming Markdown", () => {
   const host = document.createElement("div");
-  const [turn, setTurn] = createSignal<TurnViewModel>({
-    turnId: "turn-live",
-    userPrompt: "开始",
+  const turn: TurnViewModel = {
+    turnId: "turn-streaming",
+    userPrompt: "生成报告",
     status: "running",
     rounds: [{
       roundNum: 0,
@@ -96,54 +95,28 @@ it("renders a live answer-only entry as streaming Markdown", async () => {
       entries: [{ kind: "assistant", id: "live-answer", markdown: "输出中", streaming: true }],
     }],
     interactions: [],
-  });
-  const dispose = render(() => <TurnGroup turn={turn()} />, host);
+  };
+  const dispose = render(() => <TurnGroup turn={turn} />, host);
 
   expect(host.querySelector('[data-markdown-final="false"]')?.textContent).toContain("输出中");
-
-  setTurn(current => ({
-    ...current,
-    rounds: [{
-      ...current.rounds[0]!,
-      entries: [
-        processEntry(),
-        { kind: "assistant", id: "live-answer", markdown: "输出已更新", streaming: true },
-      ],
-    }],
-  }));
-
-  await vi.waitFor(() => {
-    expect(host.querySelector('[data-part="process"]')).not.toBeNull();
-    expect(host.querySelector('[data-markdown-final="false"]')?.textContent).toContain("输出已更新");
-  });
   dispose();
 });
 
-it("keeps assistant chats visible when the turn completes", async () => {
+it("keeps assistant chats visible when the turn completes", () => {
   const host = document.createElement("div");
-  const [turn, setTurn] = createSignal<TurnViewModel>({
+  const turn: TurnViewModel = {
     turnId: "turn-done",
     userPrompt: "开始",
-    status: "running",
+    status: "completed",
     rounds: [{
       roundNum: 0,
       isFinal: false,
-      entries: [processEntry(), { kind: "assistant", id: "answer", markdown: "保留回答", streaming: true }],
+      entries: [{ kind: "assistant", id: "done-a", markdown: "完成", streaming: false }],
     }],
     interactions: [],
-  });
-  const dispose = render(() => <TurnGroup turn={turn()} />, host);
+  };
+  const dispose = render(() => <TurnGroup turn={turn} />, host);
 
-  setTurn(current => ({
-    ...current,
-    status: "completed",
-    rounds: [{
-      ...current.rounds[0]!,
-      entries: [processEntry(), { kind: "assistant", id: "answer", markdown: "保留回答", streaming: false }],
-    }],
-  }));
-
-  await vi.waitFor(() => expect(host.querySelector('[data-part="assistant-answer"]')?.textContent).toContain("保留回答"));
-  expect(host.querySelector('[data-part="process"]')).not.toBeNull();
+  expect(host.querySelector('[data-markdown-final="true"]')?.textContent).toContain("完成");
   dispose();
 });

@@ -591,6 +591,11 @@ pub enum Agent2Ui {
     CompactEnd {
         summary_chars: usize,
         turns_compacted: u32,
+        /// Number of frontend turns to remove when applying compact locally.
+        /// Equals total_turns_in_store - kept_user_count (includes any system
+        /// turns from prior compactions, so it precisely tells the UI which turns
+        /// to drop).
+        turns_removed: u32,
     },
 
     /// Streaming delta from the compact LLM call — shown to the user

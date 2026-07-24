@@ -19,16 +19,44 @@ function detailText(item: ProcessItem): string {
   }
 }
 
+/** Attempt JSON parse + pretty-print. Returns null if not valid JSON. */
+function tryFormatJson(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return null;
+  }
+}
+
 export default function ProcessDetail(props: { item: ProcessItem }) {
   const [full, setFull] = createSignal(false);
-  const lines = () => detailText(props.item).split("\n");
+  const raw = () => detailText(props.item);
+  const formattedJson = () => tryFormatJson(raw());
+  const isJson = () => formattedJson() !== null;
+  const displayText = () => isJson() ? formattedJson()! : raw();
+  const lines = () => displayText().split("\n");
   const visible = () => full() ? lines() : lines().slice(0, PREVIEW_LINES);
+  const statusBadge = () => {
+    if (props.item.kind !== "tool") return null;
+    if (props.item.success === true) return <span class="process-tool-status success">✅ 成功</span>;
+    if (props.item.success === false) return <span class="process-tool-status failure">❌ 失败</span>;
+    return <span class="process-tool-status pending">⏳ 等待中</span>;
+  };
 
   return (
     <div class="process-detail">
       <Show when={props.item.kind === "group"} fallback={
         <>
-          <pre>{visible().join("\n")}</pre>
+          <div class="process-detail-badges">
+            <Show when={statusBadge()}>{statusBadge()}</Show>
+            <Show when={isJson()}>
+              <span class="process-tool-status json" aria-label="JSON 格式">JSON</span>
+            </Show>
+          </div>
+          <pre data-format={isJson() ? "json" : "text"}>{visible().join("\n")}</pre>
           <Show when={lines().length > PREVIEW_LINES}>
             <button type="button" class="process-show-full" onClick={() => setFull(value => !value)}>
               {full() ? "收起输出" : "显示完整输出"}

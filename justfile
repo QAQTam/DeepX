@@ -42,8 +42,8 @@ package-desktop: build-daemon
 # 生成安装器 SFX（安装器编译 + 收集产物 + 拼接）
 [windows]
 package-installer: build-installer
-    @pwsh -File apps/installer/scripts/collect-payload.ps1
-    @pwsh -File apps/installer/scripts/finalize.ps1
+    ./apps/installer/scripts/collect-payload.ps1
+    ./apps/installer/scripts/finalize.ps1
 
 # 完整流水线
 [windows]
@@ -52,8 +52,8 @@ package: package-desktop package-installer
 # SFX 快速拼接（payload 已就位，跳过编译）
 [windows]
 sfx-quick:
-    @pwsh -File apps/installer/scripts/collect-payload.ps1
-    @pwsh -File apps/installer/scripts/finalize.ps1
+    ./apps/installer/scripts/collect-payload.ps1
+    ./apps/installer/scripts/finalize.ps1
 
 # ── 开发 ────────────────────────────────────────────
 

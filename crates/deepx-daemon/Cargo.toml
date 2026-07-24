@@ -16,5 +16,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = "0.28"
 
+[features]
+default = ["rag"]
+rag = ["deepx-runtime/rag"]
+
 [lints]
 workspace = true

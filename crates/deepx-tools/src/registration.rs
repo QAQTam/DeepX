@@ -49,6 +49,10 @@ pub fn build_tool_manager(extra_registrars: &[ToolRegistrar]) -> ToolManager {
     // ── Agent Skills ──
     skill::register(&mut mgr);
 
+    // ── RAG (optional, feature-gated) ──
+    #[cfg(feature = "rag")]
+    crate::rag::register_rag_tools(&mut mgr);
+
     // ── 外部注册器 ──
     for reg in extra_registrars {
         reg(&mut mgr);

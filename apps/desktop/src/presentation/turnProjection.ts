@@ -156,7 +156,7 @@ function projectRoundEntries(
             kind: "assistant",
             id: `${turn.turnId}-round-${round.roundNum}-assistant-${ordinal++}`,
             markdown: block.content,
-            streaming: false,
+            streaming,
           });
           break;
       }

@@ -482,14 +482,39 @@ export function reduceAgentEvent(
       return { ...state, compact: { ...state.compact, active: true, text: "", turnsCompacted: null } };
     case "compact_delta":
       return { ...state, compact: { ...state.compact, active: true, text: state.compact.text + event.delta } };
-    case "compact_end":
+    case "compact_end": {
+      // deduplicate by turnsCompacted
       if (!state.compact.active && state.compact.turnsCompacted === event.turns_compacted) return state;
-      return { ...state, compact: {
-        active: false,
-        text: "",
-        turnsCompacted: event.turns_compacted,
-        completionRevision: state.compact.completionRevision + 1,
-      } };
+      // Graceful fallback for old protocol without turns_removed
+      const turnsRemoved: number = event.turns_removed ?? event.turns_compacted ?? 0;
+      const summaryText = state.compact.text;
+      // Remove compacted turns from the front
+      let newTurns = state.turns.slice(turnsRemoved);
+      // Prepend compact summary turn if we have text and actually removed turns
+      if (summaryText && turnsRemoved > 0) {
+        const compactTurn: RawTurn = {
+          turnId: `compact-${Date.now()}`,
+          userText: summaryText,
+          status: "completed",
+          startedAt: Date.now(),
+          endedAt: Date.now(),
+          rounds: [],
+          interactions: [],
+        };
+        newTurns = [compactTurn, ...newTurns];
+      }
+      return {
+        ...state,
+        turns: newTurns,
+        compact: {
+          ...state.compact,
+          active: false,
+          text: summaryText,
+          turnsCompacted: event.turns_compacted ?? null,
+          completionRevision: state.compact.completionRevision + 1,
+        },
+      };
+    }
     case "cancelled": {
       const turnId = lastTurnId(state);
       if (!turnId) return state;

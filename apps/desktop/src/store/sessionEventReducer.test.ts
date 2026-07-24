@@ -180,14 +180,14 @@ describe("sessionEventReducer", () => {
     }, 22);
     state = reduceAgentEvent(state, { type: "compact_start", turns_total: 4, turns_keeping: 2 }, 23);
     state = reduceAgentEvent(state, { type: "compact_delta", delta: "summary" }, 24);
-    state = reduceAgentEvent(state, { type: "compact_end", summary_chars: 7, turns_compacted: 2 }, 25);
+    state = reduceAgentEvent(state, { type: "compact_end", summary_chars: 7, turns_compacted: 2, turns_removed: 2 }, 25);
 
     expect(state.session.usage?.total_tokens).toBe(120);
     expect(state.dashboard.recentEdits).toEqual(["src/a.ts"]);
     expect(state.dashboard.activity[0].toolName).toBe("exec");
     expect(state.compact).toMatchObject({ active: false, turnsCompacted: 2 });
     expect(state.telemetry[state.telemetry.length - 1]?.prompt_tokens).toBe(100);
-    expect(removeTurnFromSession(state, "t1").turns).toHaveLength(0);
+    expect(removeTurnFromSession(state, "t1").turns).toHaveLength(1); // compact summary turn remains
   });
 
   it("deduplicates the Dashboard and TurnEnd copies of one usage snapshot", () => {
@@ -252,5 +252,78 @@ describe("sessionEventReducer", () => {
     state = reduceAgentEvent(state, snapshot(3n, "catalog"), 2);
     expect(state).toBe(current);
     expect(state.skills.runtime[0].state).toBe("active");
+  });
+
+  it("replaces compacted turns with summary turn on compact_end", () => {
+    let state = createRawSessionState("seed-a");
+    // Build 3 turns
+    state = reduceAgentEvent(state, {
+      type: "turn_start", turn_id: "t1", user_text: "hello",
+    }, 1);
+    state = reduceAgentEvent(state, { type: "turn_end", turn_id: "t1" }, 2);
+    state = reduceAgentEvent(state, {
+      type: "turn_start", turn_id: "t2", user_text: "world",
+    }, 3);
+    state = reduceAgentEvent(state, { type: "turn_end", turn_id: "t2" }, 4);
+    state = reduceAgentEvent(state, {
+      type: "turn_start", turn_id: "t3", user_text: "keep me",
+    }, 5);
+    state = reduceAgentEvent(state, { type: "turn_end", turn_id: "t3" }, 6);
+    expect(state.turns).toHaveLength(3);
+
+    // Start compact
+    state = reduceAgentEvent(state, {
+      type: "compact_start", turns_total: 3, turns_keeping: 1,
+    }, 7);
+    expect(state.compact.active).toBe(true);
+
+    // Stream summary deltas
+    state = reduceAgentEvent(state, {
+      type: "compact_delta", delta: "Summarized 2 turns.",
+    }, 8);
+    expect(state.compact.text).toBe("Summarized 2 turns.");
+
+    // Finish compact: remove first 2 turns, prepend summary
+    state = reduceAgentEvent(state, {
+      type: "compact_end",
+      summary_chars: 21,
+      turns_compacted: 2,
+      turns_removed: 2,
+    }, 9);
+    expect(state.compact.active).toBe(false);
+    expect(state.compact.turnsCompacted).toBe(2);
+    expect(state.compact.text).toBe("Summarized 2 turns."); // preserved
+    expect(state.turns).toHaveLength(2);
+    // First turn is the compact summary
+    expect(state.turns[0].turnId).toMatch(/^compact-/);
+    expect(state.turns[0].userText).toBe("Summarized 2 turns.");
+    expect(state.turns[0].status).toBe("completed");
+    expect(state.turns[0].rounds).toEqual([]);
+    // Second turn is the kept turn
+    expect(state.turns[1].turnId).toBe("t3");
+    expect(state.turns[1].userText).toBe("keep me");
+  });
+
+  it("handles compact_end with zero turns_removed gracefully", () => {
+    let state = createRawSessionState("seed-b");
+    state = reduceAgentEvent(state, {
+      type: "turn_start", turn_id: "t1", user_text: "only turn",
+    }, 1);
+    state = reduceAgentEvent(state, { type: "turn_end", turn_id: "t1" }, 2);
+    state = reduceAgentEvent(state, {
+      type: "compact_start", turns_total: 1, turns_keeping: 1,
+    }, 3);
+    state = reduceAgentEvent(state, {
+      type: "compact_delta", delta: "No-op compact.",
+    }, 4);
+    state = reduceAgentEvent(state, {
+      type: "compact_end",
+      summary_chars: 14,
+      turns_compacted: 0,
+      turns_removed: 0,
+    }, 5);
+    expect(state.compact.active).toBe(false);
+    expect(state.turns).toHaveLength(1); // unchanged
+    expect(state.turns[0].turnId).toBe("t1");
   });
 });

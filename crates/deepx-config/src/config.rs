@@ -78,6 +78,52 @@ impl Default for DatabaseConfig {
     }
 }
 
+/// RAG（检索增强生成）配置
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RagConfig {
+    /// 是否启用 RAG（false 时不加载向量引擎）
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// HuggingFace 模型 ID
+    #[serde(default = "default_rag_model")]
+    pub model: String,
+    /// 嵌入向量维度（512 = bge-small, 768 = bge-base）
+    #[serde(default = "default_embed_dim")]
+    pub embed_dim: usize,
+    /// 数据存储目录（None = 自动选择 ~/.deepx/vector/）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_dir: Option<String>,
+    /// 技能语义检索 top-K
+    #[serde(default = "default_skill_top_k")]
+    pub skill_top_k: usize,
+    /// 记忆检索 top-K
+    #[serde(default = "default_memory_top_k")]
+    pub memory_top_k: usize,
+    /// 本地模型目录（设置后跳过 HF Hub 下载）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_model: Option<String>,
+}
+
+fn default_true() -> bool { true }
+fn default_rag_model() -> String { "BAAI/bge-small-zh-v1.5".into() }
+fn default_embed_dim() -> usize { 512 }
+fn default_skill_top_k() -> usize { 5 }
+fn default_memory_top_k() -> usize { 3 }
+
+impl Default for RagConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: "BAAI/bge-small-zh-v1.5".into(),
+            embed_dim: 512,
+            store_dir: None,
+            skill_top_k: 5,
+            memory_top_k: 3,
+            local_model: None,
+        }
+    }
+}
+
 /// Runtime agent configuration built from PersistentConfig + registry.
 ///
 /// This is the fully-resolved config used by the agent at runtime. It combines
@@ -117,6 +163,8 @@ pub struct Config {
     pub compliance_allowlist: Vec<String>,
     /// Local Turso SQLite database mirror configuration.
     pub database: DatabaseConfig,
+    /// RAG 向量引擎配置（embedding / 语义搜索 / 跨会话记忆）
+    pub rag: RagConfig,
     /// Agent permission level:
     /// 1 = MaxLockdown, 2 = ReadFree, 3 = WorkspaceFree, 4 = Unrestricted.
     pub permission_level: u8,
@@ -159,6 +207,7 @@ impl Default for Config {
             compliance_extra_keywords: Vec::new(),
             compliance_allowlist: Vec::new(),
             database: DatabaseConfig::default(),
+            rag: RagConfig::default(),
             permission_level: 4, // Unrestricted — backward compat
             tokenizer_path: None,
         }

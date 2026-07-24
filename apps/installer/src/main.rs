@@ -17,14 +17,15 @@ mod win_process;
 mod colors {
     use egui::Color32;
     pub const ACCENT: Color32 = Color32::from_rgb(0, 122, 255);      // macOS 蓝
-    pub const SIDEBAR_BG: Color32 = Color32::from_rgb(245, 245, 247); // 浅灰
-    pub const SIDEBAR_TEXT: Color32 = Color32::from_rgb(100, 100, 100);
+    pub const SIDEBAR_BG: Color32 = Color32::from_rgb(245, 245, 247); // 浅灰侧边栏
+    pub const SIDEBAR_TEXT: Color32 = Color32::from_rgb(50, 50, 55);  // 深色文字
     pub const SIDEBAR_ACTIVE: Color32 = Color32::from_rgb(0, 0, 0);
     pub const CONTENT_BG: Color32 = Color32::from_rgb(255, 255, 255);
     pub const SUCCESS: Color32 = Color32::from_rgb(52, 199, 89);     // 绿色
     pub const DANGER: Color32 = Color32::from_rgb(255, 59, 48);      // 红色
-    pub const BORDER: Color32 = Color32::from_rgb(220, 220, 225);
-    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(142, 142, 147);
+    pub const BORDER: Color32 = Color32::from_rgb(200, 200, 205);
+    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(90, 90, 95); // 次级文字
+    pub const TEXT_MUTED: Color32 = Color32::from_rgb(140, 140, 145);  // 更浅（禁用态等）
     pub const STEP_DOT_SIZE: f32 = 28.0;
 }
 
@@ -74,16 +75,29 @@ fn setup_chinese_fonts(ctx: &Context) {
 }
 
 fn setup_style(ctx: &Context) {
-    let mut style = (*ctx.style()).clone();
-    style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
-    style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgba_premultiplied(0, 122, 255, 20);
-    style.visuals.widgets.active.bg_fill = Color32::from_rgba_premultiplied(0, 122, 255, 40);
-    style.visuals.selection.bg_fill = colors::ACCENT;
-    style.visuals.widgets.inactive.rounding = Rounding::same(6.0);
-    style.visuals.widgets.hovered.rounding = Rounding::same(6.0);
-    style.visuals.widgets.active.rounding = Rounding::same(6.0);
-    ctx.set_style(style);
+    ctx.style_mut(|style| {
+        // 强制亮色模式
+        style.visuals.dark_mode = false;
+        style.visuals.panel_fill = colors::CONTENT_BG;
+        style.visuals.window_fill = colors::CONTENT_BG;
+        // widget 背景
+        style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgba_premultiplied(0, 122, 255, 20);
+        style.visuals.widgets.active.bg_fill = Color32::from_rgba_premultiplied(0, 122, 255, 40);
+        // widget 文字色
+        style.visuals.widgets.noninteractive.fg_stroke.color = colors::SIDEBAR_TEXT;
+        style.visuals.widgets.inactive.fg_stroke.color = colors::SIDEBAR_TEXT;
+        style.visuals.widgets.active.fg_stroke.color = colors::SIDEBAR_ACTIVE;
+        // 选择态
+        style.visuals.selection.bg_fill = colors::ACCENT;
+        // 圆角
+        style.visuals.widgets.inactive.rounding = Rounding::same(6.0);
+        style.visuals.widgets.hovered.rounding = Rounding::same(6.0);
+        style.visuals.widgets.active.rounding = Rounding::same(6.0);
+        // 无阴影
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+    });
 }
 
 // ============================================================
@@ -336,7 +350,7 @@ impl App {
                     .rounding(Rounding::same(6.0))
                     .min_size(Vec2::new(90.0, 30.0))
             } else {
-                Button::new(RichText::new(next_label).color(Color32::from_rgb(180, 180, 180)).size(13.0))
+                Button::new(RichText::new(next_label).color(Color32::from_rgb(130, 130, 135)).size(13.0))
                     .fill(Color32::from_rgb(230, 230, 235))
                     .rounding(Rounding::same(6.0))
                     .min_size(Vec2::new(90.0, 30.0))

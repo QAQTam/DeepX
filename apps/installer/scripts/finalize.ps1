@@ -1,8 +1,9 @@
 # finalize.ps1 — 生成 SFX 单文件成品
+# 所有路径相对于 workspace 根 (D:\DeepX)
 param(
-    [string]$PayloadDir = "payload",
-    [string]$ExePath    = "../../target/release/DeepXInstaller.exe",
-    [string]$OutDir     = "dist"
+    [string]$PayloadDir = "apps\installer\payload",
+    [string]$ExePath    = "target\release\DeepXInstaller.exe",
+    [string]$OutDir     = "apps\installer\dist"
 )
 
 Write-Host "=== 生成成品 (SFX 单文件模式) ==="

@@ -4,7 +4,9 @@ use deepx_session::SessionMeta;
 use super::skill_context::SkillContextManager;
 use deepx_message::{ToolExecReport, ToolExecRequest};
 use deepx_tools::runtime;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use deepx_vector::{VectorConfig, VectorEngine};
 
 #[derive(Debug)]
 pub struct AgentState {
@@ -16,6 +18,8 @@ pub struct AgentState {
     pub turn_count: u32,
     /// If true, skip all disk persistence (subagent disposable mode).
     pub ephemeral: bool,
+    /// RAG 向量引擎（None = 未启用或初始化失败）
+    pub vector: Option<Arc<Mutex<VectorEngine>>>,
     pub skills: SkillContextManager,
 }
 
@@ -25,6 +29,7 @@ impl AgentState {
         // This prevents accidental persistence of a placeholder seed.
         let msg = deepx_message::MessageStore::new("");
         let effective_input_tokens = config.context_limit as usize;
+        let vector = Self::try_init_vector(&config);
         Self {
             msg,
             config,
@@ -33,7 +38,47 @@ impl AgentState {
             dsml_compat_count: 0,
             turn_count: 0,
             ephemeral: false,
+            vector,
             skills: SkillContextManager::new(Path::new("."), effective_input_tokens),
+        }
+    }
+
+    /// 尝试初始化向量引擎。失败时记录日志并返回 None。
+    fn try_init_vector(config: &deepx_config::Config) -> Option<Arc<Mutex<VectorEngine>>> {
+        if !config.rag.enabled {
+            return None;
+        }
+        let base = config.rag.store_dir.as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let home = std::env::var("USERPROFILE")
+                    .or_else(|_| std::env::var("HOME"))
+                    .unwrap_or_else(|_| ".".into());
+                PathBuf::from(home).join(".deepx").join("vector")
+            });
+        let vcfg = VectorConfig {
+            enabled: true,
+            model_id: config.rag.model.clone(),
+            embed_dim: config.rag.embed_dim,
+            store_dir: base.clone(),
+            memory_dir: base.join("memory"),
+            skill_top_k: config.rag.skill_top_k,
+            memory_top_k: config.rag.memory_top_k,
+            max_chunk_size: 500,
+            min_chunk_size: 50,
+            local_model: config.rag.local_model.clone().map(PathBuf::from),
+        };
+        match VectorEngine::init(vcfg) {
+            Ok(engine) => {
+                let arc = Arc::new(Mutex::new(engine));
+                #[cfg(feature = "rag")]
+                deepx_tools::rag::set_engine(arc.clone());
+                Some(arc)
+            }
+            Err(e) => {
+                log::warn!("RAG 向量引擎初始化失败（将禁用 RAG 功能）: {e}");
+                None
+            }
         }
     }
 
@@ -103,8 +148,56 @@ impl AgentState {
             context.insert(prefix_end, deepx_types::Message::system(&snapshot.catalog));
         }
         // The complete authoritative active set is always the final message.
-        context.push(deepx_types::Message::system(&snapshot.envelope));
+        let envelope_text = snapshot.envelope.as_str();
+        context.push(deepx_types::Message::system(envelope_text));
+
+        // ── RAG: 语义技能检索 ──
+        // 如果向量引擎已启用且有已索引的技能，用语义检索补充上下文
+        if let Some(ref vec) = self.vector {
+            if let Ok(engine) = vec.lock() {
+                let query = Self::extract_last_user_query(&self.msg);
+
+                // 1) 技能语义检索
+                if engine.skill_count() > 0 && !query.is_empty() {
+                    if let Ok(chunks) = engine.search_skills(&query) {
+                        if !chunks.is_empty() {
+                            let semantic = engine.format_skill_context(&chunks);
+                            if !semantic.is_empty() {
+                                context.push(deepx_types::Message::system(&semantic));
+                            }
+                        }
+                    }
+                }
+
+                // 2) 跨会话记忆检索
+                if !query.is_empty() {
+                    if let Ok(entries) = engine.recall_memory(&query, 3) {
+                        if !entries.is_empty() {
+                            let memory_ctx = VectorEngine::format_memory_context(&entries);
+                            if !memory_ctx.is_empty() {
+                                context.push(deepx_types::Message::system(&memory_ctx));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         context
+    }
+
+    /// 从消息存储中提取最后一条用户消息文本，用作语义检索的查询。
+    fn extract_last_user_query(msg: &deepx_message::MessageStore) -> String {
+        let turns = msg.turns();
+        for turn in turns.iter().rev() {
+            for block in &turn.user.content {
+                if let deepx_types::ContentBlock::Text { text } = block {
+                    if !text.is_empty() {
+                        return text.clone();
+                    }
+                }
+            }
+        }
+        String::new()
     }
 
     /// Refresh the transient catalog slot without writing it to history.

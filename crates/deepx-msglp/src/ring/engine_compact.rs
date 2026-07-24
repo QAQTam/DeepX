@@ -169,10 +169,19 @@ impl CompactEngine {
             ctx.emitter.emit(Agent2Ui::CompactEnd {
                 summary_chars: 0,
                 turns_compacted: 0,
+                turns_removed: 0,
             });
             return;
         }
         let chars = meta.summary.chars().count();
+
+        // Turns to remove from frontend state (= total_turns - kept).
+        let turns_removed = ctx
+            .agent
+            .msg
+            .turns()
+            .len()
+            .saturating_sub(meta.kept_user_count);
         ctx.agent
             .msg
             .apply_compact(&meta.summary, meta.kept_user_count);
@@ -204,17 +213,18 @@ impl CompactEngine {
         let _ = std::fs::create_dir_all(&stats_dir);
         let _ = std::fs::write(stats_dir.join("context_stats.json"), stats.to_string());
 
-        ctx.emitter.emit(Agent2Ui::CompactEnd {
-            summary_chars: chars,
-            turns_compacted: meta.head_user_count as u32,
-        });
-        ctx.emitter.emit_delta(Agent2Ui::ToolNotice {
-            message: format!(
-                "Compacted {} turns -> {chars} chars, keeping {} turns",
-                meta.head_user_count, meta.kept_user_count,
-            ),
-            level: "info".into(),
-        });
+            ctx.emitter.emit(Agent2Ui::CompactEnd {
+                summary_chars: chars,
+                turns_compacted: meta.head_user_count as u32,
+                turns_removed: turns_removed as u32,
+            });
+            ctx.emitter.emit(Agent2Ui::ToolNotice {
+                message: format!(
+                    "Compacted {} turns -> {chars} chars, keeping {} turns",
+                    meta.head_user_count, meta.kept_user_count,
+                ),
+                level: "info".into(),
+            });
     }
 }
 

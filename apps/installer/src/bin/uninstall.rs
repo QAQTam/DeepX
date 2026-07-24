@@ -15,7 +15,10 @@ mod color {
     pub const ACCENT: Color32          = Color32::from_rgb(0, 122, 255);
     pub const DANGER: Color32          = Color32::from_rgb(255, 59, 48);
     pub const SUCCESS: Color32         = Color32::from_rgb(52, 199, 89);
-    pub const TEXT_SECONDARY: Color32  = Color32::from_rgb(142, 142, 147);
+    pub const TEXT_PRIMARY: Color32    = Color32::from_rgb(50, 50, 55);
+    pub const TEXT_SECONDARY: Color32  = Color32::from_rgb(90, 90, 95);
+    pub const TEXT_MUTED: Color32      = Color32::from_rgb(140, 140, 145);
+    pub const BG: Color32              = Color32::from_rgb(255, 255, 255);
 }
 
 // ============================================================
@@ -91,6 +94,7 @@ fn main() -> Result<(), eframe::Error> {
         options,
         Box::new(move |cc| {
             setup_chinese_fonts(&cc.egui_ctx);
+            setup_style(&cc.egui_ctx);
             Ok(Box::new(UninstallApp {
                 install_dir,
                 delete_config: args.delete_config,
@@ -480,6 +484,21 @@ fn setup_chinese_fonts(ctx: &Context) {
         }
     }
     ctx.set_fonts(fonts);
+}
+
+fn setup_style(ctx: &Context) {
+    ctx.style_mut(|style| {
+        style.visuals.dark_mode = false;
+        style.visuals.panel_fill = color::BG;
+        style.visuals.window_fill = color::BG;
+        style.visuals.widgets.noninteractive.fg_stroke.color = color::TEXT_PRIMARY;
+        style.visuals.widgets.inactive.fg_stroke.color = color::TEXT_PRIMARY;
+        style.visuals.widgets.active.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.inactive.rounding = Rounding::same(6.0);
+        style.visuals.widgets.hovered.rounding = Rounding::same(6.0);
+        style.visuals.widgets.active.rounding = Rounding::same(6.0);
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+    });
 }
 
 #[cfg(windows)]

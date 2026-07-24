@@ -28,6 +28,10 @@ pub mod plan;
 
 pub mod workspace;
 
+#[cfg(feature = "rag")]
+#[cfg(feature = "rag")]
+pub mod rag;
+
 pub mod process_inspect;
 pub mod process_registry;
 

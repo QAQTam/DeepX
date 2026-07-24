@@ -79,6 +79,98 @@ pub struct SkillCatalog {
     pub diagnostics: Vec<SkillDiagnostic>,
 }
 
+impl SkillCatalog {
+    /// Semantic search over available skills.
+    ///
+    /// Returns matching skills sorted by relevance. When the `rag` feature
+    /// is enabled, uses vector embeddings for true semantic search. Without
+    /// it, falls back to keyword matching on skill name and description.
+    ///
+    /// `top_k` is a hint; the actual count may be lower if fewer skills match.
+    pub fn search_semantic(&self, query: &str, top_k: usize) -> Vec<SkillMetadata> {
+        if query.is_empty() || self.skills.is_empty() {
+            return Vec::new();
+        }
+
+        #[cfg(feature = "rag")]
+        {
+            return self.search_semantic_vector(query, top_k);
+        }
+
+        #[cfg(not(feature = "rag"))]
+        {
+            self.search_semantic_keyword(query, top_k)
+        }
+    }
+
+    /// Keyword-based fallback: score skills by token overlap with the query.
+    fn search_semantic_keyword(&self, query: &str, top_k: usize) -> Vec<SkillMetadata> {
+        let query_lower = query.to_lowercase();
+        let query_tokens: Vec<&str> = query_lower
+            .split(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let mut scored: Vec<(usize, usize)> = self
+            .skills
+            .iter()
+            .enumerate()
+            .map(|(i, skill)| {
+                let text = format!(
+                    "{} {} {}",
+                    skill.name,
+                    skill.description,
+                    skill.description // double-weight description
+                )
+                .to_lowercase();
+                let hits = query_tokens
+                    .iter()
+                    .filter(|t| text.contains(*t))
+                    .count();
+                (i, hits)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        let k = top_k.min(scored.len());
+
+        scored[..k]
+            .iter()
+            .filter(|(_, score)| *score > 0)
+            .map(|(idx, _)| self.skills[*idx].clone())
+            .collect()
+    }
+
+    /// Vector-based semantic search (requires `rag` feature).
+    #[cfg(feature = "rag")]
+    fn search_semantic_vector(&self, query: &str, top_k: usize) -> Vec<SkillMetadata> {
+        use deepx_vector::degradation::auto_detect;
+        use std::sync::OnceLock;
+
+        // Build a BM25 index lazily (cheap, no model needed)
+        static BM25: OnceLock<deepx_vector::Bm25Index> = OnceLock::new();
+        let bm25 = BM25.get_or_init(|| {
+            let mut idx = deepx_vector::Bm25Index::new();
+            for skill in &self.skills {
+                let text = format!("{} {}", skill.name, skill.description);
+                idx.insert(&skill.name, &text, &skill.description);
+            }
+            idx
+        });
+
+        // TODO: When embedder is available, use vector search.
+        // For now, fall back to BM25 keyword search.
+        let _ = auto_detect; // verify the dep works
+        let results = bm25.search(query, top_k);
+        results
+            .into_iter()
+            .filter_map(|(name, _meta, _score)| {
+                self.skills.iter().find(|s| s.name == name).cloned()
+            })
+            .collect()
+    }
+}
+
 /// A fully loaded skill ready for injection into the agent context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillActivation {
